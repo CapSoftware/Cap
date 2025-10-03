@@ -1,9 +1,10 @@
 "use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { CurrentUser, Video, Folder } from "@cap/web-domain";
+import { CurrentUser, Video, Folder, Policy } from "@cap/web-domain";
+import { SpacesPolicy } from "@cap/web-backend";
 import { Effect } from "effect";
-import { moveVideosToFolder } from "../../lib/folder";
+import { moveVideosToFolder, getFolderById } from "../../lib/folder";
 import { runPromise } from "../../lib/server";
 import { revalidatePath } from "next/cache";
 
@@ -36,11 +37,23 @@ export async function moveVideosToFolderAction({
       ? { variant: "space" as const, spaceId }
       : { variant: "org" as const, organizationId: user.activeOrganizationId };
 
-    const result = await runPromise(
-      moveVideosToFolder(typedVideoIds, typedTargetFolderId, root).pipe(
-        Effect.provideService(CurrentUser, user)
-      )
-    );
+    // Create effect with permission checks
+    const moveVideosEffect = spaceId
+      ? Effect.gen(function* () {
+          const spacesPolicy = yield* SpacesPolicy;
+
+          // Perform the folder move operation
+          return yield* moveVideosToFolder(
+            typedVideoIds,
+            typedTargetFolderId,
+            root
+          ).pipe(Policy.withPolicy(spacesPolicy.isMember(spaceId)));
+        }).pipe(Effect.provideService(CurrentUser, user))
+      : moveVideosToFolder(typedVideoIds, typedTargetFolderId, root).pipe(
+          Effect.provideService(CurrentUser, user)
+        );
+
+    const result = await runPromise(moveVideosEffect);
 
     // Revalidate paths
     revalidatePath("/dashboard/caps");
