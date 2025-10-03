@@ -32,7 +32,11 @@ impl EncoderBase {
         if timestamp != Duration::MAX {
             let time_base = encoder.time_base();
             let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
-            frame.set_pts(Some((timestamp.as_secs_f64() * rate).round() as i64));
+
+            let pts = (timestamp.as_secs_f64() * rate).round() as i64;
+            let first_pts = self.first_pts.get_or_insert(pts);
+
+            frame.set_pts(Some(pts - *first_pts));
         } else {
             let Some(pts) = frame.pts() else {
                 tracing::error!("Frame has no pts");

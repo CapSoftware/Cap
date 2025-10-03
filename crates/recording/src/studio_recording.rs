@@ -713,6 +713,7 @@ async fn create_segment_pipeline(
         screen_output_path.clone(),
         start_time,
     )
+    .instrument(error_span!("screen-out"))
     .await
     .context("screen pipeline setup")?;
 
@@ -721,8 +722,8 @@ async fn create_segment_pipeline(
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
             .build::<Mp4Muxer>(())
+            .instrument(error_span!("camera-out"))
     }))
-    .instrument(error_span!("camera-output"))
     .await
     .transpose()
     .context("camera pipeline setup")?;
@@ -732,8 +733,8 @@ async fn create_segment_pipeline(
             .with_audio_source::<sources::Microphone>(mic_feed)
             .with_timestamps(start_time)
             .build::<OggMuxer>(())
+            .instrument(error_span!("mic-out"))
     }))
-    .instrument(error_span!("mic-output"))
     .await
     .transpose()
     .context("microphone pipeline setup")?;
@@ -743,8 +744,8 @@ async fn create_segment_pipeline(
             .with_audio_source::<screen_capture::SystemAudioSource>(system_audio)
             .with_timestamps(start_time)
             .build::<OggMuxer>(())
+            .instrument(error_span!("system-audio-out"))
     }))
-    .instrument(error_span!("system-audio-output"))
     .await
     .transpose()
     .context("microphone pipeline setup")?;

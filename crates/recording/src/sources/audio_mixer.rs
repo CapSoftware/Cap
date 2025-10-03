@@ -133,48 +133,13 @@ impl AudioMixerBuilder {
         })
     }
 
-    pub async fn spawn(self, output: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioMixerHandle> {
+    async fn spawn(self, output: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioMixerHandle> {
         let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
         let stop_flag = Arc::new(AtomicBool::new(false));
 
         let thread_handle = std::thread::spawn({
             let stop_flag = stop_flag.clone();
-            move || {
-                let start = Timestamps::now();
-
-                let mut mixer = match self.build(output) {
-                    Ok(mixer) => mixer,
-                    Err(e) => {
-                        tracing::error!("Failed to build audio mixer: {}", e);
-                        let _ = ready_tx.send(Err(e.into()));
-                        return;
-                    }
-                };
-
-                let _ = ready_tx.send(Ok(()));
-
-                let mut run = || {
-                    loop {
-                        if stop_flag.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        mixer
-                            .tick(start, Timestamp::Instant(Instant::now()))
-                            .map_err(|()| anyhow::format_err!("Audio mixer tick failed"))?;
-
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-
-                    Ok::<(), anyhow::Error>(())
-                };
-
-                if let Err(e) = run() {
-                    tracing::error!("Audio mixer failed: {}", e);
-                }
-
-                info!("Audio mixer processing thread complete");
-            }
+            move || self.run(output, ready_tx, stop_flag)
         });
 
         ready_rx
@@ -187,6 +152,48 @@ impl AudioMixerBuilder {
             thread_handle,
             stop_flag,
         })
+    }
+
+    pub fn run(
+        self,
+        output: mpsc::Sender<AudioFrame>,
+        ready_tx: oneshot::Sender<anyhow::Result<()>>,
+        stop_flag: Arc<AtomicBool>,
+    ) {
+        let start = Timestamps::now();
+
+        let mut mixer = match self.build(output) {
+            Ok(mixer) => mixer,
+            Err(e) => {
+                tracing::error!("Failed to build audio mixer: {}", e);
+                let _ = ready_tx.send(Err(e.into()));
+                return;
+            }
+        };
+
+        let _ = ready_tx.send(Ok(()));
+
+        let mut run = || {
+            loop {
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                mixer
+                    .tick(start, Timestamp::Instant(Instant::now()))
+                    .map_err(|()| anyhow::format_err!("Audio mixer tick failed"))?;
+
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            Ok::<(), anyhow::Error>(())
+        };
+
+        if let Err(e) = run() {
+            tracing::error!("Audio mixer failed: {}", e);
+        }
+
+        info!("Audio mixer processing thread complete");
     }
 }
 
@@ -405,6 +412,13 @@ pub struct AudioMixerHandle {
 }
 
 impl AudioMixerHandle {
+    pub fn new(thread_handle: std::thread::JoinHandle<()>, stop_flag: Arc<AtomicBool>) -> Self {
+        Self {
+            thread_handle,
+            stop_flag,
+        }
+    }
+
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::Relaxed);
     }

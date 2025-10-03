@@ -34,12 +34,12 @@ impl OggFile {
     }
 
     pub fn queue_frame(&mut self, frame: frame::Audio, timestamp: Duration) {
-        self.encoder.queue_frame(frame, timestamp, &mut self.output);
+        let _ = self.encoder.queue_frame(frame, timestamp, &mut self.output);
     }
 
     pub fn finish(&mut self) {
         if !self.finished {
-            self.encoder.finish(&mut self.output);
+            let _ = self.encoder.finish(&mut self.output);
             self.output.write_trailer().unwrap();
             self.finished = true;
         }

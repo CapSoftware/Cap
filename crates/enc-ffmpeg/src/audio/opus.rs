@@ -96,8 +96,8 @@ impl OpusEncoder {
         frame: frame::Audio,
         timestamp: Duration,
         output: &mut format::context::Output,
-    ) {
-        self.base.send_frame(frame, timestamp, output);
+    ) -> Result<(), ffmpeg::Error> {
+        self.base.send_frame(frame, timestamp, output)
     }
 
     pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
@@ -107,10 +107,10 @@ impl OpusEncoder {
 
 impl AudioEncoder for OpusEncoder {
     fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        self.queue_frame(frame, Duration::MAX, output);
+        let _ = self.queue_frame(frame, Duration::MAX, output);
     }
 
     fn finish(&mut self, output: &mut format::context::Output) {
-        self.finish(output);
+        let _ = self.finish(output);
     }
 }

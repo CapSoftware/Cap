@@ -136,7 +136,7 @@ impl TaskPool {
         std::thread::spawn(move || {
             let _guard = span.enter();
             cb();
-            done_tx.send(());
+            let _ = done_tx.send(());
         });
         self.0.push((
             name,
@@ -166,17 +166,15 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         let video_info = video_source.video_info();
         let (first_tx, first_rx) = oneshot::channel();
 
-        let muxer = Arc::new(Mutex::new(
-            TMuxer::setup(
-                muxer_config,
-                path.clone(),
-                Some(video_source.video_info()),
-                Some(AudioMixer::INFO),
-                pause_flag.clone(),
-                &mut setup_ctx.tasks,
-            )
-            .await?,
-        ));
+        let muxer = setup_muxer::<TMuxer>(
+            muxer_config,
+            &path,
+            Some(video_info),
+            Some(AudioMixer::INFO),
+            &pause_flag,
+            &mut setup_ctx,
+        )
+        .await?;
 
         spawn_video_encoder(
             &mut setup_ctx,
@@ -231,17 +229,15 @@ impl OutputPipelineBuilder<NoVideo> {
 
         let (first_tx, first_rx) = oneshot::channel();
 
-        let muxer = Arc::new(Mutex::new(
-            TMuxer::setup(
-                muxer_config,
-                path.clone(),
-                None,
-                Some(AudioMixer::INFO),
-                pause_flag.clone(),
-                &mut setup_ctx.tasks,
-            )
-            .await?,
-        ));
+        let muxer = setup_muxer::<TMuxer>(
+            muxer_config,
+            &path,
+            None,
+            Some(AudioMixer::INFO),
+            &pause_flag,
+            &mut setup_ctx,
+        )
+        .await?;
 
         finish_build(
             setup_ctx,
@@ -360,6 +356,30 @@ async fn setup_video_source<TVideo: VideoSource>(
     Ok((video_source, video_rx))
 }
 
+async fn setup_muxer<TMuxer: Muxer>(
+    muxer_config: TMuxer::Config,
+    path: &PathBuf,
+    video_info: Option<VideoInfo>,
+    audio_info: Option<AudioInfo>,
+    pause_flag: &Arc<AtomicBool>,
+    setup_ctx: &mut SetupCtx,
+) -> Result<Arc<Mutex<TMuxer>>, anyhow::Error> {
+    let muxer = Arc::new(Mutex::new(
+        TMuxer::setup(
+            muxer_config,
+            path.clone(),
+            video_info,
+            audio_info,
+            pause_flag.clone(),
+            &mut setup_ctx.tasks,
+        )
+        .instrument(error_span!("muxer-setup"))
+        .await?,
+    ));
+
+    Ok(muxer)
+}
+
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
     mut video_source: TVideo,
@@ -435,12 +455,21 @@ async fn configure_audio<TMutex: AudioMuxer>(
     }
 
     let (audio_tx, mut audio_rx) = mpsc::channel(64);
-    let audio_mixer_handle = audio_mixer.spawn(audio_tx).await?;
+    let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
+    setup_ctx.tasks().spawn_thread("audio-mixer", {
+        let stop_flag = stop_flag.clone();
+        move || audio_mixer.run(audio_tx, ready_tx, stop_flag)
+    });
+    let _ = ready_rx
+        .await
+        .map_err(|_| anyhow::format_err!("Audio mixer crashed"))??;
 
     setup_ctx.tasks().spawn(
         "audio-mixer-stop",
         stop_token.child_token().cancelled_owned().map(move |_| {
-            audio_mixer_handle.stop();
+            stop_flag.store(true, atomic::Ordering::Relaxed);
             Ok(())
         }),
     );
