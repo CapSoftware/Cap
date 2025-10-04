@@ -15,7 +15,6 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { useState } from "react";
 import { getAllFoldersAction } from "../../../../actions/folders/getAllFolders";
 import { moveVideosToFolderAction } from "../../../../actions/folders/moveVideosToFolder";
@@ -56,7 +55,6 @@ export function FolderSelectionDialog({
   const { activeOrganization, activeSpace } = useDashboardContext();
   const queryClient = useQueryClient();
 
-  // Fetch folders using useEffectQuery
   const { data: foldersData, isLoading } = useEffectQuery({
     queryKey: ["folders", activeOrganization?.organization.id, activeSpace?.id],
     queryFn: () =>
@@ -80,7 +78,6 @@ export function FolderSelectionDialog({
 
   const folders = foldersData || [];
 
-  // Move videos mutation using useEffectMutation
   const moveVideosMutation = useEffectMutation({
     mutationFn: (params: {
       videoIds: string[];
@@ -97,25 +94,62 @@ export function FolderSelectionDialog({
       ),
     onSuccess: (result) => {
       toast.success(result.message);
-      
-      // Invalidate related queries to refresh data
-      queryClient.invalidateQueries({ 
-        queryKey: ["folders", activeOrganization?.organization.id, activeSpace?.id] 
-      });
-      queryClient.invalidateQueries({ 
-        queryKey: ["videos"] 
-      });
-      
+
+      const foldersQueryKey = [
+        "folders",
+        activeOrganization?.organization.id,
+        activeSpace?.id,
+      ];
+
+      queryClient.setQueryData(
+        foldersQueryKey,
+        (oldFolders: FolderWithChildren[] | undefined) => {
+          if (!oldFolders) return oldFolders;
+
+          return oldFolders.map((folder) => ({
+            ...folder,
+            videoCount: result.originalFolderIds.includes(folder.id)
+              ? Math.max(0, folder.videoCount - videoIds.length)
+              : folder.id === selectedFolderId
+              ? folder.videoCount + videoIds.length
+              : folder.videoCount,
+            children:
+              folder.children?.map((child) => ({
+                ...child,
+                videoCount: result.originalFolderIds.includes(child.id)
+                  ? Math.max(0, child.videoCount - videoIds.length)
+                  : child.id === selectedFolderId
+                  ? child.videoCount + videoIds.length
+                  : child.videoCount,
+              })) || [],
+          }));
+        }
+      );
+
+      queryClient.setQueriesData(
+        { queryKey: ["videos"] },
+        (oldVideos: any[] | undefined) => {
+          if (!oldVideos) return oldVideos;
+
+          return oldVideos.map((video) =>
+            videoIds.includes(video.id)
+              ? { ...video, folderId: selectedFolderId }
+              : video
+          );
+        }
+      );
+
       onConfirm(selectedFolderId);
       setSelectedFolderId(null);
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Failed to move videos");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to move videos"
+      );
       console.error("Error moving videos:", error);
     },
   });
 
-  // Toggle folder expansion
   const toggleFolderExpansion = (folderId: string) => {
     setExpandedFolders((prev) => {
       const newSet = new Set(prev);
@@ -128,7 +162,6 @@ export function FolderSelectionDialog({
     });
   };
 
-  // Render folder with improved design
   const renderFolder = (folder: FolderWithChildren, depth = 0) => {
     const hasChildren = folder.children && folder.children.length > 0;
     const isExpanded = expandedFolders.has(folder.id);
@@ -149,7 +182,6 @@ export function FolderSelectionDialog({
           `}
           style={{ marginLeft: `${depth * 16}px` }}
         >
-          {/* Expand/Collapse button */}
           {hasChildren ? (
             <button
               onClick={(e) => {
@@ -167,7 +199,6 @@ export function FolderSelectionDialog({
             <div className="w-5 h-5 flex-shrink-0" />
           )}
 
-          {/* Folder icon */}
           <div className="flex items-center gap-2 flex-1">
             <div className="flex-shrink-0 w-7 h-7 rounded-md bg-gray-2 border border-gray-6 shadow-sm flex items-center justify-center">
               <FontAwesomeIcon
@@ -184,7 +215,6 @@ export function FolderSelectionDialog({
             </div>
           </div>
 
-          {/* Selection indicator */}
           {isSelected && (
             <div className="ml-auto w-5 h-5 rounded-full bg-blue-9 flex items-center justify-center">
               <div className="w-2.5 h-2.5 bg-white rounded-full" />
@@ -192,7 +222,6 @@ export function FolderSelectionDialog({
           )}
         </div>
 
-        {/* Render children if expanded */}
         {hasChildren && isExpanded && (
           <div className="mt-1">
             {folder.children.map((child) => renderFolder(child, depth + 1))}
@@ -229,7 +258,6 @@ export function FolderSelectionDialog({
           </p>
 
           <div className="space-y-2 max-h-[320px] overflow-y-auto custom-scroll">
-            {/* Option to move to root (no folder) */}
             <div
               onClick={() => setSelectedFolderId(null)}
               className={`
@@ -261,14 +289,12 @@ export function FolderSelectionDialog({
               )}
             </div>
 
-            {/* Loading state */}
             {isLoading && (
               <div className="text-center py-4">
                 <p className="text-sm text-gray-10">Loading folders...</p>
               </div>
             )}
 
-            {/* Available folders with hierarchy */}
             {!isLoading &&
               folders.map((folder: FolderWithChildren) => renderFolder(folder))}
           </div>

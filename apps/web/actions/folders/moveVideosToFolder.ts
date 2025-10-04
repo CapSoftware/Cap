@@ -4,7 +4,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { CurrentUser, Video, Folder, Policy } from "@cap/web-domain";
 import { SpacesPolicy } from "@cap/web-backend";
 import { Effect } from "effect";
-import { moveVideosToFolder, getFolderById } from "../../lib/folder";
+import { moveVideosToFolder } from "../../lib/folder";
 import { runPromise } from "../../lib/server";
 import { revalidatePath } from "next/cache";
 
@@ -37,12 +37,10 @@ export async function moveVideosToFolderAction({
       ? { variant: "space" as const, spaceId }
       : { variant: "org" as const, organizationId: user.activeOrganizationId };
 
-    // Create effect with permission checks
     const moveVideosEffect = spaceId
       ? Effect.gen(function* () {
           const spacesPolicy = yield* SpacesPolicy;
 
-          // Perform the folder move operation
           return yield* moveVideosToFolder(
             typedVideoIds,
             typedTargetFolderId,
@@ -55,7 +53,6 @@ export async function moveVideosToFolderAction({
 
     const result = await runPromise(moveVideosEffect);
 
-    // Revalidate paths
     revalidatePath("/dashboard/caps");
 
     if (spaceId) {
@@ -86,6 +83,9 @@ export async function moveVideosToFolderAction({
       message: `Successfully moved ${result.movedCount} video${
         result.movedCount !== 1 ? "s" : ""
       } to ${result.targetFolderId ? "folder" : "root"}`,
+      movedCount: result.movedCount,
+      originalFolderIds: result.originalFolderIds,
+      targetFolderId: result.targetFolderId,
     };
   } catch (error) {
     console.error("Error moving videos to folder:", error);
