@@ -120,6 +120,8 @@ pub enum NewCapturerError {
     UpdateIntervalNotSupported,
     #[error("CreateDevice: {0}")]
     CreateDevice(windows::core::Error),
+    #[error("CreateDevice: {0}")]
+    Context(windows::core::Error),
     #[error("Direct3DDevice: {0}")]
     Direct3DDevice(windows::core::Error),
     #[error("FramePool: {0}")]
@@ -192,7 +194,7 @@ impl Capturer {
         let (d3d_device, d3d_context) = d3d_device
             .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
             .transpose()
-            .unwrap()
+            .map_err(NewCapturerError::Context)?
             .unwrap();
 
         let item = item.clone();
