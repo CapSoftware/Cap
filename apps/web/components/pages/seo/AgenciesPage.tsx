@@ -34,9 +34,9 @@ const FAQItem = ({
 	return (
 		<div
 			className={clsx(
-				"rounded-xl overflow-hidden border border-gray-5",
+				"overflow-hidden rounded-xl border border-gray-5",
 				isOpen
-					? "bg-blue-500 text-white"
+					? "text-white bg-blue-500"
 					: "bg-gray-1 hover:bg-gray-3 text-gray-12",
 				"transition-colors duration-200",
 			)}
@@ -96,8 +96,8 @@ const AnimatedDomainBanner = () => {
 	}, []);
 
 	return (
-		<div className="mx-auto max-w-2xl mb-12 text-center">
-			<div className="relative rounded-xl bg-white border border-gray-200 p-8 shadow-sm">
+		<div className="mx-auto mb-12 max-w-2xl text-center">
+			<div className="relative p-8 bg-white rounded-xl border border-gray-200 shadow-sm">
 				<div className="flex flex-col items-center space-y-4">
 					{/* Art */}
 					<div className="flex-shrink-0">
@@ -110,7 +110,7 @@ const AnimatedDomainBanner = () => {
 					</h3>
 
 					{/* Description */}
-					<p className="text-sm text-gray-600 max-w-md">
+					<p className="max-w-md text-sm text-gray-600">
 						Send from your own domain for higher client trust and professional
 						branding. Your share links reflect your agency's identity.
 					</p>
@@ -399,14 +399,14 @@ export const AgenciesPage = () => {
 				</div>
 			</div>
 
-			<div className="relative z-10 space-y-24 md:space-y-32 mt-24 mb-24 wrapper">
+			<div className="relative z-10 mt-24 mb-24 space-y-24 md:space-y-32 wrapper">
 				{/* Features Section */}
 				<div>
 					<div className="text-center max-w-[800px] mx-auto mb-16">
 						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 							{agenciesContent.featuresTitle}
 						</h2>
-						<p className="text-xl leading-relaxed text-gray-600">
+						<p className="text-xl leading-relaxed text-gray-10">
 							{agenciesContent.featuresDescription}
 						</p>
 					</div>
