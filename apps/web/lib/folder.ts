@@ -280,9 +280,18 @@ export const getChildFolders = Effect.fn(function* (
         color: folders.color,
         parentId: folders.parentId,
         organizationId: folders.organizationId,
-        videoCount: sql<number>`(
-        	SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-	      )`,
+        videoCount:
+          root.variant === "space"
+            ? sql<number>`(
+              SELECT COUNT(*)
+              FROM space_videos
+              WHERE space_videos.folderId = folders.id
+                AND space_videos.spaceId = ${root.spaceId}
+            )`
+            : sql<number>`(
+              SELECT COUNT(*)
+              FROM videos WHERE videos.folderId = folders.id
+            )`,
       })
       .from(folders)
       .where(
@@ -318,9 +327,18 @@ export const getAllFolders = Effect.fn(function* (
         color: folders.color,
         parentId: folders.parentId,
         organizationId: folders.organizationId,
-        videoCount: sql<number>`(
-					SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-				)`,
+        videoCount:
+          root.variant === "space"
+            ? sql<number>`(
+              SELECT COUNT(*)
+              FROM space_videos
+              WHERE space_videos.folderId = folders.id
+                AND space_videos.spaceId = ${root.spaceId}
+            )`
+            : sql<number>`(
+              SELECT COUNT(*)
+              FROM videos WHERE videos.folderId = folders.id
+            )`,
       })
       .from(folders)
       .where(
