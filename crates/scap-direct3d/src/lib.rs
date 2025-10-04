@@ -38,8 +38,9 @@ use windows::{
                 IDXGIDevice,
             },
         },
-        System::WinRT::Direct3D11::{
-            CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
+        System::WinRT::{
+            Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
+            RO_INIT_MULTITHREADED, RoInitialize,
         },
     },
     core::{HSTRING, IInspectable, Interface},
@@ -124,6 +125,8 @@ pub enum NewCapturerError {
     CreateRunner(#[from] StartRunnerError),
     #[error("RecvTimeout")]
     RecvTimeout(#[from] RecvError),
+    #[error("GraphicsCapture: {0}")]
+    GraphicsCapture(String),
     #[error("Other: {0}")]
     Other(#[from] windows::core::Error),
 }
@@ -144,6 +147,11 @@ impl Capturer {
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
         mut d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
+        // Initialize COM on this thread first to avoid marshalling issues
+        unsafe {
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        }
+
         if !is_supported()? {
             return Err(NewCapturerError::NotSupported);
         }
@@ -201,13 +209,17 @@ impl Capturer {
             &direct3d_device,
             settings.pixel_format.as_directx(),
             1,
-            item.Size().unwrap(),
+            item.Size().map_err(|e| {
+                NewCapturerError::GraphicsCapture(format!("Failed to get item size: {:?}", e))
+            })?,
         )
-        .unwrap();
-        // .map_err(StartRunnerError::FramePool)?;
+        .map_err(|e| {
+            NewCapturerError::GraphicsCapture(format!("Failed to create frame pool: {:?}", e))
+        })?;
 
-        let session = frame_pool.CreateCaptureSession(&item).unwrap();
-        // .map_err(StartRunnerError::CaptureSession)?;
+        let session = frame_pool.CreateCaptureSession(&item).map_err(|e| {
+            NewCapturerError::GraphicsCapture(format!("Failed to create capture session: {:?}", e))
+        })?;
 
         if let Some(border_required) = settings.is_border_required {
             session.SetIsBorderRequired(border_required).unwrap();
