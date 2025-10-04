@@ -124,6 +124,8 @@ pub enum NewCapturerError {
     Context(windows::core::Error),
     #[error("Direct3DDevice: {0}")]
     Direct3DDevice(windows::core::Error),
+    #[error("CreateDevice: {0}")]
+    ItemSize(windows::core::Error),
     #[error("FramePool: {0}")]
     FramePool(windows::core::Error),
     #[error("CaptureSession: {0}")]
@@ -212,7 +214,7 @@ impl Capturer {
             &direct3d_device,
             settings.pixel_format.as_directx(),
             1,
-            item.Size().unwrap(),
+            item.Size().map_err(NewCapturerError::ItemSize)?,
         )
         .map_err(NewCapturerError::FramePool)?;
 
@@ -261,8 +263,7 @@ impl Capturer {
 
                 Ok::<_, NewCapturerError>((texture.unwrap(), crop))
             })
-            .transpose()
-            .unwrap();
+            .transpose()?;
 
         frame_pool
             .FrameArrived(
@@ -378,41 +379,8 @@ pub enum StopCapturerError {
 }
 
 impl Capturer {
-    pub fn stop(&mut self) -> Result<(), StopCapturerError> {
-        // let Some(thread_handle) = self.thread_handle.take() else {
-        //     return Err(StopCapturerError::NotStarted);
-        // };
-
-        // let Some(runner) = self.runner.take() else {
-        //     return Err(StopCapturerError::NotStarted);
-        // };
-
-        // runner._session.Close().unwrap();
-
-        self.session.Close().unwrap();
-
-        // self.runner.self.stop_flag.store(true, Ordering::Relaxed);
-
-        // let handle = HANDLE(thread_handle.as_raw_handle());
-        // let thread_id = unsafe { GetThreadId(handle) };
-
-        // while let Err(e) =
-        //     unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
-        // {
-        //     if thread_handle.is_finished() {
-        //         break;
-        //     }
-
-        //     if e.code().0 != -2147023452 {
-        //         return Err(StopCapturerError::PostMessageFailed);
-        //     }
-        // }
-
-        // thread_handle
-        //     .join()
-        //     .map_err(|_| StopCapturerError::ThreadJoinFailed)
-
-        Ok(())
+    pub fn stop(&mut self) -> windows::core::Result<()> {
+        self.session.Close()
     }
 }
 
