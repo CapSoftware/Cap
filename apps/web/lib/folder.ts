@@ -64,14 +64,12 @@ export const getFolderBreadcrumb = Effect.fn(function* (
   return breadcrumb;
 });
 
-// Helper function to fetch shared spaces data for videos
 const getSharedSpacesForVideos = Effect.fn(function* (
   videoIds: Video.VideoId[]
 ) {
   if (videoIds.length === 0) return {};
   const db = yield* Database;
 
-  // Fetch space-level sharing
   const spaceSharing = yield* db.execute((db) =>
     db
       .select({
@@ -92,7 +90,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
       )
   );
 
-  // Fetch organization-level sharing
   const orgSharing = yield* db.execute((db) =>
     db
       .select({
@@ -115,7 +112,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
       )
   );
 
-  // Combine and group by videoId
   const sharedSpacesMap: Record<
     string,
     Array<{
@@ -127,7 +123,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
     }>
   > = {};
 
-  // Add space-level sharing
   spaceSharing.forEach((space) => {
     const spaces = sharedSpacesMap[space.videoId] ?? [];
     sharedSpacesMap[space.videoId] = spaces;
@@ -229,14 +224,12 @@ export const getVideosByFolderId = Effect.fn(function* (
       )
   );
 
-  // Fetch shared spaces data for all videos
   const videoIds = videoData.map((video) => video.id);
   const sharedSpacesMap = yield* getSharedSpacesForVideos(videoIds);
 
-  // Process the video data to match the expected format
   const processedVideoData = videoData.map((video) => {
     return {
-      id: video.id as Video.VideoId, // Cast to Video.VideoId branded type
+      id: video.id as Video.VideoId,
       ownerId: video.ownerId,
       name: video.name,
       createdAt: video.createdAt,
@@ -317,7 +310,6 @@ export const getAllFolders = Effect.fn(function* (
 
   if (!user.activeOrganizationId) throw new Error("No active organization");
 
-  // Get all folders in one query
   const allFolders = yield* db.execute((db) =>
     db
       .select({
@@ -341,7 +333,6 @@ export const getAllFolders = Effect.fn(function* (
       )
   );
 
-  // Define the folder with children type
   type FolderWithChildren = {
     id: string;
     name: string;
@@ -352,16 +343,13 @@ export const getAllFolders = Effect.fn(function* (
     children: FolderWithChildren[];
   };
 
-  // Build hierarchy client-side
   const folderMap = new Map<string, FolderWithChildren>();
   const rootFolders: FolderWithChildren[] = [];
 
-  // First pass: create folder objects with children array
   allFolders.forEach((folder) => {
     folderMap.set(folder.id, { ...folder, children: [] });
   });
 
-  // Second pass: build parent-child relationships
   allFolders.forEach((folder) => {
     const folderWithChildren = folderMap.get(folder.id);
 
@@ -394,7 +382,6 @@ export const moveVideosToFolder = Effect.fn(function* (
 
   if (!user.activeOrganizationId) throw new Error("No active organization");
 
-  // Validate that all videos exist and belong to the user
   const existingVideos = yield* db.execute((db) =>
     db
       .select({
@@ -412,7 +399,6 @@ export const moveVideosToFolder = Effect.fn(function* (
     );
   }
 
-  // If target folder is specified, validate it exists and user has access
   if (targetFolderId) {
     const targetFolder = yield* getFolderById(targetFolderId);
 
@@ -420,12 +406,10 @@ export const moveVideosToFolder = Effect.fn(function* (
       throw new Error("Target folder not found or you don't have access to it");
     }
 
-    // Validate space context if provided
     if (root?.variant === "space" && targetFolder.spaceId !== root.spaceId) {
       throw new Error("Target folder does not belong to the specified space");
     }
 
-    // Block moves into space folders when not operating in that space
     if (root?.variant !== "space" && targetFolder.spaceId !== null) {
       throw new Error(
         "Target folder is scoped to a space and cannot be used here"
@@ -433,12 +417,10 @@ export const moveVideosToFolder = Effect.fn(function* (
     }
   }
 
-  // Determine original folder ids and perform the move based on context
   let originalFolderIds: (string | null)[] = [];
   const videoCountDeltas: Record<string, number> = {};
 
   if (root?.variant === "space") {
-    // Collect originals from space_videos
     const spaceRows = yield* db.execute((db) =>
       db
         .select({
@@ -461,7 +443,6 @@ export const moveVideosToFolder = Effect.fn(function* (
       );
     }
 
-    // Calculate per-folder decrements
     const folderCounts = new Map<string, number>();
     spaceRows.forEach((row) => {
       if (row.folderId) {
@@ -478,7 +459,6 @@ export const moveVideosToFolder = Effect.fn(function* (
 
     originalFolderIds = [...folderCounts.keys()];
 
-    // Update per-space folder placement
     yield* db.execute((db) =>
       db
         .update(spaceVideos)
@@ -491,7 +471,6 @@ export const moveVideosToFolder = Effect.fn(function* (
         )
     );
   } else {
-    // ORG/global placement via videos.folderId
     const folderCounts = new Map<string, number>();
     existingVideos.forEach((video) => {
       if (video.folderId) {
@@ -519,7 +498,6 @@ export const moveVideosToFolder = Effect.fn(function* (
     );
   }
 
-  // Add increment for target folder if specified
   if (targetFolderId) {
     videoCountDeltas[targetFolderId] =
       (videoCountDeltas[targetFolderId] || 0) + videoIds.length;

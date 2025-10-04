@@ -92,7 +92,10 @@ export function FolderSelectionDialog({
           return result;
         })
       ),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
+      const confirmedFolderId = result.targetFolderId;
+      const confirmedVideoIds = variables.videoIds;
+
       toast.success(result.message);
 
       const foldersQueryKey = [
@@ -127,14 +130,14 @@ export function FolderSelectionDialog({
           if (!oldVideos) return oldVideos;
 
           return oldVideos.map((video) =>
-            videoIds.includes(video.id)
-              ? { ...video, folderId: selectedFolderId }
+            confirmedVideoIds.includes(video.id)
+              ? { ...video, folderId: confirmedFolderId }
               : video
           );
         }
       );
 
-      onConfirm(selectedFolderId);
+      onConfirm(confirmedFolderId);
       setSelectedFolderId(null);
     },
     onError: (error) => {
