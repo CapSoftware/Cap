@@ -10,7 +10,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
-import { FolderSelectionDialog } from "@/app/(org)/dashboard/_components/FolderSelectionDialog";
+import { FolderSelectionDialog } from "@/app/(org)/dashboard/_components/folder-selection-dialog";
 
 interface SelectedCapsBarProps {
   selectedCaps: string[];
