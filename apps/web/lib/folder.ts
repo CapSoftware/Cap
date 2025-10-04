@@ -435,6 +435,7 @@ export const moveVideosToFolder = Effect.fn(function* (
 
   // Determine original folder ids and perform the move based on context
   let originalFolderIds: (string | null)[] = [];
+  const videoCountDeltas: Record<string, number> = {};
 
   if (root?.variant === "space") {
     // Collect originals from space_videos
@@ -459,9 +460,20 @@ export const moveVideosToFolder = Effect.fn(function* (
         "Some videos are not in the specified space or you don't have permission to move them"
       );
     }
-    originalFolderIds = [
-      ...new Set(spaceRows.map((r) => r.folderId).filter(Boolean)),
-    ];
+    
+    // Calculate per-folder decrements
+    const folderCounts = new Map<string, number>();
+    spaceRows.forEach((row) => {
+      if (row.folderId) {
+        folderCounts.set(row.folderId, (folderCounts.get(row.folderId) || 0) + 1);
+      }
+    });
+    
+    folderCounts.forEach((count, folderId) => {
+      videoCountDeltas[folderId] = -count;
+    });
+    
+    originalFolderIds = [...folderCounts.keys()];
 
     // Update per-space folder placement
     yield* db.execute((db) =>
@@ -477,9 +489,18 @@ export const moveVideosToFolder = Effect.fn(function* (
     );
   } else {
     // ORG/global placement via videos.folderId
-    originalFolderIds = [
-      ...new Set(existingVideos.map((v) => v.folderId).filter(Boolean)),
-    ];
+    const folderCounts = new Map<string, number>();
+    existingVideos.forEach((video) => {
+      if (video.folderId) {
+        folderCounts.set(video.folderId, (folderCounts.get(video.folderId) || 0) + 1);
+      }
+    });
+    
+    folderCounts.forEach((count, folderId) => {
+      videoCountDeltas[folderId] = -count;
+    });
+    
+    originalFolderIds = [...folderCounts.keys()];
 
     yield* db.execute((db) =>
       db
@@ -492,9 +513,15 @@ export const moveVideosToFolder = Effect.fn(function* (
     );
   }
 
+  // Add increment for target folder if specified
+  if (targetFolderId) {
+    videoCountDeltas[targetFolderId] = (videoCountDeltas[targetFolderId] || 0) + videoIds.length;
+  }
+
   return {
     movedCount: videoIds.length,
     originalFolderIds,
     targetFolderId,
+    videoCountDeltas,
   };
 });

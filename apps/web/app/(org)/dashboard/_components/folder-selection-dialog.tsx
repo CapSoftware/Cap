@@ -101,28 +101,23 @@ export function FolderSelectionDialog({
         activeSpace?.id,
       ];
 
+      const applyFolderDeltas = (
+        nodes: FolderWithChildren[],
+        deltas: Record<string, number>
+      ): FolderWithChildren[] =>
+        nodes.map((node) => ({
+          ...node,
+          videoCount: Math.max(0, node.videoCount + (deltas[node.id] ?? 0)),
+          children: node.children
+            ? applyFolderDeltas(node.children, deltas)
+            : [],
+        }));
+
       queryClient.setQueryData(
         foldersQueryKey,
         (oldFolders: FolderWithChildren[] | undefined) => {
           if (!oldFolders) return oldFolders;
-
-          return oldFolders.map((folder) => ({
-            ...folder,
-            videoCount: result.originalFolderIds.includes(folder.id)
-              ? Math.max(0, folder.videoCount - videoIds.length)
-              : folder.id === selectedFolderId
-              ? folder.videoCount + videoIds.length
-              : folder.videoCount,
-            children:
-              folder.children?.map((child) => ({
-                ...child,
-                videoCount: result.originalFolderIds.includes(child.id)
-                  ? Math.max(0, child.videoCount - videoIds.length)
-                  : child.id === selectedFolderId
-                  ? child.videoCount + videoIds.length
-                  : child.videoCount,
-              })) || [],
-          }));
+          return applyFolderDeltas(oldFolders, result.videoCountDeltas);
         }
       );
 

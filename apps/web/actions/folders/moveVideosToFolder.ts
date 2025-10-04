@@ -86,6 +86,7 @@ export async function moveVideosToFolderAction({
       movedCount: result.movedCount,
       originalFolderIds: result.originalFolderIds,
       targetFolderId: result.targetFolderId,
+      videoCountDeltas: result.videoCountDeltas,
     };
   } catch (error) {
     console.error("Error moving videos to folder:", error);
