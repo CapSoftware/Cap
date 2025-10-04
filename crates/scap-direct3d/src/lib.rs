@@ -118,10 +118,20 @@ pub enum NewCapturerError {
     CursorNotSupported,
     #[error("UpdateIntervalNotSupported")]
     UpdateIntervalNotSupported,
-    #[error("D3DDevice: {0}")]
-    D3DDevice(windows::core::Error),
-    #[error("CreateRunner/{0}")]
-    CreateRunner(#[from] StartRunnerError),
+    #[error("CreateDevice: {0}")]
+    CreateDevice(windows::core::Error),
+    #[error("Direct3DDevice: {0}")]
+    Direct3DDevice(windows::core::Error),
+    #[error("FramePool: {0}")]
+    FramePool(windows::core::Error),
+    #[error("CaptureSession: {0}")]
+    CaptureSession(windows::core::Error),
+    #[error("CropTexture: {0}")]
+    CropTexture(windows::core::Error),
+    #[error("RegisterFrameArrived: {0}")]
+    RegisterFrameArrived(windows::core::Error),
+    #[error("RegisterClosed: {0}")]
+    RegisterClosed(windows::core::Error),
     #[error("RecvTimeout")]
     RecvTimeout(#[from] RecvError),
     #[error("Other: {0}")]
@@ -176,7 +186,7 @@ impl Capturer {
                     None,
                 )
             }
-            .map_err(StartRunnerError::D3DDevice)?;
+            .map_err(NewCapturerError::CreateDevice)?;
         }
 
         let (d3d_device, d3d_context) = d3d_device
@@ -194,8 +204,7 @@ impl Capturer {
             let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?;
             inspectable.cast::<IDirect3DDevice>()
         })()
-        .unwrap();
-        // .map_err(StartRunnerError::Direct3DDevice)?;
+        .map_err(NewCapturerError::Direct3DDevice)?;
 
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
@@ -203,11 +212,11 @@ impl Capturer {
             1,
             item.Size().unwrap(),
         )
-        .unwrap();
-        // .map_err(StartRunnerError::FramePool)?;
+        .map_err(NewCapturerError::FramePool)?;
 
-        let session = frame_pool.CreateCaptureSession(&item).unwrap();
-        // .map_err(StartRunnerError::CaptureSession)?;
+        let session = frame_pool
+            .CreateCaptureSession(&item)
+            .map_err(NewCapturerError::CaptureSession)?;
 
         if let Some(border_required) = settings.is_border_required {
             session.SetIsBorderRequired(border_required).unwrap();
@@ -246,9 +255,9 @@ impl Capturer {
 
                 let mut texture = None;
                 unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
-                    .map_err(StartRunnerError::CropTexture)?;
+                    .map_err(NewCapturerError::CropTexture)?;
 
-                Ok::<_, StartRunnerError>((texture.unwrap(), crop))
+                Ok::<_, NewCapturerError>((texture.unwrap(), crop))
             })
             .transpose()
             .unwrap();
@@ -314,15 +323,14 @@ impl Capturer {
                     }
                 }),
             )
-            .unwrap();
-        // .map_err(StartRunnerError::RegisterFrameArrived)?;
+            .map_err(NewCapturerError::RegisterFrameArrived)?;
 
         item.Closed(
             &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
                 closed_callback()
             }),
         )
-        .unwrap();
+        .map_err(NewCapturerError::RegisterClosed)?;
 
         Ok(Capturer {
             settings,
@@ -351,15 +359,6 @@ impl Capturer {
     }
 }
 
-#[derive(Clone, Debug, thiserror::Error)]
-pub enum StartCapturerError {
-    #[error("AlreadyStarted")]
-    AlreadyStarted,
-    #[error("StartFailed/{0}")]
-    StartFailed(StartRunnerError),
-    #[error("RecvFailed")]
-    RecvFailed(RecvError),
-}
 impl Capturer {
     pub fn start(&mut self) -> windows::core::Result<()> {
         self.session.StartCapture()
@@ -556,64 +555,3 @@ impl<'a> FrameBuffer<'a> {
         self.pixel_format
     }
 }
-
-#[derive(Clone, Debug, thiserror::Error)]
-pub enum StartRunnerError {
-    #[error("Failed to initialize WinRT")]
-    FailedToInitializeWinRT,
-    #[error("DispatchQueue: {0}")]
-    DispatchQueue(windows::core::Error),
-    #[error("D3DDevice: {0}")]
-    D3DDevice(windows::core::Error),
-    #[error("Direct3DDevice: {0}")]
-    Direct3DDevice(windows::core::Error),
-    #[error("FramePool: {0}")]
-    FramePool(windows::core::Error),
-    #[error("CaptureSession: {0}")]
-    CaptureSession(windows::core::Error),
-    #[error("CropTexture: {0}")]
-    CropTexture(windows::core::Error),
-    #[error("RegisterFrameArrived: {0}")]
-    RegisterFrameArrived(windows::core::Error),
-    #[error("RegisterClosed: {0}")]
-    RegisterClosed(windows::core::Error),
-    #[error("StartCapture: {0}")]
-    StartCapture(windows::core::Error),
-    #[error("Other: {0}")]
-    Other(#[from] windows::core::Error),
-}
-
-// #[derive(Clone)]
-// struct Runner {
-//     _session: GraphicsCaptureSession,
-//     _frame_pool: Direct3D11CaptureFramePool,
-// }
-
-// impl Runner {
-//     fn start(
-//         item: GraphicsCaptureItem,
-//         settings: Settings,
-//         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
-//         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-//         stop_flag: Arc<AtomicBool>,
-//         d3d_device: ID3D11Device,
-//         d3d_context: ID3D11DeviceContext,
-//     ) -> Result<Self, StartRunnerError> {
-//         session
-//             .StartCapture()
-//             .map_err(StartRunnerError::StartCapture)?;
-
-//         Ok(Self {
-//             _session: session,
-//             _frame_pool: frame_pool,
-//         })
-//     }
-
-//     // fn run(self) {
-//     // let mut message = MSG::default();
-//     // while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
-//     //     let _ = unsafe { TranslateMessage(&message) };
-//     //     unsafe { DispatchMessageW(&message) };
-//     // }
-//     // }
-// }
