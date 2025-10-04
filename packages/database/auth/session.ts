@@ -22,7 +22,12 @@ export const getCurrentUser = cache(
 			.from(users)
 			.where(eq(users.id, session.user.id));
 
-		return currentUser ?? null;
+		return currentUser
+			? {
+					...currentUser,
+					activeOrganizationId: currentUser?.activeOrganizationId ?? null,
+				}
+			: null;
 	},
 );
 

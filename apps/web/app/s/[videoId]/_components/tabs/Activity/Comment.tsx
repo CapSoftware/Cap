@@ -52,7 +52,7 @@ const Comment: React.FC<{
 
 	const handleDelete = () => {
 		if (window.confirm("Are you sure you want to delete this comment?")) {
-			onDelete(comment.id, comment.parentCommentId);
+			onDelete(comment.id, comment.parentCommentId ?? undefined);
 		}
 	};
 

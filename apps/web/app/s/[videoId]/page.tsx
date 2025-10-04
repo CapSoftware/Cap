@@ -619,7 +619,7 @@ async function AuthorizedContent({
 				.from(comments)
 				.where(eq(comments.id, replyId))
 				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId;
+			toplLevelCommentId = parentComment?.parentCommentId ?? undefined;
 		}
 
 		const commentToBringToTheTop = toplLevelCommentId ?? commentId;

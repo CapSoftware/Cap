@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations } from "@cap/database/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDashboardData } from "../../dashboard-data";
@@ -31,7 +31,7 @@ export default async function OrganizationPage() {
 		.where(
 			and(
 				eq(organizationMembers.userId, user.id),
-				eq(organizations.id, user.activeOrganizationId),
+				eq(organizations.id, user.activeOrganizationId ?? sql`NULL`),
 			),
 		);
 

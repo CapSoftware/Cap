@@ -125,7 +125,7 @@ export default async function CapsPage(props: {
 			domainVerified: organizations.domainVerified,
 		})
 		.from(organizations)
-		.where(eq(organizations.id, user.activeOrganizationId))
+		.where(eq(organizations.id, user.activeOrganizationId ?? sql`NULL`))
 		.limit(1);
 
 	let customDomain: string | null = null;
@@ -214,7 +214,7 @@ export default async function CapsPage(props: {
 		.from(folders)
 		.where(
 			and(
-				eq(folders.organizationId, user.activeOrganizationId),
+				eq(folders.organizationId, user.activeOrganizationId ?? sql`NULL`),
 				isNull(folders.parentId),
 				isNull(folders.spaceId),
 			),
