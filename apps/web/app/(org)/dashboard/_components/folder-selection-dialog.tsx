@@ -17,7 +17,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
 import { useState } from "react";
 import { getAllFoldersAction } from "../../../../actions/folders/getAllFolders";
-import { moveVideosToFolderAction } from "../../../../actions/folders/moveVideosToFolder";
+import { moveVideosToFolderAction } from "../../../../actions/folders/move-videos-to-folder";
 import { useDashboardContext } from "../Contexts";
 import { toast } from "sonner";
 import { Effect } from "effect";

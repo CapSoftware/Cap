@@ -460,19 +460,22 @@ export const moveVideosToFolder = Effect.fn(function* (
         "Some videos are not in the specified space or you don't have permission to move them"
       );
     }
-    
+
     // Calculate per-folder decrements
     const folderCounts = new Map<string, number>();
     spaceRows.forEach((row) => {
       if (row.folderId) {
-        folderCounts.set(row.folderId, (folderCounts.get(row.folderId) || 0) + 1);
+        folderCounts.set(
+          row.folderId,
+          (folderCounts.get(row.folderId) || 0) + 1
+        );
       }
     });
-    
+
     folderCounts.forEach((count, folderId) => {
       videoCountDeltas[folderId] = -count;
     });
-    
+
     originalFolderIds = [...folderCounts.keys()];
 
     // Update per-space folder placement
@@ -492,14 +495,17 @@ export const moveVideosToFolder = Effect.fn(function* (
     const folderCounts = new Map<string, number>();
     existingVideos.forEach((video) => {
       if (video.folderId) {
-        folderCounts.set(video.folderId, (folderCounts.get(video.folderId) || 0) + 1);
+        folderCounts.set(
+          video.folderId,
+          (folderCounts.get(video.folderId) || 0) + 1
+        );
       }
     });
-    
+
     folderCounts.forEach((count, folderId) => {
       videoCountDeltas[folderId] = -count;
     });
-    
+
     originalFolderIds = [...folderCounts.keys()];
 
     yield* db.execute((db) =>
@@ -515,7 +521,8 @@ export const moveVideosToFolder = Effect.fn(function* (
 
   // Add increment for target folder if specified
   if (targetFolderId) {
-    videoCountDeltas[targetFolderId] = (videoCountDeltas[targetFolderId] || 0) + videoIds.length;
+    videoCountDeltas[targetFolderId] =
+      (videoCountDeltas[targetFolderId] || 0) + videoIds.length;
   }
 
   return {
