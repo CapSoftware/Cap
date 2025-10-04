@@ -143,7 +143,7 @@ const RecordingModes = () => {
 				</div>
 				{/*Video Description*/}
 				<div className="p-4 border-t border-b bg-gray-2 border-gray-5">
-					<p className="mx-auto w-full text-lg text-center text-gray-10">
+					<p className="mx-auto w-full text-lg text-center text-gray-12">
 						{activeMode?.description}
 					</p>
 				</div>
