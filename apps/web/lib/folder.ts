@@ -16,7 +16,7 @@ import {
 import { Database } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
@@ -298,7 +298,7 @@ export const getChildFolders = Effect.fn(function* (
           eq(folders.organizationId, user.activeOrganizationId),
           root.variant === "space"
             ? eq(folders.spaceId, root.spaceId)
-            : undefined
+            : isNull(folders.spaceId)
         )
       )
   );
@@ -336,7 +336,7 @@ export const getAllFolders = Effect.fn(function* (
           eq(folders.organizationId, user.activeOrganizationId),
           root.variant === "space"
             ? eq(folders.spaceId, root.spaceId)
-            : undefined
+            : isNull(folders.spaceId)
         )
       )
   );
@@ -423,6 +423,13 @@ export const moveVideosToFolder = Effect.fn(function* (
     // Validate space context if provided
     if (root?.variant === "space" && targetFolder.spaceId !== root.spaceId) {
       throw new Error("Target folder does not belong to the specified space");
+    }
+
+    // Block moves into space folders when not operating in that space
+    if (root?.variant !== "space" && targetFolder.spaceId !== null) {
+      throw new Error(
+        "Target folder is scoped to a space and cannot be used here"
+      );
     }
   }
 

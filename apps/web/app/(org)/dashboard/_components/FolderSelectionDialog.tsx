@@ -14,12 +14,15 @@ import {
   faChevronDown,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useQuery } from "@tanstack/react-query";
+import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { useState } from "react";
 import { getAllFoldersAction } from "../../../../actions/folders/getAllFolders";
 import { moveVideosToFolderAction } from "../../../../actions/folders/moveVideosToFolder";
 import { useDashboardContext } from "../Contexts";
 import { toast } from "sonner";
+import { Effect } from "effect";
+import { useQueryClient } from "@tanstack/react-query";
 
 type FolderWithChildren = {
   id: string;
@@ -35,7 +38,6 @@ interface FolderSelectionDialogProps {
   open: boolean;
   onClose: () => void;
   onConfirm: (folderId: string | null) => void;
-  loading?: boolean;
   selectedCount: number;
   videoIds: string[];
 }
@@ -44,7 +46,6 @@ export function FolderSelectionDialog({
   open,
   onClose,
   onConfirm,
-  loading = false,
   selectedCount,
   videoIds,
 }: FolderSelectionDialogProps) {
@@ -53,30 +54,66 @@ export function FolderSelectionDialog({
     new Set()
   );
   const { activeOrganization, activeSpace } = useDashboardContext();
+  const queryClient = useQueryClient();
 
-  // Fetch folders using the server action
-  const { data: foldersData, isLoading } = useQuery({
+  // Fetch folders using useEffectQuery
+  const { data: foldersData, isLoading } = useEffectQuery({
     queryKey: ["folders", activeOrganization?.organization.id, activeSpace?.id],
-    queryFn: async () => {
-      const root = activeSpace?.id
-        ? { variant: "space" as const, spaceId: activeSpace.id }
-        : {
-            variant: "org" as const,
-            organizationId: activeOrganization!.organization.id,
-          };
+    queryFn: () =>
+      Effect.tryPromise(() => {
+        const root = activeSpace?.id
+          ? { variant: "space" as const, spaceId: activeSpace.id }
+          : {
+              variant: "org" as const,
+              organizationId: activeOrganization!.organization.id,
+            };
 
-      const result = await getAllFoldersAction(root);
-
-      if (!result.success) {
-        throw new Error(result.error || "Failed to fetch folders");
-      }
-
-      return result.folders;
-    },
+        return getAllFoldersAction(root).then((result) => {
+          if (!result.success) {
+            throw new Error(result.error || "Failed to fetch folders");
+          }
+          return result.folders;
+        });
+      }),
     enabled: open && !!activeOrganization?.organization.id,
   });
 
   const folders = foldersData || [];
+
+  // Move videos mutation using useEffectMutation
+  const moveVideosMutation = useEffectMutation({
+    mutationFn: (params: {
+      videoIds: string[];
+      targetFolderId: string | null;
+      spaceId?: string | null;
+    }) =>
+      Effect.tryPromise(() =>
+        moveVideosToFolderAction(params).then((result) => {
+          if (!result.success) {
+            throw new Error(result.error || "Failed to move videos");
+          }
+          return result;
+        })
+      ),
+    onSuccess: (result) => {
+      toast.success(result.message);
+      
+      // Invalidate related queries to refresh data
+      queryClient.invalidateQueries({ 
+        queryKey: ["folders", activeOrganization?.organization.id, activeSpace?.id] 
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: ["videos"] 
+      });
+      
+      onConfirm(selectedFolderId);
+      setSelectedFolderId(null);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Failed to move videos");
+      console.error("Error moving videos:", error);
+    },
+  });
 
   // Toggle folder expansion
   const toggleFolderExpansion = (folderId: string) => {
@@ -165,25 +202,12 @@ export function FolderSelectionDialog({
     );
   };
 
-  const handleConfirm = async () => {
-    try {
-      const result = await moveVideosToFolderAction({
-        videoIds,
-        targetFolderId: selectedFolderId,
-        spaceId: activeSpace?.id,
-      });
-
-      if (result.success) {
-        toast.success(result.message);
-        onConfirm(selectedFolderId);
-        setSelectedFolderId(null);
-      } else {
-        toast.error(result.error);
-      }
-    } catch (error) {
-      toast.error("Failed to move videos");
-      console.error("Error moving videos:", error);
-    }
+  const handleConfirm = () => {
+    moveVideosMutation.mutate({
+      videoIds,
+      targetFolderId: selectedFolderId,
+      spaceId: activeSpace?.id,
+    });
   };
 
   const handleCancel = () => {
@@ -267,7 +291,7 @@ export function FolderSelectionDialog({
             onClick={handleCancel}
             variant="gray"
             size="sm"
-            disabled={loading}
+            disabled={moveVideosMutation.isPending}
           >
             Cancel
           </Button>
@@ -275,10 +299,10 @@ export function FolderSelectionDialog({
             onClick={handleConfirm}
             variant="dark"
             size="sm"
-            spinner={loading}
-            disabled={loading}
+            spinner={moveVideosMutation.isPending}
+            disabled={moveVideosMutation.isPending}
           >
-            {loading ? "Moving..." : "Move"}
+            {moveVideosMutation.isPending ? "Moving..." : "Move"}
           </Button>
         </DialogFooter>
       </DialogContent>

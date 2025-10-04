@@ -120,7 +120,6 @@ export const SelectedCapsBar = ({
               onClose={() => setMoveDialogOpen(false)}
               onConfirm={handleMoveToFolder}
               selectedCount={selectedCaps.length}
-              loading={false}
               videoIds={selectedCaps}
             />
           </div>
