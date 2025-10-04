@@ -97,6 +97,7 @@ impl InterpolatedScene {
                         (SceneMode::CameraOnly, SceneMode::CameraOnly)
                             | (SceneMode::Default, SceneMode::Default)
                             | (SceneMode::HideCamera, SceneMode::HideCamera)
+                            | (SceneMode::SplitView, SceneMode::SplitView)
                     );
                     if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                         // Small gap between same modes, no transition needed
@@ -121,6 +122,7 @@ impl InterpolatedScene {
                         (SceneMode::CameraOnly, SceneMode::CameraOnly)
                             | (SceneMode::Default, SceneMode::Default)
                             | (SceneMode::HideCamera, SceneMode::HideCamera)
+                            | (SceneMode::SplitView, SceneMode::SplitView)
                     );
                     if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                         // Keep the current mode without transitioning
@@ -169,6 +171,7 @@ impl InterpolatedScene {
                     (SceneMode::CameraOnly, SceneMode::CameraOnly)
                         | (SceneMode::Default, SceneMode::Default)
                         | (SceneMode::HideCamera, SceneMode::HideCamera)
+                        | (SceneMode::SplitView, SceneMode::SplitView)
                 );
                 if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                     (prev_seg.mode, prev_seg.mode, 1.0)
@@ -288,6 +291,7 @@ impl InterpolatedScene {
             SceneMode::Default => (1.0, 1.0, 1.0),
             SceneMode::CameraOnly => (1.0, 1.0, 1.0),
             SceneMode::HideCamera => (0.0, 1.0, 1.0),
+            SceneMode::SplitView => (1.0, 1.0, 1.0),
         }
     }
 
@@ -300,7 +304,54 @@ impl InterpolatedScene {
     }
 
     pub fn should_render_screen(&self) -> bool {
+        // Don't render regular screen during split view (except during transitions)
+        if matches!(self.scene_mode, SceneMode::SplitView) && !self.is_transitioning_split_view() {
+            return false;
+        }
+        // Always render screen during split view transitions for cross-fade effect
+        if self.is_transitioning_split_view() {
+            return true;
+        }
         self.screen_opacity > 0.01 || self.screen_blur > 0.01
+    }
+
+    pub fn regular_screen_transition_opacity(&self) -> f64 {
+        // Handle transitions to/from CameraOnly
+        if matches!(self.to_mode, SceneMode::CameraOnly)
+            && !matches!(self.from_mode, SceneMode::CameraOnly)
+        {
+            // Keep screen visible underneath camera-only transition
+            // but fade it slightly to create the overlay effect
+            let fade = (1.0 - self.transition_progress * 0.3).max(0.7);
+            fade * self.screen_opacity
+        } else if matches!(self.from_mode, SceneMode::CameraOnly)
+            && !matches!(self.to_mode, SceneMode::CameraOnly)
+        {
+            // Restore screen opacity as camera-only fades out
+            let fade = (0.7 + self.transition_progress * 0.3).min(1.0);
+            fade * self.screen_opacity
+        }
+        // Handle transitions to/from SplitView
+        else if matches!(self.to_mode, SceneMode::SplitView)
+            && !matches!(self.from_mode, SceneMode::SplitView)
+        {
+            // Keep screen visible underneath split view transition for cross-fade effect
+            // Similar to camera-only, fade slightly but keep visible
+            let fade = (1.0 - self.transition_progress * 0.3).max(0.7);
+            fade * self.screen_opacity
+        } else if matches!(self.from_mode, SceneMode::SplitView)
+            && !matches!(self.to_mode, SceneMode::SplitView)
+        {
+            // Restore screen opacity as split view fades out
+            let fade = (0.7 + self.transition_progress * 0.3).min(1.0);
+            fade * self.screen_opacity
+        } else if matches!(self.from_mode, SceneMode::SplitView)
+            && matches!(self.to_mode, SceneMode::SplitView)
+        {
+            0.0
+        } else {
+            self.screen_opacity
+        }
     }
 
     pub fn is_transitioning_camera_only(&self) -> bool {
@@ -308,15 +359,52 @@ impl InterpolatedScene {
             || matches!(self.to_mode, SceneMode::CameraOnly)
     }
 
+    pub fn is_split_view(&self) -> bool {
+        matches!(self.scene_mode, SceneMode::SplitView)
+    }
+
+    pub fn is_transitioning_split_view(&self) -> bool {
+        matches!(self.from_mode, SceneMode::SplitView)
+            || matches!(self.to_mode, SceneMode::SplitView)
+    }
+
+    pub fn split_view_transition_opacity(&self) -> f64 {
+        if matches!(self.from_mode, SceneMode::SplitView)
+            && !matches!(self.to_mode, SceneMode::SplitView)
+        {
+            1.0 - self.transition_progress
+        } else if !matches!(self.from_mode, SceneMode::SplitView)
+            && matches!(self.to_mode, SceneMode::SplitView)
+        {
+            self.transition_progress
+        } else if matches!(self.from_mode, SceneMode::SplitView)
+            && matches!(self.to_mode, SceneMode::SplitView)
+        {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
     pub fn camera_only_transition_opacity(&self) -> f64 {
         if matches!(self.from_mode, SceneMode::CameraOnly)
             && !matches!(self.to_mode, SceneMode::CameraOnly)
         {
-            1.0 - self.transition_progress
+            // Maintain full opacity until late in transition to ensure coverage
+            if self.transition_progress < 0.7 {
+                1.0
+            } else {
+                ((1.0 - self.transition_progress) / 0.3).max(0.0)
+            }
         } else if !matches!(self.from_mode, SceneMode::CameraOnly)
             && matches!(self.to_mode, SceneMode::CameraOnly)
         {
-            self.transition_progress
+            // Start fading in early to ensure no gaps
+            if self.transition_progress > 0.3 {
+                1.0
+            } else {
+                (self.transition_progress / 0.3).min(1.0)
+            }
         } else if matches!(self.from_mode, SceneMode::CameraOnly)
             && matches!(self.to_mode, SceneMode::CameraOnly)
         {
@@ -327,18 +415,45 @@ impl InterpolatedScene {
     }
 
     pub fn regular_camera_transition_opacity(&self) -> f64 {
+        // Handle transitions to/from CameraOnly
         if matches!(self.to_mode, SceneMode::CameraOnly)
             && !matches!(self.from_mode, SceneMode::CameraOnly)
         {
-            let fast_fade = (1.0 - self.transition_progress * 1.5).max(0.0);
-            fast_fade * self.camera_opacity
+            // Fade out quickly but maintain full opacity initially to prevent background showing
+            if self.transition_progress < 0.3 {
+                self.camera_opacity
+            } else {
+                let fast_fade = ((1.0 - self.transition_progress) / 0.7).max(0.0);
+                fast_fade * self.camera_opacity
+            }
         } else if matches!(self.from_mode, SceneMode::CameraOnly)
             && !matches!(self.to_mode, SceneMode::CameraOnly)
         {
-            let fast_fade = (self.transition_progress * 1.5).min(1.0);
-            fast_fade * self.camera_opacity
+            // Fade in quickly but ensure no gap
+            if self.transition_progress > 0.7 {
+                self.camera_opacity
+            } else {
+                let fast_fade = (self.transition_progress / 0.7).min(1.0);
+                fast_fade * self.camera_opacity
+            }
         } else if matches!(self.from_mode, SceneMode::CameraOnly)
             && matches!(self.to_mode, SceneMode::CameraOnly)
+        {
+            0.0
+        }
+        // Handle transitions to/from SplitView
+        else if matches!(self.to_mode, SceneMode::SplitView)
+            && !matches!(self.from_mode, SceneMode::SplitView)
+        {
+            // Fade out regular camera when transitioning to split view
+            (1.0 - self.transition_progress) * self.camera_opacity
+        } else if matches!(self.from_mode, SceneMode::SplitView)
+            && !matches!(self.to_mode, SceneMode::SplitView)
+        {
+            // Fade in regular camera when transitioning from split view
+            self.transition_progress * self.camera_opacity
+        } else if matches!(self.from_mode, SceneMode::SplitView)
+            && matches!(self.to_mode, SceneMode::SplitView)
         {
             0.0
         } else {
