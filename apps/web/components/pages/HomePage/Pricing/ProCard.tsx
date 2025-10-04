@@ -120,7 +120,7 @@ export const ProCard = () => {
 					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-4 text-sm font-medium text-center text-gray-6">
+					<p className="mb-4 text-base text-center text-gray-6">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
@@ -134,11 +134,11 @@ export const ProCard = () => {
 						{billingCycleTextPro}
 					</span>
 					{isAnnually ? (
-						<p className="text-sm text-gray-8">
+						<p className="text-base text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
-								className="text-sm tabular-nums"
+								className="text-base tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -151,18 +151,21 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
+									<NumberFlow
+										value={users}
+										className="text-base tabular-nums"
+									/>{" "}
 									users,{" "}
 								</>
 							)}
 							billed monthly
 						</p>
 					) : (
-						<p className="text-sm text-gray-8">
+						<p className="text-base text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
-								className="text-sm tabular-nums"
+								className="text-base tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -175,7 +178,10 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
+									<NumberFlow
+										value={users}
+										className="text-base tabular-nums"
+									/>{" "}
 									users,{" "}
 								</>
 							)}

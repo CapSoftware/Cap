@@ -77,13 +77,13 @@ export const CommercialCard = () => {
 					<h3 className="mb-2 text-xl font-semibold text-center text-gray-12">
 						{homepageCopy.pricing.commercial.title}
 					</h3>
-					<p className="mb-3 text-sm text-center text-gray-11 w-full max-w-[285px] mx-auto font-medium">
+					<p className="mb-3 text-base text-center text-gray-11 w-full max-w-[285px] mx-auto">
 						{homepageCopy.pricing.commercial.description}
 					</p>
 					<div className="mb-6 text-center">
 						<a
 							href="/docs/commercial-license"
-							className="text-xs underline text-gray-10 hover:text-gray-12"
+							className="text-sm underline text-gray-10 hover:text-gray-12"
 						>
 							Learn more about the commercial license here
 						</a>
@@ -99,7 +99,7 @@ export const CommercialCard = () => {
 						/ {billingCycleText}
 					</span>
 					{isYearly ? (
-						<p className="text-sm tabular-nums text-gray-10">
+						<p className="text-base tabular-nums text-gray-10">
 							or, $
 							<NumberFlow
 								value={licenses * COMMERCIAL_LICENSE_LIFETIME_PRICE}
@@ -107,7 +107,7 @@ export const CommercialCard = () => {
 							one-time payment
 						</p>
 					) : (
-						<p className="text-sm tabular-nums text-gray-10">
+						<p className="text-base tabular-nums text-gray-10">
 							or, $
 							<NumberFlow value={licenses * COMMERCIAL_LICENSE_YEARLY_PRICE} />{" "}
 							/ year
