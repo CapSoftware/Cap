@@ -59,7 +59,7 @@ const RecordingModes = () => {
 				<h1 className="text-4xl font-medium text-gray-12">
 					{homepageCopy.recordingModes.title}
 				</h1>
-				<p className="text-lg text-gray-10">
+				<p className="text-lg text-gray-10 w-full max-w-[670px] mx-auto">
 					{homepageCopy.recordingModes.subtitle}
 				</p>
 			</div>
