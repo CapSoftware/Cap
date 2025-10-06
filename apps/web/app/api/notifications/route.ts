@@ -55,7 +55,10 @@ export async function GET() {
 			.where(
 				and(
 					eq(notifications.recipientId, currentUser.id),
-					eq(notifications.orgId, currentUser.activeOrganizationId),
+					eq(
+						notifications.orgId,
+						currentUser.activeOrganizationId ?? sql`NULL`,
+					),
 				),
 			)
 			.orderBy(
@@ -72,7 +75,10 @@ export async function GET() {
 			.where(
 				and(
 					eq(notifications.recipientId, currentUser.id),
-					eq(notifications.orgId, currentUser.activeOrganizationId),
+					eq(
+						notifications.orgId,
+						currentUser.activeOrganizationId ?? sql`NULL`,
+					),
 				),
 			)
 			.groupBy(notifications.type);

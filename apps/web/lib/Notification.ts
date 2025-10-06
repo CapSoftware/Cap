@@ -88,7 +88,6 @@ export async function createNotification(
 			const [recipientUser] = await db()
 				.select({
 					preferences: users.preferences,
-					activeOrganizationId: users.activeOrganizationId,
 				})
 				.from(users)
 				.where(eq(users.id, recipientId))
@@ -122,7 +121,7 @@ export async function createNotification(
 
 			await db().insert(notifications).values({
 				id: notificationId,
-				orgId: recipientUser.activeOrganizationId,
+				orgId: undefined, // TODO: BRUHHHHH: recipientUser.activeOrganizationId,
 				recipientId,
 				type,
 				data,
