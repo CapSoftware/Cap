@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 
 export async function updateOrganizationSettings(settings: {
 	disableSummary?: boolean;
@@ -36,6 +37,8 @@ export async function updateOrganizationSettings(settings: {
 		.update(organizations)
 		.set({ settings })
 		.where(eq(organizations.id, user.activeOrganizationId));
+
+	revalidatePath("/dashboard/caps");
 
 	return { success: true };
 }

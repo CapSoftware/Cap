@@ -93,7 +93,20 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 					data.organizationMembers?.includes(user?.id ?? "")),
 		);
 
-		const [activeTab, setActiveTab] = useState<TabType>("activity");
+		const defaultTab = !(
+			videoSettings?.disableComments ?? data.orgSettings?.disableComments
+		)
+			? "activity"
+			: !(videoSettings?.disableSummary ?? data.orgSettings?.disableSummary)
+				? "summary"
+				: !(
+							videoSettings?.disableTranscript ??
+							data.orgSettings?.disableTranscript
+						)
+					? "transcript"
+					: "activity";
+
+		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
 		const [[page, direction], setPage] = useState([0, 0]);
 
 		const tabs = [
@@ -143,6 +156,11 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								ref={ref}
 								views={views}
 								comments={commentsData}
+								commentsDisabled={
+									videoSettings?.disableComments ??
+									data.orgSettings?.disableComments ??
+									false
+								}
 								setComments={setCommentsData}
 								user={user}
 								optimisticComments={optimisticComments}

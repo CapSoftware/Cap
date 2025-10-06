@@ -34,7 +34,7 @@ const options = [
 	{
 		label: "Disable summary",
 		value: "disableSummary",
-		description: "Remove the summary for this cap",
+		description: "Remove the summary for this cap (requires transcript)",
 		pro: true,
 	},
 	{
@@ -45,7 +45,7 @@ const options = [
 	{
 		label: "Disable chapters",
 		value: "disableChapters",
-		description: "Remove the chapters for this cap",
+		description: "Remove the chapters for this cap (requires transcript)",
 		pro: true,
 	},
 	{
@@ -56,7 +56,8 @@ const options = [
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description: "Remove the transcript for this cap",
+		description:
+			"Remove the transcript for this cap, this also disables chapters and summary",
 		pro: true,
 	},
 ];
@@ -67,15 +68,15 @@ export const SettingsDialog = ({
 	capId,
 	settingsData,
 }: SettingsDialogProps) => {
-	const { user } = useDashboardContext();
+	const { user, organizationSettings } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
 	const [settings, setSettings] = useState<OrganizationSettings>({
-		disableComments: settingsData?.disableComments ?? false,
-		disableSummary: settingsData?.disableSummary ?? false,
-		disableCaptions: settingsData?.disableCaptions ?? false,
-		disableChapters: settingsData?.disableChapters ?? false,
-		disableReactions: settingsData?.disableReactions ?? false,
-		disableTranscript: settingsData?.disableTranscript ?? false,
+		disableComments: settingsData?.disableComments,
+		disableSummary: settingsData?.disableSummary,
+		disableCaptions: settingsData?.disableCaptions,
+		disableChapters: settingsData?.disableChapters,
+		disableReactions: settingsData?.disableReactions,
+		disableTranscript: settingsData?.disableTranscript,
 	});
 
 	const isUserPro = userIsPro(user);
@@ -95,12 +96,43 @@ export const SettingsDialog = ({
 		onClose();
 	};
 
-	const toggleSettingHandler = useCallback((value: string) => {
-		setSettings((prev) => ({
-			...prev,
-			[value as keyof typeof settings]: !prev?.[value as keyof typeof settings],
-		}));
-	}, []);
+	const toggleSettingHandler = useCallback(
+		(value: string) => {
+			setSettings((prev) => {
+				const key = value as keyof OrganizationSettings;
+				const currentValue = prev?.[key];
+				const orgValue = organizationSettings?.[key] ?? false;
+
+				// If using org default, set to opposite of org value
+				// If org disabled it (true), enabling means setting to false
+				// If org enabled it (false), disabling means setting to true
+				const newValue = currentValue === undefined ? !orgValue : !currentValue;
+
+				// If disabling transcript, also disable summary and chapters since they depend on it
+				if (key === "disableTranscript" && newValue === true) {
+					return {
+						...prev,
+						[key]: newValue,
+						disableSummary: true,
+						disableChapters: true,
+					};
+				}
+
+				return {
+					...prev,
+					[key]: newValue,
+				};
+			});
+		},
+		[organizationSettings],
+	);
+
+	// Helper to get the effective value (considering org defaults)
+	const getEffectiveValue = (key: keyof OrganizationSettings) => {
+		const videoValue = settings?.[key];
+		const orgValue = organizationSettings?.[key] ?? false;
+		return videoValue !== undefined ? videoValue : orgValue;
+	};
 
 	return (
 		<Dialog open={isOpen} onOpenChange={onClose}>
@@ -112,31 +144,59 @@ export const SettingsDialog = ({
 					<DialogTitle>Settings</DialogTitle>
 				</DialogHeader>
 				<div className="grid grid-cols-2 gap-3 p-5">
-					{options.map((option) => (
-						<div
-							key={option.value}
-							className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
-						>
+					{options.map((option) => {
+						const key = option.value as keyof OrganizationSettings;
+						const effectiveValue = getEffectiveValue(key);
+						const orgValue = organizationSettings?.[key] ?? false;
+						return (
 							<div
-								className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
+								key={option.value}
+								className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
 							>
-								<div className="flex gap-1.5 items-center">
-									<p className="text-sm text-gray-12">{option.label}</p>
-									{option.pro && (
-										<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
-											Pro
-										</p>
+								<div
+									className={clsx(
+										"flex flex-col flex-1",
+										option.pro && "gap-1",
 									)}
+								>
+									<div className="flex gap-1.5 items-center flex-wrap">
+										<p className="text-sm text-gray-12">
+											{orgValue
+												? option.label.replace("Disable", "Enable")
+												: option.label}
+										</p>
+										{orgValue && (
+											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
+												Org {orgValue ? "disabled" : "enabled"}
+											</p>
+										)}
+										{option.pro && (
+											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
+												Pro
+											</p>
+										)}
+									</div>
+									<p className="text-xs text-gray-10">{option.description}</p>
 								</div>
-								<p className="text-xs text-gray-10">{option.description}</p>
+								<Switch
+									disabled={
+										(option.pro && !isUserPro) ||
+										// Disable summary and chapters if transcript is disabled
+										((key === "disableSummary" || key === "disableChapters") &&
+											getEffectiveValue(
+												"disableTranscript" as keyof OrganizationSettings,
+											))
+									}
+									onCheckedChange={() => toggleSettingHandler(option.value)}
+									checked={
+										// If org disabled (showing "Enable X"), switch shows if enabled (!effectiveValue)
+										// If org enabled (showing "Disable X"), switch shows if disabled (effectiveValue)
+										orgValue ? !effectiveValue : effectiveValue
+									}
+								/>
 							</div>
-							<Switch
-								disabled={option.pro && !isUserPro}
-								onCheckedChange={() => toggleSettingHandler(option.value)}
-								checked={settings?.[option.value as keyof typeof settings]}
-							/>
-						</div>
-					))}
+						);
+					})}
 				</div>
 				<DialogFooter className="p-5 border-t border-gray-4">
 					<Button

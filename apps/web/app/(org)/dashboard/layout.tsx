@@ -71,8 +71,6 @@ export default async function DashboardLayout({
 	const sidebar = (await cookies()).get("sidebarCollapsed")?.value ?? "false";
 	const referClicked = (await cookies()).get("referClicked")?.value ?? "false";
 
-	console.log(organizationSettings, "organizationSettings");
-
 	return (
 		<UploadingProvider>
 			<DashboardContexts

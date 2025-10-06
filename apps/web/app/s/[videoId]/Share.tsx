@@ -275,14 +275,17 @@ export const Share = ({
 		}, 100);
 	}, []);
 
-	const areChaptersDisabled =
-		videoSettings?.disableChapters ??
-		data.orgSettings?.disableChapters ??
-		false;
-	const areCaptionsDisabled =
-		videoSettings?.disableCaptions ??
-		data.orgSettings?.disableCaptions ??
-		false;
+	const isDisabled = (setting: keyof NonNullable<OrganizationSettings>) =>
+		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
+
+	const areChaptersDisabled = isDisabled("disableChapters");
+	const areCaptionsDisabled = isDisabled("disableCaptions");
+	const areCommentStampsDisabled = isDisabled("disableComments");
+	const areReactionStampsDisabled = isDisabled("disableReactions");
+	const allSettingsDisabled =
+		isDisabled("disableComments") &&
+		isDisabled("disableSummary") &&
+		isDisabled("disableTranscript");
 
 	return (
 		<div className="mt-4">
@@ -296,6 +299,8 @@ export const Share = ({
 								comments={comments}
 								areChaptersDisabled={areChaptersDisabled}
 								areCaptionsDisabled={areCaptionsDisabled}
+								areCommentStampsDisabled={areCommentStampsDisabled}
+								areReactionStampsDisabled={areReactionStampsDisabled}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
 								ref={playerRef}
@@ -312,28 +317,30 @@ export const Share = ({
 					</div>
 				</div>
 
-				<div className="flex flex-col lg:w-80">
-					<Sidebar
-						data={{
-							...data,
-							createdAt: effectiveDate,
-							transcriptionStatus,
-						}}
-						videoSettings={videoSettings}
-						user={user}
-						commentsData={commentsData}
-						setCommentsData={setCommentsData}
-						optimisticComments={optimisticComments}
-						setOptimisticComments={setOptimisticComments}
-						handleCommentSuccess={handleCommentSuccess}
-						views={views}
-						onSeek={handleSeek}
-						videoId={data.id}
-						aiData={aiData}
-						aiGenerationEnabled={aiGenerationEnabled}
-						ref={activityRef}
-					/>
-				</div>
+				{!allSettingsDisabled && (
+					<div className="flex flex-col lg:w-80">
+						<Sidebar
+							data={{
+								...data,
+								createdAt: effectiveDate,
+								transcriptionStatus,
+							}}
+							videoSettings={videoSettings}
+							user={user}
+							commentsData={commentsData}
+							setCommentsData={setCommentsData}
+							optimisticComments={optimisticComments}
+							setOptimisticComments={setOptimisticComments}
+							handleCommentSuccess={handleCommentSuccess}
+							views={views}
+							onSeek={handleSeek}
+							videoId={data.id}
+							aiData={aiData}
+							aiGenerationEnabled={aiGenerationEnabled}
+							ref={activityRef}
+						/>
+					</div>
+				)}
 			</div>
 
 			<div className="hidden mt-4 lg:block">
@@ -341,7 +348,10 @@ export const Share = ({
 					<Toolbar
 						onOptimisticComment={handleOptimisticComment}
 						onCommentSuccess={handleCommentSuccess}
-						disableReactions={data.settings?.disableReactions}
+						disableReactions={
+							videoSettings?.disableReactions ??
+							data.orgSettings?.disableReactions
+						}
 						data={data}
 						user={user}
 					/>

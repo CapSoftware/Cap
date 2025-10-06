@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { organizations, s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Option } from "effect";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { runPromise } from "./server";
 
@@ -38,9 +38,12 @@ export async function transcribeVideo(
 		.select({
 			video: videos,
 			bucket: s3Buckets,
+			settings: videos.settings,
+			orgSettings: organizations.settings,
 		})
 		.from(videos)
 		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
@@ -56,6 +59,24 @@ export async function transcribeVideo(
 
 	if (!video) {
 		return { success: false, message: "Video information is missing" };
+	}
+
+	if (
+		video.settings?.disableTranscript ??
+		result.orgSettings?.disableTranscript ??
+		false
+	) {
+		console.log(
+			`[transcribeVideo] Transcription disabled for video ${videoId}`,
+		);
+		await db()
+			.update(videos)
+			.set({ transcriptionStatus: "ERROR" })
+			.where(eq(videos.id, videoId));
+		return {
+			success: true,
+			message: "Transcription disabled for video - skipping transcription",
+		};
 	}
 
 	if (

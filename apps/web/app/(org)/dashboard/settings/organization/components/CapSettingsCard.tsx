@@ -4,7 +4,7 @@ import { Card, CardDescription, CardHeader, CardTitle, Switch } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationSettings } from "@/actions/organization/settings";
 import { useDashboardContext } from "../../../Contexts";
@@ -14,34 +14,35 @@ const options = [
 	{
 		label: "Disable comments",
 		value: "disableComments",
-		description: "Prevent viewers from commenting on this cap",
+		description: "Prevent viewers from commenting on caps",
 	},
 	{
 		label: "Disable summary",
 		value: "disableSummary",
-		description: "Remove the summary for this cap",
+		description: "Remove the summary for caps (requires transcript)",
 		pro: true,
 	},
 	{
 		label: "Disable captions",
 		value: "disableCaptions",
-		description: "Prevent viewers from using captions for this cap",
+		description: "Prevent viewers from using captions for caps",
 	},
 	{
 		label: "Disable chapters",
 		value: "disableChapters",
-		description: "Remove the chapters for this cap",
+		description: "Remove the chapters for caps (requires transcript)",
 		pro: true,
 	},
 	{
 		label: "Disable reactions",
 		value: "disableReactions",
-		description: "Prevent viewers from reacting to this cap",
+		description: "Prevent viewers from reacting to caps",
 	},
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description: "Remove the transcript for this cap",
+		description:
+			"Remove the transcript for caps, this also disables chapters and summary",
 		pro: true,
 	},
 ];
@@ -59,40 +60,97 @@ const CapSettingsCard = () => {
 		},
 	);
 
+	// Track the last saved settings to compare against
+	const lastSavedSettings = useRef<OrganizationSettings>(
+		organizationSettings || settings,
+	);
+
 	const isUserPro = userIsPro(user);
 
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
 
-	const updateSettings = useCallback((newSettings: OrganizationSettings) => {
-		if (!newSettings) return;
-		try {
-			setSettings(newSettings);
-			updateOrganizationSettings(newSettings);
-		} catch (error) {
-			console.error("Error updating organization settings:", error);
-			toast.error("Failed to update settings");
-			// Revert the local state on error
-			setSettings(organizationSettings);
+	// Update lastSavedSettings when organizationSettings changes externally
+	useEffect(() => {
+		if (organizationSettings) {
+			lastSavedSettings.current = organizationSettings;
 		}
-	}, []);
+	}, [organizationSettings]);
 
 	useEffect(() => {
-		if (debouncedUpdateSettings !== organizationSettings) {
-			try {
-				updateSettings(debouncedUpdateSettings);
-			} catch (error) {
-				console.error("Error updating organization settings:", error);
-				toast.error("Failed to update settings");
-				setSettings(organizationSettings);
-			}
+		if (
+			debouncedUpdateSettings &&
+			debouncedUpdateSettings !== lastSavedSettings.current
+		) {
+			const handleUpdate = async () => {
+				// Find ALL settings that changed
+				const changedKeys: Array<keyof OrganizationSettings> = [];
+				for (const key of Object.keys(debouncedUpdateSettings) as Array<
+					keyof OrganizationSettings
+				>) {
+					if (
+						debouncedUpdateSettings[key] !== lastSavedSettings.current?.[key]
+					) {
+						changedKeys.push(key);
+					}
+				}
+
+				// Guard: if no actual changes, do nothing (prevents loops)
+				if (changedKeys.length === 0) {
+					return;
+				}
+
+				// Inline the update logic to avoid circular dependency
+				try {
+					await updateOrganizationSettings(debouncedUpdateSettings);
+
+					// Show a toast for each changed setting
+					changedKeys.forEach((changedKey) => {
+						const option = options.find((opt) => opt.value === changedKey);
+						const isDisabled = debouncedUpdateSettings[changedKey];
+						const action = isDisabled ? "disabled" : "enabled";
+						const label =
+							option?.label.replace(/^Disable /, "").toLowerCase() ||
+							changedKey;
+						toast.success(
+							`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
+						);
+					});
+
+					// Update the last saved settings reference
+					lastSavedSettings.current = debouncedUpdateSettings;
+				} catch (error) {
+					console.error("Error updating organization settings:", error);
+					toast.error("Failed to update settings");
+					// Revert the local state on error
+					if (organizationSettings) {
+						setSettings(organizationSettings);
+					}
+				}
+			};
+
+			handleUpdate();
 		}
-	}, [debouncedUpdateSettings, organizationSettings, updateSettings]);
+	}, [debouncedUpdateSettings, organizationSettings]);
 
 	const handleToggle = (key: keyof OrganizationSettings) => {
-		setSettings((prev) => ({
-			...prev,
-			[key]: !prev?.[key],
-		}));
+		setSettings((prev) => {
+			const newValue = !prev?.[key];
+
+			// If disabling transcript, also disable summary and chapters since they depend on it
+			if (key === "disableTranscript" && newValue === true) {
+				return {
+					...prev,
+					[key]: newValue,
+					disableSummary: true,
+					disableChapters: true,
+				};
+			}
+
+			return {
+				...prev,
+				[key]: newValue,
+			};
+		});
 	};
 
 	return (
@@ -125,7 +183,13 @@ const CapSettingsCard = () => {
 							<p className="text-xs text-gray-10">{option.description}</p>
 						</div>
 						<Switch
-							disabled={option.pro && !isUserPro}
+							disabled={
+								(option.pro && !isUserPro) ||
+								// Disable summary and chapters if transcript is disabled
+								((option.value === "disableSummary" ||
+									option.value === "disableChapters") &&
+									settings?.disableTranscript)
+							}
 							onCheckedChange={() => {
 								handleToggle(option.value as keyof OrganizationSettings);
 							}}

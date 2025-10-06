@@ -44,11 +44,21 @@ export const ShareVideo = forwardRef<
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
 		areCaptionsDisabled?: boolean;
+		areCommentStampsDisabled?: boolean;
+		areReactionStampsDisabled?: boolean;
 		aiProcessing?: boolean;
 	}
 >(
 	(
-		{ data, comments, chapters = [], areCaptionsDisabled, areChaptersDisabled },
+		{
+			data,
+			comments,
+			chapters = [],
+			areCaptionsDisabled,
+			areChaptersDisabled,
+			areCommentStampsDisabled,
+			areReactionStampsDisabled,
+		},
 		ref,
 	) => {
 		const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -179,6 +189,8 @@ export const ShareVideo = forwardRef<
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
 							disableCaptions={areCaptionsDisabled ?? false}
+							disableCommentStamps={areCommentStampsDisabled ?? false}
+							disableReactionStamps={areReactionStampsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}

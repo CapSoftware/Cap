@@ -3,6 +3,8 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
+import { faRectangleList } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffect, useState } from "react";
 
 interface Chapter {
@@ -156,22 +158,12 @@ export const Summary: React.FC<SummaryProps> = ({
 	if (!aiData?.summary && (!aiData?.chapters || aiData.chapters.length === 0)) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
-				<div className="space-y-2 text-gray-300">
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						className="mx-auto w-8 h-8"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={1.5}
-							d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-						/>
-					</svg>
-					<h3 className="text-sm font-medium text-gray-12">
+				<FontAwesomeIcon
+					icon={faRectangleList}
+					className="mb-4 text-gray-12 size-8"
+				/>
+				<div className="space-y-1">
+					<h3 className="text-base font-medium text-gray-12">
 						No summary available
 					</h3>
 					<p className="text-sm text-gray-10">

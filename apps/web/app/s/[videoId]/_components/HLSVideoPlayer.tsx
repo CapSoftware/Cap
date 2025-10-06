@@ -37,7 +37,7 @@ interface Props {
 	captionsSrc: string;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
-	disableCaptions: boolean;
+	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 }
