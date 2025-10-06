@@ -11,14 +11,31 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 		effect: Effect.gen(function* () {
 			const repo = yield* SpacesRepo;
 
-			const isMember = (spaceId: string) =>
+			const hasMembership = (spaceId: string) =>
 				Policy.policy(
 					Effect.fn(function* (user) {
 						return Option.isSome(yield* repo.membership(user.id, spaceId));
 					}),
 				);
 
-			return { isMember };
+			const isOwner = (spaceId: string) =>
+				Policy.policy(
+					Effect.fn(function* (user) {
+						const space = yield* repo.getById(spaceId);
+
+						if (Option.isNone(space)) {
+							yield* Effect.log("Space not found. Access granted.");
+							return true;
+						}
+
+						return space.value.createdById === user.id;
+					}),
+				);
+
+			const isMember = (spaceId: string) =>
+				Policy.any(isOwner(spaceId), hasMembership(spaceId));
+
+			return { isMember, isOwner };
 		}),
 		dependencies: [
 			OrganisationsRepo.Default,
