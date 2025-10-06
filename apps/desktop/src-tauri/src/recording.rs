@@ -7,6 +7,7 @@ use cap_project::{
     TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
     cursor::CursorEvents,
 };
+use cap_recording::PipelineDoneError;
 use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
@@ -547,7 +548,7 @@ pub async fn start_recording(
     }
     .await;
 
-    let actor_done_rx = match spawn_actor_res {
+    let actor_done_fut = match spawn_actor_res {
         Ok(rx) => rx,
         Err(err) => {
             let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
@@ -608,7 +609,7 @@ pub async fn start_recording(
                     dialog.blocking_show();
 
                     // this clears the current recording for us
-                    handle_recording_end(app, Err(e), &mut state, recording_dir)
+                    handle_recording_end(app, Err(e.to_string()), &mut state, recording_dir)
                         .await
                         .ok();
                 }
@@ -766,7 +767,7 @@ async fn handle_recording_end(
                         }
                     }
                     RecordingMetaInner::Instant(meta) => {
-                        *meta = InstantRecordingMeta::Failed { error };
+                        *meta = InstantRecordingMeta::Failed { error: error };
                     }
                 }
                 project_meta
