@@ -574,7 +574,7 @@ pub fn from_pending_file_to_chunks(
     }
 }
 
-fn retryable_client(host: &str) -> reqwest::ClientBuilder {
+fn retryable_client(host: String) -> reqwest::ClientBuilder {
     reqwest::Client::builder().retry(
         reqwest::retry::for_host(host)
             .classify_fn(|req_rep| {
@@ -619,7 +619,7 @@ fn multipart_uploader(
                     .await?;
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
-            let resp = retryable_client(&url.host().unwrap_or("<unknown>").to_string())
+            let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
                 .build()
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
@@ -659,7 +659,7 @@ pub async fn singlepart_uploader(
 
     let url = Uri::from_str(&presigned_url)
         .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let resp = retryable_client(&url.host().unwrap_or("<unknown>").to_string())
+    let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
         .build()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
