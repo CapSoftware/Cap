@@ -247,8 +247,7 @@ export const videos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
-		// TODO: make this non-null
-		orgId: nanoIdNullable("orgId"),
+		orgId: nanoId("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
