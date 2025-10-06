@@ -28,9 +28,9 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 
 export class FolderUpdate extends Schema.Class<FolderUpdate>("FolderPatch")({
 	id: FolderId,
-	name: Schema.OptionFromUndefinedOr(Schema.String),
-	color: Schema.OptionFromUndefinedOr(FolderColor),
-	parentId: Schema.OptionFromUndefinedOr(FolderId),
+	name: Schema.optional(Schema.String),
+	color: Schema.optional(FolderColor),
+	parentId: Schema.optional(FolderId),
 }) {}
 
 export class FolderRpcs extends RpcGroup.make(

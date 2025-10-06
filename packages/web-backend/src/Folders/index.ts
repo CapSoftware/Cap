@@ -5,6 +5,7 @@ import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Database, type DatabaseError } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
+import { revalidatePath } from "next/cache";
 
 // @effect-diagnostics-next-line leakingRequirements:off
 export class Folders extends Effect.Service<Folders>()("Folders", {
@@ -125,7 +126,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}),
 
 			update: Effect.fn("Folders.update")(function* (
-				id: Folder.FolderId,
+				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
 				const user = yield* CurrentUser;
@@ -141,7 +142,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				// // If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (data.parentId) {
 					// Check that we're not creating a circular reference
-					if (data.parentId === Option.some(id))
+					if (data.parentId === Option.some(folderId))
 						throw new Error("A folder cannot be its own parent"); // TODO: Effect error
 
 					// 	const [parentFolder] = await db()
@@ -177,15 +178,20 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				yield* db
 					.execute((db) =>
-						db.update(Db.folders)
-  						.set({
-  							...(Option.isSome(data.name) ? { name: data.name.value } : {}),
-  							...(Option.isSome(data.color) ? { color: data.color.value } : {}),
-  							...(Option.isSome(data.parentId) ? { parentId: data.parentId.value } : {}),
-  						})
-  						.where(Dz.eq(Db.folders.id, id));
+						db
+							.update(Db.folders)
+							.set({
+								...(Option.isSome(data.name) ? { name: data.name.value } : {}),
+								...(Option.isSome(data.color)
+									? { color: data.color.value }
+									: {}),
+								...(Option.isSome(data.parentId)
+									? { parentId: data.parentId.value }
+									: {}),
+							})
+							.where(Dz.eq(Db.folders.id, folderId)),
 					)
-					.pipe(Policy.withPolicy(policy.canEdit(id)));
+					.pipe(Policy.withPolicy(policy.canEdit(folderId)));
 
 				revalidatePath(`/dashboard/caps`);
 				revalidatePath(`/dashboard/folder/${folderId}`);
