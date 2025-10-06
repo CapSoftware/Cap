@@ -97,7 +97,7 @@ export default async function ConversionPage(props: ConversionPageProps) {
 		faqs: [
 			{
 				question: `How does the ${sourceFormat.toUpperCase()} to ${targetFormat.toUpperCase()} converter work?`,
-				answer: `Our converter uses Remotion (remotion.dev) directly in your browser. When you upload a ${sourceFormat.toUpperCase()} file, it gets processed locally on your device and converted to ${targetFormat.toUpperCase()} format without ever being sent to a server.`,
+				answer: `Our converter uses Mediabunny (mediabunny.dev) directly in your browser. When you upload a ${sourceFormat.toUpperCase()} file, it gets processed locally on your device and converted to ${targetFormat.toUpperCase()} format without ever being sent to a server.`,
 			},
 			{
 				question: "Is there a file size limit?",

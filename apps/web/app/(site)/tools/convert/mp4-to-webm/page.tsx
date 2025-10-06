@@ -57,7 +57,7 @@ export default function MP4ToWebMPage() {
 			{
 				question: "How does the MP4 to WebM converter work?",
 				answer:
-					"Our converter uses Remotion (remotion.dev) directly in your browser. When you upload an MP4 file, it gets processed locally on your device and converted to WebM format without ever being sent to a server.",
+					"Our converter uses Mediabunny (mediabunny.dev) directly in your browser. When you upload an MP4 file, it gets processed locally on your device and converted to WebM format without ever being sent to a server.",
 			},
 			{
 				question: "Is there a file size limit?",

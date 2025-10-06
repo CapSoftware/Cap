@@ -5,7 +5,7 @@ import { Notification as APINotification } from "@cap/web-api-contract";
 import { and, ColumnBaseConfig, desc, eq, isNull, sql } from "drizzle-orm";
 import { MySqlColumn } from "drizzle-orm/mysql-core";
 import { NextResponse } from "next/server";
-import { AvcProfileInfo } from "node_modules/@remotion/media-parser/dist/containers/avc/parse-avc";
+
 import { z } from "zod";
 import type { NotificationType } from "@/lib/Notification";
 import { jsonExtractString } from "@/utils/sql";

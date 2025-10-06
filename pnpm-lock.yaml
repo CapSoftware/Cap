@@ -564,12 +564,6 @@ importers:
       '@react-email/render':
         specifier: 1.1.2
         version: 1.1.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
-      '@remotion/media-parser':
-        specifier: ^4.0.291
-        version: 4.0.298
-      '@remotion/webcodecs':
-        specifier: ^4.0.291
-        version: 4.0.298
       '@rive-app/react-canvas':
         specifier: ^4.18.7
         version: 4.19.0(react@19.1.1)
@@ -681,6 +675,9 @@ importers:
       media-chrome:
         specifier: ^4.12.0
         version: 4.12.0(react@19.1.1)
+      mediabunny:
+        specifier: ^1.23.0
+        version: 1.23.0
       moment:
         specifier: ^2.30.1
         version: 2.30.1
@@ -692,7 +689,7 @@ importers:
         version: 15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       next-auth:
         specifier: ^4.24.5
-        version: 4.24.11(next@15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+        version: 4.24.11(next@15.5.4(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       next-contentlayer2:
         specifier: ^0.5.3
         version: 0.5.8(acorn@8.15.0)(contentlayer2@0.5.8(acorn@8.15.0)(esbuild@0.25.5))(esbuild@0.25.5)(next@15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -994,7 +991,7 @@ importers:
         version: 15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       next-auth:
         specifier: ^4.24.5
-        version: 4.24.11(next@15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+        version: 4.24.11(next@15.5.4(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       react-email:
         specifier: ^4.0.16
         version: 4.0.16(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -5256,15 +5253,6 @@ packages:
     resolution: {integrity: sha512-O3rHJzAQKamUz1fvE0Qaw0xSFqsA/yafi2iqeE0pvdFtCO1viYx8QL6f3Ln/aCCTLxs68SLf0KPM9eSeM8yBnA==}
     engines: {node: '>=14.0.0'}
 
-  '@remotion/licensing@4.0.298':
-    resolution: {integrity: sha512-s1WWAA4roF0b/fGBqxW3vtuFfN+dlr0haHIS0GcjHJ6F6z7vr2SS4mHf26HR3jMOUwrwKfX2gHHur3Kc/96LEw==}
-
-  '@remotion/media-parser@4.0.298':
-    resolution: {integrity: sha512-SPPuPkb9ViAU/YntcJeAWRTPWQRaRGxquUlNkqUj3ggjv3reTw9OufQoYf1xuSQUla+JVPhiFvsBqwlmugPPiw==}
-
-  '@remotion/webcodecs@4.0.298':
-    resolution: {integrity: sha512-eT9yQtEpxnczfEIfbf980qJVTkrN793ItlDD0KcVz30Gl2e0636r2ClSpm220kJyFWS/Zh4FzcgSCOS9/Ptf+w==}
-
   '@rive-app/canvas@2.27.1':
     resolution: {integrity: sha512-TnRZdwS/y6RvoTwaZJVlG91NP+m97WcXgSY08wY8R8m8iyVQtpvkRN9oNKwlh46YHPAqGTafaqOzxc7H7ijZDw==}
 
@@ -5992,10 +5980,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.0.0-beta.8':
-    resolution: {integrity: sha512-KlIdcmvjbB9WgrjSml9vmCDKqnLu6s88K9V/BsTklfKr71Nh0LEiltpiIsVabXmk8FcxWsVbvecoui0NcawWtA==}
+  '@storybook/builder-vite@10.0.0-beta.9':
+    resolution: {integrity: sha512-R8nSDRWr9eFOF+Bi9+wfJA6jjXGcLCrbgBt2bLebzfXhCNmfHCMaqRG2ZaNdEV4u9KJyakKdzKEotvAkaPONUA==}
     peerDependencies:
-      storybook: ^10.0.0-beta.8
+      storybook: ^10.0.0-beta.9
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -6006,12 +5994,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.0.0-beta.8':
-    resolution: {integrity: sha512-nwMQ51ZTI8bPy15iar49frYByW9Fwq+UM6RkF0ExoPaDqV32VPZW46ChhTGVaKH6mHmZR7sNAXdboxulXGTP0Q==}
+  '@storybook/csf-plugin@10.0.0-beta.9':
+    resolution: {integrity: sha512-0PfoiNKNJGNaWZBc31sevMOfhzX0VqrrKqE98DCMyEvZLUPnKy4t7iCE5TNFH+rUd5D7MdVzwgAmJ+CdtlmHIQ==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.0.0-beta.8
+      storybook: ^10.0.0-beta.9
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -6529,6 +6517,12 @@ packages:
 
   '@types/debug@4.1.12':
     resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
+
+  '@types/dom-mediacapture-transform@0.1.11':
+    resolution: {integrity: sha512-Y2p+nGf1bF2XMttBnsVPHUWzRRZzqUoJAKmiP10b5umnO6DDrWI0BrGDJy1pOHoOULVmGSfFNkQrAlC5dcj6nQ==}
+
+  '@types/dom-webcodecs@0.1.13':
+    resolution: {integrity: sha512-O5hkiFIcjjszPIYyUSyvScyvrBoV3NOEEZx/pMlsu44TKzWNkLVBBxnxJz42in5n3QIolYOcBYFCPZZ0h8SkwQ==}
 
   '@types/dom-webcodecs@0.1.14':
     resolution: {integrity: sha512-ba9aF0qARLLQpLihONIRbj8VvAdUxO+5jIxlscVcDAQTcJmq5qVr781+ino5qbQUJUmO21cLP2eLeXYWzao5Vg==}
@@ -10722,6 +10716,9 @@ packages:
   media-typer@1.1.0:
     resolution: {integrity: sha512-aisnrDP4GNe06UcKFnV5bfMNPBUw4jsLGaWwWfnH3v02GnBuXX2MCVn5RbrWo0j3pczUilYblq7fQ7Nw2t5XKw==}
     engines: {node: '>= 0.8'}
+
+  mediabunny@1.23.0:
+    resolution: {integrity: sha512-mWdhhdRquePfTgZ+18DLCFWmqwO6oGP/YudmRU8Puh+whMUJ3VSb9KMAHPl2utim66ixKdZw+DbmdqBfBxRp0A==}
 
   memfs@4.17.1:
     resolution: {integrity: sha512-thuTRd7F4m4dReCIy7vv4eNYnU6XI/tHMLSMMHLiortw/Y0QxqKtinG523U2aerzwYWGi606oBP4oMPy4+edag==}
@@ -18671,15 +18668,6 @@ snapshots:
 
   '@remix-run/router@1.23.0': {}
 
-  '@remotion/licensing@4.0.298': {}
-
-  '@remotion/media-parser@4.0.298': {}
-
-  '@remotion/webcodecs@4.0.298':
-    dependencies:
-      '@remotion/licensing': 4.0.298
-      '@remotion/media-parser': 4.0.298
-
   '@rive-app/canvas@2.27.1': {}
 
   '@rive-app/react-canvas@4.19.0(react@19.1.1)':
@@ -19554,9 +19542,9 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
-  '@storybook/builder-vite@10.0.0-beta.8(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
+  '@storybook/builder-vite@10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
     dependencies:
-      '@storybook/csf-plugin': 10.0.0-beta.8(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
+      '@storybook/csf-plugin': 10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1)
@@ -19586,7 +19574,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.0.0-beta.8(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
+  '@storybook/csf-plugin@10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 2.3.10
@@ -20150,6 +20138,12 @@ snapshots:
   '@types/debug@4.1.12':
     dependencies:
       '@types/ms': 2.1.0
+
+  '@types/dom-mediacapture-transform@0.1.11':
+    dependencies:
+      '@types/dom-webcodecs': 0.1.14
+
+  '@types/dom-webcodecs@0.1.13': {}
 
   '@types/dom-webcodecs@0.1.14': {}
 
@@ -25443,6 +25437,11 @@ snapshots:
 
   media-typer@1.1.0: {}
 
+  mediabunny@1.23.0:
+    dependencies:
+      '@types/dom-mediacapture-transform': 0.1.11
+      '@types/dom-webcodecs': 0.1.13
+
   memfs@4.17.1:
     dependencies:
       '@jsonjoy.com/json-pack': 1.2.0(tslib@2.8.1)
@@ -25946,7 +25945,7 @@ snapshots:
       p-wait-for: 5.0.2
       qs: 6.14.0
 
-  next-auth@4.24.11(next@15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1):
+  next-auth@4.24.11(next@15.5.4(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(nodemailer@6.10.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1):
     dependencies:
       '@babel/runtime': 7.27.1
       '@panva/hkdf': 1.2.1
@@ -28002,7 +28001,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(esbuild@0.25.4)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4)):
     dependencies:
-      '@storybook/builder-vite': 10.0.0-beta.8(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
+      '@storybook/builder-vite': 10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6

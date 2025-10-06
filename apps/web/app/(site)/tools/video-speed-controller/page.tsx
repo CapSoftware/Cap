@@ -7,7 +7,7 @@ const content = {
 		"Instantly speed up or slow down any MP4, WebM or MOV in your browser. No uploads, no quality loss.",
 	featuresTitle: "Why Use Our Online Video Speed Controller?",
 	featuresDescription:
-		"Powered by WebCodecs + Remotion, Cap processes every frame locally for near-instant results—while keeping your files 100% private.",
+		"Powered by WebCodecs + Mediabunny, Cap processes every frame locally for near-instant results—while keeping your files 100% private.",
 	features: [
 		{
 			title: "WebCodecs-Level Speed",
@@ -69,7 +69,7 @@ export const metadata = {
 	title:
 		"Video Speed Controller Online – Speed Up or Slow Down Videos (0.25×-3×)",
 	description:
-		"Free WebCodecs-powered tool to change video speed online. Adjust playback from 0.25× to 3× without quality loss—processed locally for privacy.",
+		"Free Mediabunny-powered tool to change video speed online. Adjust playback from 0.25× to 3× without quality loss—processed locally for privacy.",
 	keywords: [
 		"video speed controller",
 		"speed up video online",

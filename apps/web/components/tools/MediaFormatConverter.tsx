@@ -1,8 +1,15 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import * as MediaParser from "@remotion/media-parser";
-import type { WebCodecsController } from "@remotion/webcodecs";
+import {
+	Input,
+	Output,
+	Conversion,
+	BufferTarget,
+	Mp4OutputFormat,
+	WebMOutputFormat,
+	WavOutputFormat,
+} from "mediabunny";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -179,7 +186,6 @@ export const MediaFormatConverter = ({
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
-	const parserControllerRef = useRef<{ abort: () => void } | null>(null);
 
 	useEffect(() => {
 		if (
@@ -226,12 +232,12 @@ export const MediaFormatConverter = ({
 	}, []);
 
 	useEffect(() => {
-		const loadRemotionModules = async () => {
+		const loadMediabunnyModules = async () => {
 			try {
-				const parser = await import("@remotion/media-parser");
+				await import("mediabunny");
 				setMediaEngineLoaded(true);
 			} catch (error) {
-				console.error("Failed to load Remotion modules:", error);
+				console.error("Failed to load mediabunny modules:", error);
 				setMediaEngineLoaded(false);
 				setError(
 					"Failed to load media conversion engine. Please try again later.",
@@ -239,7 +245,7 @@ export const MediaFormatConverter = ({
 			}
 		};
 
-		loadRemotionModules();
+		loadMediabunnyModules();
 	}, []);
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -327,11 +333,6 @@ export const MediaFormatConverter = ({
 		setError(null);
 		setProgress(0);
 
-		if (parserControllerRef.current) {
-			parserControllerRef.current.abort();
-		}
-		parserControllerRef.current = { abort: () => {} };
-
 		trackEvent(`${conversionPath}_conversion_started`, {
 			fileSize: file.size,
 			fileName: file.name,
@@ -354,58 +355,67 @@ export const MediaFormatConverter = ({
 		} catch (err: any) {
 			console.error("Detailed conversion error:", err);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(err)) {
-				setError("Conversion was cancelled");
+			let errorMessage = "Conversion failed: ";
+			if (err.message) {
+				errorMessage += err.message;
+			} else if (typeof err === "string") {
+				errorMessage += err;
 			} else {
-				let errorMessage = "Conversion failed: ";
-				if (err.message) {
-					errorMessage += err.message;
-				} else if (typeof err === "string") {
-					errorMessage += err;
-				} else {
-					errorMessage += "Unknown error occurred during conversion";
-				}
-
-				setError(errorMessage);
-
-				trackEvent(`${conversionPath}_conversion_failed`, {
-					fileSize: file.size,
-					fileName: file.name,
-					error: err.message || "Unknown error",
-				});
+				errorMessage += "Unknown error occurred";
 			}
+			setError(errorMessage);
+
+			trackEvent(`${conversionPath}_conversion_failed`, {
+				fileSize: file.size,
+				fileName: file.name,
+				error: err.message || "Unknown error",
+			});
 		} finally {
 			setIsConverting(false);
-			parserControllerRef.current = null;
 		}
 	};
 
 	const extractAudioFromVideo = async (inputFile: File): Promise<void> => {
 		try {
-			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
+			const {
+				Input,
+				Output,
+				Conversion,
+				WavOutputFormat,
+				BufferTarget,
+				BlobSource,
+				ALL_FORMATS,
+			} = await import("mediabunny");
 
-			const handleProgress = (progressEvent: { progress: number }) => {
-				setProgress(Math.min(Math.round(progressEvent.progress * 100), 99));
-			};
-
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
-			parserControllerRef.current = controller;
-
-			const result = await webcodecs.convertMedia({
-				src: inputFile,
-				container: "wav",
-				onProgress: ({ overallProgress }) => {
-					if (overallProgress !== null) {
-						setProgress(Math.min(Math.round(overallProgress * 100), 99));
-					}
-				},
-				controller: controller as unknown as WebCodecsController,
+			const input = new Input({
+				source: new BlobSource(inputFile),
+				formats: ALL_FORMATS,
+			});
+			const output = new Output({
+				format: new WavOutputFormat(),
+				target: new BufferTarget(),
 			});
 
-			const blob = await result.save();
+			const conversion = await Conversion.init({
+				input,
+				output,
+				video: { discard: true }, // Only extract audio
+			});
+
+			if (!conversion.isValid) {
+				throw new Error("Audio extraction configuration is invalid");
+			}
+
+			conversion.onProgress = (progress: number) => {
+				setProgress(Math.min(Math.round(progress * 100), 99));
+			};
+
+			await conversion.execute();
+			const buffer = output.target.buffer;
+			if (!buffer) {
+				throw new Error("Audio extraction produced no output buffer");
+			}
+			const blob = new Blob([buffer]);
 			const url = URL.createObjectURL(blob);
 			setOutputUrl(url);
 			setProgress(100);
@@ -423,23 +433,7 @@ export const MediaFormatConverter = ({
 
 	const convertVideoToGif = async (inputFile: File): Promise<void> => {
 		try {
-			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
-
-			const onProgress = ({
-				overallProgress,
-			}: {
-				overallProgress: number | null;
-			}) => {
-				if (overallProgress !== null) {
-					setProgress(Math.min(Math.round(overallProgress * 100), 99));
-				}
-			};
-
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
-			parserControllerRef.current = controller;
+			const { Input } = await import("mediabunny");
 
 			console.log(`Starting video to GIF conversion`);
 			console.log(
@@ -455,14 +449,22 @@ export const MediaFormatConverter = ({
 				);
 			}
 
-			const metadata = await parser.parseMedia({
-				src: inputFile,
-				fields: {
-					durationInSeconds: true,
-					dimensions: true,
-					videoCodec: true,
-				},
+			const { BlobSource, ALL_FORMATS } = await import("mediabunny");
+			const input = new Input({
+				source: new BlobSource(inputFile),
+				formats: ALL_FORMATS,
 			});
+
+			const videoTracks = await input.getVideoTracks();
+			const videoTrack = videoTracks[0];
+			const duration = await input.computeDuration();
+			const metadata = {
+				durationInSeconds: duration,
+				dimensions: videoTrack
+					? { width: videoTrack.displayWidth, height: videoTrack.displayHeight }
+					: undefined,
+				videoCodec: videoTrack?.codec,
+			};
 
 			console.log("Video metadata for GIF conversion:", metadata);
 
@@ -562,21 +564,17 @@ export const MediaFormatConverter = ({
 		} catch (error) {
 			console.error("Error converting video to GIF:", error);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(error)) {
-				setError("Conversion was cancelled");
+			let errorMessage = "GIF conversion failed: ";
+
+			if (error instanceof Error) {
+				errorMessage += error.message;
+			} else if (typeof error === "string") {
+				errorMessage += error;
 			} else {
-				let errorMessage = "GIF conversion failed: ";
-
-				if (error instanceof Error) {
-					errorMessage += error.message;
-				} else if (typeof error === "string") {
-					errorMessage += error;
-				} else {
-					errorMessage += "Unknown error occurred during conversion";
-				}
-
-				setError(errorMessage);
+				errorMessage += "Unknown error occurred";
 			}
+
+			setError(errorMessage);
 
 			throw error;
 		}
@@ -584,25 +582,20 @@ export const MediaFormatConverter = ({
 
 	const convertVideoFormat = async (inputFile: File): Promise<void> => {
 		try {
-			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
+			const {
+				Input,
+				Output,
+				Conversion,
+				Mp4OutputFormat,
+				WebMOutputFormat,
+				BufferTarget,
+			} = await import("mediabunny");
 
-			const onProgress = ({
-				overallProgress,
-			}: {
-				overallProgress: number | null;
-			}) => {
-				if (overallProgress !== null) {
-					setProgress(Math.min(Math.round(overallProgress * 100), 99));
-				}
+			const onProgress = (progress: number) => {
+				setProgress(Math.min(Math.round(progress * 100), 99));
 			};
 
-			const controller = parser.mediaParserController
-				? parser.mediaParserController()
-				: null;
-			parserControllerRef.current = controller;
-
-			console.log(`Starting conversion with Remotion: ${conversionPath}`);
+			console.log(`Starting conversion with mediabunny: ${conversionPath}`);
 			console.log(
 				`Input file: ${inputFile.name}, size: ${inputFile.size} bytes`,
 			);
@@ -618,36 +611,52 @@ export const MediaFormatConverter = ({
 				);
 			}
 
-			const metadata = await parser.parseMedia({
-				src: inputFile,
-				fields: {
-					durationInSeconds: true,
-					dimensions: true,
-					videoCodec: true,
-				},
+			const { BlobSource, ALL_FORMATS } = await import("mediabunny");
+			const input = new Input({
+				source: new BlobSource(inputFile),
+				formats: ALL_FORMATS,
 			});
+
+			const videoTracks = await input.getVideoTracks();
+			const videoTrack = videoTracks[0];
+			const duration = await input.computeDuration();
+			const metadata = {
+				durationInSeconds: duration,
+				dimensions: videoTrack
+					? { width: videoTrack.displayWidth, height: videoTrack.displayHeight }
+					: undefined,
+				videoCodec: videoTrack?.codec,
+			};
 
 			console.log("Video metadata:", metadata);
 
-			const outputContainer = currentTargetFormat === "webm" ? "webm" : "mp4";
+			const isWebM = currentTargetFormat === "webm";
+			const videoCodec = isWebM ? "vp8" : "h264";
 
-			let videoCodec;
-			if (outputContainer === "webm") {
-				videoCodec = "vp8";
-			} else {
-				videoCodec = "h264";
-			}
-
-			const result = await webcodecs.convertMedia({
-				src: inputFile,
-				container: outputContainer as any,
-				videoCodec: videoCodec as any,
-				onProgress,
-				controller: controller as unknown as WebCodecsController,
-				expectedDurationInSeconds: metadata.durationInSeconds || undefined,
+			const output = new Output({
+				format: isWebM ? new WebMOutputFormat() : new Mp4OutputFormat(),
+				target: new BufferTarget(),
 			});
 
-			const blob = await result.save();
+			const conversion = await Conversion.init({
+				input,
+				output,
+				video: {
+					codec: videoCodec === "h264" ? "avc" : videoCodec,
+				},
+			});
+
+			if (!conversion.isValid) {
+				throw new Error("Video conversion configuration is invalid");
+			}
+
+			conversion.onProgress = onProgress;
+			await conversion.execute();
+			const buffer = output.target.buffer;
+			if (!buffer) {
+				throw new Error("Video conversion produced no output buffer");
+			}
+			const blob = new Blob([buffer]);
 			const url = URL.createObjectURL(blob);
 
 			setOutputUrl(url);
@@ -663,21 +672,17 @@ export const MediaFormatConverter = ({
 		} catch (error) {
 			console.error("Error converting video format:", error);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(error)) {
-				setError("Conversion was cancelled");
+			let errorMessage = "Conversion failed: ";
+
+			if (error instanceof Error) {
+				errorMessage += error.message;
+			} else if (typeof error === "string") {
+				errorMessage += error;
 			} else {
-				let errorMessage = "Conversion failed: ";
-
-				if (error instanceof Error) {
-					errorMessage += error.message;
-				} else if (typeof error === "string") {
-					errorMessage += error;
-				} else {
-					errorMessage += "Unknown error occurred during conversion";
-				}
-
-				setError(errorMessage);
+				errorMessage += "Unknown error occurred";
 			}
+
+			setError(errorMessage);
 
 			throw error;
 		}
@@ -725,11 +730,6 @@ export const MediaFormatConverter = ({
 	const resetConverter = () => {
 		if (outputUrl) {
 			URL.revokeObjectURL(outputUrl);
-		}
-
-		if (parserControllerRef.current) {
-			parserControllerRef.current.abort();
-			parserControllerRef.current = null;
 		}
 
 		setFile(null);

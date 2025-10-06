@@ -75,12 +75,24 @@ export function VerifyOTPForm({
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			// shoutout https://github.com/buoyad/Tally/pull/14
-			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
-			);
+			const callback = next || "/dashboard";
+			const url = `/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent(callback)}`;
 
-			if (!res.url.includes("/login-success")) {
+			const isSafari =
+				typeof navigator !== "undefined" &&
+				/^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+			if (isSafari) {
+				window.location.assign(url);
+				return;
+			}
+
+			const res = await fetch(url, {
+				credentials: "include",
+				redirect: "follow",
+			});
+
+			if (!res.url.includes(callback)) {
 				setCode(["", "", "", "", "", ""]);
 				inputRefs.current[0]?.focus();
 				throw "Invalid code. Please try again.";

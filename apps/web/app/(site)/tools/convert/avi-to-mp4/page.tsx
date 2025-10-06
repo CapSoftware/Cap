@@ -57,7 +57,7 @@ export default function AVIToMP4Page() {
 			{
 				question: "How does the AVI to MP4 converter work?",
 				answer:
-					"Our converter uses Remotion (remotion.dev) directly in your browser. When you upload an AVI file, it gets processed locally on your device and converted to MP4 format without ever being sent to a server.",
+					"Our converter uses Mediabunny (mediabunny.dev) directly in your browser. When you upload an AVI file, it gets processed locally on your device and converted to MP4 format without ever being sent to a server.",
 			},
 			{
 				question: "Is there a file size limit?",

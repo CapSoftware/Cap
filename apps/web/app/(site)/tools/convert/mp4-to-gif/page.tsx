@@ -51,14 +51,14 @@ export default function MP4ToGIFPage() {
 			{
 				title: "High Quality Conversion",
 				description:
-					"We use Remotion technology to create optimized GIFs from your videos.",
+					"We use Mediabunny technology to create optimized GIFs from your videos.",
 			},
 		],
 		faqs: [
 			{
 				question: "How does the MP4 to GIF converter work?",
 				answer:
-					"Our converter uses Remotion (remotion.dev) directly in your browser. When you upload an MP4 file, it gets processed locally on your device and converted to an animated GIF without ever being sent to a server.",
+					"Our converter uses Mediabunny (mediabunny.dev) directly in your browser. When you upload an MP4 file, it gets processed locally on your device and converted to an animated GIF without ever being sent to a server.",
 			},
 			{
 				question: "Is there a file size limit?",

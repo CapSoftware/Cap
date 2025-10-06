@@ -104,29 +104,42 @@ async function legacyUploadCap(
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	queryClient: QueryClient,
 ) {
-	const parser = await import("@remotion/media-parser");
-	const webcodecs = await import("@remotion/webcodecs");
+	const { Input } = await import("mediabunny");
 
 	try {
 		setUploadStatus({ status: "parsing" });
-		const metadata = await parser.parseMedia({
-			src: file,
-			fields: {
-				durationInSeconds: true,
-				dimensions: true,
-				fps: true,
-				numberOfAudioChannels: true,
-				sampleRate: true,
-			},
+		const { BlobSource, ALL_FORMATS } = await import("mediabunny");
+		const input = new Input({
+			source: new BlobSource(file),
+			formats: ALL_FORMATS,
 		});
 
-		const duration = metadata.durationInSeconds
+		// Get metadata from the input
+		const videoTracks = await input.getVideoTracks();
+		const audioTracks = await input.getAudioTracks();
+		const videoTrack = videoTracks[0];
+		const audioTrack = audioTracks[0];
+		const fileDuration = await input.computeDuration();
+
+		const metadata = {
+			durationInSeconds: fileDuration,
+			dimensions: videoTrack
+				? { width: videoTrack.displayWidth, height: videoTrack.displayHeight }
+				: undefined,
+			fps: videoTrack
+				? (await videoTrack.computePacketStats()).averagePacketRate
+				: undefined,
+			numberOfAudioChannels: audioTrack?.numberOfChannels,
+			sampleRate: audioTrack?.sampleRate,
+		};
+
+		const videoDuration = metadata.durationInSeconds
 			? Math.round(metadata.durationInSeconds)
 			: undefined;
 
 		setUploadStatus({ status: "creating" });
 		const videoData = await createVideoAndGetUploadUrl({
-			duration,
+			duration: videoDuration,
 			resolution: metadata.dimensions
 				? `${metadata.dimensions.width}x${metadata.dimensions.height}`
 				: undefined,
@@ -165,24 +178,59 @@ async function legacyUploadCap(
 
 			const resizeOptions = calculateResizeOptions();
 
-			const convertResult = await webcodecs.convertMedia({
-				src: file,
-				container: "mp4",
-				videoCodec: "h264",
-				audioCodec: "aac",
-				...(resizeOptions && { resize: resizeOptions }),
-				onProgress: ({ overallProgress }) => {
-					if (overallProgress !== null) {
-						const progressValue = overallProgress * 100;
-						setUploadStatus({
-							status: "converting",
-							capId: uploadId,
-							progress: progressValue,
-						});
-					}
+			const {
+				Output,
+				Mp4OutputFormat,
+				BufferTarget,
+				Conversion,
+				BlobSource,
+				ALL_FORMATS,
+			} = await import("mediabunny");
+			const input = new Input({
+				source: new BlobSource(file),
+				formats: ALL_FORMATS,
+			});
+			const output = new Output({
+				format: new Mp4OutputFormat(),
+				target: new BufferTarget(),
+			});
+
+			const conversion = await Conversion.init({
+				input,
+				output,
+				video: {
+					codec: "avc",
+					...(resizeOptions && {
+						width: Math.round(metadata.dimensions!.width * resizeOptions.scale),
+						height: Math.round(
+							metadata.dimensions!.height * resizeOptions.scale,
+						),
+					}),
+				},
+				audio: {
+					codec: "aac",
 				},
 			});
-			optimizedBlob = await convertResult.save();
+
+			if (!conversion.isValid) {
+				throw new Error("Video conversion configuration is invalid");
+			}
+
+			conversion.onProgress = (progress) => {
+				const progressValue = progress * 100;
+				setUploadStatus({
+					status: "converting",
+					capId: uploadId,
+					progress: progressValue,
+				});
+			};
+
+			await conversion.execute();
+			const buffer = output.target.buffer;
+			if (!buffer) {
+				throw new Error("Conversion produced no output buffer");
+			}
+			optimizedBlob = new Blob([buffer]);
 
 			if (optimizedBlob.size === 0)
 				throw new Error("Conversion produced empty file");
