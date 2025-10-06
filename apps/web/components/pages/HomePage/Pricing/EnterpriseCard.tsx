@@ -62,7 +62,7 @@ export const EnterpriseCard = () => {
 							<h3 className="mb-2 text-xl font-semibold text-center text-gray-12">
 								Cap for Enterprise
 							</h3>
-							<p className="mb-4 text-sm font-medium text-center text-gray-11">
+							<p className="mb-4 text-base text-center text-gray-11">
 								Deploy Cap across your organization with enterprise-grade
 								features, dedicated support, and custom integrations.
 							</p>
