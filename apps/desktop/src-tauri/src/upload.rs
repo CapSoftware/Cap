@@ -20,6 +20,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     pin::pin,
@@ -402,6 +403,13 @@ impl InstantMultipartUpload {
         )
         .try_collect::<Vec<_>>()
         .await?;
+
+        // Deduplicate parts - keep the last occurrence of each part number
+        let mut deduplicated_parts = HashMap::new();
+        for part in parts {
+            deduplicated_parts.insert(part.part_number, part);
+        }
+        parts = deduplicated_parts.into_values().collect::<Vec<_>>();
         parts.sort_by_key(|part| part.part_number);
 
         let metadata = build_video_meta(&file_path)
@@ -466,7 +474,7 @@ pub fn from_pending_file_to_chunks(
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
-        let mut part_number = 2; // Start at 2 since part 1 will be yielded last
+        let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
         let mut first_chunk_size: Option<u64> = None;
@@ -533,17 +541,16 @@ pub fn from_pending_file_to_chunks(
                     chunk.truncate(total_read);
 
                     if last_read_position == 0 {
-                        // This is the first chunk - remember its size but don't yield yet
+                        // This is the first chunk - remember its size so we can reemit it.
                         first_chunk_size = Some(total_read as u64);
-                    } else {
-                        // Yield non-first chunks immediately
-                        yield Chunk {
-                            total_size: file_size,
-                            part_number,
-                            chunk: Bytes::from(chunk),
-                        };
-                        part_number += 1;
                     }
+
+                    yield Chunk {
+                        total_size: file_size,
+                        part_number,
+                        chunk: Bytes::from(chunk),
+                    };
+                    part_number += 1;
 
                     last_read_position += total_read as u64;
                 }
