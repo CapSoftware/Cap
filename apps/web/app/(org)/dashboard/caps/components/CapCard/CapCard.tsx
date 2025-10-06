@@ -336,7 +336,7 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[20]",
 					)}
 				>
-					{isOwner && (
+					{isOwner ? (
 						<CapCardButton
 							tooltipContent="Settings"
 							onClick={(e) => {
@@ -347,6 +347,18 @@ export const CapCard = ({
 							icon={() => {
 								return <FontAwesomeIcon className="size-4" icon={faGear} />;
 							}}
+						/>
+					) : (
+						<CapCardButton
+							tooltipContent="Download"
+							onClick={(e) => {
+								e.stopPropagation();
+								handleDownload();
+							}}
+							className="delay-0"
+							icon={() => (
+								<FontAwesomeIcon className="size-4" icon={faDownload} />
+							)}
 						/>
 					)}
 					<CapCardButton
