@@ -364,7 +364,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && (
+						{!sidebarCollapsed && !userIsSubscribed && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}

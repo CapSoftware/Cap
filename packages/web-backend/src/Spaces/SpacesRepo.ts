@@ -45,6 +45,12 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 							),
 					)
 					.pipe(Effect.map(Array.get(0))),
+			getById: (spaceId: string) =>
+				db
+					.execute((db) =>
+						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
+					)
+					.pipe(Effect.map(Array.get(0))),
 		};
 	}),
 	dependencies: [Database.Default],
