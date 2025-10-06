@@ -474,63 +474,55 @@ pub fn from_pending_file_to_chunks(
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
+        let mut file = tokio::fs::File::open(&path).await?;
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
         let mut first_chunk_size: Option<u64> = None;
+        let mut chunk_buffer = vec![0u8; CHUNK_SIZE as usize];
 
         loop {
             // Check if realtime recording is done
-            if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
-                match realtime_receiver.try_recv() {
-                    Ok(_) => realtime_is_done = Some(true),
-                    Err(flume::TryRecvError::Empty) => {},
-                    Err(_) => yield Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "Realtime generation failed"
-                    ))?,
-                };
+            if !realtime_is_done.unwrap_or(true) {
+                if let Some(ref realtime_receiver) = realtime_upload_done {
+                    match realtime_receiver.try_recv() {
+                        Ok(_) => realtime_is_done = Some(true),
+                        Err(flume::TryRecvError::Empty) => {},
+                        Err(_) => yield Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Realtime generation failed"
+                        ))?,
+                    }
+                }
             }
 
-            // Check file existence and size
-            if !path.exists() {
-                yield Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "File no longer exists"
-                ))?;
-            }
-
-            let file_size = match tokio::fs::metadata(&path).await {
+            // Get current file size - reuse file handle for metadata
+            let file_size = match file.metadata().await {
                 Ok(metadata) => metadata.len(),
                 Err(_) => {
-                    // Retry on metadata errors (file might be temporarily locked)
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    // File might be temporarily locked, retry with shorter delay
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             };
 
             let new_data_size = file_size.saturating_sub(last_read_position);
 
-            // Read chunk if we have enough data OR if recording is done with any data
+            // Determine if we should read a chunk
             let should_read_chunk = if let Some(is_done) = realtime_is_done {
-                // We have a realtime receiver - check if recording is done or we have enough data
                 (new_data_size >= CHUNK_SIZE) || (is_done && new_data_size > 0)
             } else {
-                // No realtime receiver - read any available data
                 new_data_size > 0
             };
 
             if should_read_chunk {
-                let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE);
+                let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE) as usize;
 
-                let mut file = tokio::fs::File::open(&path).await?;
                 file.seek(std::io::SeekFrom::Start(last_read_position)).await?;
 
-                let mut chunk = vec![0u8; chunk_size as usize];
                 let mut total_read = 0;
-
-                while total_read < chunk_size as usize {
-                    match file.read(&mut chunk[total_read..]).await {
+                while total_read < chunk_size {
+                    match file.read(&mut chunk_buffer[total_read..chunk_size]).await {
                         Ok(0) => break, // EOF
                         Ok(n) => total_read += n,
                         Err(e) => yield Err(e)?,
@@ -538,33 +530,29 @@ pub fn from_pending_file_to_chunks(
                 }
 
                 if total_read > 0 {
-                    chunk.truncate(total_read);
-
+                    // Remember first chunk size for later re-emission with updated header
                     if last_read_position == 0 {
-                        // This is the first chunk - remember its size so we can reemit it.
                         first_chunk_size = Some(total_read as u64);
                     }
 
                     yield Chunk {
                         total_size: file_size,
                         part_number,
-                        chunk: Bytes::from(chunk),
+                        chunk: Bytes::copy_from_slice(&chunk_buffer[..total_read]),
                     };
                     part_number += 1;
-
                     last_read_position += total_read as u64;
                 }
             } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
-                // Recording is done and no new data - now yield the first chunk
+                // Recording is done and no new data - re-emit first chunk with corrected MP4 header
                 if let Some(first_size) = first_chunk_size {
-                    let mut file = tokio::fs::File::open(&path).await?;
                     file.seek(std::io::SeekFrom::Start(0)).await?;
 
-                    let mut first_chunk = vec![0u8; first_size as usize];
+                    let chunk_size = first_size as usize;
                     let mut total_read = 0;
 
-                    while total_read < first_size as usize {
-                        match file.read(&mut first_chunk[total_read..]).await {
+                    while total_read < chunk_size {
+                        match file.read(&mut chunk_buffer[total_read..chunk_size]).await {
                             Ok(0) => break,
                             Ok(n) => total_read += n,
                             Err(e) => yield Err(e)?,
@@ -572,17 +560,18 @@ pub fn from_pending_file_to_chunks(
                     }
 
                     if total_read > 0 {
-                        first_chunk.truncate(total_read);
+                        // Re-emit first chunk with part_number 1 to fix MP4 header
                         yield Chunk {
                             total_size: file_size,
                             part_number: 1,
-                            chunk: Bytes::from(first_chunk),
+                            chunk: Bytes::copy_from_slice(&chunk_buffer[..total_read]),
                         };
                     }
                 }
                 break;
             } else {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                // Reduced polling interval for better responsiveness
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }
