@@ -107,6 +107,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				return new Folder.Folder(folder);
 			}),
+
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
 			 * relocated to the root of the collection (space or My Caps) they're in
@@ -121,6 +122,73 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				if (!folder) return yield* new Folder.NotFoundError();
 
 				yield* deleteFolder(folder);
+			}),
+
+			update: Effect.fn("Folders.update")(function* (
+				id: Folder.FolderId,
+				data: Folder.FolderUpdate,
+			) {
+				const user = yield* CurrentUser;
+
+				// const [folder] = yield* db
+				// 	.execute((db) =>
+				// 		db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
+				// 	)
+				// 	.pipe(Policy.withPolicy(policy.canEdit(id)));
+				// if (!folder) return yield* new Folder.NotFoundError();
+				// yield* deleteFolder(folder);
+
+				// // If parentId is provided and not null, verify it exists and belongs to the same organization
+				if (data.parentId) {
+					// Check that we're not creating a circular reference
+					if (data.parentId === Option.some(id))
+						throw new Error("A folder cannot be its own parent"); // TODO: Effect error
+
+					// 	const [parentFolder] = await db()
+					// 		.select()
+					// 		.from(folders)
+					// 		.where(
+					// 			and(
+					// 				eq(folders.id, parentId),
+					// 				eq(folders.organizationId, user.activeOrganizationId),
+					// 			),
+					// 		);
+
+					// 	if (!parentFolder) {
+					// 		throw new Error("Parent folder not found or not accessible");
+					// 	}
+
+					// 	// Check for circular references in the folder hierarchy
+					// 	let currentParentId = parentFolder.parentId;
+					// 	while (currentParentId) {
+					// 		if (currentParentId === folderId) {
+					// 			throw new Error("Cannot create circular folder references");
+					// 		}
+
+					// 		const [nextParent] = await db()
+					// 			.select()
+					// 			.from(folders)
+					// 			.where(eq(folders.id, currentParentId));
+
+					// 		if (!nextParent) break;
+					// 		currentParentId = nextParent.parentId;
+					// 	}
+				}
+
+				yield* db
+					.execute((db) =>
+						db.update(Db.folders)
+  						.set({
+  							...(Option.isSome(data.name) ? { name: data.name.value } : {}),
+  							...(Option.isSome(data.color) ? { color: data.color.value } : {}),
+  							...(Option.isSome(data.parentId) ? { parentId: data.parentId.value } : {}),
+  						})
+  						.where(Dz.eq(Db.folders.id, id));
+					)
+					.pipe(Policy.withPolicy(policy.canEdit(id)));
+
+				revalidatePath(`/dashboard/caps`);
+				revalidatePath(`/dashboard/folder/${folderId}`);
 			}),
 		};
 	}),

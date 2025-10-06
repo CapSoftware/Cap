@@ -7,6 +7,7 @@ import type { Folder } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
+// TODO: Replace this
 export async function updateFolder({
 	folderId,
 	name,

@@ -26,6 +26,13 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	parentId: Schema.OptionFromNullOr(FolderId),
 }) {}
 
+export class FolderUpdate extends Schema.Class<FolderUpdate>("FolderPatch")({
+	id: FolderId,
+	name: Schema.OptionFromUndefinedOr(Schema.String),
+	color: Schema.OptionFromUndefinedOr(FolderColor),
+	parentId: Schema.OptionFromUndefinedOr(FolderId),
+}) {}
+
 export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderDelete", {
 		payload: FolderId,
@@ -38,6 +45,11 @@ export class FolderRpcs extends RpcGroup.make(
 			spaceId: Schema.OptionFromUndefinedOr(Schema.String),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),
+		success: Folder,
+		error: Schema.Union(NotFoundError, InternalError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("FolderUpdate", {
+		payload: FolderUpdate,
 		success: Folder,
 		error: Schema.Union(NotFoundError, InternalError),
 	}).middleware(RpcAuthMiddleware),

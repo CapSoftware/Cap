@@ -26,6 +26,15 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 							() => new InternalError({ type: "database" }),
 						),
 					),
+			FolderUpdate: (data) =>
+				folders
+					.update(data.id, data)
+					.pipe(
+						Effect.catchTag(
+							"DatabaseError",
+							() => new InternalError({ type: "database" }),
+						),
+					),
 		};
 	}),
 );
