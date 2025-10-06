@@ -1,17 +1,19 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
 import { type Brand, Context, Data, Effect, type Option, Schema } from "effect";
-
+import type { NonEmptyReadonlyArray } from "effect/Array";
 import { CurrentUser } from "./Authentication.ts";
 
-export type Policy<E = never, R = never> = Brand.Branded<
-	Effect.Effect<void, PolicyDeniedError | E, CurrentUser | R>,
-	"Private"
+export type Policy<E = never, R = never> = Effect.Effect<
+	void,
+	PolicyDeniedError | E,
+	CurrentUser | R
 >;
 
-export type PublicPolicy<E = never, R = never> = Brand.Branded<
-	Effect.Effect<void, PolicyDeniedError | E, R>,
-	"Public"
+export type PublicPolicy<E = never, R = never> = Effect.Effect<
+	void,
+	PolicyDeniedError | E,
+	R
 >;
 
 export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
@@ -73,3 +75,23 @@ export const withPublicPolicy =
 	<E, R>(policy: PublicPolicy<E, R>) =>
 	<A, E2, R2>(self: Effect.Effect<A, E2, R2>) =>
 		Effect.zipRight(policy, self);
+
+/**
+ * Composes multiple policies with AND semantics - all policies must pass.
+ * Returns a new policy that succeeds only if all the given policies succeed.
+ */
+export const all = <E, R>(
+	...policies: NonEmptyReadonlyArray<Policy<E, R>>
+): Policy<E, R> =>
+	Effect.all(policies, {
+		concurrency: 1,
+		discard: true,
+	});
+
+/**
+ * Composes multiple policies with OR semantics - at least one policy must pass.
+ * Returns a new policy that succeeds if any of the given policies succeed.
+ */
+export const any = <E, R>(
+	...policies: NonEmptyReadonlyArray<Policy<E, R>>
+): Policy<E, R> => Effect.firstSuccessOf(policies);
