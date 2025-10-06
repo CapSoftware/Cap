@@ -41,8 +41,7 @@ const options = [
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description:
-			"Remove the transcript for caps, this also disables chapters and summary",
+		description: "This also disables chapters and summary",
 		pro: true,
 	},
 ];
