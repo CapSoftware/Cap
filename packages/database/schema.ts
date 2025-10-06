@@ -24,6 +24,9 @@ const nanoId = customType<{ data: string; notNull: true }>({
 		return `varchar(${nanoIdLength})`;
 	},
 });
+// TODO: This will replace `nanoId` in: https://github.com/CapSoftware/Cap/pull/1105
+const nanoIdRequired = (name: string) =>
+	varchar(name, { length: nanoIdLength }).notNull();
 
 const nanoIdNullable = customType<{ data: string; notNull: false }>({
 	dataType() {
@@ -247,7 +250,7 @@ export const videos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
-		orgId: nanoId("orgId"),
+		orgId: nanoIdRequired("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
