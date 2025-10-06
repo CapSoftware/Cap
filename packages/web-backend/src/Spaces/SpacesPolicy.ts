@@ -22,11 +22,7 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 				Policy.policy(
 					Effect.fn(function* (user) {
 						const space = yield* repo.getById(spaceId);
-
-						if (Option.isNone(space)) {
-							yield* Effect.log("Space not found. Access granted.");
-							return true;
-						}
+						if (Option.isNone(space)) return false;
 
 						return space.value.createdById === user.id;
 					}),
