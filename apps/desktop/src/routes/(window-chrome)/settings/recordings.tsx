@@ -1,4 +1,4 @@
-import { ProgressCircle } from "@cap/ui-solid";
+import { Button, ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -7,13 +7,12 @@ import {
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -135,13 +134,58 @@ export default function Recordings() {
 		});
 	};
 
+	const handleImportUpload = async () => {
+		try {
+			const file = await open({
+				multiple: false,
+				filters: [
+					{
+						name: "Video",
+						extensions: ["mp4", "mov", "mkv", "webm", "avi"],
+					},
+				],
+			});
+
+			if (!file || Array.isArray(file)) return;
+
+			trackEvent("import_upload_started");
+
+			const channel = new Channel<UploadProgress>(() => {});
+
+			await commands.importAndUploadVideo(file, channel);
+
+			// Refetch recordings to show the new imported recording
+			recordings.refetch();
+
+			trackEvent("import_upload_completed");
+		} catch (error) {
+			console.error("Failed to import and upload video:", error);
+			trackEvent("import_upload_failed");
+		}
+	};
+
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
-				<p class="text-sm text-gray-10">
-					Manage your recordings and perform actions.
-				</p>
+				<div class="flex items-center justify-between">
+					<div>
+						<h2 class="text-lg font-medium text-gray-12">
+							Previous Recordings
+						</h2>
+						<p class="text-sm text-gray-10">
+							Manage your recordings and perform actions.
+						</p>
+					</div>
+					<Button
+						onClick={handleImportUpload}
+						variant="outline"
+						size="sm"
+						class="flex items-center gap-2"
+					>
+						<IconLucideUpload class="size-4" />
+						Upload from file
+					</Button>
+				</div>
 			</div>
 			<Show
 				when={recordings.data && recordings.data.length > 0}

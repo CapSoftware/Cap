@@ -87,6 +87,7 @@ use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace, warn};
 use upload::{create_or_get_video, upload_image, upload_video};
+use uuid;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
@@ -1761,6 +1762,292 @@ async fn editor_delete_project(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn import_and_upload_video(
+    app: AppHandle,
+    source_path: PathBuf,
+    channel: Channel<UploadProgress>,
+) -> Result<UploadResult, String> {
+    // 1) Auth/plan checks (reuse code from upload_exported_video)
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(UploadResult::NotAuthenticated);
+    };
+
+    // Validate source file exists and is a valid video
+    if !source_path.exists() {
+        return Err("Source video file does not exist".to_string());
+    }
+
+    if !is_valid_video(&source_path) {
+        return Err("Source file is not a valid video".to_string());
+    }
+
+    // Build metadata to check duration for plan constraints
+    let source_metadata = build_video_meta(&source_path)
+        .map_err(|err| format!("Error getting source video meta: {err}"))?;
+
+    if !auth.is_upgraded() && source_metadata.duration_in_secs > 300.0 {
+        return Ok(UploadResult::UpgradeRequired);
+    }
+
+    // 2) Create new project dir
+    let id = uuid::Uuid::new_v4().to_string();
+    let recording_dir = recordings_path(&app).join(format!("{id}.cap"));
+    std::fs::create_dir_all(&recording_dir)
+        .map_err(|e| format!("Failed to create recording directory: {e}"))?;
+
+    // 3) Transcode input to standard MP4
+    let output_dir = recording_dir.join("output");
+    std::fs::create_dir_all(&output_dir)
+        .map_err(|e| format!("Failed to create output directory: {e}"))?;
+    let output_mp4 = output_dir.join("result.mp4");
+
+    transcode_to_mp4(&source_path, &output_mp4).await?;
+
+    // 4) Generate thumbnail
+    let screenshot_dir = recording_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshot_dir)
+        .map_err(|e| format!("Failed to create screenshots directory: {e}"))?;
+    let screenshot_path = screenshot_dir.join("display.jpg");
+
+    create_screenshot(output_mp4.clone(), screenshot_path.clone(), None).await?;
+
+    // 5) Create and persist RecordingMeta (Studio SingleSegment)
+    let pretty_name = source_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Video")
+        .to_string();
+
+    use cap_project::*;
+    let mut meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.clone(),
+        sharing: None,
+        pretty_name: pretty_name.clone(),
+        inner: RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment {
+            segment: SingleSegment {
+                display: VideoMeta {
+                    path: RelativePathBuf::from_path("output/result.mp4").unwrap(),
+                    fps: 30, // Standard fps as per spec
+                    start_time: None,
+                },
+                camera: None,
+                audio: None,
+                cursor: None,
+            },
+        }),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e:?}"))?;
+
+    // 6) Create/get S3 upload config
+    let s3_meta = build_video_meta(&output_mp4)
+        .map_err(|err| format!("Error getting output video meta: {err}"))?;
+
+    let s3_config = create_or_get_video(
+        &app,
+        false,
+        None,
+        Some(meta.pretty_name.clone()),
+        Some(s3_meta.clone()),
+    )
+    .await?;
+
+    // 7) Persist upload state to meta and save
+    meta.upload = Some(UploadMeta::SinglePartUpload {
+        video_id: s3_config.id.clone(),
+        file_path: output_mp4.clone(),
+        screenshot_path: screenshot_path.clone(),
+        recording_dir: recording_dir.clone(),
+    });
+    meta.save_for_project()
+        .map_err(|e| error!("Failed to save recording meta: {e}"))
+        .ok();
+
+    // 8) Upload (single-part)
+    match upload_video(
+        &app,
+        s3_config.id.clone(),
+        output_mp4,
+        screenshot_path,
+        s3_meta,
+        Some(channel.clone()),
+    )
+    .await
+    {
+        Ok(uploaded_video) => {
+            channel.send(UploadProgress { progress: 1.0 }).ok();
+
+            meta.upload = Some(UploadMeta::Complete);
+            meta.sharing = Some(SharingMeta {
+                link: uploaded_video.link.clone(),
+                id: uploaded_video.id.clone(),
+            });
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
+
+            let _ = app
+                .state::<ArcLock<ClipboardContext>>()
+                .write()
+                .await
+                .set_text(uploaded_video.link.clone());
+
+            NotificationType::ShareableLinkCopied.send(&app);
+            Ok(UploadResult::Success(uploaded_video.link))
+        }
+        Err(e) => {
+            error!("Failed to upload video: {e}");
+
+            NotificationType::UploadFailed.send(&app);
+
+            meta.upload = Some(UploadMeta::Failed { error: e.clone() });
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
+
+            Err(e)
+        }
+    }
+}
+
+async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
+    let input = input.to_path_buf();
+    let output = output.to_path_buf();
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut ictx =
+            ffmpeg::format::input(&input).map_err(|e| format!("Failed to open input file: {e}"))?;
+
+        let video_stream = ictx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found in input file".to_string())?;
+
+        let video_stream_index = video_stream.index();
+
+        let mut octx = ffmpeg::format::output(&output)
+            .map_err(|e| format!("Failed to create output context: {e}"))?;
+
+        // Create video encoder (H.264)
+        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
+            .ok_or_else(|| "H.264 encoder not found".to_string())?;
+
+        let global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg::format::flag::Flags::GLOBAL_HEADER);
+        let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .map_err(|e| format!("Failed to create encoder: {e}"))?;
+
+        let mut decoder =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
+                .map_err(|e| format!("Failed to create decoder context: {e}"))?
+                .decoder()
+                .video()
+                .map_err(|e| format!("Failed to create video decoder: {e}"))?;
+
+        // Configure encoder
+        encoder.set_width(decoder.width());
+        encoder.set_height(decoder.height());
+        encoder.set_format(ffmpeg::format::Pixel::YUV420P);
+        encoder.set_frame_rate(Some(ffmpeg::Rational::from((30, 1)))); // 30fps as per spec
+        encoder.set_time_base(ffmpeg::Rational::from((1, 30)));
+
+        if global_header {
+            encoder.set_flags(ffmpeg::codec::flag::Flags::GLOBAL_HEADER);
+        }
+
+        let mut encoder = encoder
+            .open_as(codec)
+            .map_err(|e| format!("Failed to open encoder: {e}"))?;
+
+        let mut output_stream = octx
+            .add_stream(codec)
+            .map_err(|e| format!("Failed to add stream: {e}"))?;
+
+        output_stream.set_parameters(&encoder);
+        let output_stream_index = output_stream.index();
+        let output_stream_time_base = output_stream.time_base();
+
+        octx.write_header()
+            .map_err(|e| format!("Failed to write header: {e}"))?;
+
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            ffmpeg::format::Pixel::YUV420P,
+            encoder.width(),
+            encoder.height(),
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .map_err(|e| format!("Failed to create scaler: {e}"))?;
+
+        let mut frame_index = 0;
+        let mut decoded_frame = ffmpeg::frame::Video::empty();
+        let mut encoded_frame = ffmpeg::frame::Video::empty();
+
+        for (stream, packet) in ictx.packets() {
+            if stream.index() == video_stream_index {
+                decoder
+                    .send_packet(&packet)
+                    .map_err(|e| format!("Failed to send packet to decoder: {e}"))?;
+
+                while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                    scaler
+                        .run(&decoded_frame, &mut encoded_frame)
+                        .map_err(|e| format!("Failed to scale frame: {e}"))?;
+
+                    encoded_frame.set_pts(Some(frame_index));
+                    frame_index += 1;
+
+                    encoder
+                        .send_frame(&encoded_frame)
+                        .map_err(|e| format!("Failed to send frame to encoder: {e}"))?;
+
+                    let mut encoded_packet = ffmpeg::packet::Packet::empty();
+                    while encoder.receive_packet(&mut encoded_packet).is_ok() {
+                        encoded_packet.set_stream(output_stream_index);
+                        encoded_packet.rescale_ts(encoder.time_base(), output_stream_time_base);
+                        encoded_packet
+                            .write_interleaved(&mut octx)
+                            .map_err(|e| format!("Failed to write packet: {e}"))?;
+                    }
+                }
+            }
+        }
+
+        // Flush encoder
+        encoder
+            .send_eof()
+            .map_err(|e| format!("Failed to flush encoder: {e}"))?;
+
+        let mut encoded_packet = ffmpeg::packet::Packet::empty();
+        while encoder.receive_packet(&mut encoded_packet).is_ok() {
+            encoded_packet.set_stream(output_stream_index);
+            encoded_packet.rescale_ts(encoder.time_base(), output_stream_time_base);
+            encoded_packet
+                .write_interleaved(&mut octx)
+                .map_err(|e| format!("Failed to write final packet: {e}"))?;
+        }
+
+        octx.write_trailer()
+            .map_err(|e| format!("Failed to write trailer: {e}"))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Transcode task failed: {e}"))?
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
@@ -1981,7 +2268,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            import_and_upload_video,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

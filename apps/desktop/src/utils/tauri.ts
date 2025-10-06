@@ -274,6 +274,9 @@ async focusWindow(windowId: WindowId) : Promise<null> {
 },
 async editorDeleteProject() : Promise<null> {
     return await TAURI_INVOKE("editor_delete_project");
+},
+async importAndUploadVideo(sourcePath: string, channel: TAURI_CHANNEL<UploadProgress>) : Promise<UploadResult> {
+    return await TAURI_INVOKE("import_and_upload_video", { sourcePath, channel });
 }
 }
 
