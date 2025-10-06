@@ -129,22 +129,31 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
-				const user = yield* CurrentUser;
+				// const [video] = yield* repo
+				// 	.getById(videoId)
+				// 	.pipe(
+				// 		Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
+				// 		Policy.withPolicy(policy.isOwner(videoId)),
+				// 	);
+
+				// const user = yield* CurrentUser;
 
 				// const [folder] = yield* db
 				// 	.execute((db) =>
 				// 		db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
 				// 	)
 				// 	.pipe(Policy.withPolicy(policy.canEdit(id)));
+
+				// TODO: Hook up a return like this
 				// if (!folder) return yield* new Folder.NotFoundError();
-				// yield* deleteFolder(folder);
 
 				// // If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (data.parentId) {
 					// Check that we're not creating a circular reference
-					if (data.parentId === Option.some(folderId))
-						throw new Error("A folder cannot be its own parent"); // TODO: Effect error
+					if (data.parentId === folderId)
+						return yield* new Folder.RecursiveDefinitionError();
 
+					// TODO: Should this have a `policy` assigned to it???
 					// 	const [parentFolder] = await db()
 					// 		.select()
 					// 		.from(folders)
@@ -181,13 +190,9 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						db
 							.update(Db.folders)
 							.set({
-								...(Option.isSome(data.name) ? { name: data.name.value } : {}),
-								...(Option.isSome(data.color)
-									? { color: data.color.value }
-									: {}),
-								...(Option.isSome(data.parentId)
-									? { parentId: data.parentId.value }
-									: {}),
+								...(data.name ? { name: data.name } : {}),
+								...(data.color ? { color: data.color } : {}),
+								...(data.parentId ? { parentId: data.parentId } : {}),
 							})
 							.where(Dz.eq(Db.folders.id, folderId)),
 					)

@@ -36,6 +36,7 @@ const FolderCard = ({
 	const router = useRouter();
 	const { theme } = useTheme();
 	const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
+	const [isRenaming, setIsRenaming] = useState(false);
 	const [updateName, setUpdateName] = useState(name);
 	const nameRef = useRef<HTMLTextAreaElement>(null);
 	const folderRef = useRef<HTMLDivElement>(null);
@@ -89,14 +90,15 @@ const FolderCard = ({
 			router.refresh();
 		},
 		onError: () => toast.error("Failed to update folder name"),
+		onSettled: () => setIsRenaming(false),
 	});
 
 	useEffect(() => {
-		if (updateFolder.isPending && nameRef.current) {
+		if (isRenaming && nameRef.current) {
 			nameRef.current.focus();
 			nameRef.current.select();
 		}
-	}, [updateFolder.isPending]);
+	}, [isRenaming]);
 
 	// Register this folder as a drop target for mobile drag and drop
 	useEffect(() => {
@@ -340,6 +342,7 @@ const FolderCard = ({
 								value={updateName}
 								onChange={(e) => setUpdateName(e.target.value)}
 								onBlur={() => {
+									setIsRenaming(false);
 									if (updateName.trim() !== name)
 										updateFolder.mutate({
 											id,
@@ -348,6 +351,7 @@ const FolderCard = ({
 								}}
 								onKeyDown={(e) => {
 									if (e.key === "Enter") {
+										setIsRenaming(false);
 										if (updateName.trim() !== name)
 											updateFolder.mutate({
 												id,
@@ -363,6 +367,7 @@ const FolderCard = ({
 								onClick={(e) => {
 									e.preventDefault();
 									e.stopPropagation();
+									setIsRenaming(false);
 								}}
 							>
 								<p className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">

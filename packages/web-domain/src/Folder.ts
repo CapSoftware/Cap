@@ -1,5 +1,5 @@
 import { Rpc, RpcGroup } from "@effect/rpc";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
@@ -16,6 +16,12 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	{},
 ) {}
 
+// A folder can't be declared within itself.
+export class RecursiveDefinitionError extends Schema.TaggedError<RecursiveDefinitionError>()(
+	"RecursiveDefinitionError",
+	{},
+) {}
+
 export class Folder extends Schema.Class<Folder>("Folder")({
 	id: FolderId,
 	name: Schema.String,
@@ -24,7 +30,12 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	createdById: Schema.String,
 	spaceId: Schema.OptionFromNullOr(Schema.String),
 	parentId: Schema.OptionFromNullOr(FolderId),
-}) {}
+}) {
+	static decodeSync = Schema.decodeSync(Folder);
+
+	static toJS = (self: Folder) =>
+		Schema.encode(Folder)(self).pipe(Effect.orDie);
+}
 
 export class FolderUpdate extends Schema.Class<FolderUpdate>("FolderPatch")({
 	id: FolderId,
@@ -51,6 +62,6 @@ export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,
 		success: Folder,
-		error: Schema.Union(NotFoundError, InternalError),
+		error: Schema.Union(NotFoundError, RecursiveDefinitionError, InternalError),
 	}).middleware(RpcAuthMiddleware),
 ) {}
