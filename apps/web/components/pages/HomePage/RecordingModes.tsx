@@ -56,10 +56,10 @@ const RecordingModes = () => {
 	return (
 		<div className="w-full max-w-[1000px] mx-auto px-5">
 			<div className="flex flex-col gap-2 justify-center items-center text-center">
-				<h1 className="text-4xl font-medium text-12">
+				<h1 className="text-4xl font-medium text-gray-12">
 					{homepageCopy.recordingModes.title}
 				</h1>
-				<p className="text-lg text-gray-10">
+				<p className="text-lg text-gray-10 w-full max-w-[670px] mx-auto">
 					{homepageCopy.recordingModes.subtitle}
 				</p>
 			</div>
@@ -143,7 +143,7 @@ const RecordingModes = () => {
 				</div>
 				{/*Video Description*/}
 				<div className="p-4 border-t border-b bg-gray-2 border-gray-5">
-					<p className="mx-auto w-full text-sm text-center md:text-xl text-gray-12">
+					<p className="mx-auto w-full text-lg text-center text-gray-12">
 						{activeMode?.description}
 					</p>
 				</div>

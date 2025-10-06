@@ -875,7 +875,7 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	return (
 		<Suspense>
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
+				<p class="text-sm text-center text-white max-w-64">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
 						class="underline"
