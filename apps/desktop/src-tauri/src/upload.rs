@@ -496,7 +496,6 @@ pub fn from_pending_file_to_chunks(
                 }
             }
 
-            // Get current file size - reuse file handle for metadata
             let file_size = match file.metadata().await {
                 Ok(metadata) => metadata.len(),
                 Err(_) => {
@@ -560,7 +559,6 @@ pub fn from_pending_file_to_chunks(
                     }
 
                     if total_read > 0 {
-                        // Re-emit first chunk with part_number 1 to fix MP4 header
                         yield Chunk {
                             total_size: file_size,
                             part_number: 1,
@@ -570,11 +568,29 @@ pub fn from_pending_file_to_chunks(
                 }
                 break;
             } else {
-                // Reduced polling interval for better responsiveness
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     }
+}
+
+fn retryable_client(host: &str) -> reqwest::ClientBuilder {
+    reqwest::Client::builder().retry(
+        reqwest::retry::for_host(host)
+            .classify_fn(|req_rep| {
+                match req_rep.status() {
+                    // Server errors
+                    Some(s) if s.is_server_error() || s == StatusCode::TOO_MANY_REQUESTS => {
+                        req_rep.retryable()
+                    }
+                    // Network errors
+                    None => req_rep.retryable(),
+                    _ => req_rep.success(),
+                }
+            })
+            .max_retries_per_request(5)
+            .max_extra_load(5.0),
+    )
 }
 
 /// Takes an incoming stream of bytes and individually uploads them to S3.
@@ -603,14 +619,7 @@ fn multipart_uploader(
                     .await?;
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
-            let resp = reqwest::Client::builder()
-                .retry(reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(|req_rep| {
-                    if req_rep.status().is_some_and(|s| s.is_server_error()) {
-                        req_rep.retryable()
-                    } else {
-                        req_rep.success()
-                    }
-                }))
+            let resp = retryable_client(&url.host().unwrap_or("<unknown>").to_string())
                 .build()
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
@@ -650,19 +659,7 @@ pub async fn singlepart_uploader(
 
     let url = Uri::from_str(&presigned_url)
         .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let resp = reqwest::Client::builder()
-        .retry(
-            reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string())
-                .classify_fn(|req_rep| {
-                    if req_rep.status().is_some_and(|s| s.is_server_error()) {
-                        req_rep.retryable()
-                    } else {
-                        req_rep.success()
-                    }
-                })
-                .max_retries_per_request(5)
-                .max_extra_load(5.0),
-        )
+    let resp = retryable_client(&url.host().unwrap_or("<unknown>").to_string())
         .build()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
