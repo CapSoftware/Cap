@@ -3,9 +3,9 @@ import * as Db from "@cap/database/schema";
 import { CurrentUser, Folder, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
+import { revalidatePath } from "next/cache";
 import { Database, type DatabaseError } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
-import { revalidatePath } from "next/cache";
 
 // @effect-diagnostics-next-line leakingRequirements:off
 export class Folders extends Effect.Service<Folders>()("Folders", {

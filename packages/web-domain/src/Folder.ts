@@ -1,10 +1,9 @@
+import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Effect, Schema } from "effect";
-
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { PolicyDeniedError } from "./Policy.ts";
-import { HttpApiSchema } from "@effect/platform";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;
@@ -72,9 +71,10 @@ export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,
 		error: Schema.Union(
-			NotFoundError,
 			RecursiveDefinitionError,
 			ParentNotFoundError,
+			PolicyDeniedError,
+			NotFoundError,
 			InternalError,
 		),
 	}).middleware(RpcAuthMiddleware),
