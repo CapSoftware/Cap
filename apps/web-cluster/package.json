@@ -1,10 +1,10 @@
 {
-	"name": "@cap/effect-cluster",
+	"name": "@cap/web-cluster",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/index.ts",
-		"build": "tsdown",
-		"build:docker": "cd ../.. && docker build -f apps/effect-cluster/Dockerfile -t cap-effect-cluster ."
+		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/runner.ts",
+		"build": "pnpm run --filter @cap/web-cluster^... build",
+		"build:docker": "cd ../.. && docker build -f apps/web-cluster/Dockerfile -t ghcr.io/brendonovich/cap-web-cluster:latest ."
 	},
 	"dependencies": {
 		"@cap/web-backend": "workspace:*",
@@ -13,6 +13,7 @@
 		"@effect/opentelemetry": "^0.56.1",
 		"@effect/platform": "^0.91.1",
 		"@effect/platform-node": "^0.96.1",
+		"@effect/platform-node-shared": "^0.51.4",
 		"@effect/rpc": "^0.70.0",
 		"@effect/sql-mysql2": "^0.45.1",
 		"@effect/workflow": "^0.10.0",

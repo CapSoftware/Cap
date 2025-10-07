@@ -3,11 +3,12 @@
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
-	"exports": {
-		".": "./src/index.ts"
-	},
 	"scripts": {
-		"typecheck": "tsc -b"
+		"typecheck": "tsc -b",
+		"build": "tsdown"
+	},
+	"publishConfig": {
+		"main": "./dist/index.js"
 	},
 	"devDependencies": {
 		"react": "^19.1.1",

@@ -8,6 +8,7 @@
 	},
 	"dependencies": {
 		"@pulumi/github": "^6.7.0",
+		"@pulumi/pulumi": "^3.201.0",
 		"@pulumiverse/vercel": "^1.14.3",
 		"zod": "^3"
 	}

@@ -5,7 +5,19 @@
 
 declare module "sst" {
   export interface Resource {
-    "DATABASE_URL": {
+    "CAP_AWS_ACCESS_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "CAP_AWS_SECRET_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "DATABASE_URL_HTTP": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "DATABASE_URL_MYSQL": {
       "type": "sst.sst.Secret"
       "value": string
     }

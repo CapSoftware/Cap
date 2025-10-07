@@ -1,7 +1,6 @@
 import "@/app/globals.css";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
