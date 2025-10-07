@@ -1265,8 +1265,9 @@ pub struct RenderSession {
     textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     current_is_left: bool,
-    readback_buffer: Option<wgpu::Buffer>,
+    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
     readback_buffer_size: u64,
+    current_readback_is_left: bool,
 }
 
 impl RenderSession {
@@ -1299,8 +1300,9 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
-            readback_buffer: None,
+            readback_buffers: (None, None),
             readback_buffer_size: 0,
+            current_readback_is_left: true,
         }
     }
 
@@ -1359,27 +1361,44 @@ impl RenderSession {
         self.current_is_left = !self.current_is_left;
     }
 
-    pub(crate) fn ensure_readback_buffer(&mut self, device: &wgpu::Device, size: u64) {
+    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
         let needs_new = self
-            .readback_buffer
+            .readback_buffers
+            .0
             .as_ref()
             .map_or(true, |_| self.readback_buffer_size < size);
 
         if needs_new {
-            self.readback_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("RenderSession Readback Buffer"),
-                size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            }));
+            let make_buffer = || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("RenderSession Readback Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            };
+
+            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
             self.readback_buffer_size = size;
         }
     }
 
-    pub(crate) fn readback_buffer(&self) -> &wgpu::Buffer {
-        self.readback_buffer
-            .as_ref()
-            .expect("readback buffer should be initialised")
+    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
+        if self.current_readback_is_left {
+            self.readback_buffers
+                .0
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        } else {
+            self.readback_buffers
+                .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        }
+    }
+
+    pub(crate) fn swap_readback_buffers(&mut self) {
+        self.current_readback_is_left = !self.current_readback_is_left;
     }
 }
 

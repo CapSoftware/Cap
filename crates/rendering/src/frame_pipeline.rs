@@ -1,4 +1,3 @@
-use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderSession, RenderingError};
@@ -80,8 +79,8 @@ pub async fn finish_encoder(
     };
 
     let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
-    session.ensure_readback_buffer(device, output_buffer_size);
-    let output_buffer = session.readback_buffer();
+    session.ensure_readback_buffers(device, output_buffer_size);
+    let output_buffer = session.current_readback_buffer();
 
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -110,21 +109,32 @@ pub async fn finish_encoder(
     queue.submit(std::iter::once(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
-    let (tx, rx) = oneshot_channel();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).ok();
     });
-    device.poll(wgpu::PollType::Wait)?;
 
-    rx.receive()
-        .await
-        .ok_or(RenderingError::BufferMapWaitingFailed)??;
+    let mut poll_count = 0;
+    loop {
+        device.poll(wgpu::PollType::Poll)?;
+        if let Ok(result) = rx.try_recv() {
+            result?;
+            break;
+        }
+        poll_count += 1;
+        if poll_count > 100 {
+            tokio::time::sleep(std::time::Duration::from_micros(10)).await;
+            poll_count = 0;
+        }
+    }
 
     let data = buffer_slice.get_mapped_range();
     let data_vec = data.to_vec();
 
     drop(data);
     output_buffer.unmap();
+
+    session.swap_readback_buffers();
 
     Ok(RenderedFrame {
         data: data_vec,
