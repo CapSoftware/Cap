@@ -1,9 +1,14 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Folder, Policy } from "@cap/web-domain";
+import {
+	CurrentUser,
+	type DatabaseError,
+	Folder,
+	Policy,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { Database, type DatabaseError } from "../Database.ts";
+import { Database } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
 
 // @effect-diagnostics-next-line leakingRequirements:off

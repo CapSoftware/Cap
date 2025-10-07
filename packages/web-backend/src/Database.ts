@@ -1,10 +1,6 @@
 import { db } from "@cap/database";
-import { Effect, Schema } from "effect";
-
-export class DatabaseError extends Schema.TaggedError<DatabaseError>()(
-	"DatabaseError",
-	{ cause: Schema.Unknown },
-) {}
+import { DatabaseError } from "@cap/web-domain";
+import { Effect } from "effect";
 
 export class Database extends Effect.Service<Database>()("Database", {
 	effect: Effect.gen(function* () {

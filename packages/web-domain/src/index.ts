@@ -1,8 +1,12 @@
 export * from "./Authentication.ts";
+export * from "./Database.ts";
 export * from "./Errors.ts";
 export * as Folder from "./Folder.ts";
+export * as Http from "./Http/index.ts";
+export * as Loom from "./Loom.ts";
 export * from "./Organisation.ts";
 export * as Policy from "./Policy.ts";
 export { Rpcs } from "./Rpcs.ts";
 export * as S3Bucket from "./S3Bucket.ts";
+export { S3Error } from "./S3Bucket.ts";
 export * as Video from "./Video.ts";

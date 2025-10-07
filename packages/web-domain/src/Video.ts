@@ -1,6 +1,6 @@
+import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Context, Effect, Option, Schema } from "effect";
-
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
@@ -135,6 +135,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"VideoNotFoundError",
 	{},
+	HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
 export class VideoRpcs extends RpcGroup.make(

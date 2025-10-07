@@ -1,8 +1,10 @@
 {
-	"name": "@cap/workflow-runner",
+	"name": "@cap/effect-cluster",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/index.ts"
+		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/index.ts",
+		"build": "tsdown",
+		"build:docker": "cd ../.. && docker build -f apps/effect-cluster/Dockerfile -t cap-effect-cluster ."
 	},
 	"dependencies": {
 		"@cap/web-backend": "workspace:*",
@@ -11,11 +13,15 @@
 		"@effect/opentelemetry": "^0.56.1",
 		"@effect/platform": "^0.91.1",
 		"@effect/platform-node": "^0.96.1",
+		"@effect/rpc": "^0.70.0",
 		"@effect/sql-mysql2": "^0.45.1",
 		"@effect/workflow": "^0.10.0",
 		"@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
 		"@opentelemetry/sdk-trace-base": "^2.0.1",
-		"effect": "^3.17.14"
+		"effect": "^3.17.14",
+		"rolldown": "1.0.0-beta.42",
+		"tsdown": "^0.15.6",
+		"tsup": "^8.5.0"
 	},
 	"devDependencies": {
 		"dotenv-cli": "^10.0.0"

@@ -10,6 +10,7 @@ import {
 	SpacesPolicy,
 	Videos,
 	VideosPolicy,
+	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
@@ -17,12 +18,24 @@ import {
 	FetchHttpClient,
 	type HttpApi,
 	HttpApiBuilder,
+	HttpApiClient,
+	HttpClient,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
+import { RpcClient } from "@effect/rpc";
+import {
+	Cause,
+	Config,
+	Effect,
+	Exit,
+	Layer,
+	ManagedRuntime,
+	Option,
+} from "effect";
 import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
+
 import { getTracingConfig } from "./tracing";
 
 export const TracingLayer = NodeSdk.layer(getTracingConfig);
@@ -40,6 +53,36 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
+const WorkflowRpcLive = Layer.scoped(
+	Workflows.RpcClient,
+	Effect.gen(function* () {
+		const url = Option.getOrElse(
+			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
+			() => "http://127.0.0.1:42169",
+		);
+
+		return yield* RpcClient.make(Workflows.RpcGroup).pipe(
+			Effect.provide(
+				RpcClient.layerProtocolHttp({ url }).pipe(
+					Layer.provide(Workflows.RpcSerialization),
+				),
+			),
+		);
+	}),
+);
+
+const WorkflowHttpLive = Layer.scoped(
+	Workflows.HttpClient,
+	Effect.gen(function* () {
+		const url = Option.getOrElse(
+			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
+			() => "http://127.0.0.1:42169",
+		);
+
+		return yield* HttpApiClient.make(Workflows.Api, { baseUrl: url });
+	}),
+);
+
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
@@ -47,6 +90,8 @@ export const Dependencies = Layer.mergeAll(
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
+	WorkflowRpcLive,
+	WorkflowHttpLive,
 ).pipe(
 	Layer.provideMerge(
 		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),

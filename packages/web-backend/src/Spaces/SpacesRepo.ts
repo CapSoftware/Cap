@@ -1,7 +1,7 @@
 import * as Db from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Effect } from "effect";
+import { Array, Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
 
@@ -10,6 +10,12 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 		const db = yield* Database;
 
 		return {
+			getById: (spaceId: string) =>
+				db
+					.execute((db) =>
+						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
+					)
+					.pipe(Effect.map((r) => Option.fromNullable(r[0]))),
 			membershipForVideo: (userId: string, videoId: Video.VideoId) =>
 				db
 					.execute((db) =>
@@ -43,12 +49,6 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 									Dz.eq(Db.spaceMembers.spaceId, spaceId),
 								),
 							),
-					)
-					.pipe(Effect.map(Array.get(0))),
-			getById: (spaceId: string) =>
-				db
-					.execute((db) =>
-						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
 					)
 					.pipe(Effect.map(Array.get(0))),
 		};

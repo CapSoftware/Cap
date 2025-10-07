@@ -31,6 +31,7 @@ const nextConfig = {
 			"@cap/utils",
 			"@cap/web-api-contract",
 			"@cap/web-domain",
+			"@cap/web-backend",
 		],
 	},
 	images: {
