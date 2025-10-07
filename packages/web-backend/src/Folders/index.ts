@@ -129,8 +129,6 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
-				const user = yield* CurrentUser;
-
 				const [folder] = yield* db
 					.execute((db) =>
 						db.select().from(Db.folders).where(Dz.eq(Db.folders.id, folderId)),
@@ -140,22 +138,20 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				// If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (data.parentId) {
+					const parentId = data.parentId;
+
 					// Check that we're not creating a circular reference
-					if (data.parentId === folderId)
+					if (parentId === folderId)
 						return yield* new Folder.RecursiveDefinitionError();
 
-					const [parentFolder] = yield* db.execute((db) =>
-						db
-							.select()
-							.from(Db.folders)
-							.where(
-								Dz.and(
-									Dz.eq(Db.folders.id, data.parentId),
-									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
-								),
-							),
-					);
-
+					const [parentFolder] = yield* db
+						.execute((db) =>
+							db
+								.select()
+								.from(Db.folders)
+								.where(Dz.eq(Db.folders.id, parentId)),
+						)
+						.pipe(Policy.withPolicy(policy.canEdit(parentId)));
 					if (!parentFolder) return yield* new Folder.ParentNotFoundError();
 
 					// Check for circular references in the folder hierarchy
