@@ -25,8 +25,9 @@ export type Organization = {
 	totalInvites: number;
 };
 
-export type OrganizationSettings =
-	(typeof organizations.$inferSelect)["settings"];
+export type OrganizationSettings = NonNullable<
+	(typeof organizations.$inferSelect)["settings"]
+>;
 
 export type Spaces = Omit<
 	typeof spaces.$inferSelect,
@@ -83,7 +84,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 
 		let anyNewNotifications = false;
 		let spacesData: Spaces[] = [];
-		let organizationSettings: OrganizationSettings = null;
+		let organizationSettings: OrganizationSettings | null = null;
 
 		// Find active organization ID
 

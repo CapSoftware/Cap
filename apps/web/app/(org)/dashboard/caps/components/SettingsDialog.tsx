@@ -25,7 +25,12 @@ interface SettingsDialogProps {
 	settingsData?: OrganizationSettings;
 }
 
-const options = [
+const options: {
+	label: string;
+	value: keyof NonNullable<OrganizationSettings>;
+	description: string;
+	pro?: boolean;
+}[] = [
 	{
 		label: "Disable comments",
 		value: "disableComments",
@@ -56,7 +61,7 @@ const options = [
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description: "This also allows chapters and summary",
+		description: "Required for summary and chapters",
 		pro: true,
 	},
 ];
@@ -81,18 +86,21 @@ export const SettingsDialog = ({
 	const isUserPro = userIsPro(user);
 
 	const saveHandler = async () => {
-		setSaveLoading(true);
-		if (!settings) return;
 		try {
-			await updateVideoSettings(capId, settings);
+			setSaveLoading(true);
+			if (!settings) return;
+			const payload = Object.fromEntries(
+				Object.entries(settings).filter(([, v]) => v !== undefined),
+			) as Partial<OrganizationSettings>;
+			await updateVideoSettings(capId, payload);
 			toast.success("Settings updated successfully");
+			onClose();
 		} catch (error) {
 			console.error("Error updating video settings:", error);
 			toast.error("Failed to update settings");
 		} finally {
 			setSaveLoading(false);
 		}
-		onClose();
 	};
 
 	const toggleSettingHandler = useCallback(

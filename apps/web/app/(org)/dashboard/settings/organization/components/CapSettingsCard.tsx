@@ -59,7 +59,6 @@ const CapSettingsCard = () => {
 		},
 	);
 
-	// Track the last saved settings to compare against
 	const lastSavedSettings = useRef<OrganizationSettings>(
 		organizationSettings || settings,
 	);
@@ -68,7 +67,6 @@ const CapSettingsCard = () => {
 
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
 
-	// Update lastSavedSettings when organizationSettings changes externally
 	useEffect(() => {
 		const next = organizationSettings ?? {
 			disableComments: false,
@@ -88,7 +86,6 @@ const CapSettingsCard = () => {
 			debouncedUpdateSettings !== lastSavedSettings.current
 		) {
 			const handleUpdate = async () => {
-				// Find ALL settings that changed
 				const changedKeys: Array<keyof OrganizationSettings> = [];
 				for (const key of Object.keys(debouncedUpdateSettings) as Array<
 					keyof OrganizationSettings
@@ -100,16 +97,13 @@ const CapSettingsCard = () => {
 					}
 				}
 
-				// Guard: if no actual changes, do nothing (prevents loops)
 				if (changedKeys.length === 0) {
 					return;
 				}
 
-				// Inline the update logic to avoid circular dependency
 				try {
-					updateOrganizationSettings(debouncedUpdateSettings);
+					await updateOrganizationSettings(debouncedUpdateSettings);
 
-					// Show a toast for each changed setting
 					changedKeys.forEach((changedKey) => {
 						const option = options.find((opt) => opt.value === changedKey);
 						const isDisabled = debouncedUpdateSettings[changedKey];
@@ -122,12 +116,10 @@ const CapSettingsCard = () => {
 						);
 					});
 
-					// Update the last saved settings reference
 					lastSavedSettings.current = debouncedUpdateSettings;
 				} catch (error) {
 					console.error("Error updating organization settings:", error);
 					toast.error("Failed to update settings");
-					// Revert the local state on error
 					if (organizationSettings) {
 						setSettings(organizationSettings);
 					}
@@ -142,7 +134,6 @@ const CapSettingsCard = () => {
 		setSettings((prev) => {
 			const newValue = !prev?.[key];
 
-			// If disabling transcript, also disable summary and chapters since they depend on it
 			if (key === "disableTranscript" && newValue === true) {
 				return {
 					...prev,
@@ -193,7 +184,6 @@ const CapSettingsCard = () => {
 						<Switch
 							disabled={
 								(option.pro && !isUserPro) ||
-								// Disable summary and chapters if transcript is disabled
 								((option.value === "disableSummary" ||
 									option.value === "disableChapters") &&
 									settings?.disableTranscript)
