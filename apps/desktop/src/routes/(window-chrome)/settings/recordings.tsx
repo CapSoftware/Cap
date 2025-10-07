@@ -142,11 +142,12 @@ export default function Recordings() {
 				path,
 				new Channel<UploadProgress>(() => {}),
 			);
+			await recordings.refetch();
+
+			toast.success("Success!"); // TODO: Fix
 		},
-		onSuccess: () => {
-			recordings.refetch();
-		},
-		onError: (error: Error) => toast.error("Failed to import video:", error),
+		onError: (error: Error) =>
+			toast.error(`Failed to import video: ${error.toString()}`),
 	}));
 
 	const handleImportUpload = async () => {
@@ -161,16 +162,6 @@ export default function Recordings() {
 		});
 		if (!path) return;
 		importVideo.mutate(path);
-
-		try {
-			// Refetch recordings to show the new imported recording
-			recordings.refetch();
-
-			trackEvent("import_upload_completed");
-		} catch (error) {
-			console.error("Failed to import and upload video:", error);
-			trackEvent("import_upload_failed");
-		}
 	};
 
 	return (
@@ -190,9 +181,20 @@ export default function Recordings() {
 						variant="outline"
 						size="sm"
 						class="flex items-center gap-2"
+						disabled={importVideo.isPending}
 					>
-						<IconLucideUpload class="size-4" />
-						Upload from file
+						<Show
+							when={importVideo.isPending}
+							fallback={
+								<>
+									<IconLucideUpload class="size-4" />
+									Upload from file
+								</>
+							}
+						>
+							<div class="size-4 border-2 border-gray-6 border-t-gray-11 rounded-full animate-spin" />
+							Uploading...
+						</Show>
 					</Button>
 				</div>
 			</div>
