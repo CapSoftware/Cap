@@ -1,12 +1,12 @@
 export * from "./Authentication.ts";
+export * as Comment from "./Comment.ts";
 export * from "./Errors.ts";
 export * as Folder from "./Folder.ts";
 export * as Organisation from "./Organisation.ts";
-export * as Space from "./Space.ts";
-export * as User from "./User.ts";
-export * as Policy from "./Policy.ts";
 export * from "./Organisation.ts";
-export * as Comment from "./Comment.ts";
+export * as Policy from "./Policy.ts";
 export { Rpcs } from "./Rpcs.ts";
 export * as S3Bucket from "./S3Bucket.ts";
+export * as Space from "./Space.ts";
+export * as User from "./User.ts";
 export * as Video from "./Video.ts";

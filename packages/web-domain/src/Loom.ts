@@ -1,9 +1,8 @@
 import { Workflow } from "@effect/workflow";
 import { Schema } from "effect";
-
-import * as Video from "./Video.ts";
-import { UserId } from "./User.ts";
 import { OrganisationId } from "./Organisation.ts";
+import { UserId } from "./User.ts";
+import * as Video from "./Video.ts";
 
 class LoomApiError extends Schema.TaggedError<LoomApiError>("LoomApiError")(
 	"LoomApiError",
