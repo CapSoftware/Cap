@@ -14,7 +14,7 @@ const options = [
 	{
 		label: "Disable comments",
 		value: "disableComments",
-		description: "Prevent viewers from commenting on caps",
+		description: "Allow viewers to comment on caps",
 	},
 	{
 		label: "Disable summary",
@@ -25,7 +25,7 @@ const options = [
 	{
 		label: "Disable captions",
 		value: "disableCaptions",
-		description: "Prevent viewers from using captions for caps",
+		description: "Allow viewers to use captions for caps",
 	},
 	{
 		label: "Disable chapters",
@@ -36,12 +36,12 @@ const options = [
 	{
 		label: "Disable reactions",
 		value: "disableReactions",
-		description: "Prevent viewers from reacting to caps",
+		description: "Allow viewers to react to caps",
 	},
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description: "This also disables chapters and summary",
+		description: "This also allows chapters and summary",
 		pro: true,
 	},
 ];
@@ -100,7 +100,7 @@ const CapSettingsCard = () => {
 
 				// Inline the update logic to avoid circular dependency
 				try {
-					await updateOrganizationSettings(debouncedUpdateSettings);
+					updateOrganizationSettings(debouncedUpdateSettings);
 
 					// Show a toast for each changed setting
 					changedKeys.forEach((changedKey) => {
@@ -172,7 +172,9 @@ const CapSettingsCard = () => {
 							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
 						>
 							<div className="flex gap-1.5 items-center">
-								<p className="text-sm text-gray-12">{option.label}</p>
+								<p className="text-sm text-gray-12">
+									{option.label.replace("Disable", "Enable")}
+								</p>
 								{option.pro && (
 									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
 										Pro
@@ -192,7 +194,7 @@ const CapSettingsCard = () => {
 							onCheckedChange={() => {
 								handleToggle(option.value as keyof OrganizationSettings);
 							}}
-							checked={settings?.[option.value as keyof typeof settings]}
+							checked={!settings?.[option.value as keyof typeof settings]}
 						/>
 					</div>
 				))}

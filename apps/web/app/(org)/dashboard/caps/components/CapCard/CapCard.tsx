@@ -407,50 +407,52 @@ export const CapCard = ({
 							);
 						}}
 					/>
-					<CapCardButton
-						tooltipContent="Download Cap"
-						onClick={(e) => {
-							e.stopPropagation();
-							handleDownload();
-						}}
-						disabled={
-							downloadMutation.isPending ||
-							(enableBetaUploadProgress && cap.hasActiveUpload)
-						}
-						className="delay-25"
-						icon={() => {
-							return downloadMutation.isPending ? (
-								<div className="animate-spin size-3">
-									<svg
-										className="size-3"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<circle
-											className="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="4"
-										></circle>
-										<path
-											className="opacity-75"
-											fill="currentColor"
-											d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
-										></path>
-									</svg>
-								</div>
-							) : (
-								<FontAwesomeIcon
-									className="text-gray-12 size-3"
-									icon={faDownload}
-								/>
-							);
-						}}
-					/>
+					{!isOwner && (
+						<CapCardButton
+							tooltipContent="Download Cap"
+							onClick={(e) => {
+								e.stopPropagation();
+								handleDownload();
+							}}
+							disabled={
+								downloadMutation.isPending ||
+								(enableBetaUploadProgress && cap.hasActiveUpload)
+							}
+							className="delay-25"
+							icon={() => {
+								return downloadMutation.isPending ? (
+									<div className="animate-spin size-3">
+										<svg
+											className="size-3"
+											xmlns="http://www.w3.org/2000/svg"
+											fill="none"
+											viewBox="0 0 24 24"
+											aria-hidden="true"
+										>
+											<circle
+												className="opacity-25"
+												cx="12"
+												cy="12"
+												r="10"
+												stroke="currentColor"
+												strokeWidth="4"
+											></circle>
+											<path
+												className="opacity-75"
+												fill="currentColor"
+												d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
+											></path>
+										</svg>
+									</div>
+								) : (
+									<FontAwesomeIcon
+										className="text-gray-12 size-3"
+										icon={faDownload}
+									/>
+								);
+							}}
+						/>
+					)}
 
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>

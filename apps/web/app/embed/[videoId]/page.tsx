@@ -123,6 +123,7 @@ export default async function EmbedVideoPage(
 					name: videos.name,
 					ownerId: videos.ownerId,
 					orgId: videos.orgId,
+					settings: videos.settings,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					bucket: videos.bucket,
@@ -182,7 +183,7 @@ export default async function EmbedVideoPage(
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed(
-					<div className="flex flex-col justify-center items-center min-h-screen text-center bg-black text-white">
+					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
 						<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
 						<p className="text-gray-400">
 							If you own this video, please <Link href="/login">sign in</Link>{" "}
@@ -237,7 +238,7 @@ async function EmbedContent({
 				!user.email.endsWith(`@${organization[0].allowedEmailDomain}`)
 			) {
 				return (
-					<div className="flex flex-col justify-center items-center min-h-screen text-center bg-black text-white">
+					<div className="flex flex-col justify-center items-center min-h-screen text-center text-white bg-black">
 						<h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
 						<p className="mb-2 text-gray-300">
 							This video is only accessible to members of this organization.
@@ -284,7 +285,7 @@ async function EmbedContent({
 
 	if (video.isScreenshot === true) {
 		return (
-			<div className="flex items-center justify-center min-h-screen bg-black text-white">
+			<div className="flex justify-center items-center min-h-screen text-white bg-black">
 				<p>Screenshots cannot be embedded</p>
 			</div>
 		);

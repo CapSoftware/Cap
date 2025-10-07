@@ -29,7 +29,7 @@ const options = [
 	{
 		label: "Disable comments",
 		value: "disableComments",
-		description: "Prevent viewers from commenting on this cap",
+		description: "Allow viewers to comment on this cap",
 	},
 	{
 		label: "Disable summary",
@@ -40,7 +40,7 @@ const options = [
 	{
 		label: "Disable captions",
 		value: "disableCaptions",
-		description: "Prevent viewers from using captions for this cap",
+		description: "Allow viewers to use captions for this cap",
 	},
 	{
 		label: "Disable chapters",
@@ -51,12 +51,12 @@ const options = [
 	{
 		label: "Disable reactions",
 		value: "disableReactions",
-		description: "Prevent viewers from reacting to this cap",
+		description: "Allow viewers to react to this cap",
 	},
 	{
 		label: "Disable transcript",
 		value: "disableTranscript",
-		description: "This also disables chapters and summary",
+		description: "This also allows chapters and summary",
 		pro: true,
 	},
 ];
@@ -130,7 +130,9 @@ export const SettingsDialog = ({
 	const getEffectiveValue = (key: keyof OrganizationSettings) => {
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
-		return videoValue !== undefined ? videoValue : orgValue;
+		return videoValue !== undefined || videoValue === true
+			? videoValue
+			: orgValue;
 	};
 
 	return (
@@ -160,18 +162,16 @@ export const SettingsDialog = ({
 								>
 									<div className="flex gap-1.5 items-center flex-wrap">
 										<p className="text-sm text-gray-12">
-											{orgValue
-												? option.label.replace("Disable", "Enable")
-												: option.label}
+											{option.label.replace("Disable", "Enable")}
 										</p>
-										{orgValue && (
-											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
-												Org {orgValue ? "disabled" : "enabled"}
-											</p>
-										)}
 										{option.pro && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
 												Pro
+											</p>
+										)}
+										{effectiveValue && (
+											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-11 bg-gray-5">
+												Org {orgValue ? "disabled" : "enabled"}
 											</p>
 										)}
 									</div>
@@ -187,11 +187,7 @@ export const SettingsDialog = ({
 											))
 									}
 									onCheckedChange={() => toggleSettingHandler(option.value)}
-									checked={
-										// If org disabled (showing "Enable X"), switch shows if enabled (!effectiveValue)
-										// If org enabled (showing "Disable X"), switch shows if disabled (effectiveValue)
-										orgValue ? !effectiveValue : effectiveValue
-									}
+									checked={!effectiveValue}
 								/>
 							</div>
 						);
