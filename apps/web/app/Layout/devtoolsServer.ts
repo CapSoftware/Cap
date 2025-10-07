@@ -6,8 +6,6 @@ import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 
 export async function promoteToPro() {
-	"use server";
-
 	if (process.env.NODE_ENV !== "development")
 		throw new Error("promoteToPro can only be used in development");
 
@@ -24,8 +22,6 @@ export async function promoteToPro() {
 }
 
 export async function demoteFromPro() {
-	"use server";
-
 	if (process.env.NODE_ENV !== "development")
 		throw new Error("demoteFromPro can only be used in development");
 
