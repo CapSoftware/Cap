@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Policy, Video } from "@cap/web-domain";
+import { Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
 
@@ -35,11 +35,11 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 * Delete a video. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
-				const [video] = yield* repo
-					.getById(videoId)
-					.pipe(
-						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
-					);
+				const res = yield* repo.getById(videoId);
+				if (Option.isNone(res)) {
+					return yield* new Video.NotFoundError();
+				}
+				const [video] = res.value;
 
 				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
@@ -47,9 +47,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					.delete(video.id)
 					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
 
-				const user = yield* CurrentUser;
-
-				const prefix = `${user.id}/${video.id}/`;
+				const prefix = `${video.ownerId}/${video.id}/`;
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
 

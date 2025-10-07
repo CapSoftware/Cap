@@ -126,74 +126,11 @@ export const Caps = ({
 
 	const analytics = analyticsData || {};
 
-	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && selectedCaps.length > 0) {
-				setSelectedCaps([]);
-			}
-
-			if (
-				(e.key === "Delete" || e.key === "Backspace") &&
-				selectedCaps.length > 0
-			) {
-				if (e.key === "Backspace") {
-					e.preventDefault();
-				}
-
-				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
-				) {
-					deleteCaps(selectedCaps);
-				}
-			}
-
-			if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
-				if (
-					!["INPUT", "TEXTAREA", "SELECT"].includes(
-						document.activeElement?.tagName || "",
-					)
-				) {
-					e.preventDefault();
-					setSelectedCaps(data.map((cap) => cap.id));
-				}
-			}
-		};
-
-		window.addEventListener("keydown", handleKeyDown);
-
-		return () => {
-			window.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [selectedCaps.length, data]);
-
-	useEffect(() => {
-		const handleDragStart = () => setIsDraggingCap(true);
-		const handleDragEnd = () => setIsDraggingCap(false);
-
-		window.addEventListener("dragstart", handleDragStart);
-		window.addEventListener("dragend", handleDragEnd);
-
-		return () => {
-			window.removeEventListener("dragstart", handleDragStart);
-			window.removeEventListener("dragend", handleDragEnd);
-		};
-	}, []);
-
-	const handleCapSelection = (capId: Video.VideoId) => {
-		setSelectedCaps((prev) => {
-			const newSelection = prev.includes(capId)
-				? prev.filter((id) => id !== capId)
-				: [...prev, capId];
-
-			previousCountRef.current = prev.length;
-
-			return newSelection;
-		});
-	};
-
-	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
+	const {
+		mutate: deleteCaps,
+		mutateAsync: deleteCapsAsync,
+		isPending: isDeletingCaps,
+	} = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
 
@@ -249,14 +186,82 @@ export const Caps = ({
 		},
 	});
 
-	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
-		onSuccess: () => {
-			toast.success("Cap deleted successfully");
-			router.refresh();
-		},
-		onError: () => toast.error("Failed to delete cap"),
-	});
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.key === "Escape" && selectedCaps.length > 0) {
+				setSelectedCaps([]);
+			}
+
+			if (
+				(e.key === "Delete" || e.key === "Backspace") &&
+				selectedCaps.length > 0
+			) {
+				if (e.key === "Backspace") {
+					e.preventDefault();
+				}
+
+				if (
+					!["INPUT", "TEXTAREA", "SELECT"].includes(
+						document.activeElement?.tagName || "",
+					)
+				) {
+					deleteCaps(selectedCaps);
+				}
+			}
+
+			if (e.key === "a" && (e.ctrlKey || e.metaKey) && data.length > 0) {
+				if (
+					!["INPUT", "TEXTAREA", "SELECT"].includes(
+						document.activeElement?.tagName || "",
+					)
+				) {
+					e.preventDefault();
+					setSelectedCaps(data.map((cap) => cap.id));
+				}
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+
+		return () => {
+			window.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [selectedCaps, data, deleteCaps]);
+
+	useEffect(() => {
+		const handleDragStart = () => setIsDraggingCap(true);
+		const handleDragEnd = () => setIsDraggingCap(false);
+
+		window.addEventListener("dragstart", handleDragStart);
+		window.addEventListener("dragend", handleDragEnd);
+
+		return () => {
+			window.removeEventListener("dragstart", handleDragStart);
+			window.removeEventListener("dragend", handleDragEnd);
+		};
+	}, []);
+
+	const handleCapSelection = (capId: Video.VideoId) => {
+		setSelectedCaps((prev) => {
+			const newSelection = prev.includes(capId)
+				? prev.filter((id) => id !== capId)
+				: [...prev, capId];
+
+			previousCountRef.current = prev.length;
+
+			return newSelection;
+		});
+	};
+
+	const { mutateAsync: deleteCapAsync, isPending: isDeletingCap } =
+		useEffectMutation({
+			mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+			onSuccess: () => {
+				toast.success("Cap deleted successfully");
+				router.refresh();
+			},
+			onError: () => toast.error("Failed to delete cap"),
+		});
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
@@ -315,11 +320,11 @@ export const Caps = ({
 									key={video.id}
 									cap={video}
 									analytics={analytics[video.id] || 0}
-									onDelete={() => {
+									onDelete={async () => {
 										if (selectedCaps.length > 0) {
-											deleteCaps(selectedCaps);
+											await deleteCapsAsync(selectedCaps);
 										} else {
-											deleteCap(video.id);
+											await deleteCapAsync(video.id);
 										}
 									}}
 									userId={user?.id}
