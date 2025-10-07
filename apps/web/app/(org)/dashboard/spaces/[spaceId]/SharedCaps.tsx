@@ -281,32 +281,38 @@ export const SharedCaps = ({
 				</>
 			)}
 
-			<h1 className="mb-4 text-2xl font-medium text-gray-12">Videos</h1>
-			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-				{data.map((cap) => {
-					const isOwner = cap.ownerId === currentUserId;
-					return (
-						<SharedCapCard
-							key={cap.id}
-							cap={cap}
-							hideSharedStatus
-							isLoadingAnalytics={isLoadingAnalytics}
-							analytics={analytics[cap.id] || 0}
-							organizationName={activeOrganization?.organization.name || ""}
-							spaceName={spaceData?.name || ""}
-							userId={currentUserId}
-							onDragStart={() =>
-								setIsDraggingCap({ isOwner, isDragging: true })
-							}
-							onDragEnd={() => setIsDraggingCap({ isOwner, isDragging: false })}
-						/>
-					);
-				})}
-			</div>
-			{(data.length > limit || data.length === limit || page !== 1) && (
-				<div className="mt-4">
-					<CapPagination currentPage={page} totalPages={totalPages} />
-				</div>
+			{data.length > 0 && (
+				<>
+					<h1 className="mb-4 text-2xl font-medium text-gray-12">Videos</h1>
+					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+						{data.map((cap) => {
+							const isOwner = cap.ownerId === currentUserId;
+							return (
+								<SharedCapCard
+									key={cap.id}
+									cap={cap}
+									hideSharedStatus
+									isLoadingAnalytics={isLoadingAnalytics}
+									analytics={analytics[cap.id] || 0}
+									organizationName={activeOrganization?.organization.name || ""}
+									spaceName={spaceData?.name || ""}
+									userId={currentUserId}
+									onDragStart={() =>
+										setIsDraggingCap({ isOwner, isDragging: true })
+									}
+									onDragEnd={() =>
+										setIsDraggingCap({ isOwner, isDragging: false })
+									}
+								/>
+							);
+						})}
+					</div>
+					{(data.length > limit || data.length === limit || page !== 1) && (
+						<div className="mt-4">
+							<CapPagination currentPage={page} totalPages={totalPages} />
+						</div>
+					)}
+				</>
 			)}
 		</div>
 	);
