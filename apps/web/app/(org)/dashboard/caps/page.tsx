@@ -113,7 +113,13 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const totalCountResult = await db()
 		.select({ count: count() })
 		.from(videos)
-		.where(eq(videos.ownerId, userId));
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(organizations.id, user.activeOrganizationId),
+			),
+		);
 
 	const totalCount = totalCountResult[0]?.count || 0;
 
