@@ -1769,11 +1769,17 @@ async fn import_and_upload_video(
     source_path: PathBuf,
     channel: Channel<UploadProgress>,
 ) -> Result<UploadResult, String> {
-    // 1) Auth/plan checks (reuse code from upload_exported_video)
-    let Ok(Some(auth)) = AuthStore::get(&app) else {
-        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-        return Ok(UploadResult::NotAuthenticated);
-    };
+    // Importing always requires Pro
+    {
+        let Ok(Some(auth)) = AuthStore::get(&app) else {
+            AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+            return Ok(UploadResult::NotAuthenticated);
+        };
+
+        if !auth.is_upgraded() {
+            return Ok(UploadResult::UpgradeRequired);
+        }
+    }
 
     // Validate source file exists and is a valid video
     if !source_path.exists() {
@@ -1787,10 +1793,6 @@ async fn import_and_upload_video(
     // Build metadata to check duration for plan constraints
     let source_metadata = build_video_meta(&source_path)
         .map_err(|err| format!("Error getting source video meta: {err}"))?;
-
-    if !auth.is_upgraded() && source_metadata.duration_in_secs > 300.0 {
-        return Ok(UploadResult::UpgradeRequired);
-    }
 
     // 2) Create new project dir
     let id = uuid::Uuid::new_v4().to_string();
@@ -1930,6 +1932,7 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
             .ok_or_else(|| "No video stream found in input file".to_string())?;
 
         let video_stream_index = video_stream.index();
+        let input_time_base = video_stream.time_base();
 
         let mut octx = ffmpeg::format::output(&output)
             .map_err(|e| format!("Failed to create output context: {e}"))?;
@@ -1942,6 +1945,7 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
             .format()
             .flags()
             .contains(ffmpeg::format::flag::Flags::GLOBAL_HEADER);
+
         let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
             .encoder()
             .video()
@@ -1954,12 +1958,26 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
                 .video()
                 .map_err(|e| format!("Failed to create video decoder: {e}"))?;
 
-        // Configure encoder
+        // Configure encoder with proper settings
         encoder.set_width(decoder.width());
         encoder.set_height(decoder.height());
         encoder.set_format(ffmpeg::format::Pixel::YUV420P);
-        encoder.set_frame_rate(Some(ffmpeg::Rational::from((30, 1)))); // 30fps as per spec
-        encoder.set_time_base(ffmpeg::Rational::from((1, 30)));
+
+        // Use input stream frame rate or fallback to 30fps
+        let fps = {
+            let stream_fps = video_stream.avg_frame_rate();
+            if stream_fps.numerator() > 0 && stream_fps.denominator() > 0 {
+                stream_fps
+            } else {
+                ffmpeg::Rational::from((30, 1))
+            }
+        };
+        encoder.set_frame_rate(Some(fps));
+        encoder.set_time_base(fps.invert());
+
+        // Set quality parameters
+        encoder.set_bit_rate(decoder.bit_rate().max(1_000_000)); // At least 1Mbps
+        encoder.set_max_b_frames(0); // Disable B-frames for compatibility
 
         if global_header {
             encoder.set_flags(ffmpeg::codec::flag::Flags::GLOBAL_HEADER);
@@ -1975,8 +1993,9 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
 
         output_stream.set_parameters(&encoder);
         let output_stream_index = output_stream.index();
-        let output_stream_time_base = output_stream.time_base();
+        let output_time_base = output_stream.time_base();
 
+        // Write header before processing
         octx.write_header()
             .map_err(|e| format!("Failed to write header: {e}"))?;
 
@@ -1991,12 +2010,16 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
         )
         .map_err(|e| format!("Failed to create scaler: {e}"))?;
 
-        let mut frame_index = 0;
         let mut decoded_frame = ffmpeg::frame::Video::empty();
         let mut encoded_frame = ffmpeg::frame::Video::empty();
+        let mut output_frame_count = 0i64;
 
-        for (stream, packet) in ictx.packets() {
+        // Process packets
+        for (stream, mut packet) in ictx.packets() {
             if stream.index() == video_stream_index {
+                // Rescale packet timestamp to decoder time base
+                packet.rescale_ts(input_time_base, decoder.time_base());
+
                 decoder
                     .send_packet(&packet)
                     .map_err(|e| format!("Failed to send packet to decoder: {e}"))?;
@@ -2006,22 +2029,70 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
                         .run(&decoded_frame, &mut encoded_frame)
                         .map_err(|e| format!("Failed to scale frame: {e}"))?;
 
-                    encoded_frame.set_pts(Some(frame_index));
-                    frame_index += 1;
+                    // Set proper PTS for encoded frame
+                    encoded_frame.set_pts(Some(output_frame_count));
+                    output_frame_count += 1;
 
                     encoder
                         .send_frame(&encoded_frame)
                         .map_err(|e| format!("Failed to send frame to encoder: {e}"))?;
 
+                    // Flush encoder packets
                     let mut encoded_packet = ffmpeg::packet::Packet::empty();
                     while encoder.receive_packet(&mut encoded_packet).is_ok() {
                         encoded_packet.set_stream(output_stream_index);
-                        encoded_packet.rescale_ts(encoder.time_base(), output_stream_time_base);
+
+                        // Properly rescale timestamps
+                        encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+                        // Ensure valid timestamps
+                        if encoded_packet.pts().is_none() {
+                            encoded_packet.set_pts(Some(0));
+                        }
+                        if encoded_packet.dts().is_none() {
+                            encoded_packet.set_dts(encoded_packet.pts());
+                        }
+
                         encoded_packet
                             .write_interleaved(&mut octx)
                             .map_err(|e| format!("Failed to write packet: {e}"))?;
                     }
                 }
+            }
+        }
+
+        // Flush decoder
+        decoder
+            .send_eof()
+            .map_err(|e| format!("Failed to flush decoder: {e}"))?;
+
+        while decoder.receive_frame(&mut decoded_frame).is_ok() {
+            scaler
+                .run(&decoded_frame, &mut encoded_frame)
+                .map_err(|e| format!("Failed to scale frame: {e}"))?;
+
+            encoded_frame.set_pts(Some(output_frame_count));
+            output_frame_count += 1;
+
+            encoder
+                .send_frame(&encoded_frame)
+                .map_err(|e| format!("Failed to send frame to encoder: {e}"))?;
+
+            let mut encoded_packet = ffmpeg::packet::Packet::empty();
+            while encoder.receive_packet(&mut encoded_packet).is_ok() {
+                encoded_packet.set_stream(output_stream_index);
+                encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+                if encoded_packet.pts().is_none() {
+                    encoded_packet.set_pts(Some(0));
+                }
+                if encoded_packet.dts().is_none() {
+                    encoded_packet.set_dts(encoded_packet.pts());
+                }
+
+                encoded_packet
+                    .write_interleaved(&mut octx)
+                    .map_err(|e| format!("Failed to write packet: {e}"))?;
             }
         }
 
@@ -2033,7 +2104,15 @@ async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
         let mut encoded_packet = ffmpeg::packet::Packet::empty();
         while encoder.receive_packet(&mut encoded_packet).is_ok() {
             encoded_packet.set_stream(output_stream_index);
-            encoded_packet.rescale_ts(encoder.time_base(), output_stream_time_base);
+            encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+            if encoded_packet.pts().is_none() {
+                encoded_packet.set_pts(Some(0));
+            }
+            if encoded_packet.dts().is_none() {
+                encoded_packet.set_dts(encoded_packet.pts());
+            }
+
             encoded_packet
                 .write_interleaved(&mut octx)
                 .map_err(|e| format!("Failed to write final packet: {e}"))?;

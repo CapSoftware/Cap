@@ -21,6 +21,7 @@ import {
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import toast from "solid-toast";
 import CapTooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
@@ -134,26 +135,34 @@ export default function Recordings() {
 		});
 	};
 
+	const importVideo = createMutation(() => ({
+		mutationKey: ["importVideo"],
+		mutationFn: async (path: string) => {
+			await commands.importAndUploadVideo(
+				path,
+				new Channel<UploadProgress>(() => {}),
+			);
+		},
+		onSuccess: () => {
+			recordings.refetch();
+		},
+		onError: (error: Error) => toast.error("Failed to import video:", error),
+	}));
+
 	const handleImportUpload = async () => {
+		const path = await open({
+			multiple: false,
+			filters: [
+				{
+					name: "Video",
+					extensions: ["mp4", "mov", "mkv", "webm", "avi"],
+				},
+			],
+		});
+		if (!path) return;
+		importVideo.mutate(path);
+
 		try {
-			const file = await open({
-				multiple: false,
-				filters: [
-					{
-						name: "Video",
-						extensions: ["mp4", "mov", "mkv", "webm", "avi"],
-					},
-				],
-			});
-
-			if (!file || Array.isArray(file)) return;
-
-			trackEvent("import_upload_started");
-
-			const channel = new Channel<UploadProgress>(() => {});
-
-			await commands.importAndUploadVideo(file, channel);
-
 			// Refetch recordings to show the new imported recording
 			recordings.refetch();
 
