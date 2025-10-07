@@ -3,10 +3,7 @@ use crate::{
     output_pipeline,
     screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
 };
-use ::windows::{
-    Graphics::Capture::GraphicsCaptureItem,
-    Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device},
-};
+use ::windows::Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device};
 use anyhow::anyhow;
 use cap_fail::fail_err;
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -24,7 +21,7 @@ use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 const WINDOW_DURATION: Duration = Duration::from_secs(3);
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
@@ -121,18 +118,12 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 Some(Duration::from_secs_f64(1.0 / self.config.fps as f64));
         }
 
-        let display = Display::from_id(&self.config.display)
-            .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
-
-        let capture_item = display
-            .raw_handle()
-            .try_as_capture_item()
-            .map_err(SourceError::AsCaptureItem)?;
-
+        // Store the display ID instead of GraphicsCaptureItem to avoid COM threading issues
+        // The GraphicsCaptureItem will be created on the capture thread
         Ok((
             VideoSourceConfig {
                 video_info: self.video_info,
-                capture_item,
+                display_id: self.config.display.clone(),
                 settings,
                 d3d_device: self.d3d_device.clone(),
             },
@@ -149,7 +140,7 @@ pub enum VideoSourceError {
 
 pub struct VideoSourceConfig {
     video_info: VideoInfo,
-    capture_item: GraphicsCaptureItem,
+    display_id: DisplayId,
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
@@ -170,9 +161,9 @@ impl output_pipeline::VideoSource for VideoSource {
     async fn setup(
         VideoSourceConfig {
             video_info,
-            capture_item,
+            display_id,
             settings,
-            d3d_device,
+            d3d_device, // Share the D3D device with the encoder to avoid device mismatch
         }: Self::Config,
         mut video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut output_pipeline::SetupCtx,
@@ -185,6 +176,28 @@ impl output_pipeline::VideoSource for VideoSource {
 
         ctx.tasks().spawn_thread("d3d-capture-thread", move || {
             cap_mediafoundation_utils::thread_init();
+
+            // Look up the display and create the GraphicsCaptureItem on this thread to avoid COM threading issues
+            let capture_item = match Display::from_id(&display_id) {
+                Some(display) => {
+                    match display.raw_handle().try_as_capture_item() {
+                        Ok(item) => {
+                            trace!("GraphicsCaptureItem created successfully on capture thread");
+                            item
+                        }
+                        Err(e) => {
+                            error!("Failed to create GraphicsCaptureItem on capture thread: {}", e);
+                            let _ = error_tx.send(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    error!("Display not found for ID: {:?}", display_id);
+                    let _ = error_tx.send(anyhow!("Display not found for ID: {:?}", display_id));
+                    return;
+                }
+            };
 
             let res = scap_direct3d::Capturer::new(
                 capture_item,
@@ -206,26 +219,39 @@ impl output_pipeline::VideoSource for VideoSource {
                         Ok(())
                     }
                 },
-                Some(d3d_device),
+                Some(d3d_device), // Use the same D3D device as the encoder
             );
 
             let mut capturer = match res {
-                Ok(capturer) => capturer,
+                Ok(capturer) => {
+                    trace!("D3D capturer created successfully");
+                    capturer
+                }
                 Err(e) => {
+                    error!("Failed to create D3D capturer: {}", e);
                     let _ = error_tx.send(e.into());
                     return;
                 }
             };
 
             let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
+                error!("Failed to receive Start control message - channel disconnected");
+                let _ = error_tx.send(anyhow!("Control channel disconnected before Start"));
                 return;
             };
 
-            if reply.send(capturer.start().map_err(Into::into)).is_err() {
+            trace!("Starting D3D capturer");
+            let start_result = capturer.start().map_err(Into::into);
+            if let Err(ref e) = start_result {
+                error!("Failed to start D3D capturer: {}", e);
+            }
+            if reply.send(start_result).is_err() {
+                error!("Failed to send start result - receiver dropped");
                 return;
             }
 
             let Ok(VideoControl::Stop(reply)) = ctrl_rx.recv() else {
+                trace!("Failed to receive Stop control message - channel disconnected (expected during shutdown)");
                 return;
             };
 
