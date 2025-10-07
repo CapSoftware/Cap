@@ -12,6 +12,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Spaces } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
@@ -19,7 +20,6 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
-import { Spaces } from "@cap/web-backend";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",

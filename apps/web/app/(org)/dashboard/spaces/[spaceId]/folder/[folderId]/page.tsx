@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
+import { Spaces } from "@cap/web-backend";
 import { CurrentUser, type Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
@@ -16,7 +17,6 @@ import {
 	NewSubfolderButton,
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
-import { Spaces } from "@cap/web-backend";
 
 const FolderPage = async (props: {
 	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
