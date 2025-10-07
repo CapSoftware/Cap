@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import clsx from "clsx";
 import type { MouseEvent, ReactNode } from "react";
@@ -23,7 +25,7 @@ export const CapCardButton = ({
 	return (
 		<Tooltip key={tooltipContent} content={tooltipContent}>
 			<Button
-				onClick={(e) => onClick?.(e)}
+				onClick={onClick}
 				disabled={disabled}
 				asChild={asChild}
 				className={clsx(

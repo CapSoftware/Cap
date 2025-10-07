@@ -5,6 +5,7 @@ import { Button } from "@cap/ui";
 import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
 
@@ -12,10 +13,13 @@ const MotionButton = motion.create(Button);
 
 // million-ignore
 interface ToolbarProps {
-	data: typeof videos.$inferSelect;
+	data: typeof videos.$inferSelect & {
+		orgSettings?: OrganizationSettings | null;
+	};
 	user: typeof userSelectProps | null;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
+	disableReactions?: boolean;
 }
 
 export const Toolbar = ({
@@ -23,6 +27,7 @@ export const Toolbar = ({
 	user,
 	onOptimisticComment,
 	onCommentSuccess,
+	disableReactions,
 }: ToolbarProps) => {
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
@@ -168,6 +173,10 @@ export const Toolbar = ({
 		}
 		setCommentBoxOpen(true);
 	};
+
+	if (disableReactions) {
+		return null;
+	}
 
 	return (
 		<>

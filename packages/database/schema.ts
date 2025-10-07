@@ -174,6 +174,14 @@ export const organizations = mysqlTable(
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),
+		settings: json("settings").$type<{
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+			disableComments?: boolean;
+		}>(),
 		iconUrl: varchar("iconUrl", { length: 1024 }),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -281,8 +289,16 @@ export const videos = mysqlTable(
 		fps: int("fps"),
 		metadata: json("metadata").$type<VideoMetadata>(),
 		public: boolean("public").notNull().default(true),
+		settings: json("settings").$type<{
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+			disableComments?: boolean;
+		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
-			"PROCESSING" | "COMPLETE" | "ERROR"
+			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED"
 		>(),
 		source: json("source")
 			.$type<

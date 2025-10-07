@@ -35,11 +35,14 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
+	disableCaptions?: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
+	disableCommentStamps?: boolean;
+	disableReactionStamps?: boolean;
 	comments?: Array<{
 		id: string;
 		timestamp: number | null;
@@ -55,12 +58,15 @@ export function CapVideoPlayer({
 	videoId,
 	chaptersSrc,
 	captionsSrc,
+	disableCaptions,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
 	comments = [],
+	disableCommentStamps = false,
+	disableReactionStamps = false,
 	onSeek,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -610,11 +616,17 @@ export function CapVideoPlayer({
 
 			{mainControlsVisible &&
 				markersReady &&
-				comments
-					.filter(
-						(comment) => comment && comment.timestamp !== null && comment.id,
-					)
-					.map((comment) => {
+				(() => {
+					const filteredComments = comments.filter(
+						(comment) =>
+							comment &&
+							comment.timestamp !== null &&
+							comment.id &&
+							!(disableCommentStamps && comment.type === "text") &&
+							!(disableReactionStamps && comment.type === "emoji"),
+					);
+
+					return filteredComments.map((comment) => {
 						const position = (Number(comment.timestamp) / duration) * 100;
 						const containerPadding = 20;
 						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
@@ -631,7 +643,8 @@ export function CapVideoPlayer({
 								hoveredComment={hoveredComment}
 							/>
 						);
-					})}
+					});
+				})()}
 
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
@@ -655,10 +668,12 @@ export function CapVideoPlayer({
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
+						{!disableCaptions && (
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
+							/>
+						)}
 						<MediaPlayerSettings />
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />

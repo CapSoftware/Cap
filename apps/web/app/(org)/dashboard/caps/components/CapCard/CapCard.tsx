@@ -1,3 +1,5 @@
+"use client";
+
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import {
@@ -13,6 +15,7 @@ import {
 	faCopy,
 	faDownload,
 	faEllipsis,
+	faGear,
 	faLink,
 	faLock,
 	faTrash,
@@ -40,6 +43,7 @@ import {
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
+import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
@@ -70,6 +74,14 @@ export interface CapCardProps extends PropsWithChildren {
 		hasPassword?: boolean;
 		hasActiveUpload: boolean | undefined;
 		duration?: number;
+		settings?: {
+			disableComments?: boolean;
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+		};
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -111,6 +123,7 @@ export const CapCard = ({
 	);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
+	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -148,6 +161,9 @@ export const CapCard = ({
 		},
 		onError: (error) => {
 			console.error("Error deleting cap:", error);
+		},
+		onSuccess: () => {
+			router.refresh();
 		},
 		onSettled: () => {
 			setConfirmOpen(false);
@@ -285,6 +301,12 @@ export const CapCard = ({
 				onSharingUpdated={handleSharingUpdated}
 				isPublic={cap.public}
 			/>
+			<SettingsDialog
+				isOpen={isSettingsDialogOpen}
+				settingsData={cap.settings}
+				capId={cap.id}
+				onClose={() => setIsSettingsDialogOpen(false)}
+			/>
 			<PasswordDialog
 				isOpen={isPasswordDialogOpen}
 				onClose={() => setIsPasswordDialogOpen(false)}
@@ -323,6 +345,31 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[51]",
 					)}
 				>
+					{isOwner ? (
+						<CapCardButton
+							tooltipContent="Settings"
+							onClick={(e) => {
+								e.stopPropagation();
+								setIsSettingsDialogOpen(true);
+							}}
+							className="delay-0"
+							icon={() => {
+								return <FontAwesomeIcon className="size-4" icon={faGear} />;
+							}}
+						/>
+					) : (
+						<CapCardButton
+							tooltipContent="Download Cap"
+							onClick={(e) => {
+								e.stopPropagation();
+								handleDownload();
+							}}
+							className="delay-0"
+							icon={() => (
+								<FontAwesomeIcon className="size-4" icon={faDownload} />
+							)}
+						/>
+					)}
 					<CapCardButton
 						tooltipContent="Copy link"
 						onClick={(e) => {
@@ -363,54 +410,10 @@ export const CapCard = ({
 							);
 						}}
 					/>
-					<CapCardButton
-						tooltipContent="Download Cap"
-						onClick={(e) => {
-							e.stopPropagation();
-							handleDownload();
-						}}
-						disabled={
-							downloadMutation.isPending ||
-							(enableBetaUploadProgress && cap.hasActiveUpload)
-						}
-						className="delay-25"
-						icon={() => {
-							return downloadMutation.isPending ? (
-								<div className="animate-spin size-3">
-									<svg
-										className="size-3"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<circle
-											className="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											strokeWidth="4"
-										></circle>
-										<path
-											className="opacity-75"
-											fill="currentColor"
-											d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
-										></path>
-									</svg>
-								</div>
-							) : (
-								<FontAwesomeIcon
-									className="text-gray-12 size-3"
-									icon={faDownload}
-								/>
-							);
-						}}
-					/>
 
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
-							<DropdownMenuTrigger asChild>
+							<DropdownMenuTrigger asChild suppressHydrationWarning>
 								<div>
 									<CapCardButton
 										tooltipContent="More options"
@@ -421,7 +424,21 @@ export const CapCard = ({
 									/>
 								</div>
 							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end" sideOffset={5}>
+							<DropdownMenuContent
+								align="end"
+								sideOffset={5}
+								suppressHydrationWarning
+							>
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										handleDownload();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faDownload} />
+									<p className="text-sm text-gray-12">Download</p>
+								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
 										toast.promise(duplicateMutation.mutateAsync(), {
@@ -522,8 +539,8 @@ export const CapCard = ({
 						href={`/s/${cap.id}`}
 					>
 						{imageStatus !== "success" && uploadProgress ? (
-							<div className="relative inset-0 w-full h-full z-20">
-								<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-5">
+							<div className="relative inset-0 z-20 w-full h-full">
+								<div className="overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video z-5">
 									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
 										{uploadProgress.status === "failed" ? (
 											<div className="flex flex-col items-center">

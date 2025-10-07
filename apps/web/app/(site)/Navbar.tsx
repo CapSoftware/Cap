@@ -138,7 +138,7 @@ export const Navbar = () => {
 							<Link passHref href="/home">
 								<Logo
 									hideLogoName={hideLogoName}
-									className="transition-all duration-[0.2s] ease-out"
+									className="transition-all duration-200 ease-out"
 									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
 									style={{
 										width: hideLogoName ? 45.5 : 90,

@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
@@ -36,194 +37,216 @@ export const ShareVideo = forwardRef<
 		data: typeof videos.$inferSelect & {
 			ownerIsPro?: boolean;
 			hasActiveUpload?: boolean;
+			orgSettings?: OrganizationSettings | null;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
+		areChaptersDisabled?: boolean;
+		areCaptionsDisabled?: boolean;
+		areCommentStampsDisabled?: boolean;
+		areReactionStampsDisabled?: boolean;
 		aiProcessing?: boolean;
 	}
->(({ data, comments, chapters = [] }, ref) => {
-	const videoRef = useRef<HTMLVideoElement | null>(null);
-	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+>(
+	(
+		{
+			data,
+			comments,
+			chapters = [],
+			areCaptionsDisabled,
+			areChaptersDisabled,
+			areCommentStampsDisabled,
+			areReactionStampsDisabled,
+		},
+		ref,
+	) => {
+		const videoRef = useRef<HTMLVideoElement | null>(null);
+		useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 
-	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-	const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
-	const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
-	const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
+		const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+		const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
+		const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
+		const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
+		const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
 
-	const { data: transcriptContent, error: transcriptError } = useTranscript(
-		data.id,
-		data.transcriptionStatus,
-	);
+		const { data: transcriptContent, error: transcriptError } = useTranscript(
+			data.id,
+			data.transcriptionStatus,
+		);
 
-	// Handle comments data
-	useEffect(() => {
-		if (comments) {
-			if (Array.isArray(comments)) {
-				setCommentsData(comments);
+		// Handle comments data
+		useEffect(() => {
+			if (comments) {
+				if (Array.isArray(comments)) {
+					setCommentsData(comments);
+				} else {
+					comments.then(setCommentsData);
+				}
+			}
+		}, [comments]);
+
+		// Handle seek functionality
+		const handleSeek = (time: number) => {
+			if (videoRef.current) {
+				videoRef.current.currentTime = time;
+			}
+		};
+
+		useEffect(() => {
+			if (transcriptContent) {
+				const parsed = parseVTT(transcriptContent);
+				setTranscriptData(parsed);
+			} else if (transcriptError) {
+				console.error(
+					"[Transcript] Transcript error from React Query:",
+					transcriptError.message,
+				);
+			}
+		}, [transcriptContent, transcriptError]);
+
+		// Handle subtitle URL creation
+		useEffect(() => {
+			if (
+				data.transcriptionStatus === "COMPLETE" &&
+				transcriptData &&
+				transcriptData.length > 0
+			) {
+				const vttContent = formatTranscriptAsVTT(transcriptData);
+				const blob = new Blob([vttContent], { type: "text/vtt" });
+				const newUrl = URL.createObjectURL(blob);
+
+				// Clean up previous URL
+				if (subtitleUrl) {
+					URL.revokeObjectURL(subtitleUrl);
+				}
+
+				setSubtitleUrl(newUrl);
+
+				return () => {
+					URL.revokeObjectURL(newUrl);
+				};
 			} else {
-				comments.then(setCommentsData);
+				// Clean up if no longer needed
+				if (subtitleUrl) {
+					URL.revokeObjectURL(subtitleUrl);
+					setSubtitleUrl(null);
+				}
 			}
-		}
-	}, [comments]);
+		}, [data.transcriptionStatus, transcriptData]);
 
-	// Handle seek functionality
-	const handleSeek = (time: number) => {
-		if (videoRef.current) {
-			videoRef.current.currentTime = time;
-		}
-	};
+		// Handle chapters URL creation
+		useEffect(() => {
+			if (chapters?.length > 0) {
+				const vttContent = formatChaptersAsVTT(chapters);
+				const blob = new Blob([vttContent], { type: "text/vtt" });
+				const newUrl = URL.createObjectURL(blob);
 
-	useEffect(() => {
-		if (transcriptContent) {
-			const parsed = parseVTT(transcriptContent);
-			setTranscriptData(parsed);
-		} else if (transcriptError) {
-			console.error(
-				"[Transcript] Transcript error from React Query:",
-				transcriptError.message,
-			);
-		}
-	}, [transcriptContent, transcriptError]);
+				// Clean up previous URL
+				if (chaptersUrl) {
+					URL.revokeObjectURL(chaptersUrl);
+				}
 
-	// Handle subtitle URL creation
-	useEffect(() => {
-		if (
-			data.transcriptionStatus === "COMPLETE" &&
-			transcriptData &&
-			transcriptData.length > 0
+				setChaptersUrl(newUrl);
+
+				return () => {
+					URL.revokeObjectURL(newUrl);
+				};
+			} else {
+				// Clean up if no longer needed
+				if (chaptersUrl) {
+					URL.revokeObjectURL(chaptersUrl);
+					setChaptersUrl(null);
+				}
+			}
+		}, [chapters]);
+
+		let videoSrc: string;
+		let enableCrossOrigin = false;
+
+		if (data.source.type === "desktopMP4") {
+			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+			// Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
+			enableCrossOrigin = true;
+		} else if (
+			NODE_ENV === "development" ||
+			((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
+				data.source.type === "MediaConvert")
 		) {
-			const vttContent = formatTranscriptAsVTT(transcriptData);
-			const blob = new Blob([vttContent], { type: "text/vtt" });
-			const newUrl = URL.createObjectURL(blob);
-
-			// Clean up previous URL
-			if (subtitleUrl) {
-				URL.revokeObjectURL(subtitleUrl);
-			}
-
-			setSubtitleUrl(newUrl);
-
-			return () => {
-				URL.revokeObjectURL(newUrl);
-			};
+			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+		} else if (data.source.type === "MediaConvert") {
+			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		} else {
-			// Clean up if no longer needed
-			if (subtitleUrl) {
-				URL.revokeObjectURL(subtitleUrl);
-				setSubtitleUrl(null);
-			}
+			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 		}
-	}, [data.transcriptionStatus, transcriptData]);
 
-	// Handle chapters URL creation
-	useEffect(() => {
-		if (chapters?.length > 0) {
-			const vttContent = formatChaptersAsVTT(chapters);
-			const blob = new Blob([vttContent], { type: "text/vtt" });
-			const newUrl = URL.createObjectURL(blob);
+		return (
+			<>
+				<div className="relative h-full">
+					{data.source.type === "desktopMP4" ? (
+						<CapVideoPlayer
+							videoId={data.id}
+							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+							videoSrc={videoSrc}
+							disableCaptions={areCaptionsDisabled ?? false}
+							disableCommentStamps={areCommentStampsDisabled ?? false}
+							disableReactionStamps={areReactionStampsDisabled ?? false}
+							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
+							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
+							videoRef={videoRef}
+							enableCrossOrigin={enableCrossOrigin}
+							hasActiveUpload={data.hasActiveUpload}
+							comments={commentsData.map((comment) => ({
+								id: comment.id,
+								type: comment.type,
+								timestamp: comment.timestamp,
+								content: comment.content,
+								authorName: comment.authorName,
+							}))}
+							onSeek={handleSeek}
+						/>
+					) : (
+						<HLSVideoPlayer
+							videoId={data.id}
+							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+							videoSrc={videoSrc}
+							disableCaptions={areCaptionsDisabled ?? false}
+							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
+							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
+							videoRef={videoRef}
+							hasActiveUpload={data.hasActiveUpload}
+						/>
+					)}
+				</div>
 
-			// Clean up previous URL
-			if (chaptersUrl) {
-				URL.revokeObjectURL(chaptersUrl);
-			}
+				{!data.ownerIsPro && (
+					<div className="absolute top-4 left-4 z-30">
+						<div
+							className="block cursor-pointer"
+							onClick={(e) => {
+								e.stopPropagation();
+								setUpgradeModalOpen(true);
+							}}
+						>
+							<div className="relative">
+								<div className="opacity-50 transition-opacity hover:opacity-100 peer">
+									<Logo className="w-auto h-4 sm:h-8" white={true} />
+								</div>
 
-			setChaptersUrl(newUrl);
-
-			return () => {
-				URL.revokeObjectURL(newUrl);
-			};
-		} else {
-			// Clean up if no longer needed
-			if (chaptersUrl) {
-				URL.revokeObjectURL(chaptersUrl);
-				setChaptersUrl(null);
-			}
-		}
-	}, [chapters]);
-
-	let videoSrc: string;
-	let enableCrossOrigin = false;
-
-	if (data.source.type === "desktopMP4") {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-		// Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
-		enableCrossOrigin = true;
-	} else if (
-		NODE_ENV === "development" ||
-		((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
-			data.source.type === "MediaConvert")
-	) {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-	} else if (data.source.type === "MediaConvert") {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
-	} else {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
-	}
-
-	return (
-		<>
-			<div className="relative h-full">
-				{data.source.type === "desktopMP4" ? (
-					<CapVideoPlayer
-						videoId={data.id}
-						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
-						videoSrc={videoSrc}
-						chaptersSrc={chaptersUrl || ""}
-						captionsSrc={subtitleUrl || ""}
-						videoRef={videoRef}
-						enableCrossOrigin={enableCrossOrigin}
-						hasActiveUpload={data.hasActiveUpload}
-						comments={commentsData.map((comment) => ({
-							id: comment.id,
-							type: comment.type,
-							timestamp: comment.timestamp,
-							content: comment.content,
-							authorName: comment.authorName,
-						}))}
-						onSeek={handleSeek}
-					/>
-				) : (
-					<HLSVideoPlayer
-						videoId={data.id}
-						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
-						videoSrc={videoSrc}
-						chaptersSrc={chaptersUrl || ""}
-						captionsSrc={subtitleUrl || ""}
-						videoRef={videoRef}
-						hasActiveUpload={data.hasActiveUpload}
-					/>
-				)}
-			</div>
-
-			{!data.ownerIsPro && (
-				<div className="absolute top-4 left-4 z-30">
-					<div
-						className="block cursor-pointer"
-						onClick={(e) => {
-							e.stopPropagation();
-							setUpgradeModalOpen(true);
-						}}
-					>
-						<div className="relative">
-							<div className="opacity-50 transition-opacity hover:opacity-100 peer">
-								<Logo className="w-auto h-4 sm:h-8" white={true} />
-							</div>
-
-							<div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
-								<p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-									Remove watermark
-								</p>
+								<div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
+									<p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
+										Remove watermark
+									</p>
+								</div>
 							</div>
 						</div>
 					</div>
-				</div>
-			)}
-			<UpgradeModal
-				open={upgradeModalOpen}
-				onOpenChange={setUpgradeModalOpen}
-			/>
-		</>
-	);
-});
+				)}
+				<UpgradeModal
+					open={upgradeModalOpen}
+					onOpenChange={setUpgradeModalOpen}
+				/>
+			</>
+		);
+	},
+);
