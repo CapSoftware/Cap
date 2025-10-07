@@ -70,9 +70,16 @@ const CapSettingsCard = () => {
 
 	// Update lastSavedSettings when organizationSettings changes externally
 	useEffect(() => {
-		if (organizationSettings) {
-			lastSavedSettings.current = organizationSettings;
-		}
+		const next = organizationSettings ?? {
+			disableComments: false,
+			disableSummary: false,
+			disableCaptions: false,
+			disableChapters: false,
+			disableReactions: false,
+			disableTranscript: false,
+		};
+		setSettings(next);
+		lastSavedSettings.current = next;
 	}, [organizationSettings]);
 
 	useEffect(() => {

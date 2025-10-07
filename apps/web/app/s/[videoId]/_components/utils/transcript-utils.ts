@@ -20,12 +20,6 @@ export const formatTime = (seconds: number): string => {
 		.padStart(3, "0")}`;
 };
 
-/**
- * Formats time in seconds to minutes:seconds format
- * @param time - Time in seconds
- * @returns Time in minutes:seconds format
- */
-
 export const formatTimeMinutes = (time: number) => {
 	const minutes = Math.floor(time / 60);
 	const seconds = Math.floor(time % 60);

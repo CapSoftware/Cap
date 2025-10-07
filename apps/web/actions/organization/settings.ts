@@ -24,7 +24,7 @@ export async function updateOrganizationSettings(settings: {
 		throw new Error("Settings are required");
 	}
 
-	const organization = await db()
+	const [organization] = await db()
 		.select()
 		.from(organizations)
 		.where(eq(organizations.id, user.activeOrganizationId));
