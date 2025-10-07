@@ -1,7 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Effect, Layer, Option } from "effect";
@@ -81,6 +80,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			distributionId: Config.string("CAP_CLOUDFRONT_DISTRIBUTION_ID"),
 			keypairId: Config.string("CLOUDFRONT_KEYPAIR_ID"),
 			privateKey: Config.string("CLOUDFRONT_KEYPAIR_PRIVATE_KEY"),
+			bucketUrl: Config.string("CAP_AWS_BUCKET_URL"),
 		}).pipe(
 			Effect.match({
 				onSuccess: (v) => v,
@@ -95,7 +95,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					Effect.succeed<typeof s3>({
 						...s3,
 						getSignedObjectUrl: (key) => {
-							const url = `${S3_BUCKET_URL}/${key}`;
+							const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
 							const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
 
 							const policy = {

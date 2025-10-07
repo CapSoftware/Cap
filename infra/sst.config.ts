@@ -26,7 +26,7 @@ export default $config({
 				},
 				cloudflare: true,
 				aws: {
-					profile: "cap-dev",
+					profile: "cap-staging",
 				},
 				planetscale: true,
 				awsx: "2.21.1",
@@ -39,6 +39,7 @@ export default $config({
 			staging: "https://staging.cap.so",
 		};
 		const webUrl = WEB_URLS[$app.stage];
+		const secrets = Secrets();
 		// const planetscale = Planetscale();
 
 		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
@@ -77,7 +78,7 @@ export default $config({
 
 		vercelEnvVar("VercelDatabaseURLEnv", {
 			key: "DATABASE_URL",
-			value: new sst.Secret("DATABASE_URL").value,
+			value: secrets.DATABASE_URL_HTTP.value,
 		});
 
 		if (webUrl) {
@@ -177,9 +178,23 @@ export default $config({
 			value: vercelAwsAccessRole.arn,
 		});
 
+		// await WorkflowCluster(recordingsBucket, secrets);
+
 		// DiscordBot();
 	},
 });
+
+function Secrets() {
+	return {
+		DATABASE_URL_HTTP: new sst.Secret("DATABASE_URL_HTTP"),
+		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
+		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
+		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
+		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+	};
+}
+
+type Secrets = ReturnType<typeof Secrets>;
 
 // function Planetscale() {
 // 	const org = planetscale.getOrganizationOutput({ name: "cap" });
@@ -196,34 +211,36 @@ export default $config({
 // 	return { org, db, branch };
 // }
 
-function DiscordBot() {
-	new sst.cloudflare.Worker("DiscordBotScript", {
-		handler: "../apps/discord-bot/src/index.ts",
-		transform: {
-			worker: (args) => {
-				args.name = "cap-discord-bot";
-				args.kvNamespaceBindings = [
-					{
-						name: "release_discord_interactions",
-						namespaceId: "846b080b86914e2ba666d35acee35c9a",
-					},
-				];
-				args.secretTextBindings = [
-					{
-						name: "DISCORD_BOT_TOKEN",
-						text: new sst.Secret("DISCORD_BOT_TOKEN").value,
-					},
-					{
-						name: "GITHUB_APP_PRIVATE_KEY",
-						text: new sst.Secret("GITHUB_APP_PRIVATE_KEY").value,
-					},
-				];
-			},
-		},
-	});
-}
+// function DiscordBot() {
+// 	new sst.cloudflare.Worker("DiscordBotScript", {
+// 		handler: "../apps/discord-bot/src/index.ts",
+// 		transform: {
+// 			worker: (args) => {
+// 				args.name = "cap-discord-bot";
+// 				args.kvNamespaceBindings = [
+// 					{
+// 						name: "release_discord_interactions",
+// 						namespaceId: "846b080b86914e2ba666d35acee35c9a",
+// 					},
+// 				];
+// 				args.secretTextBindings = [
+// 					{
+// 						name: "DISCORD_BOT_TOKEN",
+// 						text: new sst.Secret("DISCORD_BOT_TOKEN").value,
+// 					},
+// 					{
+// 						name: "GITHUB_APP_PRIVATE_KEY",
+// 						text: new sst.Secret("GITHUB_APP_PRIVATE_KEY").value,
+// 					},
+// 				];
+// 			},
+// 		},
+// 	});
+// }
 
-function WorkflowCluster() {
+async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
+	const pulumi = await import("@pulumi/pulumi");
+
 	const vpc = new sst.aws.Vpc("Vpc", {
 		nat: "ec2",
 	});
@@ -242,10 +259,7 @@ function WorkflowCluster() {
 
 	const securityGroup = new aws.ec2.SecurityGroup(
 		"WorkflowClusterSecurityGroup",
-		{
-			vpcId: vpc.id,
-			description: "Security group for effect-cluster",
-		},
+		{ vpcId: vpc.id, description: "Security group for effect-cluster" },
 	);
 	new aws.vpc.SecurityGroupEgressRule("allow_all_traffic_ipv4", {
 		securityGroupId: securityGroup.id,
@@ -268,40 +282,86 @@ function WorkflowCluster() {
 			cloudmapNamespaceName: privateDnsNamespace.name,
 		},
 	});
+
 	const commonEnvironment = {
 		SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
+		CAP_AWS_REGION: bucket.region,
+		CAP_AWS_BUCKET: bucket.bucket,
+		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
+		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
+		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
 	};
 
-	const repository = new awsx.ecr.Repository("Repository", {});
-	const image = new awsx.ecr.Image("image", {
-		repositoryUrl: repository.url,
-		// adjust path because sst run on ./sst/platform
-		context: "../../",
-		platform: "linux/amd64",
+	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
+		"GHCRCredentialsSecret",
+		{ name: "GhcrCredentials" },
+	);
+
+	new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
+		secretId: ghcrCredentialsSecret.id,
+		secretString: secrets.GITHUB_PAT.value.apply((password) =>
+			JSON.stringify({
+				username: "brendonovich",
+				password,
+			}),
+		),
 	});
 
 	const shardManager = new sst.aws.Service("ShardManager", {
 		cluster,
+		architecture: "arm64",
 		containers: [
 			{
 				name: "shard-manager",
-				image: image.imageUri,
-				command: ["dist/shard-manager.js"],
+				image: "ghcr.io/brendonovich/cap-web-cluster:latest",
+				command: ["src/shard-manager.ts"],
 				environment: {
 					...commonEnvironment,
 				},
 			},
 		],
-	});
-
-	new sst.aws.Function("WorkflowClusterProxyLambda", {
-		vpc,
-		url: true,
-		timeout: "5 minutes",
-		link: [shardManager],
-		handler: "src/serverless/lambda.handler",
-		environment: {
-			SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
+		transform: {
+			taskRole(args) {
+				args.inlinePolicies = pulumi
+					.all([args.inlinePolicies ?? [], ghcrCredentialsSecret.arn])
+					.apply(([policies, arn]) => {
+						policies.push({
+							policy: JSON.stringify({
+								Version: "2012-10-17",
+								Statement: [
+									{
+										Effect: "Allow",
+										Action: ["secretsmanager:GetSecretValue"],
+										Resource: [arn],
+									},
+								],
+							}),
+						});
+						return policies;
+					});
+			},
+			taskDefinition(args) {
+				args.containerDefinitions = pulumi
+					.all([
+						$jsonParse(args.containerDefinitions),
+						ghcrCredentialsSecret.arn,
+					])
+					.apply(([def, arn]) => {
+						def[0].repositoryCredentials = { credentialsParameter: arn };
+						return JSON.stringify(def);
+					});
+			},
 		},
 	});
+
+	// new sst.aws.Function("WorkflowClusterProxyLambda", {
+	// 	vpc,
+	// 	url: true,
+	// 	timeout: "5 minutes",
+	// 	link: [shardManager],
+	// 	handler: "src/serverless/lambda.handler",
+	// 	environment: {
+	// 		SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
+	// 	},
+	// });
 }
