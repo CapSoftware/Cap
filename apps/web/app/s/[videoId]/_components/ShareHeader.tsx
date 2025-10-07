@@ -74,11 +74,11 @@ export const ShareHeader = ({
 
 	const handleBlur = async () => {
 		setIsEditing(false);
-		if (title === data.name) {
-			return;
-		}
+		const next = title.trim();
+		if (next === "" || next === data.name) return;
 		try {
-			await editTitle(data.id, title);
+			await editTitle(data.id, next);
+			setTitle(next);
 			toast.success("Video title updated");
 			refresh();
 		} catch (error) {
@@ -87,6 +87,7 @@ export const ShareHeader = ({
 			} else {
 				toast.error("Failed to update title - please try again.");
 			}
+			setTitle(data.name);
 		}
 	};
 
