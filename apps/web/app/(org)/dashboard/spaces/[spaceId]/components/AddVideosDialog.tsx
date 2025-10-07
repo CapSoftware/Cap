@@ -1,5 +1,6 @@
 "use client";
 
+import type { Space } from "@cap/web-domain";
 import type React from "react";
 import { addVideosToSpace } from "@/actions/spaces/add-videos";
 import { getSpaceVideoIds } from "@/actions/spaces/get-space-videos";
@@ -10,7 +11,7 @@ import AddVideosDialogBase from "./AddVideosDialogBase";
 interface AddVideosDialogProps {
 	open: boolean;
 	onClose: () => void;
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 	spaceName: string;
 	onVideosAdded?: () => void;
 }

@@ -4,6 +4,7 @@ import {
 	Folder,
 	Organisation,
 	Policy,
+	type Space,
 	User,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
@@ -23,7 +24,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
 			parentId: Folder.FolderId | null;
-			spaceId: string | null;
+			spaceId: Space.SpaceIdOrOrganisationId | null;
 		}): Effect.Effect<void, DatabaseError, Database> =>
 			Effect.gen(function* () {
 				const children = yield* db.execute((db) =>
@@ -73,7 +74,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			create: Effect.fn("Folders.create")(function* (data: {
 				name: string;
 				color: Folder.FolderColor;
-				spaceId: Option.Option<string>;
+				spaceId: Option.Option<Space.SpaceIdOrOrganisationId>;
 				parentId: Option.Option<Folder.FolderId>;
 			}) {
 				const user = yield* CurrentUser;

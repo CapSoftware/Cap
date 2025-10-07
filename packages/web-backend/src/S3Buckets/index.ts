@@ -2,7 +2,7 @@ import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
-import type { S3Bucket } from "@cap/web-domain";
+import type { S3Bucket, User } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Effect, Layer, Option } from "effect";
 
@@ -174,8 +174,9 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 				return yield* getBucketAccess(customBucket);
 			}),
+
 			getBucketAccessForUser: Effect.fn("S3Buckets.getProviderForUser")(
-				function* (userId: string) {
+				function* (userId: User.UserId) {
 					const customBucket = yield* repo
 						.getForUser(userId)
 						.pipe(Effect.option, Effect.map(Option.flatten));
@@ -191,6 +192,6 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		Effect.flatMap(S3Buckets, (b) =>
 			b.getBucketAccess(Option.fromNullable(bucketId).pipe(Option.flatten)),
 		);
-	static getBucketAccessForUser = (userId: string) =>
+	static getBucketAccessForUser = (userId: User.UserId) =>
 		Effect.flatMap(S3Buckets, (b) => b.getBucketAccessForUser(userId));
 }

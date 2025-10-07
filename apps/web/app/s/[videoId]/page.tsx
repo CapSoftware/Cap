@@ -16,7 +16,12 @@ import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { provideOptionalAuth, Videos } from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import { Policy, type Video } from "@cap/web-domain";
+import {
+	Comment,
+	type Organisation,
+	Policy,
+	type Video,
+} from "@cap/web-domain";
 import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -32,6 +37,7 @@ import {
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
@@ -358,7 +364,7 @@ async function AuthorizedContent({
 		InferSelectModel<typeof videos>,
 		"folderId" | "password" | "settings"
 	> & {
-		sharedOrganization: { organizationId: string } | null;
+		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
 		orgSettings?: OrganizationSettings | null;
@@ -385,8 +391,12 @@ async function AuthorizedContent({
 	}
 
 	const userId = user?.id;
-	const commentId = searchParams.comment as string | undefined;
-	const replyId = searchParams.reply as string | undefined;
+	const commentId = optionFromTOrFirst(searchParams.comment).pipe(
+		Option.map(Comment.CommentId.make),
+	);
+	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
+		Option.map(Comment.CommentId.make),
+	);
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -625,15 +635,15 @@ async function AuthorizedContent({
 		: Promise.resolve([]);
 
 	const commentsPromise = (async () => {
-		let toplLevelCommentId: string | undefined;
+		let toplLevelCommentId: Comment.CommentId | undefined;
 
-		if (replyId) {
+		if (Option.isSome(replyId)) {
 			const [parentComment] = await db()
 				.select({ parentCommentId: comments.parentCommentId })
 				.from(comments)
-				.where(eq(comments.id, replyId))
+				.where(eq(comments.id, replyId.value))
 				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId;
+			toplLevelCommentId = parentComment?.parentCommentId ?? undefined;
 		}
 
 		const commentToBringToTheTop = toplLevelCommentId ?? commentId;

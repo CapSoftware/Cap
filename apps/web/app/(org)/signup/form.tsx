@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faEnvelope,
@@ -117,7 +118,9 @@ export function SignupForm() {
 		}
 
 		try {
-			const data = await getOrganizationSSOData(organizationId);
+			const data = await getOrganizationSSOData(
+				Organisation.OrganisationId.make(organizationId),
+			);
 			setOrganizationName(data.name);
 
 			signIn("workos", undefined, {

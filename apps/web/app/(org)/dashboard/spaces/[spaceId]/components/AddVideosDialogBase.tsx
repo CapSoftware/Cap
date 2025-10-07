@@ -23,16 +23,16 @@ import { toast } from "sonner";
 import * as z from "zod";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
 
-interface AddVideosDialogBaseProps {
+interface AddVideosDialogBaseProp<T> {
 	open: boolean;
 	onClose: () => void;
-	entityId: string;
+	entityId: T;
 	entityName: string;
 	onVideosAdded?: () => void;
-	addVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
-	removeVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
+	addVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
+	removeVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
 	getVideos: (limit?: number) => Promise<any>;
-	getEntityVideoIds: (entityId: string) => Promise<any>;
+	getEntityVideoIds: (entityId: T) => Promise<any>;
 }
 
 export interface VideoData {
@@ -52,7 +52,7 @@ const formSchema = z.object({
 	search: z.string(),
 });
 
-const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
+function AddVideosDialogBase<T>({
 	open,
 	onClose,
 	entityId,
@@ -62,7 +62,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 	removeVideos,
 	getVideos,
 	getEntityVideoIds,
-}) => {
+}: AddVideosDialogBaseProp<T>) {
 	const [selectedVideos, setSelectedVideos] = useState<Video.VideoId[]>([]);
 	const [searchTerm, setSearchTerm] = useState("");
 	const filterTabs = ["all", "added", "notAdded"];
@@ -334,6 +334,6 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 			</DialogContent>
 		</Dialog>
 	);
-};
+}
 
 export default AddVideosDialogBase;

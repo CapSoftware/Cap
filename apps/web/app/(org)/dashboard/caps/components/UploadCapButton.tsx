@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Organisation } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -100,7 +100,7 @@ export const UploadCapButton = ({
 async function legacyUploadCap(
 	file: File,
 	folderId: Folder.FolderId | undefined,
-	orgId: string,
+	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	queryClient: QueryClient,
 ) {

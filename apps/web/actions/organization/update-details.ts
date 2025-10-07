@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -13,7 +14,7 @@ export async function updateOrganizationDetails({
 }: {
 	organizationName?: string | null;
 	allowedEmailDomain?: string | null;
-	organizationId: string;
+	organizationId: Organisation.OrganisationId;
 }) {
 	const user = await getCurrentUser();
 

@@ -1,17 +1,21 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { comments } from "@cap/database/schema";
+import { Comment } from "@cap/web-domain";
 import { and, eq, or } from "drizzle-orm";
+import { Option } from "effect";
 import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
 
 export async function DELETE(request: NextRequest) {
 	const user = await getCurrentUser();
 	const { searchParams } = request.nextUrl;
-	const commentId = searchParams.get("commentId");
-	const origin = request.headers.get("origin") as string;
+	const commentId = Option.fromNullable(searchParams.get("commentId")).pipe(
+		Option.map(Comment.CommentId.make),
+	);
+	const origin = request.headers.get("origin");
 
-	if (!commentId || !user?.id) {
+	if (!Option.isSome(commentId) || !user?.id) {
 		return new Response(JSON.stringify({ error: "Missing required data" }), {
 			status: 400,
 			headers: getHeaders(origin),
@@ -23,7 +27,9 @@ export async function DELETE(request: NextRequest) {
 		const query = await db()
 			.select()
 			.from(comments)
-			.where(and(eq(comments.id, commentId), eq(comments.authorId, user.id)));
+			.where(
+				and(eq(comments.id, commentId.value), eq(comments.authorId, user.id)),
+			);
 
 		if (query.length === 0) {
 			return new Response(
@@ -39,7 +45,10 @@ export async function DELETE(request: NextRequest) {
 		await db()
 			.delete(comments)
 			.where(
-				or(eq(comments.id, commentId), eq(comments.parentCommentId, commentId)),
+				or(
+					eq(comments.id, commentId.value),
+					eq(comments.parentCommentId, commentId.value),
+				),
 			);
 
 		return new Response(JSON.stringify({ success: true }), {

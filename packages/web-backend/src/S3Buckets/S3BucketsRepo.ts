@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { S3Bucket, type Video } from "@cap/web-domain";
+import { S3Bucket, type User, type Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -49,7 +49,7 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 			);
 
 			const getForUser = Effect.fn("S3BucketsRepo.getForUser")(
-				(userId: string) =>
+				(userId: User.UserId) =>
 					Effect.gen(function* () {
 						const [res] = yield* db.execute((db) =>
 							db

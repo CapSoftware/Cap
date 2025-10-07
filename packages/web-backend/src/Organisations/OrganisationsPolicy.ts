@@ -1,4 +1,4 @@
-import { Policy } from "@cap/web-domain";
+import { type Organisation, Policy } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
@@ -11,12 +11,12 @@ export class OrganisationsPolicy extends Effect.Service<OrganisationsPolicy>()(
 		effect: Effect.gen(function* () {
 			const repo = yield* OrganisationsRepo;
 
-			const isMember = (orgId: string) =>
+			const isMember = (orgId: Organisation.OrganisationId) =>
 				Policy.policy((user) =>
 					repo.membership(user.id, orgId).pipe(Effect.map(Option.isSome)),
 				);
 
-			const isOwner = (orgId: string) =>
+			const isOwner = (orgId: Organisation.OrganisationId) =>
 				Policy.policy((user) =>
 					repo.membership(user.id, orgId).pipe(
 						Effect.map((v) =>

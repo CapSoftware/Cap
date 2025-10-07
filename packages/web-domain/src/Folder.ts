@@ -5,7 +5,7 @@ import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
-import { SpaceId } from "./Space.ts";
+import { SpaceIdOrOrganisationId } from "./Space.ts";
 import { UserId } from "./User.ts";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
@@ -40,7 +40,7 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	color: FolderColor,
 	organizationId: OrganisationId,
 	createdById: UserId,
-	spaceId: Schema.OptionFromNullOr(Schema.String),
+	spaceId: Schema.OptionFromNullOr(SpaceIdOrOrganisationId),
 	parentId: Schema.OptionFromNullOr(FolderId),
 }) {}
 
@@ -61,7 +61,7 @@ export class FolderRpcs extends RpcGroup.make(
 		payload: Schema.Struct({
 			name: Schema.String,
 			color: FolderColor,
-			spaceId: Schema.OptionFromUndefinedOr(SpaceId),
+			spaceId: Schema.OptionFromUndefinedOr(SpaceIdOrOrganisationId),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),
 		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),

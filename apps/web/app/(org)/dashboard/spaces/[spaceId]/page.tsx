@@ -13,7 +13,7 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Spaces } from "@cap/web-backend";
-import { CurrentUser, Video } from "@cap/web-domain";
+import { CurrentUser, type Organisation, Space, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
@@ -35,7 +35,7 @@ export type SpaceMemberData = {
 };
 
 // --- Helper functions ---
-async function fetchFolders(spaceId: string) {
+async function fetchFolders(spaceId: Space.SpaceIdOrOrganisationId) {
 	return db()
 		.select({
 			id: folders.id,
@@ -51,7 +51,7 @@ async function fetchFolders(spaceId: string) {
 		.where(and(eq(folders.spaceId, spaceId), isNull(folders.parentId)));
 }
 
-async function fetchSpaceMembers(spaceId: string) {
+async function fetchSpaceMembers(spaceId: Space.SpaceIdOrOrganisationId) {
 	return db()
 		.select({
 			id: spaceMembers.id,
@@ -66,7 +66,7 @@ async function fetchSpaceMembers(spaceId: string) {
 		.where(eq(spaceMembers.spaceId, spaceId));
 }
 
-async function fetchOrganizationMembers(orgId: string) {
+async function fetchOrganizationMembers(orgId: Organisation.OrganisationId) {
 	return db()
 		.select({
 			id: organizationMembers.id,
@@ -93,7 +93,7 @@ export default async function SharedCapsPage(props: {
 	if (!user) notFound();
 
 	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
-		s.getSpaceOrOrg(params.spaceId),
+		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
 	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
 		Effect.provideService(CurrentUser, user),
@@ -114,7 +114,7 @@ export default async function SharedCapsPage(props: {
 			]);
 
 		async function fetchSpaceVideos(
-			spaceId: string,
+			spaceId: Space.SpaceIdOrOrganisationId,
 			page: number,
 			limit: number,
 		) {
@@ -208,7 +208,7 @@ export default async function SharedCapsPage(props: {
 		const { organization } = spaceOrOrg;
 
 		async function fetchOrganizationVideos(
-			orgId: string,
+			orgId: Organisation.OrganisationId,
 			page: number,
 			limit: number,
 		) {

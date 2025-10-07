@@ -9,12 +9,12 @@ import {
 	sharedVideos,
 	videos,
 } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function addVideosToOrganization(
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 	videoIds: Video.VideoId[],
 ) {
 	try {

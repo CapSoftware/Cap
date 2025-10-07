@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { Policy } from "@cap/web-domain";
+import { type Organisation, Policy, type Space } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
@@ -15,7 +15,9 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 
 		// this sucks but right now org ids are also valid space ids,
 		// since the whole-org space is just the org id
-		const getSpaceOrOrg = Effect.fn(function* (spaceOrOrgId: string) {
+		const getSpaceOrOrg = Effect.fn(function* (
+			spaceOrOrgId: Space.SpaceIdOrOrganisationId,
+		) {
 			const [[space], [org]] = yield* Effect.all([
 				db.execute((db) =>
 					db
@@ -37,7 +39,12 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 							ownerId: Db.organizations.ownerId,
 						})
 						.from(Db.organizations)
-						.where(Dz.eq(Db.organizations.id, spaceOrOrgId))
+						.where(
+							Dz.eq(
+								Db.organizations.id,
+								spaceOrOrgId as Organisation.OrganisationId,
+							),
+						)
 						.limit(1),
 				),
 			]);

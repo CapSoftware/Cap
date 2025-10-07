@@ -7,12 +7,15 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createSpace as createSpaceAction } from "@/actions/organization/create-space";
 import { updateSpace as updateSpaceAction } from "@/actions/organization/update-space";
 
-export async function updateActiveOrganization(organizationId: string) {
+export async function updateActiveOrganization(
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
 

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { serverEnv } from "@cap/env";
+import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
@@ -8,7 +9,6 @@ import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
-
 import { dub } from "../dub.ts";
 import { sendEmail } from "../emails/config.ts";
 import { nanoId } from "../helpers.ts";
@@ -125,7 +125,7 @@ export const authOptions = (): NextAuthOptions => {
 				const [dbUser] = await db()
 					.select()
 					.from(users)
-					.where(eq(users.id, user.id))
+					.where(eq(users.id, User.UserId.make(user.id)))
 					.limit(1);
 
 				const needsOrganizationSetup =
@@ -168,25 +168,29 @@ export const authOptions = (): NextAuthOptions => {
 						);
 					}
 
-					const organizationId = nanoId();
+					const organizationId = Organisation.OrganisationId.make(nanoId());
 
-					await db().insert(organizations).values({
-						id: organizationId,
-						name: "My Organization",
-						ownerId: user.id,
-					});
+					await db()
+						.insert(organizations)
+						.values({
+							id: organizationId,
+							name: "My Organization",
+							ownerId: User.UserId.make(user.id),
+						});
 
-					await db().insert(organizationMembers).values({
-						id: nanoId(),
-						userId: user.id,
-						organizationId: organizationId,
-						role: "owner",
-					});
+					await db()
+						.insert(organizationMembers)
+						.values({
+							id: nanoId(),
+							userId: User.UserId.make(user.id),
+							organizationId: organizationId,
+							role: "owner",
+						});
 
 					await db()
 						.update(users)
 						.set({ activeOrganizationId: organizationId })
-						.where(eq(users.id, user.id));
+						.where(eq(users.id, User.UserId.make(user.id)));
 				}
 			},
 		},

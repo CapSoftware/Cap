@@ -2,7 +2,7 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, Space, User, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
@@ -36,10 +36,10 @@ type SharedVideoData = {
 }[];
 
 type SpaceData = {
-	id: string;
+	id: Space.SpaceIdOrOrganisationId;
 	name: string;
-	organizationId: string;
-	createdById: string;
+	organizationId: Organisation.OrganisationId;
+	createdById: User.UserId;
 };
 
 export const SharedCaps = ({
@@ -60,12 +60,12 @@ export const SharedCaps = ({
 	hideSharedWith?: boolean;
 	spaceMembers?: SpaceMemberData[];
 	organizationMembers?: OrganizationMemberData[];
-	currentUserId?: string;
+	currentUserId?: User.UserId;
 	folders?: FolderDataType[];
 	organizationData?: {
-		id: string;
+		id: Organisation.OrganisationId;
 		name: string;
-		ownerId: string;
+		ownerId: User.UserId;
 	};
 }) => {
 	const params = useSearchParams();

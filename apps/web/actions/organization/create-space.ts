@@ -6,6 +6,7 @@ import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import { Space } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -62,7 +63,7 @@ export async function createSpace(
 		}
 
 		// Generate the space ID early so we can use it in the file path
-		const spaceId = nanoId();
+		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
 		let iconUrl = null;

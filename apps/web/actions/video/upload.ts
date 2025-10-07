@@ -11,7 +11,7 @@ import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
-import { type Folder, Video } from "@cap/web-domain";
+import { type Folder, type Organisation, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -175,7 +175,7 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot?: boolean;
 	isUpload?: boolean;
 	folderId?: Folder.FolderId;
-	orgId: string;
+	orgId: Organisation.OrganisationId;
 	// TODO: Remove this once we are happy with it's stability
 	supportsUploadProgress?: boolean;
 }) {

@@ -14,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { Database } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, Space, Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
@@ -271,8 +271,8 @@ export const getChildFolders = Effect.fn(function* (
 	folderId: Folder.FolderId,
 	root:
 		| { variant: "user" }
-		| { variant: "space"; spaceId: string }
-		| { variant: "org"; organizationId: string },
+		| { variant: "space"; spaceId: Space.SpaceIdOrOrganisationId }
+		| { variant: "org"; organizationId: Organisation.OrganisationId },
 ) {
 	const db = yield* Database;
 
