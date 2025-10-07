@@ -216,7 +216,7 @@ impl MP4Encoder {
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = cm::Time::new(
-            dbg!(timestamp.sub(self.timestamp_offset)).as_millis() as i64,
+            timestamp.sub(self.timestamp_offset).as_millis() as i64,
             1_000,
         );
         let frame = frame.copy_with_new_timing(&[timing]).unwrap();
