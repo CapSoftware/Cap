@@ -63,8 +63,7 @@ export class FolderRpcs extends RpcGroup.make(
 			spaceId: Schema.OptionFromUndefinedOr(SpaceId),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),
-		success: Folder,
-		error: Schema.Union(NotFoundError, InternalError),
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,

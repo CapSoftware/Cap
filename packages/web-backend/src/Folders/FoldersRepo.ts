@@ -2,7 +2,7 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { Folder, type Organisation, type User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Array, Effect, Option } from "effect";
 import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
 
@@ -21,14 +21,24 @@ export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 		/**
 		 * Gets a `Folder` by its ID.
 		 */
-		const getById = (id: Folder.FolderId) =>
-			Effect.gen(function* () {
-				const [folder] = yield* db.execute((db) =>
-					db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
-				);
-
-				return Option.fromNullable(folder);
-			});
+		const getById = (
+			id: Folder.FolderId,
+			filters?: { organizationId?: Organisation.OrganisationId },
+		) =>
+			db
+				.execute((db) =>
+					db
+						.select()
+						.from(Db.folders)
+						.where(
+							Dz.and(
+								Dz.eq(Db.folders.id, id),
+								filters?.organizationId &&
+									Dz.eq(Db.folders.organizationId, filters.organizationId),
+							),
+						),
+				)
+				.pipe(Effect.map(Array.get(0)));
 
 		const delete_ = (id: Folder.FolderId) =>
 			db.execute((db) => db.delete(Db.folders).where(Dz.eq(Db.folders.id, id)));

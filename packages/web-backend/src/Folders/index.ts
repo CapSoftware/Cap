@@ -11,12 +11,14 @@ import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Database, type DatabaseError } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
+import { FoldersRepo } from "./FoldersRepo.ts";
 
 // @effect-diagnostics-next-line leakingRequirements:off
 export class Folders extends Effect.Service<Folders>()("Folders", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
 		const policy = yield* FoldersPolicy;
+		const repo = yield* FoldersRepo;
 
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
@@ -78,45 +80,33 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				if (Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
-					const [parentFolder] = yield* db.execute((db) =>
-						db
-							.select()
-							.from(Db.folders)
-							.where(
-								Dz.and(
-									Dz.eq(Db.folders.id, parentId),
-									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
+
+					yield* repo
+						.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								user.activeOrganizationId,
+							),
+						})
+						.pipe(
+							Policy.withPolicy(policy.canEdit(parentId)),
+							Effect.flatMap(
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new Folder.NotFoundError(),
 								),
 							),
-					);
-
-					if (!parentFolder) return yield* new Folder.NotFoundError();
+						);
 				}
 
-				const folder = {
-					id: Folder.FolderId.make(nanoId()),
+				yield* repo.create({
 					name: data.name,
 					color: data.color,
-					organizationId: user.activeOrganizationId,
-					createdById: user.id,
-					spaceId: data.spaceId,
-					parentId: data.parentId,
-				};
-
-				yield* db.execute((db) =>
-					db.insert(Db.folders).values({
-						...folder,
-						spaceId: Option.getOrNull(folder.spaceId),
-						parentId: Option.getOrNull(folder.parentId),
-					}),
-				);
-
-				return new Folder.Folder({
-					...folder,
 					organizationId: Organisation.OrganisationId.make(
 						user.activeOrganizationId,
 					),
 					createdById: User.UserId.make(user.id),
+					spaceId: data.spaceId,
+					parentId: data.parentId,
 				});
 			}),
 
@@ -140,12 +130,17 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
-				const [folder] = yield* db
-					.execute((db) =>
-						db.select().from(Db.folders).where(Dz.eq(Db.folders.id, folderId)),
-					)
-					.pipe(Policy.withPolicy(policy.canEdit(folderId)));
-				if (!folder) return yield* new Folder.NotFoundError();
+				const folder = yield* repo
+					.getById(folderId)
+					.pipe(
+						Policy.withPolicy(policy.canEdit(folderId)),
+						Effect.flatMap(
+							Effect.catchTag(
+								"NoSuchElementException",
+								() => new Folder.NotFoundError(),
+							),
+						),
+					);
 
 				// If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (!data.parentId) return;
@@ -155,20 +150,21 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				if (parentId === folderId)
 					return yield* new Folder.RecursiveDefinitionError();
 
-				const [parentFolder] = yield* db
-					.execute((db) =>
-						db
-							.select()
-							.from(Db.folders)
-							.where(
-								Dz.and(
-									Dz.eq(Db.folders.id, parentId),
-									Dz.eq(Db.folders.organizationId, folder.organizationId),
-								),
+				const parentFolder = yield* repo
+					.getById(parentId, {
+						organizationId: Organisation.OrganisationId.make(
+							folder.organizationId,
+						),
+					})
+					.pipe(
+						Policy.withPolicy(policy.canEdit(parentId)),
+						Effect.flatMap(
+							Effect.catchTag(
+								"NoSuchElementException",
+								() => new Folder.ParentNotFoundError(),
 							),
-					)
-					.pipe(Policy.withPolicy(policy.canEdit(parentId)));
-				if (!parentFolder) return yield* new Folder.ParentNotFoundError();
+						),
+					);
 
 				// Check for circular references in the folder hierarchy
 				let currentParentId = parentFolder.parentId;
@@ -177,21 +173,14 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						return yield* new Folder.RecursiveDefinitionError();
 
 					const parentId = currentParentId;
-					const [nextParent] = yield* db.execute((db) =>
-						db
-							.select()
-							.from(Db.folders)
-							.where(
-								Dz.and(
-									Dz.eq(Db.folders.id, parentId),
-									// This should be implied but extra tenant isolation can't hurt
-									Dz.eq(Db.folders.organizationId, folder.organizationId),
-								),
-							),
-					);
+					const nextParent = yield* repo.getById(parentId, {
+						organizationId: Organisation.OrganisationId.make(
+							folder.organizationId,
+						),
+					});
 
-					if (!nextParent) break;
-					currentParentId = nextParent.parentId;
+					if (Option.isNone(nextParent)) break;
+					currentParentId = nextParent.value.parentId;
 				}
 
 				yield* db.execute((db) =>
