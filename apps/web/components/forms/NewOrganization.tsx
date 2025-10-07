@@ -25,7 +25,7 @@ export interface NewOrganizationProps {
 
 export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 	const formSchema = z.object({
-		name: z.string().min(1),
+		name: z.string().min(1).max(25),
 	});
 
 	const form = useForm<z.infer<typeof formSchema>>({
@@ -77,6 +77,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 						render={({ field }) => (
 							<FormControl>
 								<Input
+									maxLength={25}
 									placeholder="Your organization name"
 									{...field}
 									onChange={(e) => {

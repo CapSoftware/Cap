@@ -105,6 +105,8 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
 	orgSettings?: OrganizationSettings | null;
+	organizationIconUrl?: string | null;
+	organizationName?: string | null;
 };
 
 const ALLOWED_REFERRERS = [
@@ -287,6 +289,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					duration: videos.duration,
 					fps: videos.fps,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
+					organizationIconUrl: organizations.iconUrl,
+					organizationName: organizations.name,
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
@@ -359,6 +363,8 @@ async function AuthorizedContent({
 		ownerIsPro?: boolean;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
+		organizationIconUrl?: string | null;
+		organizationName?: string | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -477,6 +483,8 @@ async function AuthorizedContent({
 				sharedOrganization: {
 					organizationId: sharedVideos.organizationId,
 				},
+				organizationIconUrl: organizations.iconUrl,
+				organizationName: organizations.name,
 				orgSettings: organizations.settings,
 				videoSettings: videos.settings,
 			})
@@ -678,6 +686,8 @@ async function AuthorizedContent({
 		folderId: null,
 		orgSettings: video.orgSettings || null,
 		settings: video.videoSettings || null,
+		organizationIconUrl: video.organizationIconUrl ?? undefined,
+		organizationName: video.organizationName ?? undefined,
 	};
 
 	return (

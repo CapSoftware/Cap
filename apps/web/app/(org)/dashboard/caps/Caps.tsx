@@ -232,6 +232,7 @@ export const Caps = ({
 							data.error === 1 ? "" : "s"
 						}`;
 					}
+					router.refresh();
 					return `Successfully deleted ${data.success} cap${
 						data.success === 1 ? "" : "s"
 					}`;
@@ -266,7 +267,7 @@ export const Caps = ({
 		[data, isUploading, uploadingCapId],
 	);
 
-	if (count === 0) return <EmptyCapState />;
+	if (count === 0 && folders.length === 0) return <EmptyCapState />;
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
