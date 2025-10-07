@@ -61,7 +61,6 @@ export class FolderRpcs extends RpcGroup.make(
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,
-		success: Folder,
 		error: Schema.Union(NotFoundError, RecursiveDefinitionError, InternalError),
 	}).middleware(RpcAuthMiddleware),
 ) {}

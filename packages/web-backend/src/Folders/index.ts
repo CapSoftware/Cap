@@ -129,60 +129,52 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
-				// const [video] = yield* repo
-				// 	.getById(videoId)
-				// 	.pipe(
-				// 		Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
-				// 		Policy.withPolicy(policy.isOwner(videoId)),
-				// 	);
+				const user = yield* CurrentUser;
 
-				// const user = yield* CurrentUser;
+				const [folder] = yield* db
+					.execute((db) =>
+						db.select().from(Db.folders).where(Dz.eq(Db.folders.id, folderId)),
+					)
+					.pipe(Policy.withPolicy(policy.canEdit(folderId)));
+				if (!folder) return yield* new Folder.NotFoundError();
 
-				// const [folder] = yield* db
-				// 	.execute((db) =>
-				// 		db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
-				// 	)
-				// 	.pipe(Policy.withPolicy(policy.canEdit(id)));
-
-				// TODO: Hook up a return like this
-				// if (!folder) return yield* new Folder.NotFoundError();
-
-				// // If parentId is provided and not null, verify it exists and belongs to the same organization
+				// If parentId is provided and not null, verify it exists and belongs to the same organization
 				if (data.parentId) {
 					// Check that we're not creating a circular reference
 					if (data.parentId === folderId)
 						return yield* new Folder.RecursiveDefinitionError();
 
-					// TODO: Should this have a `policy` assigned to it???
-					// 	const [parentFolder] = await db()
-					// 		.select()
-					// 		.from(folders)
-					// 		.where(
-					// 			and(
-					// 				eq(folders.id, parentId),
-					// 				eq(folders.organizationId, user.activeOrganizationId),
-					// 			),
-					// 		);
+					const [parentFolder] = yield* db.execute((db) =>
+						db
+							.select()
+							.from(Db.folders)
+							.where(
+								Dz.and(
+									Dz.eq(Db.folders.id, data.parentId),
+									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
+								),
+							),
+					);
 
-					// 	if (!parentFolder) {
-					// 		throw new Error("Parent folder not found or not accessible");
-					// 	}
+					if (!parentFolder) return yield* new Folder.NotFoundError();
 
-					// 	// Check for circular references in the folder hierarchy
-					// 	let currentParentId = parentFolder.parentId;
-					// 	while (currentParentId) {
-					// 		if (currentParentId === folderId) {
-					// 			throw new Error("Cannot create circular folder references");
-					// 		}
+					// Check for circular references in the folder hierarchy
+					let currentParentId = parentFolder.parentId;
+					while (currentParentId) {
+						if (currentParentId === folderId) {
+							return yield* new Folder.RecursiveDefinitionError();
+						}
 
-					// 		const [nextParent] = await db()
-					// 			.select()
-					// 			.from(folders)
-					// 			.where(eq(folders.id, currentParentId));
+						const [nextParent] = yield* db.execute((db) =>
+							db
+								.select()
+								.from(Db.folders)
+								.where(Dz.eq(Db.folders.id, currentParentId)),
+						);
 
-					// 		if (!nextParent) break;
-					// 		currentParentId = nextParent.parentId;
-					// 	}
+						if (!nextParent) break;
+						currentParentId = nextParent.parentId;
+					}
 				}
 
 				yield* db
