@@ -31,7 +31,6 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 								),
 							),
 					),
-
 				membership: (userId: string, orgId: string) =>
 					db
 						.execute((db) =>

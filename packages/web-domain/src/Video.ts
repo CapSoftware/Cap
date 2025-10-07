@@ -4,8 +4,10 @@ import { Context, Effect, Option, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
+import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
+import { UserId } from "./User.ts";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
@@ -13,8 +15,8 @@ export type VideoId = typeof VideoId.Type;
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
-	ownerId: Schema.String,
-	orgId: Schema.String,
+	ownerId: UserId,
+	orgId: OrganisationId,
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
@@ -35,8 +37,6 @@ export class Video extends Schema.Class<Video>("Video")({
 	updatedAt: Schema.Date,
 }) {
 	static decodeSync = Schema.decodeSync(Video);
-
-	static toJS = (self: Video) => Schema.encode(Video)(self).pipe(Effect.orDie);
 
 	static getSource(self: Video) {
 		if (self.source.type === "MediaConvert")

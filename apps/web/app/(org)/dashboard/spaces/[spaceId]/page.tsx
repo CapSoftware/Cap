@@ -12,6 +12,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Spaces } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
@@ -19,7 +20,6 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
-import { getSpaceOrOrg } from "./utils";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",
@@ -92,7 +92,9 @@ export default async function SharedCapsPage(props: {
 	const user = await getCurrentUser();
 	if (!user) notFound();
 
-	const spaceOrOrg = await getSpaceOrOrg(params.spaceId).pipe(
+	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
+		s.getSpaceOrOrg(params.spaceId),
+	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
 		Effect.provideService(CurrentUser, user),
 		runPromise,

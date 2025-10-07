@@ -1,4 +1,4 @@
-import { S3Bucket, Video } from "@cap/web-domain";
+import { Organisation, S3Bucket, User, Video } from "@cap/web-domain";
 import { Headers, HttpClient } from "@effect/platform";
 import { Activity, Workflow } from "@effect/workflow";
 import { Effect, Option, Schedule, Schema, Stream } from "effect";
@@ -23,14 +23,14 @@ export const LoomImportVideo = Workflow.make({
 	name: "LoomImportVideo",
 	payload: {
 		cap: Schema.Struct({
-			userId: Schema.String,
-			orgId: Schema.String,
+			userId: User.UserId,
+			orgId: Organisation.OrganisationId,
 		}),
 		loom: Schema.Struct({
-			userId: Schema.String,
-			orgId: Schema.String,
+			userId: User.UserId,
+			orgId: Organisation.OrganisationId,
 			video: Schema.Struct({
-				id: Schema.String,
+				id: Video.VideoId,
 				name: Schema.String,
 				downloadUrl: Schema.String,
 				width: Schema.OptionFromNullOr(Schema.Number),

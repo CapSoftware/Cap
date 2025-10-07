@@ -1,6 +1,7 @@
 import { Workflow } from "@effect/workflow";
 import { Schema } from "effect";
-
+import { OrganisationId } from "./Organisation.ts";
+import { UserId } from "./User.ts";
 import * as Video from "./Video.ts";
 
 class LoomApiError extends Schema.TaggedError<LoomApiError>("LoomApiError")(
@@ -19,12 +20,12 @@ export const LoomImportVideo = Workflow.make({
 	name: "LoomImportVideo",
 	payload: {
 		cap: Schema.Struct({
-			userId: Schema.String,
-			orgId: Schema.String,
+			userId: UserId,
+			orgId: OrganisationId,
 		}),
 		loom: Schema.Struct({
-			userId: Schema.String,
-			orgId: Schema.String,
+			userId: UserId,
+			orgId: OrganisationId,
 			video: Schema.Struct({
 				id: Schema.String,
 				name: Schema.String,

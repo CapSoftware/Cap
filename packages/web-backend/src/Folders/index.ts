@@ -1,16 +1,24 @@
-import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Folder, Policy } from "@cap/web-domain";
+import {
+	CurrentUser,
+	Folder,
+	Organisation,
+	Policy,
+	User,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
+
 import { Database, type DatabaseError } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
+import { FoldersRepo } from "./FoldersRepo.ts";
 
 // @effect-diagnostics-next-line leakingRequirements:off
 export class Folders extends Effect.Service<Folders>()("Folders", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
 		const policy = yield* FoldersPolicy;
+		const repo = yield* FoldersRepo;
 
 		const deleteFolder = (folder: {
 			id: Folder.FolderId;
@@ -72,41 +80,36 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				if (Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
-					const [parentFolder] = yield* db.execute((db) =>
-						db
-							.select()
-							.from(Db.folders)
-							.where(
-								Dz.and(
-									Dz.eq(Db.folders.id, parentId),
-									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
+
+					yield* repo
+						.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								user.activeOrganizationId,
+							),
+						})
+						.pipe(
+							Policy.withPolicy(policy.canEdit(parentId)),
+							Effect.flatMap(
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new Folder.NotFoundError(),
 								),
 							),
-					);
-
-					if (!parentFolder) return yield* new Folder.NotFoundError();
+						);
 				}
 
-				const folder = {
-					id: Folder.FolderId.make(nanoId()),
+				yield* repo.create({
 					name: data.name,
 					color: data.color,
-					organizationId: user.activeOrganizationId,
-					createdById: user.id,
+					organizationId: Organisation.OrganisationId.make(
+						user.activeOrganizationId,
+					),
+					createdById: User.UserId.make(user.id),
 					spaceId: data.spaceId,
 					parentId: data.parentId,
-				};
-
-				yield* db.execute((db) =>
-					db.insert(Db.folders).values({
-						...folder,
-						spaceId: Option.getOrNull(folder.spaceId),
-						parentId: Option.getOrNull(folder.parentId),
-					}),
-				);
-
-				return new Folder.Folder(folder);
+				});
 			}),
+
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
 			 * relocated to the root of the collection (space or My Caps) they're in
@@ -122,7 +125,75 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 
 				yield* deleteFolder(folder);
 			}),
+
+			update: Effect.fn("Folders.update")(function* (
+				folderId: Folder.FolderId,
+				data: Folder.FolderUpdate,
+			) {
+				const folder = yield* (yield* repo
+					.getById(folderId)
+					.pipe(Policy.withPolicy(policy.canEdit(folderId)))).pipe(
+					Effect.catchTag(
+						"NoSuchElementException",
+						() => new Folder.NotFoundError(),
+					),
+				);
+
+				// If parentId is provided and not null, verify it exists and belongs to the same organization
+				if (data.parentId && Option.isSome(data.parentId)) {
+					const parentId = data.parentId.value;
+					// Check that we're not creating an immediate circular reference
+					if (parentId === folderId)
+						return yield* new Folder.RecursiveDefinitionError();
+
+					const parentFolder = yield* repo
+						.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								folder.organizationId,
+							),
+						})
+						.pipe(
+							Policy.withPolicy(policy.canEdit(parentId)),
+							Effect.flatMap(
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new Folder.ParentNotFoundError(),
+								),
+							),
+						);
+
+					// Check for circular references in the folder hierarchy
+					let currentParentId = parentFolder.parentId;
+					while (currentParentId) {
+						if (currentParentId === folderId)
+							return yield* new Folder.RecursiveDefinitionError();
+
+						const parentId = currentParentId;
+						const nextParent = yield* repo.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								folder.organizationId,
+							),
+						});
+
+						if (Option.isNone(nextParent)) break;
+						currentParentId = nextParent.value.parentId;
+					}
+				}
+
+				yield* db.execute((db) =>
+					db
+						.update(Db.folders)
+						.set({
+							name: data.name,
+							color: data.color,
+							parentId: data.parentId
+								? Option.getOrNull(data.parentId)
+								: undefined,
+						})
+						.where(Dz.eq(Db.folders.id, folderId)),
+				);
+			}),
 		};
 	}),
-	dependencies: [FoldersPolicy.Default, Database.Default],
+	dependencies: [FoldersPolicy.Default, FoldersRepo.Default, Database.Default],
 }) {}

@@ -12,10 +12,8 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 			const repo = yield* SpacesRepo;
 
 			const hasMembership = (spaceId: string) =>
-				Policy.policy(
-					Effect.fn(function* (user) {
-						return Option.isSome(yield* repo.membership(user.id, spaceId));
-					}),
+				Policy.policy((user) =>
+					repo.membership(user.id, spaceId).pipe(Effect.map(Option.isSome)),
 				);
 
 			const isOwner = (spaceId: string) =>

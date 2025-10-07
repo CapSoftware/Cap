@@ -16,6 +16,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						S3Error: () => new InternalError({ type: "s3" }),
 					}),
 				),
+
 			VideoDuplicate: (videoId) =>
 				videos.duplicate(videoId).pipe(
 					Effect.catchTags({
@@ -23,6 +24,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						S3Error: () => new InternalError({ type: "s3" }),
 					}),
 				),
+
 			GetUploadProgress: (videoId) =>
 				videos.getUploadProgress(videoId).pipe(
 					provideOptionalAuth,
@@ -31,6 +33,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
+
 			VideoGetDownloadInfo: (videoId) =>
 				videos.getDownloadInfo(videoId).pipe(
 					provideOptionalAuth,

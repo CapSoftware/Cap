@@ -5,6 +5,7 @@ export * from "./Loom/index.ts";
 export { OrganisationsPolicy } from "./Organisations/OrganisationsPolicy.ts";
 export * from "./Rpcs.ts";
 export { S3Buckets } from "./S3Buckets/index.ts";
+export { Spaces } from "./Spaces/index.ts";
 export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
 export { Videos } from "./Videos/index.ts";
 export { VideosPolicy } from "./Videos/VideosPolicy.ts";
