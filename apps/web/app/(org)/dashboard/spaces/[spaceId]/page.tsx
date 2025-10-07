@@ -19,7 +19,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
-import { getSpaceOrOrg } from "./utils";
+import { Spaces } from "@cap/web-backend";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",
@@ -92,7 +92,9 @@ export default async function SharedCapsPage(props: {
 	const user = await getCurrentUser();
 	if (!user) notFound();
 
-	const spaceOrOrg = await getSpaceOrOrg(params.spaceId).pipe(
+	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
+		s.getSpaceOrOrg(params.spaceId),
+	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
 		Effect.provideService(CurrentUser, user),
 		runPromise,

@@ -7,6 +7,7 @@ import {
 	HttpAuthMiddlewareLive,
 	OrganisationsPolicy,
 	S3Buckets,
+	Spaces,
 	SpacesPolicy,
 	Videos,
 	VideosPolicy,
@@ -47,6 +48,7 @@ export const Dependencies = Layer.mergeAll(
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
+	Spaces.Default,
 ).pipe(
 	Layer.provideMerge(
 		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),

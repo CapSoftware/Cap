@@ -16,7 +16,7 @@ import {
 	NewSubfolderButton,
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
-import { getSpaceOrOrg } from "../../utils";
+import { Spaces } from "@cap/web-backend";
 
 const FolderPage = async (props: {
 	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
@@ -26,7 +26,8 @@ const FolderPage = async (props: {
 	if (!user) return notFound();
 
 	return await Effect.gen(function* () {
-		const spaceOrOrg = yield* getSpaceOrOrg(params.spaceId);
+		const spaces = yield* Spaces;
+		const spaceOrOrg = yield* spaces.getSpaceOrOrg(params.spaceId);
 		if (!spaceOrOrg) notFound();
 
 		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
