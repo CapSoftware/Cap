@@ -130,66 +130,65 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
-				const folder = yield* repo
+				const folder = yield* (yield* repo
 					.getById(folderId)
-					.pipe(
-						Policy.withPolicy(policy.canEdit(folderId)),
-						Effect.flatMap(
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new Folder.NotFoundError(),
-							),
-						),
-					);
+					.pipe(Policy.withPolicy(policy.canEdit(folderId)))).pipe(
+					Effect.catchTag(
+						"NoSuchElementException",
+						() => new Folder.NotFoundError(),
+					),
+				);
 
 				// If parentId is provided and not null, verify it exists and belongs to the same organization
-				if (!data.parentId) return;
-				const parentId = data.parentId;
-
-				// Check that we're not creating an immediate circular reference
-				if (parentId === folderId)
-					return yield* new Folder.RecursiveDefinitionError();
-
-				const parentFolder = yield* repo
-					.getById(parentId, {
-						organizationId: Organisation.OrganisationId.make(
-							folder.organizationId,
-						),
-					})
-					.pipe(
-						Policy.withPolicy(policy.canEdit(parentId)),
-						Effect.flatMap(
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new Folder.ParentNotFoundError(),
-							),
-						),
-					);
-
-				// Check for circular references in the folder hierarchy
-				let currentParentId = parentFolder.parentId;
-				while (currentParentId) {
-					if (currentParentId === folderId)
+				if (data.parentId && Option.isSome(data.parentId)) {
+					const parentId = data.parentId.value;
+					// Check that we're not creating an immediate circular reference
+					if (parentId === folderId)
 						return yield* new Folder.RecursiveDefinitionError();
 
-					const parentId = currentParentId;
-					const nextParent = yield* repo.getById(parentId, {
-						organizationId: Organisation.OrganisationId.make(
-							folder.organizationId,
-						),
-					});
+					const parentFolder = yield* repo
+						.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								folder.organizationId,
+							),
+						})
+						.pipe(
+							Policy.withPolicy(policy.canEdit(parentId)),
+							Effect.flatMap(
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new Folder.ParentNotFoundError(),
+								),
+							),
+						);
 
-					if (Option.isNone(nextParent)) break;
-					currentParentId = nextParent.value.parentId;
+					// Check for circular references in the folder hierarchy
+					let currentParentId = parentFolder.parentId;
+					while (currentParentId) {
+						if (currentParentId === folderId)
+							return yield* new Folder.RecursiveDefinitionError();
+
+						const parentId = currentParentId;
+						const nextParent = yield* repo.getById(parentId, {
+							organizationId: Organisation.OrganisationId.make(
+								folder.organizationId,
+							),
+						});
+
+						if (Option.isNone(nextParent)) break;
+						currentParentId = nextParent.value.parentId;
+					}
 				}
 
 				yield* db.execute((db) =>
 					db
 						.update(Db.folders)
 						.set({
-							...(data.name ? { name: data.name } : {}),
-							...(data.color ? { color: data.color } : {}),
-							...(data.parentId ? { parentId: data.parentId } : {}),
+							name: data.name,
+							color: data.color,
+							parentId: data.parentId
+								? Option.getOrNull(data.parentId)
+								: undefined,
 						})
 						.where(Dz.eq(Db.folders.id, folderId)),
 				);

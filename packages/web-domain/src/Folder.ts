@@ -44,12 +44,13 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	parentId: Schema.OptionFromNullOr(FolderId),
 }) {}
 
-export class FolderUpdate extends Schema.Class<FolderUpdate>("FolderPatch")({
+export const FolderUpdate = Schema.Struct({
 	id: FolderId,
 	name: Schema.optional(Schema.String),
 	color: Schema.optional(FolderColor),
-	parentId: Schema.optional(FolderId),
-}) {}
+	parentId: Schema.optional(Schema.Option(FolderId)),
+});
+export type FolderUpdate = Schema.Schema.Type<typeof FolderUpdate>;
 
 export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderDelete", {
