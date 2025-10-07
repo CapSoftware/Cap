@@ -33,7 +33,7 @@ export default async function DashboardLayout({
 	}
 
 	let organizationSelect: Organization[] = [];
-	let organizationSettings: OrganizationSettings = null;
+	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
 	let userPreferences: UserPreferences;

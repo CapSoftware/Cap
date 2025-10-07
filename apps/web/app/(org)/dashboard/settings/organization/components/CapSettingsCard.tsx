@@ -12,36 +12,36 @@ import type { OrganizationSettings } from "../../../dashboard-data";
 
 const options = [
 	{
-		label: "Disable comments",
+		label: "Enable comments",
 		value: "disableComments",
 		description: "Allow viewers to comment on caps",
 	},
 	{
-		label: "Disable summary",
+		label: "Enable summary",
 		value: "disableSummary",
-		description: "Remove the summary for caps (requires transcript)",
+		description: "Show AI-generated summary (requires transcript)",
 		pro: true,
 	},
 	{
-		label: "Disable captions",
+		label: "Enable captions",
 		value: "disableCaptions",
 		description: "Allow viewers to use captions for caps",
 	},
 	{
-		label: "Disable chapters",
+		label: "Enable chapters",
 		value: "disableChapters",
-		description: "Remove the chapters for caps (requires transcript)",
+		description: "Show AI-generated chapters (requires transcript)",
 		pro: true,
 	},
 	{
-		label: "Disable reactions",
+		label: "Enable reactions",
 		value: "disableReactions",
 		description: "Allow viewers to react to caps",
 	},
 	{
-		label: "Disable transcript",
+		label: "Enable transcript",
 		value: "disableTranscript",
-		description: "This also allows chapters and summary",
+		description: "Enabling this also allows generating chapters and summary",
 		pro: true,
 	},
 ];
@@ -170,9 +170,7 @@ const CapSettingsCard = () => {
 							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
 						>
 							<div className="flex gap-1.5 items-center">
-								<p className="text-sm text-gray-12">
-									{option.label.replace("Disable", "Enable")}
-								</p>
+								<p className="text-sm text-gray-12">{option.label}</p>
 								{option.pro && (
 									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
 										Pro

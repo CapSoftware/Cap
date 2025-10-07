@@ -32,36 +32,36 @@ const options: {
 	pro?: boolean;
 }[] = [
 	{
-		label: "Disable comments",
+		label: "Enable comments",
 		value: "disableComments",
 		description: "Allow viewers to comment on this cap",
 	},
 	{
-		label: "Disable summary",
+		label: "Enable summary",
 		value: "disableSummary",
-		description: "Remove the summary for this cap (requires transcript)",
+		description: "Show AI-generated summary (requires transcript)",
 		pro: true,
 	},
 	{
-		label: "Disable captions",
+		label: "Enable captions",
 		value: "disableCaptions",
 		description: "Allow viewers to use captions for this cap",
 	},
 	{
-		label: "Disable chapters",
+		label: "Enable chapters",
 		value: "disableChapters",
-		description: "Remove the chapters for this cap (requires transcript)",
+		description: "Show AI-generated chapters (requires transcript)",
 		pro: true,
 	},
 	{
-		label: "Disable reactions",
+		label: "Enable reactions",
 		value: "disableReactions",
 		description: "Allow viewers to react to this cap",
 	},
 	{
-		label: "Disable transcript",
+		label: "Enable transcript",
 		value: "disableTranscript",
-		description: "Required for summary and chapters",
+		description: "Enabling this also allows generating summary and chapters",
 		pro: true,
 	},
 ];
@@ -86,9 +86,9 @@ export const SettingsDialog = ({
 	const isUserPro = userIsPro(user);
 
 	const saveHandler = async () => {
+		if (!settings) return;
+		setSaveLoading(true);
 		try {
-			setSaveLoading(true);
-			if (!settings) return;
 			const payload = Object.fromEntries(
 				Object.entries(settings).filter(([, v]) => v !== undefined),
 			) as Partial<OrganizationSettings>;
@@ -110,12 +110,8 @@ export const SettingsDialog = ({
 				const currentValue = prev?.[key];
 				const orgValue = organizationSettings?.[key] ?? false;
 
-				// If using org default, set to opposite of org value
-				// If org disabled it (true), enabling means setting to false
-				// If org enabled it (false), disabling means setting to true
 				const newValue = currentValue === undefined ? !orgValue : !currentValue;
 
-				// If disabling transcript, also disable summary and chapters since they depend on it
 				if (key === "disableTranscript" && newValue === true) {
 					return {
 						...prev,
@@ -134,7 +130,6 @@ export const SettingsDialog = ({
 		[organizationSettings],
 	);
 
-	// Helper to get the effective value (considering org defaults)
 	const getEffectiveValue = (key: keyof OrganizationSettings) => {
 		const videoValue = settings?.[key];
 		const orgValue = organizationSettings?.[key] ?? false;
@@ -169,9 +164,7 @@ export const SettingsDialog = ({
 									)}
 								>
 									<div className="flex gap-1.5 items-center flex-wrap">
-										<p className="text-sm text-gray-12">
-											{option.label.replace("Disable", "Enable")}
-										</p>
+										<p className="text-sm text-gray-12">{option.label}</p>
 										{option.pro && (
 											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
 												Pro
@@ -188,7 +181,6 @@ export const SettingsDialog = ({
 								<Switch
 									disabled={
 										(option.pro && !isUserPro) ||
-										// Disable summary and chapters if transcript is disabled
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue(
 												"disableTranscript" as keyof OrganizationSettings,
