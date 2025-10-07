@@ -108,9 +108,7 @@ const CapSettingsCard = () => {
 						const option = options.find((opt) => opt.value === changedKey);
 						const isDisabled = debouncedUpdateSettings[changedKey];
 						const action = isDisabled ? "disabled" : "enabled";
-						const label =
-							option?.label.replace(/^Disable /, "").toLowerCase() ||
-							changedKey;
+						const label = option?.label.split(" ")[1] || changedKey;
 						toast.success(
 							`${label.charAt(0).toUpperCase()}${label.slice(1)} ${action}`,
 						);
