@@ -39,12 +39,7 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	createdById: Schema.String,
 	spaceId: Schema.OptionFromNullOr(Schema.String),
 	parentId: Schema.OptionFromNullOr(FolderId),
-}) {
-	static decodeSync = Schema.decodeSync(Folder);
-
-	static toJS = (self: Folder) =>
-		Schema.encode(Folder)(self).pipe(Effect.orDie);
-}
+}) {}
 
 export class FolderUpdate extends Schema.Class<FolderUpdate>("FolderPatch")({
 	id: FolderId,
