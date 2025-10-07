@@ -13,6 +13,7 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod import;
 mod notifications;
 mod permissions;
 mod platform;
@@ -87,6 +88,7 @@ use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace, warn};
 use upload::{create_or_get_video, upload_image, upload_video};
+use uuid;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
@@ -1761,6 +1763,225 @@ async fn editor_delete_project(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn import_and_upload_video(
+    app: AppHandle,
+    path: PathBuf,
+    channel: Channel<UploadProgress>,
+) -> Result<UploadResult, String> {
+    import::from(app, path, channel)
+}
+
+async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
+    let input = input.to_path_buf();
+    let output = output.to_path_buf();
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut ictx =
+            ffmpeg::format::input(&input).map_err(|e| format!("Failed to open input file: {e}"))?;
+
+        let video_stream = ictx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found in input file".to_string())?;
+
+        let video_stream_index = video_stream.index();
+        let input_time_base = video_stream.time_base();
+
+        let mut octx = ffmpeg::format::output(&output)
+            .map_err(|e| format!("Failed to create output context: {e}"))?;
+
+        // Create video encoder (H.264)
+        let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::H264)
+            .ok_or_else(|| "H.264 encoder not found".to_string())?;
+
+        let global_header = octx
+            .format()
+            .flags()
+            .contains(ffmpeg::format::flag::Flags::GLOBAL_HEADER);
+
+        let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .map_err(|e| format!("Failed to create encoder: {e}"))?;
+
+        let mut decoder =
+            ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
+                .map_err(|e| format!("Failed to create decoder context: {e}"))?
+                .decoder()
+                .video()
+                .map_err(|e| format!("Failed to create video decoder: {e}"))?;
+
+        // Configure encoder with proper settings
+        encoder.set_width(decoder.width());
+        encoder.set_height(decoder.height());
+        encoder.set_format(ffmpeg::format::Pixel::YUV420P);
+
+        // Use input stream frame rate or fallback to 30fps
+        let fps = {
+            let stream_fps = video_stream.avg_frame_rate();
+            if stream_fps.numerator() > 0 && stream_fps.denominator() > 0 {
+                stream_fps
+            } else {
+                ffmpeg::Rational::from((30, 1))
+            }
+        };
+        encoder.set_frame_rate(Some(fps));
+        encoder.set_time_base(fps.invert());
+
+        // Set quality parameters
+        encoder.set_bit_rate(decoder.bit_rate().max(1_000_000)); // At least 1Mbps
+        encoder.set_max_b_frames(0); // Disable B-frames for compatibility
+
+        if global_header {
+            encoder.set_flags(ffmpeg::codec::flag::Flags::GLOBAL_HEADER);
+        }
+
+        let mut encoder = encoder
+            .open_as(codec)
+            .map_err(|e| format!("Failed to open encoder: {e}"))?;
+
+        let mut output_stream = octx
+            .add_stream(codec)
+            .map_err(|e| format!("Failed to add stream: {e}"))?;
+
+        output_stream.set_parameters(&encoder);
+        let output_stream_index = output_stream.index();
+        let output_time_base = output_stream.time_base();
+
+        // Write header before processing
+        octx.write_header()
+            .map_err(|e| format!("Failed to write header: {e}"))?;
+
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            ffmpeg::format::Pixel::YUV420P,
+            encoder.width(),
+            encoder.height(),
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .map_err(|e| format!("Failed to create scaler: {e}"))?;
+
+        let mut decoded_frame = ffmpeg::frame::Video::empty();
+        let mut encoded_frame = ffmpeg::frame::Video::empty();
+        let mut output_frame_count = 0i64;
+
+        // Process packets
+        for (stream, mut packet) in ictx.packets() {
+            if stream.index() == video_stream_index {
+                // Rescale packet timestamp to decoder time base
+                packet.rescale_ts(input_time_base, decoder.time_base());
+
+                decoder
+                    .send_packet(&packet)
+                    .map_err(|e| format!("Failed to send packet to decoder: {e}"))?;
+
+                while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                    scaler
+                        .run(&decoded_frame, &mut encoded_frame)
+                        .map_err(|e| format!("Failed to scale frame: {e}"))?;
+
+                    // Set proper PTS for encoded frame
+                    encoded_frame.set_pts(Some(output_frame_count));
+                    output_frame_count += 1;
+
+                    encoder
+                        .send_frame(&encoded_frame)
+                        .map_err(|e| format!("Failed to send frame to encoder: {e}"))?;
+
+                    // Flush encoder packets
+                    let mut encoded_packet = ffmpeg::packet::Packet::empty();
+                    while encoder.receive_packet(&mut encoded_packet).is_ok() {
+                        encoded_packet.set_stream(output_stream_index);
+
+                        // Properly rescale timestamps
+                        encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+                        // Ensure valid timestamps
+                        if encoded_packet.pts().is_none() {
+                            encoded_packet.set_pts(Some(0));
+                        }
+                        if encoded_packet.dts().is_none() {
+                            encoded_packet.set_dts(encoded_packet.pts());
+                        }
+
+                        encoded_packet
+                            .write_interleaved(&mut octx)
+                            .map_err(|e| format!("Failed to write packet: {e}"))?;
+                    }
+                }
+            }
+        }
+
+        // Flush decoder
+        decoder
+            .send_eof()
+            .map_err(|e| format!("Failed to flush decoder: {e}"))?;
+
+        while decoder.receive_frame(&mut decoded_frame).is_ok() {
+            scaler
+                .run(&decoded_frame, &mut encoded_frame)
+                .map_err(|e| format!("Failed to scale frame: {e}"))?;
+
+            encoded_frame.set_pts(Some(output_frame_count));
+            output_frame_count += 1;
+
+            encoder
+                .send_frame(&encoded_frame)
+                .map_err(|e| format!("Failed to send frame to encoder: {e}"))?;
+
+            let mut encoded_packet = ffmpeg::packet::Packet::empty();
+            while encoder.receive_packet(&mut encoded_packet).is_ok() {
+                encoded_packet.set_stream(output_stream_index);
+                encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+                if encoded_packet.pts().is_none() {
+                    encoded_packet.set_pts(Some(0));
+                }
+                if encoded_packet.dts().is_none() {
+                    encoded_packet.set_dts(encoded_packet.pts());
+                }
+
+                encoded_packet
+                    .write_interleaved(&mut octx)
+                    .map_err(|e| format!("Failed to write packet: {e}"))?;
+            }
+        }
+
+        // Flush encoder
+        encoder
+            .send_eof()
+            .map_err(|e| format!("Failed to flush encoder: {e}"))?;
+
+        let mut encoded_packet = ffmpeg::packet::Packet::empty();
+        while encoder.receive_packet(&mut encoded_packet).is_ok() {
+            encoded_packet.set_stream(output_stream_index);
+            encoded_packet.rescale_ts(encoder.time_base(), output_time_base);
+
+            if encoded_packet.pts().is_none() {
+                encoded_packet.set_pts(Some(0));
+            }
+            if encoded_packet.dts().is_none() {
+                encoded_packet.set_dts(encoded_packet.pts());
+            }
+
+            encoded_packet
+                .write_interleaved(&mut octx)
+                .map_err(|e| format!("Failed to write final packet: {e}"))?;
+        }
+
+        octx.write_trailer()
+            .map_err(|e| format!("Failed to write trailer: {e}"))?;
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Transcode task failed: {e}"))?
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
@@ -1981,7 +2202,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            import_and_upload_video,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

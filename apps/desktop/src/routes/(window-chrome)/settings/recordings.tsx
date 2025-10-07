@@ -1,4 +1,4 @@
-import { ProgressCircle } from "@cap/ui-solid";
+import { Button, ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -7,13 +7,12 @@ import {
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -22,6 +21,7 @@ import {
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import toast from "solid-toast";
 import CapTooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
@@ -135,13 +135,68 @@ export default function Recordings() {
 		});
 	};
 
+	const importVideo = createMutation(() => ({
+		mutationKey: ["importVideo"],
+		mutationFn: async (path: string) => {
+			await commands.importAndUploadVideo(
+				path,
+				new Channel<UploadProgress>(() => {}),
+			);
+			await recordings.refetch();
+
+			toast.success("Success!"); // TODO: Fix
+		},
+		onError: (error: Error) =>
+			toast.error(`Failed to import video: ${error.toString()}`),
+	}));
+
+	const handleImportUpload = async () => {
+		const path = await open({
+			multiple: false,
+			filters: [
+				{
+					name: "Video",
+					extensions: ["mp4", "mov", "mkv", "webm", "avi"],
+				},
+			],
+		});
+		if (!path) return;
+		importVideo.mutate(path);
+	};
+
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
-				<h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
-				<p class="text-sm text-gray-10">
-					Manage your recordings and perform actions.
-				</p>
+				<div class="flex items-center justify-between">
+					<div>
+						<h2 class="text-lg font-medium text-gray-12">
+							Previous Recordings
+						</h2>
+						<p class="text-sm text-gray-10">
+							Manage your recordings and perform actions.
+						</p>
+					</div>
+					<Button
+						onClick={handleImportUpload}
+						variant="outline"
+						size="sm"
+						class="flex items-center gap-2"
+						disabled={importVideo.isPending}
+					>
+						<Show
+							when={importVideo.isPending}
+							fallback={
+								<>
+									<IconLucideUpload class="size-4" />
+									Upload from file
+								</>
+							}
+						>
+							<div class="size-4 border-2 border-gray-6 border-t-gray-11 rounded-full animate-spin" />
+							Uploading...
+						</Show>
+					</Button>
+				</div>
 			</div>
 			<Show
 				when={recordings.data && recordings.data.length > 0}

@@ -4,18 +4,14 @@ use crate::{
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
-    output_pipeline::{
-        AudioFrame, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
-    },
+    output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{
-    FutureExt, StreamExt, channel::mpsc, future::OptionFuture, stream::FuturesUnordered,
-};
+use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
 use std::{
