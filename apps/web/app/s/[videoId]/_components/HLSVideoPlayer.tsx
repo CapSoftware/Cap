@@ -270,7 +270,12 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc]);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	// if the video comes back from S3, just ignore the upload progress.
+	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 

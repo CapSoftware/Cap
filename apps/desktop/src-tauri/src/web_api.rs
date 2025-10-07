@@ -26,7 +26,7 @@ async fn do_authed_request(
                 }
             ),
         )
-        .header("X-Desktop-Version", env!("CARGO_PKG_VERSION"));
+        .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"));
 
     if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);

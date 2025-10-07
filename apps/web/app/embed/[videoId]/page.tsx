@@ -23,10 +23,6 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 
-export const dynamic = "auto";
-export const dynamicParams = true;
-export const revalidate = 30;
-
 export async function generateMetadata(
 	props: PageProps<"/embed/[videoId]">,
 ): Promise<Metadata> {

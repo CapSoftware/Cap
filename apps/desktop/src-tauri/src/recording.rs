@@ -1,10 +1,13 @@
 use cap_fail::fail;
+use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CursorClickEvent, CursorMoveEvent, Platform, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment,
-    ZoomMode, ZoomSegment, cursor::CursorEvents,
+    CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
+    RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
+    TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
+    cursor::CursorEvents,
 };
+use cap_recording::PipelineDoneError;
 use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
@@ -17,7 +20,8 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
-use serde::Deserialize;
+use futures::stream;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::{HashMap, VecDeque},
@@ -34,6 +38,7 @@ use tracing::*;
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
+    api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -42,8 +47,7 @@ use crate::{
     presets::PresetsStore,
     thumbnails::*,
     upload::{
-        InstantMultipartUpload, build_video_meta, create_or_get_video, prepare_screenshot_upload,
-        upload_video,
+        InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
@@ -53,7 +57,7 @@ pub enum InProgressRecording {
     Instant {
         target_name: String,
         handle: instant_recording::ActorHandle,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
         recording_dir: PathBuf,
@@ -156,7 +160,7 @@ pub enum CompletedRecording {
     Instant {
         recording: instant_recording::CompletedRecording,
         target_name: String,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
@@ -291,7 +295,7 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = create_or_get_video(
+                    let s3_config = create_or_get_video(
                         &app,
                         false,
                         None,
@@ -302,18 +306,19 @@ pub async fn start_recording(
                         None,
                     )
                     .await
-                    {
-                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
-                        info!("Pre-created shareable link: {}", link);
+                    .map_err(|err| {
+                        error!("Error creating instant mode video: {err}");
+                        err
+                    })?;
 
-                        Some(VideoUploadInfo {
-                            id: s3_config.id().to_string(),
-                            link: link.clone(),
-                            config: s3_config,
-                        })
-                    } else {
-                        None
-                    }
+                    let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+                    info!("Pre-created shareable link: {}", link);
+
+                    Some(VideoUploadInfo {
+                        id: s3_config.id.to_string(),
+                        link: link.clone(),
+                        config: s3_config,
+                    })
                 }
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
@@ -324,6 +329,38 @@ pub async fn start_recording(
         }
         RecordingMode::Studio => None,
     };
+
+    let date_time = if cfg!(windows) {
+        // Windows doesn't support colon in file paths
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.clone(),
+        pretty_name: format!("{target_name} {date_time}"),
+        inner: match inputs.mode {
+            RecordingMode::Studio => {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                    inner: MultipleSegments {
+                        segments: Default::default(),
+                        cursors: Default::default(),
+                        status: Some(StudioRecordingStatus::InProgress),
+                    },
+                })
+            }
+            RecordingMode::Instant => {
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+        },
+        sharing: None,
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
     match &inputs.capture_target {
         ScreenCaptureTarget::Window { id: _id } => {
@@ -383,26 +420,16 @@ pub async fn start_recording(
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
-    let progressive_upload = video_upload_info
-        .as_ref()
-        .filter(|_| matches!(inputs.mode, RecordingMode::Instant))
-        .map(|video_upload_info| {
-            InstantMultipartUpload::spawn(
-                app.clone(),
-                id.clone(),
-                recording_dir.join("content/output.mp4"),
-                video_upload_info.clone(),
-                Some(finish_upload_rx),
-            )
-        });
 
     debug!("spawning start_recording actor");
 
     // done in spawn to catch panics just in case
+    let app_handle = app.clone();
     let spawn_actor_res = async {
         spawn_actor({
             let state_mtx = Arc::clone(&state_mtx);
             let general_settings = general_settings.cloned();
+            let recording_dir = recording_dir.clone();
             async move {
                 fail!("recording::spawn_actor");
                 let mut state = state_mtx.write().await;
@@ -469,6 +496,14 @@ pub async fn start_recording(
                             return Err("Video upload info not found".to_string());
                         };
 
+                        let progressive_upload = InstantMultipartUpload::spawn(
+                            app_handle,
+                            recording_dir.join("content/output.mp4"),
+                            video_upload_info.clone(),
+                            Some(finish_upload_rx),
+                            recording_dir.clone(),
+                        );
+
                         let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
@@ -514,14 +549,14 @@ pub async fn start_recording(
     .await;
 
     let actor_done_fut = match spawn_actor_res {
-        Ok(fut) => fut,
-        Err(e) => {
-            let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+        Ok(rx) => rx,
+        Err(err) => {
+            let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
 
             let mut dialog = MessageDialogBuilder::new(
                 app.dialog().clone(),
                 "An error occurred".to_string(),
-                e.clone(),
+                err.clone(),
             )
             .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -532,9 +567,9 @@ pub async fn start_recording(
             dialog.blocking_show();
 
             let mut state = state_mtx.write().await;
-            let _ = handle_recording_end(app, None, &mut state).await;
+            let _ = handle_recording_end(app, Err(err.clone()), &mut state, recording_dir).await;
 
-            return Err(e);
+            return Err(err);
         }
     };
 
@@ -574,7 +609,9 @@ pub async fn start_recording(
                     dialog.blocking_show();
 
                     // this clears the current recording for us
-                    handle_recording_end(app, None, &mut state).await.ok();
+                    handle_recording_end(app, Err(e.to_string()), &mut state, recording_dir)
+                        .await
+                        .ok();
                 }
             }
         }
@@ -618,8 +655,9 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
+    let recording_dir = completed_recording.project_path().clone();
 
-    handle_recording_end(app, Some(completed_recording), &mut state).await?;
+    handle_recording_end(app, Ok(completed_recording), &mut state, recording_dir).await?;
 
     Ok(())
 }
@@ -706,17 +744,42 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
-    recording: Option<CompletedRecording>,
+    recording: Result<CompletedRecording, String>,
     app: &mut App,
+    recording_dir: PathBuf,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
     app.clear_current_recording();
 
-    let res = if let Some(recording) = recording {
+    let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Some(handle_recording_finish(&handle, recording).await)
-    } else {
-        None
+        Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
+        Err(error) => {
+            if let Ok(mut project_meta) =
+                RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+                    error!("Error loading recording meta while finishing recording: {err}")
+                })
+            {
+                match &mut project_meta.inner {
+                    RecordingMetaInner::Studio(meta) => {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = meta {
+                            inner.status = Some(StudioRecordingStatus::Failed { error });
+                        }
+                    }
+                    RecordingMetaInner::Instant(meta) => {
+                        *meta = InstantRecordingMeta::Failed { error: error };
+                    }
+                }
+                project_meta
+                    .save_for_project()
+                    .map_err(|err| {
+                        error!("Error saving recording meta while finishing recording: {err}")
+                    })
+                    .ok();
+            }
+
+            None
+        }
     };
 
     let _ = RecordingStopped.emit(&handle);
@@ -780,8 +843,6 @@ async fn handle_recording_finish(
         None,
     ));
 
-    let target_name = completed_recording.target_name().clone();
-
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
             let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
@@ -803,7 +864,6 @@ async fn handle_recording_finish(
             video_upload_info,
             ..
         } => {
-            // shareable_link = Some(video_upload_info.link.clone());
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
@@ -811,74 +871,78 @@ async fn handle_recording_finish(
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();
+                let recording_dir = recording_dir.clone();
 
                 async move {
-                    if let Some(progressive_upload) = progressive_upload {
-                        let video_upload_succeeded = match progressive_upload
-                            .handle
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|r| r)
-                        {
-                            Ok(()) => {
-                                info!(
-                                    "Not attempting instant recording upload as progressive upload succeeded"
-                                );
-                                true
-                            }
-                            Err(e) => {
-                                error!("Progressive upload failed: {}", e);
-                                false
-                            }
-                        };
-
-                        let _ = screenshot_task.await;
-
-                        if video_upload_succeeded {
-                            let resp = prepare_screenshot_upload(
-                                &app,
-                                &video_upload_info.config.clone(),
-                                display_screenshot,
-                            )
-                            .await;
-
-                            match resp {
-                                Ok(r)
-                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
-                                {
-                                    info!("Screenshot uploaded successfully");
-                                }
-                                Ok(r) => {
-                                    error!("Failed to upload screenshot: {}", r.status());
-                                }
-                                Err(e) => {
-                                    error!("Failed to upload screenshot: {e}");
-                                }
-                            }
-                        } else {
-                            let meta = build_video_meta(&output_path).ok();
-                            // The upload_video function handles screenshot upload, so we can pass it along
-                            match upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                Some(video_upload_info.config.clone()),
-                                Some(display_screenshot.clone()),
-                                meta,
-                                None,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    info!(
-                                        "Final video upload with screenshot completed successfully"
-                                    )
-                                }
-                                Err(e) => {
-                                    error!("Error in final upload with screenshot: {}", e)
-                                }
-                            }
+                    let video_upload_succeeded = match progressive_upload
+                        .handle
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r)
+                    {
+                        Ok(()) => {
+                            info!(
+                                "Not attempting instant recording upload as progressive upload succeeded"
+                            );
+                            true
                         }
+                        Err(e) => {
+                            error!("Progressive upload failed: {}", e);
+                            false
+                        }
+                    };
+
+                    let _ = screenshot_task.await;
+
+                    if video_upload_succeeded {
+                        if let Ok(bytes) =
+                            compress_image(display_screenshot).await
+                            .map_err(|err|
+                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                            ) {
+                                crate::upload::singlepart_uploader(
+                                    app.clone(),
+                                    crate::api::PresignedS3PutRequest {
+                                        video_id: video_upload_info.id.clone(),
+                                        subpath: "screenshot/screen-capture.jpg".to_string(),
+                                        method: PresignedS3PutRequestMethod::Put,
+                                        meta: None,
+                                    },
+                                    bytes.len() as u64,
+                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
+
+                                )
+                                .await
+                                .map_err(|err| {
+                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
+                                })
+                                .ok();
+                            }
+                    } else if let Ok(meta) = build_video_meta(&output_path)
+                        .map_err(|err| error!("Error getting video metadata: {}", err))
+                    {
+                        // The upload_video function handles screenshot upload, so we can pass it along
+                        upload_video(
+                            &app,
+                            video_upload_info.id.clone(),
+                            output_path,
+                            display_screenshot.clone(),
+                            meta,
+                            None,
+                        )
+                        .await
+                        .map(|_| info!("Final video upload with screenshot completed successfully"))
+                        .map_err(|error| {
+                            error!("Error in upload_video: {error}");
+
+                            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                                meta.upload = Some(UploadMeta::Failed { error });
+                                meta.save_for_project()
+                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                    .ok();
+                            }
+                        })
+                        .ok();
                     }
                 }
             });
@@ -893,25 +957,16 @@ async fn handle_recording_finish(
         }
     };
 
-    let date_time = if cfg!(windows) {
-        // Windows doesn't support colon in file paths
-        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
-    } else {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    };
+    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+        error!("Failed to load recording meta while saving finished recording: {err}")
+    }) {
+        meta.inner = meta_inner.clone();
+        meta.sharing = sharing;
+        meta.save_for_project()
+            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+    }
 
-    let meta = RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: recording_dir.clone(),
-        sharing,
-        pretty_name: format!("{target_name} {date_time}"),
-        inner: meta_inner,
-    };
-
-    meta.save_for_project()
-        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
-
-    if let RecordingMetaInner::Studio(_) = meta.inner {
+    if let RecordingMetaInner::Studio(_) = meta_inner {
         match GeneralSettingsStore::get(app)
             .ok()
             .flatten()
@@ -1082,11 +1137,11 @@ fn generate_zoom_segments_from_clicks_impl(
 
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for interval in intervals {
-        if let Some(last) = merged.last_mut() {
-            if interval.0 <= last.1 + MERGE_GAP_THRESHOLD {
-                last.1 = last.1.max(interval.1);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && interval.0 <= last.1 + MERGE_GAP_THRESHOLD
+        {
+            last.1 = last.1.max(interval.1);
+            continue;
         }
         merged.push(interval);
     }
@@ -1122,6 +1177,7 @@ pub fn generate_zoom_segments_from_clicks(
         pretty_name: String::new(),
         sharing: None,
         inner: RecordingMetaInner::Studio(recording.meta.clone()),
+        upload: None,
     };
 
     generate_zoom_segments_for_project(&recording_meta, recordings)

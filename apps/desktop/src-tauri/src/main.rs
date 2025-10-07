@@ -4,8 +4,6 @@
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use dirs;
-use tracing_appender;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {

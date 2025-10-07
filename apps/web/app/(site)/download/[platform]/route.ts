@@ -2,9 +2,6 @@ import { type NextRequest, NextResponse } from "next/server";
 
 export const runtime = "edge";
 
-// Disable caching to ensure users always get the latest download URL
-export const revalidate = 0;
-
 export async function GET(
 	request: NextRequest,
 	props: { params: Promise<{ platform: string }> },

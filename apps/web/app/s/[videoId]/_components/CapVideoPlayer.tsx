@@ -470,7 +470,12 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	// if the video comes back from S3, just ignore the upload progress.
+	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 

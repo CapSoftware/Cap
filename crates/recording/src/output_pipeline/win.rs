@@ -113,12 +113,13 @@ impl Muxer for WindowsMuxer {
                 let encoder = match encoder {
                     Ok(encoder) => {
                         if ready_tx.send(Ok(())).is_err() {
-                            info!("Failed to send ready signal");
+                            error!("Failed to send ready signal - receiver dropped");
                             return;
                         }
                         encoder
                     }
                     Err(e) => {
+                        error!("Encoder setup failed: {}", e);
                         let _ = ready_tx.send(Err(e));
                         return;
                     }
@@ -185,7 +186,9 @@ impl Muxer for WindowsMuxer {
             });
         }
 
-        let _ = ready_rx.await;
+        ready_rx
+            .await
+            .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
         output.lock().unwrap().write_header()?;
 

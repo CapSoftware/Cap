@@ -37,10 +37,6 @@ import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
 
-export const dynamic = "auto";
-export const dynamicParams = true;
-export const revalidate = 30;
-
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Fetch space-level sharing
