@@ -70,7 +70,7 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 
 				const videoId = yield* videos.create({
 					ownerId: payload.cap.userId,
-					orgId: Option.some(payload.cap.orgId),
+					orgId: payload.cap.orgId,
 					bucketId: customBucketId,
 					source: { type: "desktopMP4" as const },
 					name: payload.loom.video.name,

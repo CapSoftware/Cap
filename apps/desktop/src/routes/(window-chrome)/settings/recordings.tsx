@@ -13,6 +13,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -20,17 +21,19 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
+import { createStore, produce } from "solid-js/store";
+import CapTooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	commands,
 	events,
-	type RecordingMetaWithMode,
+	type RecordingMetaWithMetadata,
 	type UploadProgress,
 } from "~/utils/tauri";
 
 type Recording = {
-	meta: RecordingMetaWithMode;
+	meta: RecordingMetaWithMetadata;
 	path: string;
 	prettyName: string;
 	thumbnailPath: string;
@@ -73,13 +76,28 @@ const recordingsQuery = queryOptions({
 		);
 		return recordings;
 	},
+	// This will ensure any changes to the upload status in the project meta are reflected.
+	refetchInterval: 2000,
 });
 
 export default function Recordings() {
 	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
 		Tabs[0].id,
 	);
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record</* video_id */ string, number>
+	>({});
 	const recordings = createQuery(() => recordingsQuery);
+
+	createTauriEventListener(events.uploadProgressEvent, (e) => {
+		setUploadProgress(e.video_id, (Number(e.uploaded) / Number(e.total)) * 100);
+		if (e.uploaded === e.total)
+			setUploadProgress(
+				produce((s) => {
+					delete s[e.video_id];
+				}),
+			);
+	});
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
 
@@ -169,6 +187,13 @@ export default function Recordings() {
 									onCopyVideoToClipboard={() =>
 										handleCopyVideoToClipboard(recording.path)
 									}
+									uploadProgress={
+										recording.meta.upload &&
+										(recording.meta.upload.state === "MultipartUpload" ||
+											recording.meta.upload.state === "SinglePartUpload")
+											? uploadProgress[recording.meta.upload.video_id]
+											: undefined
+									}
 								/>
 							)}
 						</For>
@@ -185,6 +210,7 @@ function RecordingItem(props: {
 	onOpenFolder: () => void;
 	onOpenEditor: () => void;
 	onCopyVideoToClipboard: () => void;
+	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
 	const mode = () => props.recording.meta.mode;
@@ -211,23 +237,66 @@ function RecordingItem(props: {
 				</Show>
 				<div class="flex flex-col gap-2">
 					<span>{props.recording.prettyName}</span>
-					<div
-						class={cx(
-							"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
-							mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
-						)}
-					>
-						{mode() === "instant" ? (
-							<IconCapInstant class="invert size-2.5 dark:invert-0" />
-						) : (
-							<IconCapFilmCut class="invert size-2.5 dark:invert-0" />
-						)}
-						<p>{firstLetterUpperCase()}</p>
+					<div class="flex space-x-1">
+						<div
+							class={cx(
+								"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
+								mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+							)}
+						>
+							{mode() === "instant" ? (
+								<IconCapInstant class="invert size-2.5 dark:invert-0" />
+							) : (
+								<IconCapFilmCut class="invert size-2.5 dark:invert-0" />
+							)}
+							<p>{firstLetterUpperCase()}</p>
+						</div>
+
+						<Show when={props.recording.meta.status.status === "InProgress"}>
+							<div
+								class={cx(
+									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-blue-500 leading-none text-center",
+								)}
+							>
+								<IconPhRecordFill class="invert size-2.5 dark:invert-0" />
+								<p>Recording in progress</p>
+							</div>
+						</Show>
+
+						<Show when={props.recording.meta.status.status === "Failed"}>
+							<CapTooltip
+								content={
+									<span>
+										{props.recording.meta.status.status === "Failed"
+											? props.recording.meta.status.error
+											: ""}
+									</span>
+								}
+							>
+								<div
+									class={cx(
+										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-9 leading-none text-center",
+									)}
+								>
+									<IconPhWarningBold class="invert size-2.5 dark:invert-0" />
+									<p>Recording failed</p>
+								</div>
+							</CapTooltip>
+						</Show>
 					</div>
 				</div>
 			</div>
 			<div class="flex gap-2 items-center">
 				<Show when={mode() === "studio"}>
+					<Show when={props.uploadProgress}>
+						<CapTooltip content={`${(props.uploadProgress || 0).toFixed(2)}%`}>
+							<ProgressCircle
+								variant="primary"
+								progress={props.uploadProgress || 0}
+								size="sm"
+							/>
+						</CapTooltip>
+					</Show>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
 							<TooltipIconButton
@@ -241,54 +310,53 @@ function RecordingItem(props: {
 					<TooltipIconButton
 						tooltipText="Edit"
 						onClick={() => props.onOpenEditor()}
+						disabled={props.recording.meta.status.status !== "Complete"}
 					>
 						<IconLucideEdit class="size-4" />
 					</TooltipIconButton>
 				</Show>
 				<Show when={mode() === "instant"}>
 					{(_) => {
-						const [progress, setProgress] = createSignal(0);
 						const reupload = createMutation(() => ({
-							mutationFn: async () => {
-								setProgress(0);
-								return await commands.uploadExportedVideo(
+							mutationFn: () =>
+								commands.uploadExportedVideo(
 									props.recording.path,
 									"Reupload",
-									new Channel<UploadProgress>((progress) =>
-										setProgress(Math.round(progress.progress * 100)),
-									),
-								);
-							},
-							onSettled: () => setProgress(0),
+									new Channel<UploadProgress>((progress) => {}),
+								),
 						}));
 
 						return (
-							<Show when={props.recording.meta.sharing}>
-								{(sharing) => (
-									<>
+							<>
+								<Show
+									when={props.uploadProgress || reupload.isPending}
+									fallback={
 										<TooltipIconButton
 											tooltipText="Reupload"
 											onClick={() => reupload.mutate()}
 										>
-											{reupload.isPending ? (
-												<ProgressCircle
-													variant="primary"
-													progress={progress()}
-													size="sm"
-												/>
-											) : (
-												<IconLucideRotateCcw class="size-4" />
-											)}
+											<IconLucideRotateCcw class="size-4" />
 										</TooltipIconButton>
+									}
+								>
+									<ProgressCircle
+										variant="primary"
+										progress={props.uploadProgress || 0}
+										size="sm"
+									/>
+								</Show>
+
+								<Show when={props.recording.meta.sharing}>
+									{(sharing) => (
 										<TooltipIconButton
 											tooltipText="Open link"
 											onClick={() => shell.open(sharing().link)}
 										>
 											<IconCapLink class="size-4" />
 										</TooltipIconButton>
-									</>
-								)}
-							</Show>
+									)}
+								</Show>
+							</>
 						);
 					}}
 				</Show>
@@ -330,7 +398,7 @@ function TooltipIconButton(
 					props.onClick();
 				}}
 				disabled={props.disabled}
-				class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5"
+				class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5 disabled:pointer-events-none disabled:opacity-45 disabled:hover:opacity-45"
 			>
 				{props.children}
 			</Tooltip.Trigger>

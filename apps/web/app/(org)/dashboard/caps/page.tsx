@@ -96,9 +96,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage(props: {
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
+export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
 
@@ -106,9 +104,10 @@ export default async function CapsPage(props: {
 		redirect("/login");
 	}
 
-	const userId = user.id;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
+
+	const userId = user.id;
 	const offset = (page - 1) * limit;
 
 	const totalCountResult = await db()
