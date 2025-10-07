@@ -170,7 +170,7 @@ const CapSettingsCard = () => {
 							<div className="flex gap-1.5 items-center">
 								<p className="text-sm text-gray-12">{option.label}</p>
 								{option.pro && (
-									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
+									<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
 										Pro
 									</p>
 								)}

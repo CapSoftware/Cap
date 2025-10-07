@@ -12,7 +12,7 @@ import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
 import { useDashboardContext } from "../../Contexts";
@@ -74,14 +74,27 @@ export const SettingsDialog = ({
 }: SettingsDialogProps) => {
 	const { user, organizationSettings } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
-	const [settings, setSettings] = useState<OrganizationSettings>({
-		disableComments: settingsData?.disableComments,
-		disableSummary: settingsData?.disableSummary,
-		disableCaptions: settingsData?.disableCaptions,
-		disableChapters: settingsData?.disableChapters,
-		disableReactions: settingsData?.disableReactions,
-		disableTranscript: settingsData?.disableTranscript,
-	});
+	const buildSettings = useCallback(
+		(data?: OrganizationSettings): OrganizationSettings => ({
+			disableComments: data?.disableComments,
+			disableSummary: data?.disableSummary,
+			disableCaptions: data?.disableCaptions,
+			disableChapters: data?.disableChapters,
+			disableReactions: data?.disableReactions,
+			disableTranscript: data?.disableTranscript,
+		}),
+		[],
+	);
+
+	const [settings, setSettings] = useState<OrganizationSettings>(
+		buildSettings(settingsData),
+	);
+
+	useEffect(() => {
+		if (isOpen) {
+			setSettings(buildSettings(settingsData));
+		}
+	}, [buildSettings, isOpen, settingsData]);
 
 	const isUserPro = userIsPro(user);
 
@@ -166,7 +179,7 @@ export const SettingsDialog = ({
 									<div className="flex gap-1.5 items-center flex-wrap">
 										<p className="text-sm text-gray-12">{option.label}</p>
 										{option.pro && (
-											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-gray-12 bg-blue-11">
+											<p className="py-1 px-1.5 text-[10px] leading-none font-medium rounded-full text-white bg-blue-11">
 												Pro
 											</p>
 										)}
