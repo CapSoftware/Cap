@@ -491,7 +491,7 @@ const NavItem = ({
 				>
 					{name}
 				</p>
-				{extraText && (
+				{extraText && !sidebarCollapsed && (
 					<p className="ml-auto text-xs font-medium text-gray-11">
 						{extraText}
 					</p>
