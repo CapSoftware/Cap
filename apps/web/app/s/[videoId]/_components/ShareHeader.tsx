@@ -3,14 +3,13 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -30,10 +29,7 @@ export const ShareHeader = ({
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect & {
-		organizationIconUrl?: string | null;
-		organizationName?: string | null;
-	};
+	data: typeof videos.$inferSelect;
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
@@ -74,11 +70,9 @@ export const ShareHeader = ({
 
 	const handleBlur = async () => {
 		setIsEditing(false);
-		const next = title.trim();
-		if (next === "" || next === data.name) return;
+
 		try {
-			await editTitle(data.id, next);
-			setTitle(next);
+			await editTitle(data.id, title);
 			toast.success("Video title updated");
 			refresh();
 		} catch (error) {
@@ -87,7 +81,6 @@ export const ShareHeader = ({
 			} else {
 				toast.error("Failed to update title - please try again.");
 			}
-			setTitle(data.name);
 		}
 	};
 
@@ -143,7 +136,7 @@ export const ShareHeader = ({
 
 	const renderSharedStatus = () => {
 		const baseClassName =
-			"text-sm text-gray-10 justify-center lg:justify-start transition-colors duration-200 flex items-center";
+			"text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
 		if (isOwner) {
 			const hasSpaceSharing =
@@ -205,29 +198,9 @@ export const ShareHeader = ({
 			/>
 			<div className="mt-8">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
-					<div className="justify-center items-center mb-3 w-full md:flex lg:justify-between md:space-x-6 md:mb-0">
-						<div className="flex flex-col gap-5 md:gap-10 lg:flex-row">
-							<div className="flex flex-col flex-1 justify-center items-center w-full lg:justify-evenly">
-								{data.organizationIconUrl ? (
-									<Image
-										className="rounded-full size-9"
-										src={data.organizationIconUrl}
-										alt="Organization icon"
-										width={36}
-										height={36}
-									/>
-								) : (
-									<Avatar
-										className="rounded-full size-9"
-										name={data.organizationName ?? "Organization"}
-										letterClass="text-sm"
-									/>
-								)}
-								<p className="text-sm font-medium text-gray-12">
-									{data.organizationName}
-								</p>
-							</div>
-							<div className="flex flex-col justify-center text-center lg:text-left lg:justify-start">
+					<div className="items-center md:flex md:justify-between md:space-x-6">
+						<div className="mb-3 md:mb-0">
+							<div className="flex items-center space-x-3 lg:min-w-[400px]">
 								{isEditing ? (
 									<input
 										value={title}
@@ -235,7 +208,7 @@ export const ShareHeader = ({
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
 										autoFocus
-										className="w-full text-xl sm:text-2xl"
+										className="w-full text-xl font-semibold sm:text-2xl"
 									/>
 								) : (
 									<h1
@@ -249,16 +222,16 @@ export const ShareHeader = ({
 										{title}
 									</h1>
 								)}
-								{user && renderSharedStatus()}
-								<p className="mt-1 text-sm text-gray-10">
-									{moment(data.createdAt).fromNow()}
-								</p>
 							</div>
+							{user && renderSharedStatus()}
+							<p className="mt-1 text-sm text-gray-10">
+								{moment(data.createdAt).fromNow()}
+							</p>
 						</div>
 					</div>
 					{user !== null && (
-						<div className="flex justify-center space-x-2 w-full lg:justify-end">
-							<div className="w-fit">
+						<div className="flex space-x-2">
+							<div>
 								<div className="flex gap-2 items-center">
 									{data.password && (
 										<FontAwesomeIcon

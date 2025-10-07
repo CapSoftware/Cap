@@ -6,7 +6,7 @@ use crate::{
         SetupCtx,
     },
 };
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use cidre::*;
 use futures::{FutureExt, channel::mpsc, future::BoxFuture};
 use std::sync::{
@@ -265,7 +265,7 @@ impl Capturer {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         if self.started.fetch_xor(true, atomic::Ordering::Relaxed) {
-            self.capturer.stop().await?;
+            self.capturer.stop().await.context("capturer_stop")?;
         }
 
         Ok(())

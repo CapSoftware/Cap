@@ -63,7 +63,7 @@ pub async fn main() {
             id: Display::primary().id(),
         },
     )
-    .with_system_audio(true)
+    // .with_system_audio(true)
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
@@ -74,16 +74,15 @@ pub async fn main() {
     .await
     .unwrap();
 
-    let _ = tokio::select!(
-        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-            trace!("Sleep done");
-            let _ = handle.stop().await;
-        }
-        res = handle.done_fut() => {
-            debug!("{res:?}");
-        }
-    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
+    handle.pause().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle.resume().await.unwrap();
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    handle.stop().await.unwrap();
     info!("Recording finished");
 
     std::mem::forget(dir);

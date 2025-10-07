@@ -85,20 +85,18 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn pause(&self) -> Result<(), RecordingError> {
-        todo!()
-        // match self {
-        //     Self::Instant { handle, .. } => handle.pause().await,
-        //     Self::Studio { handle, .. } => handle.pause().await,
-        // }
+    pub async fn pause(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Instant { handle, .. } => handle.pause().await,
+            Self::Studio { handle, .. } => handle.pause().await,
+        }
     }
 
-    pub async fn resume(&self) -> Result<(), String> {
-        todo!()
-        // match self {
-        //     Self::Instant { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
-        //     Self::Studio { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
-        // }
+    pub async fn resume(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Instant { handle, .. } => handle.resume().await,
+            Self::Studio { handle, .. } => handle.resume().await,
+        }
     }
 
     pub fn recording_dir(&self) -> &PathBuf {
@@ -140,12 +138,11 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn cancel(self) -> Result<(), RecordingError> {
-        todo!()
-        // match self {
-        //     Self::Instant { handle, .. } => handle.cancel().await,
-        //     Self::Studio { handle, .. } => handle.cancel().await,
-        // }
+    pub async fn cancel(self) -> anyhow::Result<()> {
+        match self {
+            Self::Instant { handle, .. } => handle.cancel().await,
+            Self::Studio { handle, .. } => handle.cancel().await,
+        }
     }
 
     pub fn mode(&self) -> RecordingMode {
@@ -673,7 +670,7 @@ pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> 
 
     let inputs = recording.inputs().clone();
 
-    // let _ = recording.cancel().await;
+    let _ = recording.cancel().await;
 
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
