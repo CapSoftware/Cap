@@ -36,8 +36,6 @@ export class Video extends Schema.Class<Video>("Video")({
 }) {
 	static decodeSync = Schema.decodeSync(Video);
 
-	static toJS = (self: Video) => Schema.encode(Video)(self).pipe(Effect.orDie);
-
 	static getSource(self: Video) {
 		if (self.source.type === "MediaConvert")
 			return new M3U8Source({
