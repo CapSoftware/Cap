@@ -9,7 +9,6 @@ import {
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { revalidatePath } from "next/cache";
 import { Database, type DatabaseError } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
 
@@ -205,9 +204,6 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 						})
 						.where(Dz.eq(Db.folders.id, folderId)),
 				);
-
-				revalidatePath(`/dashboard/caps`);
-				revalidatePath(`/dashboard/folder/${folderId}`);
 			}),
 		};
 	}),
