@@ -108,7 +108,7 @@ impl Message<Stop> for Actor {
 
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
-            meta: InstantRecordingMeta {
+            meta: InstantRecordingMeta::Complete {
                 fps: self.video_info.fps(),
                 sample_rate: None,
             },

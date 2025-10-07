@@ -118,6 +118,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNewRecordingFlow: false,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
+			enableNewUploader: false,
 		},
 	);
 

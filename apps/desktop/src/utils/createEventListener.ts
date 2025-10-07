@@ -31,11 +31,14 @@ export function createTauriEventListener<T>(
 	eventListener: EventListener<T>,
 	callback: (payload: T) => void,
 ): void {
+	let aborted = false;
 	const unlisten = eventListener.listen((event) => {
+		if (aborted) return;
 		callback(event.payload);
 	});
 
 	onCleanup(() => {
+		aborted = true;
 		unlisten.then((cleanup) => cleanup());
 	});
 }

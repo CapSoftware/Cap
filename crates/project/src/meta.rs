@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
-// use tracing::{debug, warn};
 
 use crate::{
     CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
@@ -73,9 +72,47 @@ pub struct RecordingMeta {
     pub sharing: Option<SharingMeta>,
     #[serde(flatten)]
     pub inner: RecordingMetaInner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<UploadMeta>,
 }
 
-impl specta::Flatten for RecordingMetaInner {}
+#[derive(Deserialize, Serialize, Clone, Type, Debug)]
+pub struct S3UploadMeta {
+    pub id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
+pub struct VideoUploadInfo {
+    pub id: String,
+    pub link: String,
+    pub config: S3UploadMeta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "state")]
+pub enum UploadMeta {
+    MultipartUpload {
+        // Cap web identifier
+        video_id: String,
+        // Data for resuming
+        file_path: PathBuf,
+        pre_created_video: VideoUploadInfo,
+        recording_dir: PathBuf,
+    },
+    SinglePartUpload {
+        // Cap web identifier
+        video_id: String,
+        // Path of the Cap file
+        recording_dir: PathBuf,
+        // Path to video and screenshot files for resuming
+        file_path: PathBuf,
+        screenshot_path: PathBuf,
+    },
+    Failed {
+        error: String,
+    },
+    Complete,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
@@ -84,16 +121,29 @@ pub enum RecordingMetaInner {
     Instant(InstantRecordingMeta),
 }
 
+impl specta::Flatten for RecordingMetaInner {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct InstantRecordingMeta {
-    pub fps: u32,
-    pub sample_rate: Option<u32>,
+#[serde(untagged, rename_all = "camelCase")]
+pub enum InstantRecordingMeta {
+    InProgress {
+        // This field means nothing and is just because this enum is untagged.
+        recording: bool,
+    },
+    Failed {
+        error: String,
+    },
+    Complete {
+        fps: u32,
+        sample_rate: Option<u32>,
+    },
 }
 
 impl RecordingMeta {
     pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
         relative.to_path(&self.project_path)
     }
+
     pub fn load_for_project(project_path: &Path) -> Result<Self, Box<dyn Error>> {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
@@ -165,12 +215,20 @@ pub enum StudioRecordingMeta {
 }
 
 impl StudioRecordingMeta {
+    pub fn status(&self) -> StudioRecordingStatus {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Complete,
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .status
+                .clone()
+                .unwrap_or(StudioRecordingStatus::Complete),
+        }
+    }
+
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                segment.camera.as_ref().map(|c| c.path.clone())
-            }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+            Self::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
+            Self::MultipleSegments { inner, .. } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -186,8 +244,8 @@ impl StudioRecordingMeta {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -195,8 +253,8 @@ impl StudioRecordingMeta {
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -222,6 +280,16 @@ pub struct MultipleSegments {
     pub segments: Vec<MultipleSegment>,
     #[serde(default, skip_serializing_if = "Cursors::is_empty")]
     pub cursors: Cursors,
+    #[serde(default)]
+    pub status: Option<StudioRecordingStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "status")]
+pub enum StudioRecordingStatus {
+    InProgress,
+    Failed { error: String },
+    Complete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
