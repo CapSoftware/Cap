@@ -58,7 +58,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 								{
 									...data,
 									id,
-									orgId: Option.getOrNull(data.orgId ?? Option.none()),
+									orgId: data.orgId,
 									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
 									metadata: Option.getOrNull(data.metadata ?? Option.none()),
 									transcriptionStatus: Option.getOrNull(
@@ -72,12 +72,12 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							]),
 						];
 
-						if (data.importSource && Option.isSome(data.orgId))
+						if (data.importSource)
 							promises.push(
 								db.insert(Db.importedVideos).values([
 									{
 										id,
-										orgId: data.orgId.value,
+										orgId: data.orgId,
 										source: data.importSource.source,
 										sourceId: data.importSource.id,
 									},

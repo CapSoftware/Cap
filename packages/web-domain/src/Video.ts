@@ -14,7 +14,7 @@ export type VideoId = typeof VideoId.Type;
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
 	ownerId: Schema.String,
-	orgId: Schema.OptionFromNullOr(Schema.String),
+	orgId: Schema.String,
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
