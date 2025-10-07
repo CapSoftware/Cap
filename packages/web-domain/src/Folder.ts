@@ -22,6 +22,12 @@ export class RecursiveDefinitionError extends Schema.TaggedError<RecursiveDefini
 	{},
 ) {}
 
+// Attempted to assign a parent to a folder which doesn't exist.
+export class ParentNotFoundError extends Schema.TaggedError<ParentNotFoundError>()(
+	"ParentNotFoundError",
+	{},
+) {}
+
 export class Folder extends Schema.Class<Folder>("Folder")({
 	id: FolderId,
 	name: Schema.String,
@@ -61,6 +67,11 @@ export class FolderRpcs extends RpcGroup.make(
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("FolderUpdate", {
 		payload: FolderUpdate,
-		error: Schema.Union(NotFoundError, RecursiveDefinitionError, InternalError),
+		error: Schema.Union(
+			NotFoundError,
+			RecursiveDefinitionError,
+			ParentNotFoundError,
+			InternalError,
+		),
 	}).middleware(RpcAuthMiddleware),
 ) {}

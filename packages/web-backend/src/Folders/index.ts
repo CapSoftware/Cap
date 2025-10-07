@@ -156,14 +156,13 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 							),
 					);
 
-					if (!parentFolder) return yield* new Folder.NotFoundError();
+					if (!parentFolder) return yield* new Folder.ParentNotFoundError();
 
 					// Check for circular references in the folder hierarchy
 					let currentParentId = parentFolder.parentId;
 					while (currentParentId) {
-						if (currentParentId === folderId) {
+						if (currentParentId === folderId)
 							return yield* new Folder.RecursiveDefinitionError();
-						}
 
 						const [nextParent] = yield* db.execute((db) =>
 							db
