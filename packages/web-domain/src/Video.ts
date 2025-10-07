@@ -4,6 +4,8 @@ import { Context, Effect, Option, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
+import { OrganisationId } from "./Organisation.ts";
+import { UserId } from "./User.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
 
@@ -13,8 +15,8 @@ export type VideoId = typeof VideoId.Type;
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
-	ownerId: Schema.String,
-	orgId: Schema.OptionFromNullOr(Schema.String),
+	ownerId: UserId,
+	orgId: Schema.OptionFromNullOr(OrganisationId),
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({

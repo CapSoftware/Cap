@@ -4,6 +4,9 @@ import { Effect, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { PolicyDeniedError } from "./Policy.ts";
+import { OrganisationId } from "./Organisation.ts";
+import { UserId } from "./User.ts";
+import { SpaceId } from "./Space.ts";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;
@@ -35,8 +38,8 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	id: FolderId,
 	name: Schema.String,
 	color: FolderColor,
-	organizationId: Schema.String,
-	createdById: Schema.String,
+	organizationId: OrganisationId,
+	createdById: UserId,
 	spaceId: Schema.OptionFromNullOr(Schema.String),
 	parentId: Schema.OptionFromNullOr(FolderId),
 }) {}
@@ -57,7 +60,7 @@ export class FolderRpcs extends RpcGroup.make(
 		payload: Schema.Struct({
 			name: Schema.String,
 			color: FolderColor,
-			spaceId: Schema.OptionFromUndefinedOr(Schema.String),
+			spaceId: Schema.OptionFromUndefinedOr(SpaceId),
 			parentId: Schema.OptionFromUndefinedOr(FolderId),
 		}),
 		success: Folder,

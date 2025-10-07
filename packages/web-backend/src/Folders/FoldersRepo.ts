@@ -1,12 +1,18 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Folder } from "@cap/web-domain";
+import { Folder, type Organisation, type User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
 
-export type CreateFolderInput = Omit<Schema.Type<typeof Folder.Folder>, "id">;
+export type CreateFolderInput = Omit<
+	Schema.Type<typeof Folder.Folder>,
+	"id" | "createdAt" | "updatedAt"
+> & {
+	organizationId: Organisation.OrganisationId;
+	createdById: User.UserId;
+};
 
 export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 	effect: Effect.gen(function* () {
@@ -21,9 +27,7 @@ export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 					db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
 				);
 
-				return Option.fromNullable(folder).pipe(
-					Option.map((f) => Folder.Folder.decodeSync(f)),
-				);
+				return Option.fromNullable(folder);
 			});
 
 		const delete_ = (id: Folder.FolderId) =>

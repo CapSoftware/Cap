@@ -367,7 +367,7 @@ const FolderCard = ({
 								onClick={(e) => {
 									e.preventDefault();
 									e.stopPropagation();
-									setIsRenaming(false);
+									setIsRenaming(true);
 								}}
 							>
 								<p className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">

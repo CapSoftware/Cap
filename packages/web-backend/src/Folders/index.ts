@@ -1,6 +1,12 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, Folder, Policy } from "@cap/web-domain";
+import {
+	CurrentUser,
+	Folder,
+	Organisation,
+	Policy,
+	User,
+} from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -106,7 +112,13 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					}),
 				);
 
-				return new Folder.Folder(folder);
+				return new Folder.Folder({
+					...folder,
+					organizationId: Organisation.OrganisationId.make(
+						user.activeOrganizationId,
+					),
+					createdById: User.UserId.make(user.id),
+				});
 			}),
 
 			/**

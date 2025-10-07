@@ -17,6 +17,7 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 							() => new InternalError({ type: "database" }),
 						),
 					),
+
 			FolderCreate: (data) =>
 				folders
 					.create(data)
@@ -26,6 +27,7 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 							() => new InternalError({ type: "database" }),
 						),
 					),
+
 			FolderUpdate: (data) =>
 				folders
 					.update(data.id, data)
