@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useDashboardContext } from "../../../Contexts";
+import { Organisation } from "@cap/web-domain";
 
 export const AccessEmailDomain = () => {
 	const { activeOrganization } = useDashboardContext();
@@ -18,7 +19,8 @@ export const AccessEmailDomain = () => {
 			setSaveLoading(true);
 			await updateOrganizationDetails({
 				allowedEmailDomain: emailDomain,
-				organizationId: activeOrganization?.organization.id as string,
+				organizationId: activeOrganization?.organization
+					.id as Organisation.OrganisationId,
 			});
 			toast.success("Settings updated successfully");
 			router.refresh();

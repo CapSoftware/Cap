@@ -6,8 +6,12 @@ import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";
+import { Organisation } from "@cap/web-domain";
 
-export async function updateDomain(domain: string, organizationId: string) {
+export async function updateDomain(
+	domain: string,
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user) {

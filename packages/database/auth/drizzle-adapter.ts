@@ -6,17 +6,18 @@ import type Stripe from "stripe";
 
 import { nanoId } from "../helpers.ts";
 import { accounts, sessions, users, verificationTokens } from "../schema.ts";
+import { Organisation, User } from "@cap/web-domain";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 	return {
 		async createUser(userData: any) {
 			await db.insert(users).values({
-				id: nanoId(),
+				id: User.UserId.make(nanoId()),
 				email: userData.email,
 				emailVerified: userData.emailVerified,
 				name: userData.name,
 				image: userData.image,
-				activeOrganizationId: "",
+				activeOrganizationId: Organisation.OrganisationId.make(""),
 			});
 			const rows = await db
 				.select()
@@ -88,7 +89,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.id, id))
+				.where(eq(users.id, User.UserId.make(id)))
 				.limit(1);
 			const row = rows[0];
 			return row ?? null;
@@ -122,22 +123,25 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 		},
 		async updateUser({ id, ...userData }) {
 			if (!id) throw new Error("User not found");
-			await db.update(users).set(userData).where(eq(users.id, id));
+			await db
+				.update(users)
+				.set(userData)
+				.where(eq(users.id, User.UserId.make(id)));
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.id, id))
+				.where(eq(users.id, User.UserId.make(id)))
 				.limit(1);
 			const row = rows[0];
 			if (!row) throw new Error("User not found");
 			return row;
 		},
 		async deleteUser(userId) {
-			await db.delete(users).where(eq(users.id, userId));
+			await db.delete(users).where(eq(users.id, User.UserId.make(userId)));
 		},
 		async linkAccount(account: any) {
 			await db.insert(accounts).values({
-				id: nanoId(),
+				id: User.UserId.make(nanoId()),
 				userId: account.userId,
 				type: account.type,
 				provider: account.provider,
@@ -166,7 +170,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				id: nanoId(),
 				expires: data.expires,
 				sessionToken: data.sessionToken,
-				userId: data.userId,
+				userId: User.UserId.make(data.userId),
 			});
 			const rows = await db
 				.select()
@@ -199,16 +203,16 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				user,
 				session: {
 					id: session.id,
-					userId: session.userId,
+					userId: User.UserId.make(session.userId),
 					sessionToken: session.sessionToken,
 					expires: session.expires,
 				},
 			};
 		},
-		async updateSession(session) {
+		async updateSession(session: any) {
 			await db
 				.update(sessions)
-				.set(session)
+				.set(session as any)
 				.where(eq(sessions.sessionToken, session.sessionToken));
 			const rows = await db
 				.select()

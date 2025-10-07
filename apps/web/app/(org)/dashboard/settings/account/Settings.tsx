@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../Contexts";
 import { patchAccountSettings } from "./server";
+import { Organisation } from "@cap/web-domain";
 
 export const Settings = ({
 	user,
@@ -25,9 +26,9 @@ export const Settings = ({
 	const { organizationData } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
-	const [defaultOrgId, setDefaultOrgId] = useState<string | undefined>(
-		user?.defaultOrgId || undefined,
-	);
+	const [defaultOrgId, setDefaultOrgId] = useState<
+		Organisation.OrganisationId | undefined
+	>(user?.defaultOrgId || undefined);
 
 	// Track if form has unsaved changes
 	const hasChanges =
@@ -131,7 +132,9 @@ export const Settings = ({
 							organizationData?.[0]?.organization.id ??
 							""
 						}
-						onValueChange={(value) => setDefaultOrgId(value)}
+						onValueChange={(value) =>
+							setDefaultOrgId(Organisation.OrganisationId.make(value))
+						}
 						options={(organizationData || []).map((org) => ({
 							value: org.organization.id,
 							label: org.organization.name,

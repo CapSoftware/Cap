@@ -24,6 +24,7 @@ import { LayersIcon } from "../AnimatedIcons";
 import type { LayersIconHandle } from "../AnimatedIcons/Layers";
 import { ConfirmationDialog } from "../ConfirmationDialog";
 import SpaceDialog from "./SpaceDialog";
+import { Space } from "@cap/web-domain";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	const { spacesData, sidebarCollapsed, user } = useDashboardContext();
@@ -91,7 +92,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		setActiveDropTarget(null);
 	};
 
-	const handleDrop = async (e: React.DragEvent, spaceId: string) => {
+	const handleDrop = async (
+		e: React.DragEvent,
+		spaceId: Space.SpaceIdOrOrganisationId,
+	) => {
 		e.preventDefault();
 		setActiveDropTarget(null);
 
@@ -120,7 +124,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		}
 	};
 
-	const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
+	const activeSpaceParams = (spaceId: Space.SpaceIdOrOrganisationId) =>
+		params.spaceId === spaceId;
 
 	return (
 		<div className="flex flex-col mt-4">

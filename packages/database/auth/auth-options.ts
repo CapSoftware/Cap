@@ -16,6 +16,7 @@ import { db } from "../index.ts";
 import { organizationMembers, organizations, users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { Organisation, User } from "@cap/web-domain";
 
 export const maxDuration = 120;
 
@@ -125,7 +126,7 @@ export const authOptions = (): NextAuthOptions => {
 				const [dbUser] = await db()
 					.select()
 					.from(users)
-					.where(eq(users.id, user.id))
+					.where(eq(users.id, User.UserId.make(user.id)))
 					.limit(1);
 
 				const needsOrganizationSetup =
@@ -168,25 +169,29 @@ export const authOptions = (): NextAuthOptions => {
 						);
 					}
 
-					const organizationId = nanoId();
+					const organizationId = Organisation.OrganisationId.make(nanoId());
 
-					await db().insert(organizations).values({
-						id: organizationId,
-						name: "My Organization",
-						ownerId: user.id,
-					});
+					await db()
+						.insert(organizations)
+						.values({
+							id: organizationId,
+							name: "My Organization",
+							ownerId: User.UserId.make(user.id),
+						});
 
-					await db().insert(organizationMembers).values({
-						id: nanoId(),
-						userId: user.id,
-						organizationId: organizationId,
-						role: "owner",
-					});
+					await db()
+						.insert(organizationMembers)
+						.values({
+							id: nanoId(),
+							userId: User.UserId.make(user.id),
+							organizationId: organizationId,
+							role: "owner",
+						});
 
 					await db()
 						.update(users)
 						.set({ activeOrganizationId: organizationId })
-						.where(eq(users.id, user.id));
+						.where(eq(users.id, User.UserId.make(user.id)));
 				}
 			},
 		},

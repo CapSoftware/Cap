@@ -3,8 +3,11 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { Organisation } from "@cap/web-domain";
 
-export async function getOrganizationSSOData(organizationId: string) {
+export async function getOrganizationSSOData(
+	organizationId: Organisation.OrganisationId,
+) {
 	if (!organizationId) {
 		throw new Error("Organization ID is required");
 	}

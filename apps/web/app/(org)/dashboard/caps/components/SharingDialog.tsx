@@ -9,7 +9,7 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import { Space, Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -69,7 +69,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			public: isPublic,
 		}: {
 			capId: Video.VideoId;
-			spaceIds: string[];
+			spaceIds: Space.SpaceIdOrOrganisationId[];
 			public: boolean;
 		}) => {
 			const result = await shareCap({ capId, spaceIds, public: isPublic });
@@ -358,7 +358,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								onClick={() =>
 									updateSharing.mutate({
 										capId,
-										spaceIds: Array.from(selectedSpaces),
+										spaceIds: Array.from(selectedSpaces).map((v) =>
+											Space.SpaceId.make(v),
+										),
 										public: publicToggle,
 									})
 								}

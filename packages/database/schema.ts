@@ -1,4 +1,12 @@
-import type { Folder, S3Bucket, Video } from "@cap/web-domain";
+import type {
+	Folder,
+	Organisation,
+	S3Bucket,
+	Comment,
+	Space,
+	User,
+	Video,
+} from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -50,7 +58,7 @@ const encryptedTextNullable = customType<{ data: string; notNull: false }>({
 export const users = mysqlTable(
 	"users",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id").notNull().primaryKey().unique().$type<User.UserId>(),
 		name: varchar("name", { length: 255 }),
 		lastName: varchar("lastName", { length: 255 }),
 		email: varchar("email", { length: 255 }).unique().notNull(),
@@ -85,13 +93,16 @@ export const users = mysqlTable(
 				};
 			} | null>()
 			.default(null),
-		activeOrganizationId: nanoId("activeOrganizationId"),
+		activeOrganizationId: nanoId(
+			"activeOrganizationId",
+		).$type<Organisation.OrganisationId>(),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
 		customBucket: nanoIdNullable("customBucket"),
 		inviteQuota: int("inviteQuota").notNull().default(1),
-		defaultOrgId: nanoIdNullable("defaultOrgId"),
+		defaultOrgId:
+			nanoIdNullable("defaultOrgId").$type<Organisation.OrganisationId>(),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -130,7 +141,7 @@ export const sessions = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		sessionToken: varchar("sessionToken", { length: 255 }).unique().notNull(),
-		userId: nanoId("userId").notNull(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
 		expires: datetime("expires").notNull(),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
@@ -152,9 +163,13 @@ export const verificationTokens = mysqlTable("verification_tokens", {
 export const organizations = mysqlTable(
 	"organizations",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id")
+			.notNull()
+			.primaryKey()
+			.unique()
+			.$type<Organisation.OrganisationId>(),
 		name: varchar("name", { length: 255 }).notNull(),
-		ownerId: nanoId("ownerId").notNull(),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
 		metadata: json("metadata"),
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
 		customDomain: varchar("customDomain", { length: 255 }),
@@ -176,8 +191,10 @@ export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		userId: nanoId("userId").notNull(),
-		organizationId: nanoId("organizationId").notNull(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.$type<OrganisationMemberRole>(),
@@ -198,9 +215,11 @@ export const organizationInvites = mysqlTable(
 	"organization_invites",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		organizationId: nanoId("organizationId").notNull(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
 		invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
-		invitedByUserId: nanoId("invitedByUserId").notNull(),
+		invitedByUserId: nanoId("invitedByUserId").notNull().$type<User.UserId>(),
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.$type<OrganisationMemberRole>(),
@@ -230,10 +249,12 @@ export const folders = mysqlTable(
 		})
 			.notNull()
 			.default("normal"),
-		organizationId: nanoId("organizationId").notNull(),
-		createdById: nanoId("createdById").notNull(),
-		parentId: nanoIdNullable("parentId").$type<Folder.FolderId | null>(),
-		spaceId: nanoIdNullable("spaceId"),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		createdById: nanoId("createdById").notNull().$type<User.UserId>(),
+		parentId: nanoIdNullable("parentId").$type<Folder.FolderId>(),
+		spaceId: nanoIdNullable("spaceId").$type<Space.SpaceIdOrOrganisationId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -249,8 +270,8 @@ export const videos = mysqlTable(
 	"videos",
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
-		ownerId: nanoId("ownerId").notNull(),
-		orgId: nanoIdRequired("orgId"),
+		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+		orgId: nanoIdRequired("orgId").$type<Organisation.OrganisationId>(),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
@@ -299,8 +320,10 @@ export const sharedVideos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
-		organizationId: nanoId("organizationId").notNull(),
-		sharedByUserId: nanoId("sharedByUserId").notNull(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		sharedByUserId: nanoId("sharedByUserId").notNull().$type<User.UserId>(),
 		sharedAt: timestamp("sharedAt").notNull().defaultNow(),
 	},
 	(table) => ({
@@ -319,15 +342,16 @@ export const sharedVideos = mysqlTable(
 export const comments = mysqlTable(
 	"comments",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id").notNull().primaryKey().unique().$type<Comment.CommentId>(),
 		type: varchar("type", { length: 6, enum: ["emoji", "text"] }).notNull(),
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
-		authorId: nanoId("authorId").notNull(),
+		authorId: nanoId("authorId").notNull().$type<User.UserId>(),
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
-		parentCommentId: nanoId("parentCommentId"),
+		parentCommentId:
+			nanoIdNullable("parentCommentId").$type<Comment.CommentId>(),
 	},
 	(table) => ({
 		videoIdIndex: index("video_id_idx").on(table.videoId),
@@ -342,8 +366,8 @@ export const notifications = mysqlTable(
 	"notifications",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		orgId: nanoId("orgId").notNull(),
-		recipientId: nanoId("recipientId").notNull(),
+		orgId: nanoId("orgId").notNull().$type<Organisation.OrganisationId>(),
+		recipientId: nanoId("recipientId").notNull().$type<User.UserId>(),
 		type: varchar("type", { length: 10 })
 			.notNull()
 			.$type<"view" | "comment" | "reply" | "reaction" /*| "mention"*/>(),
@@ -379,7 +403,7 @@ export const notifications = mysqlTable(
 
 export const s3Buckets = mysqlTable("s3_buckets", {
 	id: nanoId("id").notNull().primaryKey().unique().$type<S3Bucket.S3BucketId>(),
-	ownerId: nanoId("ownerId").notNull(),
+	ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
 	// Use encryptedText for sensitive fields
 	region: encryptedText("region").notNull(),
 	endpoint: encryptedTextNullable("endpoint"),
@@ -402,7 +426,7 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 
 export const authApiKeys = mysqlTable("auth_api_keys", {
 	id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),
-	userId: nanoId("userId").notNull(),
+	userId: nanoId("userId").notNull().$type<User.UserId>(),
 	createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -534,11 +558,17 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
 export const spaces = mysqlTable(
 	"spaces",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id")
+			.notNull()
+			.primaryKey()
+			.unique()
+			.$type<Space.SpaceIdOrOrganisationId>(),
 		primary: boolean("primary").notNull().default(false),
 		name: varchar("name", { length: 255 }).notNull(),
-		organizationId: nanoId("organizationId").notNull(),
-		createdById: nanoId("createdById").notNull(),
+		organizationId: nanoId("organizationId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
+		createdById: nanoId("createdById").notNull().$type<User.UserId>(),
 		iconUrl: varchar("iconUrl", { length: 255 }),
 		description: varchar("description", { length: 1000 }),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -557,8 +587,8 @@ export const spaceMembers = mysqlTable(
 	"space_members",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		spaceId: nanoId("spaceId").notNull(),
-		userId: nanoId("userId").notNull(),
+		spaceId: nanoId("spaceId").notNull().$type<Space.SpaceIdOrOrganisationId>(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.default("member")
@@ -580,10 +610,10 @@ export const spaceVideos = mysqlTable(
 	"space_videos",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		spaceId: nanoId("spaceId").notNull(),
-		folderId: nanoIdNullable("folderId"),
-		videoId: nanoId("videoId").notNull(),
-		addedById: nanoId("addedById").notNull(),
+		spaceId: nanoId("spaceId").notNull().$type<Space.SpaceIdOrOrganisationId>(),
+		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		addedById: nanoId("addedById").notNull().$type<User.UserId>(),
 		addedAt: timestamp("addedAt").notNull().defaultNow(),
 	},
 	(table) => ({
@@ -656,7 +686,7 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
 }));
 
 export const videoUploads = mysqlTable("video_uploads", {
-	videoId: nanoId("video_id").primaryKey().notNull(),
+	videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
 	uploaded: int("uploaded").notNull().default(0),
 	total: int("total").notNull().default(0),
 	startedAt: timestamp("started_at").notNull().defaultNow(),
@@ -667,7 +697,9 @@ export const importedVideos = mysqlTable(
 	"imported_videos",
 	{
 		id: nanoId("id").notNull(),
-		orgId: nanoIdNullable("orgId").notNull(),
+		orgId: nanoIdNullable("orgId")
+			.notNull()
+			.$type<Organisation.OrganisationId>(),
 		source: varchar("source", { length: 255, enum: ["loom"] }).notNull(),
 		sourceId: varchar("source_id", { length: 255 }).notNull(),
 	},

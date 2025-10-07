@@ -4,12 +4,12 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { spaces, spaceVideos, videos } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function addVideosToSpace(
-	spaceId: string,
+	spaceId: Space.SpaceIdOrOrganisationId,
 	videoIds: Video.VideoId[],
 ) {
 	try {

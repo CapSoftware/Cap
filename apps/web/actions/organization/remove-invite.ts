@@ -5,10 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationInvites, organizations } from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { Organisation } from "@cap/web-domain";
 
 export async function removeOrganizationInvite(
 	inviteId: string,
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 

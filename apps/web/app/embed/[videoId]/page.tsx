@@ -11,7 +11,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import { Organisation, Policy, type Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -202,7 +202,7 @@ async function EmbedContent({
 	autoplay,
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
-		sharedOrganization: { organizationId: string } | null;
+		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
 	};
 	autoplay: boolean;

@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
 import { calculateSeats } from "@/utils/organization";
 import { useDashboardContext } from "../../../Contexts";
+import { Organisation } from "@cap/web-domain";
 
 interface InviteDialogProps {
 	isOpen: boolean;
@@ -95,7 +96,7 @@ export const InviteDialog = ({
 
 			return await sendOrganizationInvites(
 				inviteEmails,
-				activeOrganization?.organization.id as string,
+				activeOrganization?.organization.id as Organisation.OrganisationId,
 			);
 		},
 		onSuccess: () => {

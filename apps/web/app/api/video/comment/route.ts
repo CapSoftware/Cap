@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
+import { Comment, User, Video } from "@cap/web-domain";
 import { serverEnv } from "@cap/env";
 import { headers } from "next/headers";
 import type { NextRequest } from "next/server";
@@ -12,9 +13,9 @@ async function handlePost(request: NextRequest) {
 	const { type, content, videoId, timestamp, parentCommentId } =
 		await request.json();
 
-	const userId = user?.id || "anonymous";
+	const userId = user?.id || User.UserId.make("anonymous");
 	const parentCommentIdSanitized = parentCommentId
-		? parentCommentId.replace("temp-", "")
+		? Comment.CommentId.make(parentCommentId.replace("temp-", ""))
 		: null;
 
 	if (!type || !content || !videoId) {
@@ -29,7 +30,7 @@ async function handlePost(request: NextRequest) {
 		);
 	}
 
-	const id = nanoId();
+	const id = Comment.CommentId.make(nanoId());
 
 	try {
 		const newComment = {
@@ -37,7 +38,7 @@ async function handlePost(request: NextRequest) {
 			authorId: userId,
 			type: type,
 			content: content,
-			videoId: videoId,
+			videoId: Video.VideoId.make(videoId),
 			timestamp: timestamp || null,
 			parentCommentId: parentCommentIdSanitized || null,
 			createdAt: new Date(),

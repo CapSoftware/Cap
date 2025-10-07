@@ -31,6 +31,7 @@ import {
 	StepStatus,
 } from "./types";
 import VerifyStep from "./VerifyStep";
+import { Organisation } from "@cap/web-domain";
 
 const STEP_CONFIGS: StepConfig[] = [
 	{
@@ -151,9 +152,12 @@ const CustomDomainDialog = ({
 			orgId: string;
 		}) => {
 			if (activeOrganization?.organization.customDomain) {
-				await removeOrganizationDomain(orgId);
+				await removeOrganizationDomain(Organisation.OrganisationId.make(orgId));
 			}
-			return await updateDomain(domain, orgId);
+			return await updateDomain(
+				domain,
+				Organisation.OrganisationId.make(orgId),
+			);
 		},
 		onSuccess: (data) => {
 			handleNext();
@@ -181,7 +185,12 @@ const CustomDomainDialog = ({
 			orgId: string;
 			showToasts: boolean;
 		}) => {
-			return { data: await checkOrganizationDomain(orgId), showToasts };
+			return {
+				data: await checkOrganizationDomain(
+					Organisation.OrganisationId.make(orgId),
+				),
+				showToasts,
+			};
 		},
 		onSuccess: ({ data, showToasts }) => {
 			setIsVerified(data.verified);

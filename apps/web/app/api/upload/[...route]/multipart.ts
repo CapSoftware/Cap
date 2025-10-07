@@ -319,7 +319,7 @@ app.post(
 						if (result.rowsAffected > 0)
 							await db()
 								.delete(videoUploads)
-								.where(eq(videoUploads.videoId, videoId));
+								.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
 					}
 
 					if (videoIdFromFileKey) {

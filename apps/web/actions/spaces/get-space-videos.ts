@@ -3,9 +3,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaceVideos } from "@cap/database/schema";
+import { Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
-export async function getSpaceVideoIds(spaceId: string) {
+export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
 		const user = await getCurrentUser();
 

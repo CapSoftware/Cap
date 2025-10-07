@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
+import { Space, User } from "@cap/web-domain";
 import { S3Buckets } from "@cap/web-backend";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -16,9 +17,9 @@ export async function updateSpace(formData: FormData) {
 	const user = await getCurrentUser();
 	if (!user) return { success: false, error: "Unauthorized" };
 
-	const id = formData.get("id") as string;
+	const id = Space.SpaceId.make(formData.get("id") as string);
 	const name = formData.get("name") as string;
-	const members = formData.getAll("members[]") as string[];
+	const members = formData.getAll("members[]") as User.UserId[];
 	const iconFile = formData.get("icon") as File | null;
 
 	const [membership] = await db()

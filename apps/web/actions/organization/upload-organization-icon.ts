@@ -12,10 +12,11 @@ import { JSDOM } from "jsdom";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
+import { Organisation } from "@cap/web-domain";
 
 export async function uploadOrganizationIcon(
 	formData: FormData,
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 

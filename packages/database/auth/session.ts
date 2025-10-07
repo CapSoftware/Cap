@@ -4,6 +4,7 @@ import { cache } from "react";
 import { db } from "../";
 import { users } from "../schema";
 import { authOptions } from "./auth-options";
+import { User } from "@cap/web-domain";
 
 export const getSession = async () => {
 	const session = await getServerSession(authOptions());
@@ -20,7 +21,7 @@ export const getCurrentUser = cache(
 		const [currentUser] = await db()
 			.select()
 			.from(users)
-			.where(eq(users.id, session.user.id));
+			.where(eq(users.id, User.UserId.make(session.user.id)));
 
 		return currentUser ?? null;
 	},

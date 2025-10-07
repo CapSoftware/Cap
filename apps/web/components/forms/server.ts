@@ -14,6 +14,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { Organisation, User } from "@cap/web-domain";
 
 export async function createOrganization(formData: FormData) {
 	const user = await getCurrentUser();
@@ -34,12 +35,12 @@ export async function createOrganization(formData: FormData) {
 		throw new Error("Organization with this name already exists");
 	}
 
-	const organizationId = nanoId();
+	const organizationId = Organisation.OrganisationId.make(nanoId());
 
 	// Create the organization first
 	const orgValues: {
-		id: string;
-		ownerId: string;
+		id: Organisation.OrganisationId;
+		ownerId: User.UserId;
 		name: string;
 		iconUrl?: string;
 	} = {

@@ -17,6 +17,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
 import { useDashboardContext } from "../../../Contexts";
 import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
+import { Organisation } from "@cap/web-domain";
 
 export function CustomDomain() {
 	const router = useRouter();
@@ -32,7 +33,9 @@ export function CustomDomain() {
 
 	const removeDomainMutation = useMutation({
 		mutationFn: (organizationId: string) =>
-			removeOrganizationDomain(organizationId),
+			removeOrganizationDomain(
+				Organisation.OrganisationId.make(organizationId),
+			),
 		onSuccess: () => {
 			setIsVerified(false);
 			toast.success("Custom domain removed");

@@ -5,15 +5,16 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { comments, notifications } from "@cap/database/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import type { Comment, Video } from "@cap/web-domain";
 
 export async function deleteComment({
 	commentId,
 	parentId,
 	videoId,
 }: {
-	commentId: string;
-	parentId?: string;
-	videoId: string;
+	commentId: Comment.CommentId;
+	parentId?: Comment.CommentId;
+	videoId: Video.VideoId;
 }) {
 	const user = await getCurrentUser();
 

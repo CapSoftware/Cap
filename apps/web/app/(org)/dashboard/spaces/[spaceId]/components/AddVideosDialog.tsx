@@ -6,11 +6,12 @@ import { getSpaceVideoIds } from "@/actions/spaces/get-space-videos";
 import { removeVideosFromSpace } from "@/actions/spaces/remove-videos";
 import { getUserVideos } from "@/actions/videos/get-user-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
+import { Space } from "@cap/web-domain";
 
 interface AddVideosDialogProps {
 	open: boolean;
 	onClose: () => void;
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 	spaceName: string;
 	onVideosAdded?: () => void;
 }

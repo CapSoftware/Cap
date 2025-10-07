@@ -5,8 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { checkDomainStatus } from "./domain-utils";
+import { Organisation } from "@cap/web-domain";
 
-export async function checkOrganizationDomain(organizationId: string) {
+export async function checkOrganizationDomain(
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user || !organizationId) {

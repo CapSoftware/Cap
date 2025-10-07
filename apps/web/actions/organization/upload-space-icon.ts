@@ -10,8 +10,12 @@ import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
+import { Space } from "@cap/web-domain";
 
-export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
+export async function uploadSpaceIcon(
+	formData: FormData,
+	spaceId: Space.SpaceId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user) {

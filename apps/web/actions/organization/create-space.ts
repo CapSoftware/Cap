@@ -11,6 +11,7 @@ import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { runPromise } from "@/lib/server";
+import { Space } from "@cap/web-domain";
 
 interface CreateSpaceResponse {
 	success: boolean;
@@ -62,7 +63,7 @@ export async function createSpace(
 		}
 
 		// Generate the space ID early so we can use it in the file path
-		const spaceId = nanoId();
+		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
 		let iconUrl = null;

@@ -12,9 +12,10 @@ import {
 import type { Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { Organisation } from "@cap/web-domain";
 
 export async function removeVideosFromOrganization(
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 	videoIds: Video.VideoId[],
 ) {
 	try {

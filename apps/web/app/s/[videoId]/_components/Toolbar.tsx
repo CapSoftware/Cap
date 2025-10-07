@@ -1,5 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
+import { Comment, User } from "@cap/web-domain";
 import { Button } from "@cap/ui";
 import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
@@ -31,13 +32,13 @@ export const Toolbar = ({
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}`,
-			authorId: user?.id || "anonymous",
+			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			authorId: User.UserId.make(user?.id || "anonymous"),
 			authorName: user?.name || "Anonymous",
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: "",
+			parentCommentId: Comment.CommentId.make(""),
 			type: "emoji",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -50,7 +51,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: emoji,
 				videoId: data.id,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "emoji",
 				timestamp: currentTime,
 			});
@@ -72,13 +73,13 @@ export const Toolbar = ({
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}`,
-			authorId: user?.id || "anonymous",
-			authorName: user?.name || "Anonymous",
+			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			authorId: User.UserId.make(user?.id || "anonymous"),
+			authorName: Comment.CommentId.make(user?.name || "Anonymous"),
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: "",
+			parentCommentId: Comment.CommentId.make(""),
 			type: "text",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -91,7 +92,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: comment,
 				videoId: data.id,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "text",
 				timestamp: currentTime,
 			});

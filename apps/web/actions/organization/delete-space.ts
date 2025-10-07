@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
+import { Space } from "@cap/web-domain";
 
 interface DeleteSpaceResponse {
 	success: boolean;
@@ -20,7 +21,7 @@ interface DeleteSpaceResponse {
 }
 
 export async function deleteSpace(
-	spaceId: string,
+	spaceId: Space.SpaceIdOrOrganisationId,
 ): Promise<DeleteSpaceResponse> {
 	try {
 		const user = await getCurrentUser();
