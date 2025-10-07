@@ -105,6 +105,8 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
 	orgSettings?: OrganizationSettings | null;
+	organizationIconUrl?: string | null;
+	organizationName?: string | null;
 };
 
 const ALLOWED_REFERRERS = [
@@ -359,6 +361,7 @@ async function AuthorizedContent({
 		ownerIsPro?: boolean;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
+		organizationIconUrl?: string | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -477,6 +480,8 @@ async function AuthorizedContent({
 				sharedOrganization: {
 					organizationId: sharedVideos.organizationId,
 				},
+				organizationIconUrl: organizations.iconUrl,
+				organizationName: organizations.name,
 				orgSettings: organizations.settings,
 				videoSettings: videos.settings,
 			})
@@ -678,6 +683,8 @@ async function AuthorizedContent({
 		folderId: null,
 		orgSettings: video.orgSettings || null,
 		settings: video.videoSettings || null,
+		organizationIconUrl: video.organizationIconUrl ?? undefined,
+		organizationName: video.organizationName ?? undefined,
 	};
 
 	return (

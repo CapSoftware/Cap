@@ -492,9 +492,7 @@ const NavItem = ({
 					{name}
 				</p>
 				{extraText && !sidebarCollapsed && (
-					<p className="ml-auto text-xs font-medium text-gray-11">
-						{extraText}
-					</p>
+					<p className="ml-auto text-xs text-gray-11">{extraText}</p>
 				)}
 			</Link>
 		</Tooltip>
