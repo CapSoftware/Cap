@@ -41,7 +41,6 @@ export async function generateAiMetadata(
 		const updatedAtTime = new Date(videoData.updatedAt).getTime();
 		const currentTime = new Date().getTime();
 		const tenMinutesInMs = 10 * 60 * 1000;
-		const minutesElapsed = Math.round((currentTime - updatedAtTime) / 60000);
 
 		if (currentTime - updatedAtTime > tenMinutesInMs) {
 			await db()

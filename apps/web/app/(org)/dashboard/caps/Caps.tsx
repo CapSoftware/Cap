@@ -24,7 +24,7 @@ import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
-import { useUploadingContext, useUploadingStatus } from "./UploadingContext";
+import { useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
 	id: Video.VideoId;

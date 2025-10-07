@@ -25,7 +25,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
+import {
+	getDashboardData,
+	type OrganizationSettings,
+} from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -91,11 +94,6 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-type Props = {
-	params: Promise<{ [key: string]: string | string[] | undefined }>;
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-};
-
 type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganization?: {
 		organizationId: string;
@@ -106,6 +104,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	password?: string | null;
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
+	orgSettings?: OrganizationSettings | null;
 };
 
 const ALLOWED_REFERRERS = [
@@ -282,6 +281,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
+					videoSettings: videos.settings,
 					width: videos.width,
 					height: videos.height,
 					duration: videos.duration,
@@ -290,6 +290,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					orgSettings: organizations.settings,
 					ownerIsPro:
 						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 							Boolean,
@@ -302,6 +303,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+				.leftJoin(organizations, eq(videos.orgId, organizations.id))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -348,10 +350,15 @@ async function AuthorizedContent({
 	video,
 	searchParams,
 }: {
-	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
+	video: Omit<
+		InferSelectModel<typeof videos>,
+		"folderId" | "password" | "settings"
+	> & {
 		sharedOrganization: { organizationId: string } | null;
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
+		orgSettings?: OrganizationSettings | null;
+		videoSettings?: OrganizationSettings | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -470,10 +477,13 @@ async function AuthorizedContent({
 				sharedOrganization: {
 					organizationId: sharedVideos.organizationId,
 				},
+				orgSettings: organizations.settings,
+				videoSettings: videos.settings,
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 			.leftJoin(users, eq(videos.ownerId, users.id))
+			.leftJoin(organizations, eq(videos.orgId, organizations.id))
 			.where(eq(videos.id, videoId))
 			.execute();
 
@@ -666,6 +676,8 @@ async function AuthorizedContent({
 		sharedOrganizations: sharedOrganizations,
 		password: null,
 		folderId: null,
+		orgSettings: video.orgSettings || null,
+		settings: video.videoSettings || null,
 	};
 
 	return (
@@ -691,6 +703,7 @@ async function AuthorizedContent({
 
 				<Share
 					data={videoWithOrganizationInfo}
+					videoSettings={videoWithOrganizationInfo.settings}
 					user={user}
 					comments={commentsPromise}
 					views={viewsPromise}

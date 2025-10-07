@@ -25,6 +25,10 @@ export type Organization = {
 	totalInvites: number;
 };
 
+export type OrganizationSettings = NonNullable<
+	(typeof organizations.$inferSelect)["settings"]
+>;
+
 export type Spaces = Omit<
 	typeof spaces.$inferSelect,
 	"createdAt" | "updatedAt"
@@ -40,6 +44,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		const organizationsWithMembers = await db()
 			.select({
 				organization: organizations,
+				settings: organizations.settings,
 				member: organizationMembers,
 				user: {
 					id: users.id,
@@ -79,6 +84,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 
 		let anyNewNotifications = false;
 		let spacesData: Spaces[] = [];
+		let organizationSettings: OrganizationSettings | null = null;
 
 		// Find active organization ID
 
@@ -89,6 +95,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		if (!activeOrganizationId && organizationIds.length > 0) {
 			activeOrganizationId = organizationIds[0];
 		}
+
 		// Only fetch spaces for the active organization
 
 		if (activeOrganizationId) {
@@ -105,6 +112,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				.limit(1);
 
 			anyNewNotifications = !!notification;
+
+			const [organizationSetting] = await db()
+				.select({ settings: organizations.settings })
+				.from(organizations)
+				.where(eq(organizations.id, activeOrganizationId));
+			organizationSettings = organizationSetting?.settings || null;
 
 			spacesData = await db()
 				.select({
@@ -262,6 +275,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 
 		return {
 			organizationSelect,
+			organizationSettings,
 			spacesData,
 			anyNewNotifications,
 			userPreferences,
@@ -273,6 +287,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			spacesData: [],
 			anyNewNotifications: false,
 			userPreferences: null,
+			organizationSettings: null,
 		};
 	}
 }
