@@ -162,6 +162,9 @@ export const CapCard = ({
 		onError: (error) => {
 			console.error("Error deleting cap:", error);
 		},
+		onSuccess: () => {
+			router.refresh();
+		},
 		onSettled: () => {
 			setConfirmOpen(false);
 		},
