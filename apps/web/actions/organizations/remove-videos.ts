@@ -9,10 +9,9 @@ import {
 	sharedVideos,
 	videos,
 } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { Organisation } from "@cap/web-domain";
 
 export async function removeVideosFromOrganization(
 	organizationId: Organisation.OrganisationId,

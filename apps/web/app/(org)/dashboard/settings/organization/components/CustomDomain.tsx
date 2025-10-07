@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import {
 	faCheckCircle,
 	faExclamationCircle,
@@ -17,7 +18,6 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
 import { useDashboardContext } from "../../../Contexts";
 import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
-import { Organisation } from "@cap/web-domain";
 
 export function CustomDomain() {
 	const router = useRouter();

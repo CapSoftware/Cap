@@ -3,9 +3,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { Organisation } from "@cap/web-domain";
 
 /**
  * Remove a member from an organization. Only the owner can perform this action.

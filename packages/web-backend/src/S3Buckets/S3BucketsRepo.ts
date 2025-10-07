@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { S3Bucket, User, type Video } from "@cap/web-domain";
+import { S3Bucket, type User, type Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 

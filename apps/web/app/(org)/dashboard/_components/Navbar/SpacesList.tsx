@@ -1,6 +1,7 @@
 "use client";
 
 import { Avatar, Button } from "@cap/ui";
+import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
 	faPlus,
@@ -24,7 +25,6 @@ import { LayersIcon } from "../AnimatedIcons";
 import type { LayersIconHandle } from "../AnimatedIcons/Layers";
 import { ConfirmationDialog } from "../ConfirmationDialog";
 import SpaceDialog from "./SpaceDialog";
-import { Space } from "@cap/web-domain";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 	const { spacesData, sidebarCollapsed, user } = useDashboardContext();

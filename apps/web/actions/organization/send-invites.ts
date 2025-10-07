@@ -7,7 +7,7 @@ import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId } from "@cap/database/helpers";
 import { organizationInvites, organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Organisation } from "@cap/web-domain";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

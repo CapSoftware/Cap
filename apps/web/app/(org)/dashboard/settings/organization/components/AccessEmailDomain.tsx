@@ -1,10 +1,10 @@
 import { Button, Input, Label } from "@cap/ui";
+import type { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { updateOrganizationDetails } from "@/actions/organization/update-details";
 import { useDashboardContext } from "../../../Contexts";
-import { Organisation } from "@cap/web-domain";
 
 export const AccessEmailDomain = () => {
 	const { activeOrganization } = useDashboardContext();

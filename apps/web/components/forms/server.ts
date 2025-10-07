@@ -10,11 +10,11 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import { Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
-import { Organisation, User } from "@cap/web-domain";
 
 export async function createOrganization(formData: FormData) {
 	const user = await getCurrentUser();

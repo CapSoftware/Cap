@@ -9,13 +9,13 @@ import {
 	Input,
 	Select,
 } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../Contexts";
 import { patchAccountSettings } from "./server";
-import { Organisation } from "@cap/web-domain";
 
 export const Settings = ({
 	user,

@@ -7,7 +7,7 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { Organisation } from "@cap/web-domain";
+import type { Organisation } from "@cap/web-domain";
 import { eq, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 

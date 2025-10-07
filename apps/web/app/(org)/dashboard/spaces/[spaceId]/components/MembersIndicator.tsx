@@ -13,6 +13,7 @@ import {
 	FormControl,
 	FormField,
 } from "@cap/ui";
+import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,7 +26,6 @@ import { useDashboardContext } from "../../../Contexts";
 import { setSpaceMembers } from "../actions";
 import type { SpaceMemberData } from "../page";
 import { MemberSelect } from "./MemberSelect";
-import { Space, User } from "@cap/web-domain";
 
 type MembersIndicatorProps = {
 	memberCount: number;

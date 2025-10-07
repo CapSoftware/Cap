@@ -6,12 +6,12 @@ import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import { Space } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { runPromise } from "@/lib/server";
-import { Space } from "@cap/web-domain";
 
 interface CreateSpaceResponse {
 	success: boolean;

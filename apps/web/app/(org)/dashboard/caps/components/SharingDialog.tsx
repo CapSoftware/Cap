@@ -9,7 +9,7 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
-import { Space, Video } from "@cap/web-domain";
+import { Space, type Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";

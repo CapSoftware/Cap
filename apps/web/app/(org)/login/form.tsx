@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, LogoBadge } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import {
 	faArrowLeft,
 	faEnvelope,
@@ -18,7 +19,6 @@ import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
-import { Organisation } from "@cap/web-domain";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);

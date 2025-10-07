@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { Organisation, Policy, Space } from "@cap/web-domain";
+import { type Organisation, Policy, type Space } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 

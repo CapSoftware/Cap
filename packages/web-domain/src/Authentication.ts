@@ -3,7 +3,7 @@ import { RpcMiddleware } from "@effect/rpc";
 import { Context, Schema } from "effect";
 
 import { InternalError } from "./Errors.ts";
-import { Organisation, User } from "./index.ts";
+import type { Organisation, User } from "./index.ts";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
 	CurrentUser,

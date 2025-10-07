@@ -11,7 +11,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
-import { Organisation, Policy, type Video } from "@cap/web-domain";
+import { type Organisation, Policy, type Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";

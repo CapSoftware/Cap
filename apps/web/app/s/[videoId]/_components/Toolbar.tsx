@@ -1,7 +1,7 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
-import { Comment, User } from "@cap/web-domain";
 import { Button } from "@cap/ui";
+import { Comment, User } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";

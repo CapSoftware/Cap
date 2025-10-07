@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
+import type { Organisation } from "@cap/web-domain";
 import { faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -18,7 +19,6 @@ import { toast } from "sonner";
 import { sendOrganizationInvites } from "@/actions/organization/send-invites";
 import { calculateSeats } from "@/utils/organization";
 import { useDashboardContext } from "../../../Contexts";
-import { Organisation } from "@cap/web-domain";
 
 interface InviteDialogProps {
 	isOpen: boolean;

@@ -4,7 +4,7 @@ import {
 	Folder,
 	Organisation,
 	Policy,
-	Space,
+	type Space,
 	User,
 } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";

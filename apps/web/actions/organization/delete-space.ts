@@ -9,11 +9,11 @@ import {
 	spaceVideos,
 } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
+import type { Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
-import { Space } from "@cap/web-domain";
 
 interface DeleteSpaceResponse {
 	success: boolean;

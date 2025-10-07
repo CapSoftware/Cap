@@ -1,9 +1,9 @@
-import { Option } from "effect";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { comments } from "@cap/database/schema";
 import { Comment } from "@cap/web-domain";
 import { and, eq, or } from "drizzle-orm";
+import { Option } from "effect";
 import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
 

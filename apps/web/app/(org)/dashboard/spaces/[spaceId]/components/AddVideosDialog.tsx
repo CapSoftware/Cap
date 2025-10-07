@@ -1,12 +1,12 @@
 "use client";
 
+import type { Space } from "@cap/web-domain";
 import type React from "react";
 import { addVideosToSpace } from "@/actions/spaces/add-videos";
 import { getSpaceVideoIds } from "@/actions/spaces/get-space-videos";
 import { removeVideosFromSpace } from "@/actions/spaces/remove-videos";
 import { getUserVideos } from "@/actions/videos/get-user-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
-import { Space } from "@cap/web-domain";
 
 interface AddVideosDialogProps {
 	open: boolean;

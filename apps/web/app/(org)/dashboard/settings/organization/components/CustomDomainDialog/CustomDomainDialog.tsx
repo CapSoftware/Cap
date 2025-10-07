@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import { faGlobe, faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -20,7 +21,6 @@ import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
 import { useDashboardContext } from "../../../../Contexts";
 import DomainStep from "./DomainStep";
 import { Stepper } from "./Stepper";
-
 import SubscribeContent from "./SubscribeContent";
 import SuccesStep from "./SuccessStep";
 import {
@@ -31,7 +31,6 @@ import {
 	StepStatus,
 } from "./types";
 import VerifyStep from "./VerifyStep";
-import { Organisation } from "@cap/web-domain";
 
 const STEP_CONFIGS: StepConfig[] = [
 	{

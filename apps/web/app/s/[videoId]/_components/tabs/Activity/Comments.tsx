@@ -1,6 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import { Video, Comment, User } from "@cap/web-domain";
+import { Comment, User, type Video } from "@cap/web-domain";
 import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useSearchParams } from "next/navigation";

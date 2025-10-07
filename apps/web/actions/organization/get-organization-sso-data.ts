@@ -2,8 +2,8 @@
 
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Organisation } from "@cap/web-domain";
 
 export async function getOrganizationSSOData(
 	organizationId: Organisation.OrganisationId,

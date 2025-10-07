@@ -1,8 +1,8 @@
 import type {
+	Comment,
 	Folder,
 	Organisation,
 	S3Bucket,
-	Comment,
 	Space,
 	User,
 	Video,

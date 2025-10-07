@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sharedVideos } from "@cap/database/schema";
-import { Organisation } from "@cap/web-domain";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
 export async function getOrganizationVideoIds(

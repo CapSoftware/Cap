@@ -1,10 +1,10 @@
+import { User } from "@cap/web-domain";
 import { eq, type InferSelectModel } from "drizzle-orm";
 import { getServerSession } from "next-auth";
 import { cache } from "react";
 import { db } from "../";
 import { users } from "../schema";
 import { authOptions } from "./auth-options";
-import { User } from "@cap/web-domain";
 
 export const getSession = async () => {
 	const session = await getServerSession(authOptions());

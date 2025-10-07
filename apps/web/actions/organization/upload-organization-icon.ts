@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import type { Organisation } from "@cap/web-domain";
 import DOMPurify from "dompurify";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -12,7 +13,6 @@ import { JSDOM } from "jsdom";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
-import { Organisation } from "@cap/web-domain";
 
 export async function uploadOrganizationIcon(
 	formData: FormData,
