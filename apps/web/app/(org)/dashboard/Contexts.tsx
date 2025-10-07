@@ -22,6 +22,7 @@ type SharedContext = {
 	sharedSpaces: Spaces[] | null;
 	activeSpace: Spaces | null;
 	user: typeof users.$inferSelect;
+	userCapsCount: number | null;
 	isSubscribed: boolean;
 	toggleSidebarCollapsed: () => void;
 	anyNewNotifications: boolean;
@@ -54,6 +55,7 @@ export function DashboardContexts({
 	organizationData,
 	activeOrganization,
 	spacesData,
+	userCapsCount,
 	user,
 	isSubscribed,
 	organizationSettings,
@@ -67,6 +69,7 @@ export function DashboardContexts({
 	organizationData: SharedContext["organizationData"];
 	activeOrganization: SharedContext["activeOrganization"];
 	spacesData: SharedContext["spacesData"];
+	userCapsCount: SharedContext["userCapsCount"];
 	user: SharedContext["user"];
 	isSubscribed: SharedContext["isSubscribed"];
 	organizationSettings: SharedContext["organizationSettings"];
@@ -160,6 +163,7 @@ export function DashboardContexts({
 					organizationData,
 					activeOrganization,
 					spacesData,
+					userCapsCount,
 					anyNewNotifications,
 					userPreferences,
 					organizationSettings,
