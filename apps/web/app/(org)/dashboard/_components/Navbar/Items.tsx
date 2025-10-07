@@ -66,16 +66,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
-			? [
-					{
-						name: "Admin Dev",
-						href: "/dashboard/admin",
-						icon: <CogIcon />,
-						subNav: [],
-					},
-				]
-			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
