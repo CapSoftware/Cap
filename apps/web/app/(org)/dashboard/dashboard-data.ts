@@ -9,6 +9,7 @@ import {
 	spaceMembers,
 	spaces,
 	users,
+	videos,
 } from "@cap/database/schema";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
@@ -85,7 +86,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 		let anyNewNotifications = false;
 		let spacesData: Spaces[] = [];
 		let organizationSettings: OrganizationSettings | null = null;
-
+		let userCapsCount = 0;
 		// Find active organization ID
 
 		let activeOrganizationId = organizationIds.find(
@@ -180,6 +181,20 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						eq(sharedVideos.organizationId, activeOrgInfo.organization.id),
 					);
 				const orgVideoCount = orgVideoCountResult[0]?.value || 0;
+
+				const userCapsCountResult = await db()
+					.select({
+						value: sql<number>`COUNT(DISTINCT ${videos.id})`,
+					})
+					.from(videos)
+					.where(
+						and(
+							eq(videos.orgId, activeOrgInfo.organization.id),
+							eq(videos.ownerId, user.id),
+						),
+					);
+
+				userCapsCount = userCapsCountResult[0]?.value || 0;
 
 				const allSpacesEntry = {
 					id: activeOrgInfo.organization.id,
@@ -279,12 +294,14 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			spacesData,
 			anyNewNotifications,
 			userPreferences,
+			userCapsCount,
 		};
 	} catch (error) {
 		console.error("Failed to fetch dashboard data", error);
 		return {
 			organizationSelect: [],
 			spacesData: [],
+			userCapsCount: null,
 			anyNewNotifications: false,
 			userPreferences: null,
 			organizationSettings: null,

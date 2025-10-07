@@ -50,12 +50,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
 	const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-	const { user, sidebarCollapsed } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const manageNavigation = [
 		{
 			name: "My Caps",
 			href: `/dashboard/caps`,
+			extraText: userCapsCount,
 			icon: <CapIcon />,
 			subNav: [],
 		},
@@ -346,6 +347,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									sidebarCollapsed={sidebarCollapsed}
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
+									extraText={item.extraText}
 								/>
 							</div>
 						))}
@@ -435,6 +437,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
+	extraText,
 }: {
 	name: string;
 	href: string;
@@ -446,6 +449,7 @@ const NavItem = ({
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
 	isPathActive: (path: string) => boolean;
+	extraText: number | null | undefined;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -487,6 +491,11 @@ const NavItem = ({
 				>
 					{name}
 				</p>
+				{extraText && (
+					<p className="ml-auto text-xs font-medium text-gray-11">
+						{extraText}
+					</p>
+				)}
 			</Link>
 		</Tooltip>
 	);

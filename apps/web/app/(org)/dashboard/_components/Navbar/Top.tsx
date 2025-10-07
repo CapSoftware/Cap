@@ -47,8 +47,7 @@ import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications, activeOrganization } =
-		useDashboardContext();
+	const { activeSpace, anyNewNotifications } = useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
 	const bellRef = useRef<HTMLDivElement>(null);
 	const { theme, setThemeHandler } = useTheme();
