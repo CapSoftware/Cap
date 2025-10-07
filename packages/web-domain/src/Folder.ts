@@ -4,6 +4,7 @@ import { Effect, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { PolicyDeniedError } from "./Policy.ts";
+import { HttpApiSchema } from "@effect/platform";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;
@@ -14,18 +15,21 @@ export type FolderColor = (typeof FolderColor)["Type"];
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"FolderNotFoundError",
 	{},
+	HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
 // A folder can't be declared within itself.
 export class RecursiveDefinitionError extends Schema.TaggedError<RecursiveDefinitionError>()(
 	"RecursiveDefinitionError",
 	{},
+	HttpApiSchema.annotations({ status: 409 }),
 ) {}
 
 // Attempted to assign a parent to a folder which doesn't exist.
 export class ParentNotFoundError extends Schema.TaggedError<ParentNotFoundError>()(
 	"ParentNotFoundError",
 	{},
+	HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
 export class Folder extends Schema.Class<Folder>("Folder")({
