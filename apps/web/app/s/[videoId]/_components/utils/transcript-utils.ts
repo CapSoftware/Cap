@@ -21,6 +21,20 @@ export const formatTime = (seconds: number): string => {
 };
 
 /**
+ * Formats time in seconds to minutes:seconds format
+ * @param time - Time in seconds
+ * @returns Time in minutes:seconds format
+ */
+
+export const formatTimeMinutes = (time: number) => {
+	const minutes = Math.floor(time / 60);
+	const seconds = Math.floor(time % 60);
+	return `${minutes.toString().padStart(2, "0")}:${seconds
+		.toString()
+		.padStart(2, "0")}`;
+};
+
+/**
  * Formats transcript entries as VTT format for subtitles
  */
 export const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {

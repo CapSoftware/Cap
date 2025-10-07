@@ -63,19 +63,26 @@ export async function transcribeVideo(
 
 	if (
 		video.settings?.disableTranscript ??
-		result.orgSettings?.disableTranscript ??
-		false
+		result.orgSettings?.disableTranscript
 	) {
 		console.log(
 			`[transcribeVideo] Transcription disabled for video ${videoId}`,
 		);
-		await db()
-			.update(videos)
-			.set({ transcriptionStatus: "ERROR" })
-			.where(eq(videos.id, videoId));
+		try {
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: "SKIPPED" })
+				.where(eq(videos.id, videoId));
+		} catch (err) {
+			console.error(`[transcribeVideo] Failed to mark as skipped:`, err);
+			return {
+				success: false,
+				message: "Transcription disabled, but failed to update status",
+			};
+		}
 		return {
 			success: true,
-			message: "Transcription disabled for video - skipping transcription",
+			message: "Transcription disabled for video — skipping transcription",
 		};
 	}
 

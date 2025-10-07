@@ -4,12 +4,16 @@ import {
 	HttpApiError,
 	HttpApiGroup,
 	HttpApiMiddleware,
-	HttpServerError,
 } from "@effect/platform";
 import { Context, Data } from "effect";
 import * as Schema from "effect/Schema";
 
-const TranscriptionStatus = Schema.Literal("PROCESSING", "COMPLETE", "ERROR");
+const TranscriptionStatus = Schema.Literal(
+	"PROCESSING",
+	"COMPLETE",
+	"ERROR",
+	"SKIPPED",
+);
 const OSType = Schema.Literal("macos", "windows");
 const LicenseType = Schema.Literal("yearly", "lifetime");
 

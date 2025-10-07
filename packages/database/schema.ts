@@ -275,7 +275,7 @@ export const videos = mysqlTable(
 			disableComments?: boolean;
 		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
-			"PROCESSING" | "COMPLETE" | "ERROR"
+			"PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED"
 		>(),
 		source: json("source")
 			.$type<
