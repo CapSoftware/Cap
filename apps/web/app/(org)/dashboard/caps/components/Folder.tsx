@@ -273,11 +273,9 @@ const FolderCard = ({
 		<Link
 			prefetch={false}
 			href={
-				deleteFolder.isPending
-					? "#"
-					: spaceId
-						? `/dashboard/spaces/${spaceId}/folder/${id}`
-						: `/dashboard/folder/${id}`
+				spaceId
+					? `/dashboard/spaces/${spaceId}/folder/${id}`
+					: `/dashboard/folder/${id}`
 			}
 		>
 			<div
