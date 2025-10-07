@@ -96,10 +96,14 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage(props: {
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-	const searchParams = await props.searchParams;
+export const dynamic = "force-dynamic";
+
+export default async function CapsPage({
+	searchParams,
+}: PageProps<"/dashboard/caps">) {
+	const page = Number(await searchParams.then((s) => s.page)) || 1;
+	const limit = Number(await searchParams.then((s) => s.limit)) || 15;
+
 	const user = await getCurrentUser();
 
 	if (!user || !user.id) {
@@ -107,8 +111,6 @@ export default async function CapsPage(props: {
 	}
 
 	const userId = user.id;
-	const page = Number(searchParams.page) || 1;
-	const limit = Number(searchParams.limit) || 15;
 	const offset = (page - 1) * limit;
 
 	const totalCountResult = await db()
