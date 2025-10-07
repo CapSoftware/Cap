@@ -61,7 +61,7 @@ const options: {
 	{
 		label: "Enable transcript",
 		value: "disableTranscript",
-		description: "Enabling this also allows generating summary and chapters",
+		description: "Enabling this also allows summary and chapters",
 		pro: true,
 	},
 ];
