@@ -362,6 +362,7 @@ async function AuthorizedContent({
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 		organizationIconUrl?: string | null;
+		organizationName?: string | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
