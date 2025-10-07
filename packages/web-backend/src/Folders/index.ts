@@ -196,5 +196,5 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}),
 		};
 	}),
-	dependencies: [FoldersPolicy.Default, Database.Default],
+	dependencies: [FoldersPolicy.Default, FoldersRepo.Default, Database.Default],
 }) {}
