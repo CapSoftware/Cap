@@ -1,60 +1,60 @@
-import { Organisation, S3Bucket, User, Video } from "@cap/web-domain";
-import { Headers, HttpClient } from "@effect/platform";
-import { Activity, Workflow } from "@effect/workflow";
+import { DatabaseError, Loom, S3Bucket, S3Error, Video } from "@cap/web-domain";
+import { Headers, HttpClient, HttpClientResponse } from "@effect/platform";
+import { Activity } from "@effect/workflow";
 import { Effect, Option, Schedule, Schema, Stream } from "effect";
 
-import { DatabaseError } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
-import { S3Error } from "../S3Buckets/S3BucketAccess.ts";
 import { Videos } from "../Videos/index.ts";
 
-export class LoomApiError extends Schema.TaggedError<LoomApiError>(
-	"LoomApiError",
-)("LoomApiError", { cause: Schema.Unknown }) {}
-
-export const LoomImportVideoError = Schema.Union(
-	DatabaseError,
-	Video.NotFoundError,
-	S3Error,
-	LoomApiError,
-);
-
-export const LoomImportVideo = Workflow.make({
-	name: "LoomImportVideo",
-	payload: {
-		cap: Schema.Struct({
-			userId: User.UserId,
-			orgId: Organisation.OrganisationId,
-		}),
-		loom: Schema.Struct({
-			userId: User.UserId,
-			orgId: Organisation.OrganisationId,
-			video: Schema.Struct({
-				id: Video.VideoId,
-				name: Schema.String,
-				downloadUrl: Schema.String,
-				width: Schema.OptionFromNullOr(Schema.Number),
-				height: Schema.OptionFromNullOr(Schema.Number),
-				fps: Schema.OptionFromNullOr(Schema.Number),
-				durationSecs: Schema.OptionFromNullOr(Schema.Number),
-			}),
-		}),
-		attempt: Schema.optional(Schema.Number),
-	},
-	error: LoomImportVideoError,
-	idempotencyKey: (p) =>
-		`${p.cap.userId}-${p.loom.orgId}-${p.loom.video.id}-${p.attempt ?? 0}`,
-});
-
-export const LoomImportVideoLive = LoomImportVideo.toLayer(
+export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 	Effect.fn(function* (payload) {
 		const videos = yield* Videos;
 		const s3Buckets = yield* S3Buckets;
 		const http = yield* HttpClient.HttpClient;
 
+		yield* Effect.log("starting loom import workflow");
+
+		yield* Activity.make({
+			name: "VerifyURLValid",
+			error: Schema.Union(Loom.VideoURLInvalidError, Loom.ExternalLoomError),
+			execute: http
+				.get(payload.loom.video.downloadUrl, {
+					headers: { range: "bytes=0-0" },
+				})
+				.pipe(
+					Effect.flatMap(HttpClientResponse.filterStatus((s) => s < 400)),
+					Effect.catchIf(
+						(e) => e._tag === "ResponseError",
+						(
+							cause,
+						): Effect.Effect<
+							never,
+							Loom.VideoURLInvalidError | Loom.ExternalLoomError
+						> => {
+							if (cause.response.status < 500)
+								return Effect.fail(
+									new Loom.VideoURLInvalidError({
+										status: cause.response.status,
+									}),
+								);
+
+							return Effect.fail(
+								new Loom.ExternalLoomError({ cause: cause.response }),
+							);
+						},
+					),
+					Effect.retry({
+						schedule: Schedule.exponential("200 millis"),
+						times: 3,
+						while: (e) => e._tag !== "VideoURLInvalidError",
+					}),
+					Effect.catchTag("RequestError", Effect.die),
+				),
+		});
+
 		const { videoId, customBucketId } = yield* Activity.make({
 			name: "CreateVideoRecord",
-			error: LoomImportVideoError,
+			error: DatabaseError,
 			success: Schema.Struct({
 				videoId: Video.VideoId,
 				customBucketId: Schema.Option(S3Bucket.S3BucketId),
@@ -62,9 +62,9 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 			execute: Effect.gen(function* () {
 				const loomVideo = payload.loom.video;
 
-				const [_, customBucket] = yield* s3Buckets
-					.getBucketAccessForUser(payload.cap.userId)
-					.pipe(Effect.catchAll(() => Effect.die(null)));
+				const [_, customBucket] = yield* s3Buckets.getBucketAccessForUser(
+					payload.cap.userId,
+				);
 
 				const customBucketId = Option.map(customBucket, (b) => b.id);
 
@@ -74,9 +74,9 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 					bucketId: customBucketId,
 					source: { type: "desktopMP4" as const },
 					name: payload.loom.video.name,
-					duration: loomVideo.durationSecs,
-					width: loomVideo.width,
-					height: loomVideo.height,
+					duration: Option.fromNullable(loomVideo.durationSecs),
+					width: Option.fromNullable(loomVideo.width),
+					height: Option.fromNullable(loomVideo.height),
 					public: true,
 					metadata: Option.none(),
 					folderId: Option.none(),
@@ -88,7 +88,12 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 				});
 
 				return { videoId, customBucketId };
-			}),
+			}).pipe(
+				Effect.retry({
+					schedule: Schedule.exponential("200 millis"),
+					times: 3,
+				}),
+			),
 		});
 
 		const source = new Video.Mp4Source({
@@ -96,16 +101,18 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 			ownerId: payload.cap.userId,
 		});
 
-		const { fileKey } = yield* Activity.make({
+		yield* Activity.make({
 			name: "DownloadVideo",
-			error: LoomImportVideoError,
-			success: Schema.Struct({ fileKey: Schema.String }),
+			error: Schema.Union(S3Error, DatabaseError, Loom.ExternalLoomError),
 			execute: Effect.gen(function* () {
 				const [s3Bucket] = yield* s3Buckets.getBucketAccess(customBucketId);
 
+				yield* Effect.log(payload.loom.video.downloadUrl);
 				const resp = yield* http
 					.get(payload.loom.video.downloadUrl)
-					.pipe(Effect.catchAll((cause) => new LoomApiError({ cause })));
+					.pipe(
+						Effect.catchAll((cause) => new Loom.ExternalLoomError({ cause })),
+					);
 				const contentLength = Headers.get(resp.headers, "content-length").pipe(
 					Option.map((v) => Number(v)),
 					Option.getOrUndefined,
@@ -143,11 +150,9 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 				yield* Effect.log(
 					`Uploaded video for user '${payload.cap.userId}' at key '${key}'`,
 				);
-
-				return { fileKey: key };
 			}),
 		});
 
-		return { fileKey, videoId };
+		return { videoId };
 	}),
 );

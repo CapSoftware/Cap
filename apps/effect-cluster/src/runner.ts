@@ -2,12 +2,18 @@ import { createServer } from "node:http";
 import { Database, S3Buckets, Videos, Workflows } from "@cap/web-backend";
 import { ClusterWorkflowEngine, RunnerAddress } from "@effect/cluster";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
-import { FetchHttpClient, HttpApiBuilder, HttpServer } from "@effect/platform";
+import {
+	FetchHttpClient,
+	HttpApiBuilder,
+	HttpMiddleware,
+	HttpRouter,
+} from "@effect/platform";
 import {
 	NodeClusterRunnerSocket,
 	NodeHttpServer,
 	NodeRuntime,
 } from "@effect/platform-node";
+import { RpcServer } from "@effect/rpc";
 import { MysqlClient } from "@effect/sql-mysql2";
 import { WorkflowProxyServer } from "@effect/workflow";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
@@ -35,7 +41,16 @@ const ClusterWorkflowLive = ClusterWorkflowEngine.layer.pipe(
 	Layer.provide(SqlLayer),
 );
 
-const WorkflowApiLive = HttpApiBuilder.api(Workflows.Api).pipe(
+const RpcsLive = RpcServer.layer(Workflows.RpcGroup).pipe(
+	Layer.provide(WorkflowProxyServer.layerRpcHandlers(Workflows.Workflows)),
+	Layer.provide(Workflows.WorkflowsLayer),
+	Layer.provide(ClusterWorkflowLive),
+);
+const RpcProtocol = RpcServer.layerProtocolHttp({ path: "/" }).pipe(
+	Layer.provide(Workflows.RpcSerialization),
+);
+
+const WorkflowApiHttpLive = HttpApiBuilder.api(Workflows.Api).pipe(
 	Layer.provide(
 		WorkflowProxyServer.layerHttpApi(
 			Workflows.Api,
@@ -45,7 +60,6 @@ const WorkflowApiLive = HttpApiBuilder.api(Workflows.Api).pipe(
 	),
 	Layer.provide(Workflows.WorkflowsLayer),
 	Layer.provide(ClusterWorkflowLive),
-	HttpServer.withLogAddress,
 );
 
 const TracingLayer = NodeSdk.layer(() => ({
@@ -53,14 +67,18 @@ const TracingLayer = NodeSdk.layer(() => ({
 	spanProcessor: [new BatchSpanProcessor(new OTLPTraceExporter({}))],
 }));
 
-HttpApiBuilder.serve().pipe(
-	Layer.provide(WorkflowApiLive),
-	Layer.provide(NodeHttpServer.layer(createServer, { port: 42169 })),
-	Layer.provide(Videos.Default),
-	Layer.provide(S3Buckets.Default),
-	Layer.provide(Database.Default),
-	Layer.provide(FetchHttpClient.layer),
-	Layer.provide(TracingLayer),
-	Layer.launch,
-	NodeRuntime.runMain,
-);
+const Main = HttpRouter.Default.serve(HttpMiddleware.logger)
+	.pipe(
+		Layer.provide(RpcsLive),
+		Layer.provide(RpcProtocol),
+		Layer.provide(NodeHttpServer.layer(createServer, { port: 42169 })),
+	)
+	.pipe(
+		Layer.provide(Videos.Default),
+		Layer.provide(S3Buckets.Default),
+		Layer.provide(Database.Default),
+		Layer.provide(FetchHttpClient.layer),
+		Layer.provide(TracingLayer),
+	);
+
+NodeRuntime.runMain(Layer.launch(Main));

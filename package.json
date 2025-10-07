@@ -37,7 +37,7 @@
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",
 	"engines": {
-		"node": "20"
+		"node": "24"
 	},
 	"pnpm": {
 		"overrides": {

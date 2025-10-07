@@ -25,6 +25,11 @@ export default $config({
 					owner: GITHUB_ORG,
 				},
 				cloudflare: true,
+				aws: {
+					profile: "cap-dev",
+				},
+				planetscale: true,
+				awsx: "2.21.1",
 			},
 		};
 	},
@@ -38,10 +43,10 @@ export default $config({
 
 		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
 
-		new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
-			bucket: recordingsBucket.id,
-			status: "Enabled",
-		});
+		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
+		// 	bucket: recordingsBucket.id,
+		// 	status: "Enabled",
+		// });
 
 		// const cloudfrontDistribution = aws.cloudfront.getDistributionOutput({
 		// 	id: "E36XSZEM0VIIYB",
@@ -105,9 +110,18 @@ export default $config({
 			value: recordingsBucket.bucket,
 		});
 
-		const vercelOidc = aws.iam.getOpenIdConnectProviderOutput({
-			url: `https://oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
-		});
+		const oidc = (() => {
+			const aud = `https://vercel.com/${VERCEL_TEAM_SLUG}`;
+			const url = `oidc.vercel.com/${VERCEL_TEAM_SLUG}`;
+			return {
+				aud,
+				url,
+				provider: new aws.iam.OpenIdConnectProvider("VercelAWSOIDC", {
+					url: `https://${url}`,
+					clientIdLists: [aud],
+				}),
+			};
+		})();
 
 		const awsAccount = aws.getCallerIdentityOutput();
 
@@ -118,15 +132,15 @@ export default $config({
 					{
 						Effect: "Allow",
 						Principal: {
-							Federated: $interpolate`arn:aws:iam::${awsAccount.id}:oidc-provider/oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
+							Federated: $interpolate`arn:aws:iam::${awsAccount.id}:oidc-provider/${oidc.url}`,
 						},
 						Action: "sts:AssumeRoleWithWebIdentity",
 						Condition: {
 							StringEquals: {
-								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:aud`]: `https://vercel.com/${VERCEL_TEAM_SLUG}`,
+								[`${oidc.url}:aud`]: oidc.aud,
 							},
 							StringLike: {
-								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:sub`]: [
+								[`${oidc.url}:sub`]: [
 									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:staging`,
 								],
 							},
@@ -205,6 +219,89 @@ function DiscordBot() {
 					},
 				];
 			},
+		},
+	});
+}
+
+function WorkflowCluster() {
+	const vpc = new sst.aws.Vpc("Vpc", {
+		nat: "ec2",
+	});
+	const privateDnsNamespace = new aws.servicediscovery.PrivateDnsNamespace(
+		"WorkflowClusterPrivateDnsNamespace",
+		{
+			name: "effect-cluster.private",
+			description: "Private namespace for effect-cluster",
+			vpc: vpc.id,
+		},
+	);
+
+	function generateServiceHostname(serviceName: string) {
+		return $interpolate`${serviceName}.${$app.stage}.${$app.name}.${privateDnsNamespace.name}`;
+	}
+
+	const securityGroup = new aws.ec2.SecurityGroup(
+		"WorkflowClusterSecurityGroup",
+		{
+			vpcId: vpc.id,
+			description: "Security group for effect-cluster",
+		},
+	);
+	new aws.vpc.SecurityGroupEgressRule("allow_all_traffic_ipv4", {
+		securityGroupId: securityGroup.id,
+		cidrIpv4: "0.0.0.0/0",
+		ipProtocol: "-1",
+	});
+	// allow inbound from vpc
+	new aws.vpc.SecurityGroupIngressRule("allow_inbound_from_vpc", {
+		securityGroupId: securityGroup.id,
+		cidrIpv4: vpc.nodes.vpc.cidrBlock,
+		ipProtocol: "-1",
+	});
+	const cluster = new sst.aws.Cluster("EffectCluster", {
+		vpc: {
+			id: vpc.id,
+			securityGroups: [securityGroup.id],
+			containerSubnets: vpc.privateSubnets,
+			loadBalancerSubnets: vpc.publicSubnets,
+			cloudmapNamespaceId: privateDnsNamespace.id,
+			cloudmapNamespaceName: privateDnsNamespace.name,
+		},
+	});
+	const commonEnvironment = {
+		SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
+	};
+
+	const repository = new awsx.ecr.Repository("Repository", {});
+	const image = new awsx.ecr.Image("image", {
+		repositoryUrl: repository.url,
+		// adjust path because sst run on ./sst/platform
+		context: "../../",
+		platform: "linux/amd64",
+	});
+
+	const shardManager = new sst.aws.Service("ShardManager", {
+		cluster,
+		containers: [
+			{
+				name: "shard-manager",
+				image: image.imageUri,
+				command: ["dist/shard-manager.js"],
+				environment: {
+					...commonEnvironment,
+				},
+			},
+		],
+	});
+
+	new sst.aws.Function("WorkflowClusterProxyLambda", {
+		vpc,
+		url: true,
+		timeout: "5 minutes",
+		link: [shardManager],
+		handler: "src/serverless/lambda.handler",
+		environment: {
+			SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
 		},
 	});
 }

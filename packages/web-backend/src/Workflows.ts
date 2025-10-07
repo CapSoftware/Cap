@@ -1,11 +1,12 @@
+import { Loom } from "@cap/web-domain";
 import { HttpApi, type HttpApiClient } from "@effect/platform";
 import * as Rpc from "@effect/rpc";
 import { WorkflowProxy, WorkflowProxyServer } from "@effect/workflow";
 import { Context, Layer } from "effect";
 
-import { LoomImportVideo, LoomImportVideoLive } from "./Loom/index.ts";
+import { LoomImportVideoLive } from "./Loom/index.ts";
 
-export const Workflows = [LoomImportVideo] as const;
+export const Workflows = [Loom.ImportVideo] as const;
 export const RpcGroup = WorkflowProxy.toRpcGroup(Workflows);
 export const RpcSerialization = Rpc.RpcSerialization.layerJson;
 

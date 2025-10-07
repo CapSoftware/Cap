@@ -1,11 +1,15 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, HttpAuthMiddleware, Policy } from "@cap/web-domain";
+import {
+	CurrentUser,
+	type DatabaseError,
+	HttpAuthMiddleware,
+} from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { type Cause, Effect, Layer, Option, Schema } from "effect";
 
-import { Database, type DatabaseError } from "./Database.ts";
+import { Database } from "./Database.ts";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;

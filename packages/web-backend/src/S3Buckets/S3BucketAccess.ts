@@ -5,14 +5,11 @@ import {
 	type PresignedPostOptions,
 } from "@aws-sdk/s3-presigned-post";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
+import { S3Error } from "@cap/web-domain";
 import type { RequestPresigningArguments } from "@smithy/types";
-import { type Cause, Effect, Option, Schema, Stream } from "effect";
+import { type Cause, Effect, Option, Stream } from "effect";
 
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
-
-export class S3Error extends Schema.TaggedError<S3Error>()("S3Error", {
-	cause: Schema.Unknown,
-}) {}
 
 const wrapS3Promise = <T>(
 	promise: Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,

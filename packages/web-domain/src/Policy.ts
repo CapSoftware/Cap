@@ -1,5 +1,6 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
+import { HttpApiSchema } from "@effect/platform";
 import { type Brand, Context, Data, Effect, type Option, Schema } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
 import { CurrentUser } from "./Authentication.ts";
@@ -19,6 +20,7 @@ export type PublicPolicy<E = never, R = never> = Effect.Effect<
 export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
 	"PolicyDenied",
 	{},
+	HttpApiSchema.annotations({ status: 403 }),
 ) {}
 
 /**
