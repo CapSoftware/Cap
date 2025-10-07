@@ -27,7 +27,7 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { Motion, Presence } from "solid-motionone";
+// Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
@@ -622,111 +622,115 @@ function Page() {
 	);
 
 	const TargetSelectionHome = () => (
-		<Motion.div
-			initial={{ scale: 0.95 }}
-			animate={{ scale: 1 }}
-			exit={{ scale: 0.95 }}
-			transition={{ duration: 0.2 }}
-			class="flex flex-col gap-2 w-full"
+		<Transition
+			appear
+			enterActiveClass="transition-transform duration-200"
+			enterClass="scale-95"
+			enterToClass="scale-100"
+			exitActiveClass="transition-transform duration-200"
+			exitClass="scale-100"
+			exitToClass="scale-95"
 		>
-			<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-				<div
-					class={cx(
-						"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-						(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-							"ring-blue-9",
-					)}
-				>
+			<div class="flex flex-col gap-2 w-full">
+				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
+					<div
+						class={cx(
+							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
+								"ring-blue-9",
+						)}
+					>
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "display"}
+							Component={IconMdiMonitor}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) =>
+									v === "display" ? null : "display",
+								);
+							}}
+							name="Display"
+							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
+						/>
+						<TargetDropdownButton
+							class={cx(
+								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+								displayMenuOpen() && "bg-gray-5",
+							)}
+							ref={(el) => (displayTriggerRef = el)}
+							disabled={isRecording()}
+							expanded={displayMenuOpen()}
+							onClick={() => {
+								setDisplayMenuOpen((prev) => {
+									const next = !prev;
+									if (next) {
+										setWindowMenuOpen(false);
+										setHasOpenedDisplayMenu(true);
+									}
+									return next;
+								});
+							}}
+							aria-haspopup="menu"
+							aria-label="Choose display"
+						/>
+					</div>
+					<div
+						class={cx(
+							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
+							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
+								"ring-blue-9",
+						)}
+					>
+						<TargetTypeButton
+							selected={rawOptions.targetMode === "window"}
+							Component={IconLucideAppWindowMac}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) =>
+									v === "window" ? null : "window",
+								);
+							}}
+							name="Window"
+							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
+						/>
+						<TargetDropdownButton
+							class={cx(
+								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+								windowMenuOpen() && "bg-gray-5",
+							)}
+							ref={(el) => (windowTriggerRef = el)}
+							disabled={isRecording()}
+							expanded={windowMenuOpen()}
+							onClick={() => {
+								setWindowMenuOpen((prev) => {
+									const next = !prev;
+									if (next) {
+										setDisplayMenuOpen(false);
+										setHasOpenedWindowMenu(true);
+									}
+									return next;
+								});
+							}}
+							aria-haspopup="menu"
+							aria-label="Choose window"
+						/>
+					</div>
 					<TargetTypeButton
-						selected={rawOptions.targetMode === "display"}
-						Component={IconMdiMonitor}
+						selected={rawOptions.targetMode === "area"}
+						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
 						disabled={isRecording()}
 						onClick={() => {
 							if (isRecording()) return;
-							setOptions("targetMode", (v) =>
-								v === "display" ? null : "display",
-							);
+							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
 						}}
-						name="Display"
-						class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-					/>
-					<TargetDropdownButton
-						class={cx(
-							"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-							displayMenuOpen() && "bg-gray-5",
-						)}
-						ref={(el) => (displayTriggerRef = el)}
-						disabled={isRecording()}
-						expanded={displayMenuOpen()}
-						onClick={() => {
-							setDisplayMenuOpen((prev) => {
-								const next = !prev;
-								if (next) {
-									setWindowMenuOpen(false);
-									setHasOpenedDisplayMenu(true);
-								}
-								return next;
-							});
-						}}
-						aria-haspopup="menu"
-						aria-label="Choose display"
+						name="Area"
 					/>
 				</div>
-				<div
-					class={cx(
-						"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-						(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-							"ring-blue-9",
-					)}
-				>
-					<TargetTypeButton
-						selected={rawOptions.targetMode === "window"}
-						Component={IconLucideAppWindowMac}
-						disabled={isRecording()}
-						onClick={() => {
-							if (isRecording()) return;
-							setOptions("targetMode", (v) =>
-								v === "window" ? null : "window",
-							);
-						}}
-						name="Window"
-						class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-					/>
-					<TargetDropdownButton
-						class={cx(
-							"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-							windowMenuOpen() && "bg-gray-5",
-						)}
-						ref={(el) => (windowTriggerRef = el)}
-						disabled={isRecording()}
-						expanded={windowMenuOpen()}
-						onClick={() => {
-							setWindowMenuOpen((prev) => {
-								const next = !prev;
-								if (next) {
-									setDisplayMenuOpen(false);
-									setHasOpenedWindowMenu(true);
-								}
-								return next;
-							});
-						}}
-						aria-haspopup="menu"
-						aria-label="Choose window"
-					/>
-				</div>
-				<TargetTypeButton
-					selected={rawOptions.targetMode === "area"}
-					Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-					disabled={isRecording()}
-					onClick={() => {
-						if (isRecording()) return;
-						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-					}}
-					name="Area"
-				/>
+				<BaseControls />
 			</div>
-			<BaseControls />
-		</Motion.div>
+		</Transition>
 	);
 
 	const startSignInCleanup = listen("start-sign-in", async () => {
