@@ -66,8 +66,6 @@ export const ShareHeader = ({
 
 	const isOwner = user && user.id.toString() === data.ownerId;
 
-	console.log(data);
-
 	const { webUrl } = usePublicEnv();
 
 	useEffect(() => {
@@ -220,7 +218,7 @@ export const ShareHeader = ({
 								) : (
 									<Avatar
 										className="rounded-full size-9"
-										name={data.organizationName}
+										name={data.organizationName ?? "Organization"}
 										letterClass="text-sm"
 									/>
 								)}

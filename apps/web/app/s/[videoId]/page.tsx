@@ -289,6 +289,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					duration: videos.duration,
 					fps: videos.fps,
 					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
+					organizationIconUrl: organizations.iconUrl,
+					organizationName: organizations.name,
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
