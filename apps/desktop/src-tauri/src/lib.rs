@@ -2197,15 +2197,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     recording_logging_handle,
                     mic_feed,
                     camera_feed,
-                    server_url: GeneralSettingsStore::get(&app)
-                        .ok()
-                        .flatten()
-                        .map(|v| v.server_url.clone())
-                        .unwrap_or_else(|| {
-                            std::option_env!("VITE_SERVER_URL")
-                                .unwrap_or("https://cap.so")
-                                .to_string()
-                        }),
+                    server_url: std::option_env!("VITE_SERVER_URL")
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            GeneralSettingsStore::get(&app)
+                                .ok()
+                                .flatten()
+                                .map(|v| v.server_url.clone())
+                        })
+                        .unwrap_or_else(|| "https://cap.so".to_string()),
                 })));
 
                 app.manage(Arc::new(RwLock::new(
