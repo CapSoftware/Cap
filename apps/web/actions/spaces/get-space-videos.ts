@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaceVideos } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -23,7 +23,9 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 				videoId: spaceVideos.videoId,
 			})
 			.from(spaceVideos)
-			.where(eq(spaceVideos.spaceId, spaceId));
+			.where(
+				and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+			);
 
 		return {
 			success: true,

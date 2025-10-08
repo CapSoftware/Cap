@@ -43,26 +43,7 @@ export async function addVideosToSpace(
 			throw new Error("No valid videos found");
 		}
 
-		const existingSpaceVideos = await db()
-			.select({ videoId: spaceVideos.videoId })
-			.from(spaceVideos)
-			.where(
-				and(
-					eq(spaceVideos.spaceId, spaceId),
-					inArray(spaceVideos.videoId, validVideoIds),
-				),
-			);
-
-		const existingVideoIds = existingSpaceVideos.map((sv) => sv.videoId);
-		const newVideoIds = validVideoIds.filter(
-			(id) => !existingVideoIds.includes(id),
-		);
-
-		if (newVideoIds.length === 0) {
-			return { success: true, message: "Videos already added to space" };
-		}
-
-		const spaceVideoEntries = newVideoIds.map((videoId) => ({
+		const spaceVideoEntries = validVideoIds.map((videoId) => ({
 			id: nanoId(),
 			videoId,
 			spaceId,
@@ -76,7 +57,7 @@ export async function addVideosToSpace(
 
 		return {
 			success: true,
-			message: `${newVideoIds.length} video${newVideoIds.length === 1 ? "" : "s"} added to space`,
+			message: `${validVideoIds.length} video${validVideoIds.length === 1 ? "" : "s"} added to space`,
 		};
 	} catch (error) {
 		console.error("Error adding videos to space:", error);

@@ -32,7 +32,7 @@ export const AddVideosDialog: React.FC<AddVideosDialogProps> = ({
 			onVideosAdded={onVideosAdded}
 			addVideos={addVideosToSpace}
 			removeVideos={removeVideosFromSpace}
-			getVideos={getUserVideos}
+			getVideos={() => getUserVideos(spaceId)}
 			getEntityVideoIds={getSpaceVideoIds}
 		/>
 	);

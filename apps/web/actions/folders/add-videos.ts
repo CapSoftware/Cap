@@ -2,7 +2,6 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
 import { folders, spaceVideos, videos } from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
@@ -11,6 +10,7 @@ import { revalidatePath } from "next/cache";
 export async function addVideosToFolder(
 	folderId: Folder.FolderId,
 	videoIds: Video.VideoId[],
+	spaceId?: string,
 ) {
 	try {
 		const user = await getCurrentUser();
@@ -51,41 +51,10 @@ export async function addVideosToFolder(
 			.set({ folderId: folderId, updatedAt: new Date() })
 			.where(inArray(videos.id, validVideoIds));
 
-		// If this folder belongs to a space, ensure spaceVideos entry exists and set folderId in that relation
-		if (folder.spaceId) {
-			// Find existing relations
-			const existingRelations = await db()
-				.select({ videoId: spaceVideos.videoId })
-				.from(spaceVideos)
-				.where(
-					and(
-						eq(
-							spaceVideos.spaceId,
-							folder.spaceId as Space.SpaceIdOrOrganisationId,
-						),
-						inArray(spaceVideos.videoId, validVideoIds),
-					),
-				);
-
-			const existingIds = new Set(existingRelations.map((r) => r.videoId));
-			const toInsert = validVideoIds.filter((id) => !existingIds.has(id));
-
-			if (toInsert.length > 0) {
-				const spaceIdValue = folder.spaceId as Space.SpaceIdOrOrganisationId;
-				await db()
-					.insert(spaceVideos)
-					.values(
-						toInsert.map((id) => ({
-							id: nanoId(),
-							videoId: id,
-							spaceId: spaceIdValue,
-							addedById: user.id,
-							folderId,
-						})),
-					);
-			}
-
-			// Update folderId for all valid videos in this space
+		// If this folder belongs to a space and we have a spaceId context, update spaceVideos relation
+		const effectiveSpaceId = spaceId || folder.spaceId;
+		if (effectiveSpaceId) {
+			// Update folderId for videos that are already in this space
 			await db()
 				.update(spaceVideos)
 				.set({ folderId })
@@ -93,7 +62,7 @@ export async function addVideosToFolder(
 					and(
 						eq(
 							spaceVideos.spaceId,
-							folder.spaceId as Space.SpaceIdOrOrganisationId,
+							effectiveSpaceId as Space.SpaceIdOrOrganisationId,
 						),
 						inArray(spaceVideos.videoId, validVideoIds),
 					),
@@ -103,8 +72,11 @@ export async function addVideosToFolder(
 		// Revalidate relevant paths
 		revalidatePath(`/dashboard/caps`);
 		revalidatePath(`/dashboard/folder/${folderId}`);
-		if (folder.spaceId) {
-			revalidatePath(`/dashboard/spaces/${folder.spaceId}/folder/${folderId}`);
+		const effectiveSpaceIdForRevalidate = spaceId || folder.spaceId;
+		if (effectiveSpaceIdForRevalidate) {
+			revalidatePath(
+				`/dashboard/spaces/${effectiveSpaceIdForRevalidate}/folder/${folderId}`,
+			);
 		}
 
 		return {

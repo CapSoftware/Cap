@@ -15,9 +15,11 @@ import AddVideosDialogBase from "../../components/AddVideosDialogBase";
 export default function AddVideosButton({
 	folderId,
 	folderName,
+	spaceId,
 }: {
 	folderId: Folder.FolderId;
 	folderName: string;
+	spaceId: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const router = useRouter();
@@ -36,9 +38,11 @@ export default function AddVideosButton({
 				onVideosAdded={() => {
 					router.refresh();
 				}}
-				addVideos={addVideosToFolder}
+				addVideos={(folderIdArg, videoIds) =>
+					addVideosToFolder(folderIdArg, videoIds, spaceId)
+				}
 				removeVideos={removeVideosFromFolder}
-				getVideos={() => getUserVideos()}
+				getVideos={() => getUserVideos(spaceId)}
 				getEntityVideoIds={getFolderVideoIds}
 			/>
 		</>

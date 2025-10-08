@@ -16,7 +16,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Search } from "lucide-react";
-import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -93,7 +92,7 @@ function AddVideosDialogBase<T>({
 	});
 
 	const { data: entityVideoIds } = useQuery<Video.VideoId[]>({
-		queryKey: ["entity-video-ids", entityId],
+		queryKey: ["entity-video-ids", entityId, entityName],
 		queryFn: async () => {
 			const result = await getEntityVideoIds(entityId);
 			if (!result.success) {
@@ -104,7 +103,8 @@ function AddVideosDialogBase<T>({
 		enabled: open,
 		refetchOnWindowFocus: false,
 		refetchOnMount: true,
-		gcTime: 1000 * 60 * 5,
+		staleTime: 0, // Always fetch fresh data
+		gcTime: 0, // Don't cache
 	});
 
 	const updateVideosMutation = useMutation({
@@ -217,8 +217,9 @@ function AddVideosDialogBase<T>({
 				{/* Tabs for filtering */}
 				<div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
 					{filterTabs.map((tab) => (
-						<div
+						<button
 							key={tab}
+							type="button"
 							className={clsx(
 								"flex relative flex-1 justify-center items-center w-full min-w-0 text-sm font-medium transition-colors",
 								videoTab === tab
@@ -226,6 +227,7 @@ function AddVideosDialogBase<T>({
 									: "cursor-pointer",
 							)}
 							onClick={() => setVideoTab(tab as "all" | "added" | "notAdded")}
+							disabled={videoTab === tab}
 						>
 							<p
 								className={clsx(
@@ -241,7 +243,7 @@ function AddVideosDialogBase<T>({
 										? "Added"
 										: "Not Added"}
 							</p>
-						</div>
+						</button>
 					))}
 				</div>
 
@@ -298,7 +300,7 @@ function AddVideosDialogBase<T>({
 								entityVideoIds={entityVideoIds || []}
 								height={300}
 								columnCount={3}
-								rowHeight={200}
+								rowHeight={230}
 							/>
 						)}
 					</div>

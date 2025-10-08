@@ -14,11 +14,19 @@ interface AddVideosToOrganizationDialogProps {
 	organizationId: Organisation.OrganisationId;
 	organizationName: string;
 	onVideosAdded?: () => void;
+	spaceId: string;
 }
 
 export const AddVideosToOrganizationDialog: React.FC<
 	AddVideosToOrganizationDialogProps
-> = ({ open, onClose, organizationId, organizationName, onVideosAdded }) => {
+> = ({
+	open,
+	onClose,
+	organizationId,
+	organizationName,
+	onVideosAdded,
+	spaceId,
+}) => {
 	return (
 		<AddVideosDialogBase
 			open={open}
@@ -28,7 +36,7 @@ export const AddVideosToOrganizationDialog: React.FC<
 			onVideosAdded={onVideosAdded}
 			removeVideos={removeVideosFromOrganization}
 			addVideos={addVideosToOrganization}
-			getVideos={getUserVideos}
+			getVideos={() => getUserVideos(spaceId)}
 			getEntityVideoIds={getOrganizationVideoIds}
 		/>
 	);

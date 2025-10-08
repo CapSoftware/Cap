@@ -5,13 +5,14 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
+	spaces,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 
-export async function getUserVideos() {
+export async function getUserVideos(spaceId: string) {
 	try {
 		const user = await getCurrentUser();
 
@@ -31,8 +32,8 @@ export async function getUserVideos() {
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 				ownerName: users.name,
-				folderName: folders.name,
-				folderColor: folders.color,
+				folderName: sql<string>`CASE WHEN ${folders.spaceId} = ${spaceId} THEN ${folders.name} ELSE NULL END`,
+				folderColor: sql<string>`CASE WHEN ${folders.spaceId} = ${spaceId} THEN ${folders.color} ELSE NULL END`,
 				effectiveDate: sql<string>`
           COALESCE(
             JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
@@ -48,6 +49,7 @@ export async function getUserVideos() {
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.leftJoin(folders, eq(videos.folderId, folders.id))
+			.leftJoin(spaces, eq(folders.spaceId, spaces.id))
 			.where(eq(videos.ownerId, userId))
 			.groupBy(
 				videos.id,
@@ -58,6 +60,8 @@ export async function getUserVideos() {
 				users.name,
 				folders.name,
 				folders.color,
+				folders.spaceId,
+				videos.folderId,
 			)
 			.orderBy(
 				desc(sql`COALESCE(

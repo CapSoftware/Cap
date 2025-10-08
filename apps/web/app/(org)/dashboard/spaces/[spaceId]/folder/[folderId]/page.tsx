@@ -50,6 +50,7 @@ const FolderPage = async (props: {
 					<NewSubfolderButton parentFolderId={params.folderId} />
 					<AddVideosButton
 						folderId={params.folderId}
+						spaceId={params.spaceId}
 						folderName={breadcrumb[breadcrumb.length - 1]?.name ?? "Folder"}
 					/>
 				</div>

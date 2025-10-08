@@ -195,6 +195,7 @@ export default async function SharedCapsPage(props: {
 				data={processedVideoData}
 				count={totalCount}
 				spaceData={space}
+				spaceId={params.spaceId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				spaceMembers={spaceMembersData}
 				organizationMembers={organizationMembersData}
@@ -302,6 +303,7 @@ export default async function SharedCapsPage(props: {
 				count={totalCount}
 				hideSharedWith
 				organizationData={organization}
+				spaceId={params.spaceId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}

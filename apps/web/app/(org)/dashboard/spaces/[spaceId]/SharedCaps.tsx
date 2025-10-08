@@ -46,6 +46,7 @@ export const SharedCaps = ({
 	data,
 	count,
 	spaceData,
+	spaceId,
 	spaceMembers,
 	organizationMembers,
 	currentUserId,
@@ -57,6 +58,7 @@ export const SharedCaps = ({
 	count: number;
 	dubApiKeyEnabled: boolean;
 	spaceData?: SpaceData;
+	spaceId: string;
 	hideSharedWith?: boolean;
 	spaceMembers?: SpaceMemberData[];
 	organizationMembers?: OrganizationMemberData[];
@@ -192,6 +194,7 @@ export const SharedCaps = ({
 						organizationId={organizationData.id}
 						organizationName={organizationData.name}
 						onVideosAdded={handleVideosAdded}
+						spaceId={spaceId}
 					/>
 				)}
 			</div>
@@ -258,6 +261,7 @@ export const SharedCaps = ({
 						organizationId={organizationData.id}
 						organizationName={organizationData.name}
 						onVideosAdded={handleVideosAdded}
+						spaceId={spaceId}
 					/>
 				)}
 				<Button
