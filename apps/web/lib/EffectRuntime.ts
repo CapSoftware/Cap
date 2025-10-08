@@ -8,11 +8,11 @@ import {
 import { Rpc } from "./Rpcs";
 import { getTracingConfig } from "./tracing";
 
-const TracingLayer = WebSdk.layer(getTracingConfig);
+// const TracingLayer = WebSdk.layer(getTracingConfig);
 
 const RuntimeLayer = Layer.mergeAll(
 	Rpc.Default,
-	TracingLayer,
+	// TracingLayer,
 	FetchHttpClient.layer,
 );
 
