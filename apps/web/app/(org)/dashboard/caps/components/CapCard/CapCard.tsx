@@ -43,6 +43,7 @@ import {
 } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
+import { usePublicEnv } from "@/utils/public-env";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -122,6 +123,8 @@ export const CapCard = ({
 	const [passwordProtected, setPasswordProtected] = useState(
 		cap.hasPassword || false,
 	);
+	const { webUrl } = usePublicEnv();
+
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
@@ -372,13 +375,17 @@ export const CapCard = ({
 							onClick={(e) => {
 								e.stopPropagation();
 								handleCopy(
-									buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
-										? `https://${customDomain}/s/${cap.id}`
+									NODE_ENV === "development"
+										? `${webUrl}/s/${cap.id}`
 										: buildEnv.NEXT_PUBLIC_IS_CAP &&
-												!customDomain &&
-												!domainVerified
-											? `https://cap.link/${cap.id}`
-											: `${location.origin}/s/${cap.id}`,
+												customDomain &&
+												domainVerified
+											? `https://${customDomain}/s/${cap.id}`
+											: buildEnv.NEXT_PUBLIC_IS_CAP &&
+													!customDomain &&
+													!domainVerified
+												? `https://cap.link/${cap.id}`
+												: `${webUrl}/s/${cap.id}`,
 								);
 							}}
 							className="delay-0"
