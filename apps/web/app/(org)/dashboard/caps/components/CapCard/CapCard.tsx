@@ -294,6 +294,18 @@ export const CapCard = ({
 		}
 	};
 
+	const copyLinkHandler = () => {
+		handleCopy(
+			NODE_ENV === "development"
+				? `${webUrl}/s/${cap.id}`
+				: buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
+					? `https://${customDomain}/s/${cap.id}`
+					: buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified
+						? `https://cap.link/${cap.id}`
+						: `${webUrl}/s/${cap.id}`,
+		);
+	};
+
 	return (
 		<>
 			<SharingDialog
@@ -376,19 +388,7 @@ export const CapCard = ({
 							tooltipContent="Copy link"
 							onClick={(e) => {
 								e.stopPropagation();
-								handleCopy(
-									NODE_ENV === "development"
-										? `${webUrl}/s/${cap.id}`
-										: buildEnv.NEXT_PUBLIC_IS_CAP &&
-												customDomain &&
-												domainVerified
-											? `https://${customDomain}/s/${cap.id}`
-											: buildEnv.NEXT_PUBLIC_IS_CAP &&
-													!customDomain &&
-													!domainVerified
-												? `https://cap.link/${cap.id}`
-												: `${webUrl}/s/${cap.id}`,
-								);
+								copyLinkHandler();
 							}}
 							className="delay-0"
 							icon={
@@ -448,17 +448,7 @@ export const CapCard = ({
 								<DropdownMenuItem
 									onClick={(e) => {
 										e.stopPropagation();
-										handleCopy(
-											buildEnv.NEXT_PUBLIC_IS_CAP &&
-												NODE_ENV === "production" &&
-												customDomain &&
-												domainVerified
-												? `https://${customDomain}/s/${cap.id}`
-												: buildEnv.NEXT_PUBLIC_IS_CAP &&
-														NODE_ENV === "production"
-													? `https://cap.link/${cap.id}`
-													: `${location.origin}/s/${cap.id}`,
-										);
+										copyLinkHandler();
 										toast.success("Link copied to clipboard");
 									}}
 									className="flex gap-2 items-center rounded-lg"
