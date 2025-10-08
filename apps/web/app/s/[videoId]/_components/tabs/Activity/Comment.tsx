@@ -22,7 +22,7 @@ const CommentComponent: React.FC<{
 	onCancelReply: () => void;
 	onDelete: (
 		commentId: Comment.CommentId,
-		parentId?: Comment.CommentId,
+		parentId: Comment.CommentId | null,
 	) => void;
 	user: typeof userSelectProps | null;
 	level?: number;
@@ -56,7 +56,7 @@ const CommentComponent: React.FC<{
 
 	const handleDelete = () => {
 		if (window.confirm("Are you sure you want to delete this comment?")) {
-			onDelete(comment.id, comment.parentCommentId ?? undefined);
+			onDelete(comment.id, comment.parentCommentId);
 		}
 	};
 
