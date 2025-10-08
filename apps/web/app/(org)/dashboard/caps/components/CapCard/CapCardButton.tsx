@@ -2,7 +2,8 @@
 
 import { Button } from "@cap/ui";
 import clsx from "clsx";
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
+import React from "react";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardButtonProps {
@@ -10,7 +11,7 @@ interface CapCardButtonProps {
 	onClick?: (e: MouseEvent) => void;
 	disabled?: boolean;
 	className: string;
-	icon: () => ReactNode;
+	icon: React.JSX.Element;
 	asChild?: boolean;
 }
 
@@ -36,7 +37,7 @@ export const CapCardButton = ({
 				size="sm"
 				aria-label={tooltipContent}
 			>
-				{icon()}
+				{React.cloneElement(icon, { className: "size-3.5" })}
 			</Button>
 		</Tooltip>
 	);

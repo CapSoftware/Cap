@@ -266,7 +266,7 @@ export const Caps = ({
 		[data, isUploading, uploadingCapId],
 	);
 
-	if (count === 0) return <EmptyCapState />;
+	if (count === 0 && folders.length === 0) return <EmptyCapState />;
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
