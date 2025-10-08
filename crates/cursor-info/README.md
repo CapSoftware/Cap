@@ -156,6 +156,21 @@ macOS cursor detection uses SHA-256 hashing of the cursor's TIFF image data. Thi
 - Cursors are resolution-independent
 - Hash comparison provides reliable identification
 
+#### macOS Version Compatibility
+
+The current implementation supports cursor detection for macOS versions up to Sequoia (macOS 15). 
+
+**macOS Tahoe (macOS 16) Support:**
+macOS Tahoe introduces a new "Liquid Glass" design language which may include updated cursor designs with different visual appearance. If cursor icons have changed in Tahoe, new cursor hashes will need to be extracted and added to the `from_hash()` function in `src/macos.rs`.
+
+To add Tahoe cursor support:
+1. Run `cursors.html` on a macOS Tahoe system
+2. Compare the generated hashes with existing ones
+3. If hashes differ, extract the new cursor SVG assets
+4. Update `src/macos.rs` with new hashes
+5. Update assets in `assets/mac/` if cursor designs have changed
+6. Test cursor detection on Tahoe to ensure proper identification
+
 ### Windows Implementation
 
 Windows cursor detection uses `HCURSOR` handle comparison with a cached lookup table of system cursors loaded at runtime.
