@@ -267,8 +267,6 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		<Caps
 			data={processedVideoData}
 			folders={foldersData}
-			customDomain={customDomain}
-			domainVerified={domainVerified}
 			count={totalCount}
 			dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 		/>

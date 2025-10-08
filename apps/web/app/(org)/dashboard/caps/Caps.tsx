@@ -52,15 +52,11 @@ export type VideoData = {
 export const Caps = ({
 	data,
 	count,
-	customDomain,
-	domainVerified,
 	dubApiKeyEnabled,
 	folders,
 }: {
 	data: VideoData;
 	count: number;
-	customDomain: string | null;
-	domainVerified: boolean;
 	folders: FolderDataType[];
 	dubApiKeyEnabled: boolean;
 }) => {
@@ -322,9 +318,7 @@ export const Caps = ({
 										}
 									}}
 									userId={user?.id}
-									customDomain={customDomain}
 									isLoadingAnalytics={isLoadingAnalytics}
-									domainVerified={domainVerified}
 									isSelected={selectedCaps.includes(video.id)}
 									anyCapSelected={anyCapSelected}
 									onSelectToggle={() => handleCapSelection(video.id)}
