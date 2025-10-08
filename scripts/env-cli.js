@@ -70,6 +70,7 @@ async function main() {
 			log.info("Generated DATABASE_ENCRYPTION_KEY");
 		}
 		envs.DATABASE_ENCRYPTION_KEY = allEnvs.DATABASE_ENCRYPTION_KEY;
+		envs.SKIP_APP_ENV_VALIDATION = "true";
 
 		usingDockerEnvironment = await confirm({
 			message: "Will you be running S3 and MySQL via Docker?",
