@@ -1,6 +1,11 @@
+import { Resource, Tracer } from "@effect/opentelemetry";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Effect, Option } from "effect";
+import { Effect, Layer, Option } from "effect";
+
+export const OtelTracingLive = Tracer.layerGlobal.pipe(
+	Layer.provide(Resource.layer({ serviceName: "cap-web" })),
+);
 
 export const getTracingConfig = Effect.gen(function* () {
 	const axiomToken = Option.fromNullable(process.env.NEXT_PUBLIC_AXIOM_TOKEN);

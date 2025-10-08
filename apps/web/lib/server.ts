@@ -13,7 +13,7 @@ import {
 	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
+import * as NodeSdk from "@effect/opentelemetry";
 import {
 	FetchHttpClient,
 	type HttpApi,
@@ -32,13 +32,14 @@ import {
 	Layer,
 	ManagedRuntime,
 	Option,
+	Tracer,
 } from "effect";
 import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
 
 import { getTracingConfig } from "./tracing";
 
-export const TracingLayer = NodeSdk.layer(getTracingConfig);
+// export const TracingLayer = NodeSdk.layer(getTracingConfig);
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
@@ -93,9 +94,7 @@ export const Dependencies = Layer.mergeAll(
 	WorkflowRpcLive,
 	WorkflowHttpLive,
 ).pipe(
-	Layer.provideMerge(
-		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),
-	),
+	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
 );
 
 // purposefully not exposed
@@ -133,6 +132,8 @@ const cors = HttpApiBuilder.middlewareCors({
 	allowedHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
 
+import { trace } from "@opentelemetry/api";
+
 export const apiToHandler = (
 	api: Layer.Layer<
 		HttpApi.Api,
@@ -149,6 +150,17 @@ export const apiToHandler = (
 		Layer.provide(
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
-		HttpApiBuilder.toWebHandler,
+		(l) =>
+			HttpApiBuilder.toWebHandler(l, {
+				middleware: (app) => {
+					const parentSpan = trace.getActiveSpan();
+					if (!parentSpan) return app;
+					return app.pipe(
+						Effect.withParentSpan(
+							Tracer.externalSpan(parentSpan.spanContext()),
+						),
+					);
+				},
+			}),
 		(v) => (req: Request) => v.handler(req),
 	);
