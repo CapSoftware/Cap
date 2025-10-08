@@ -5,7 +5,7 @@ import type React from "react";
 import { addVideosToOrganization } from "@/actions/organizations/add-videos";
 import { getOrganizationVideoIds } from "@/actions/organizations/get-organization-videos";
 import { removeVideosFromOrganization } from "@/actions/organizations/remove-videos";
-import { getUserVideos } from "@/actions/videos/get-user-videos";
+import { getUserVideos } from "@/actions/spaces/get-user-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
 
 interface AddVideosToOrganizationDialogProps {

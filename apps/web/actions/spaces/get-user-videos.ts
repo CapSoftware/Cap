@@ -11,7 +11,7 @@ import {
 } from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 
-export async function getUserVideos(limit?: number) {
+export async function getUserVideos() {
 	try {
 		const user = await getCurrentUser();
 
@@ -64,8 +64,7 @@ export async function getUserVideos(limit?: number) {
           JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )`),
-			)
-			.limit(limit || 20);
+			);
 
 		const processedVideoData = videoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =

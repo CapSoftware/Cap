@@ -31,7 +31,7 @@ interface AddVideosDialogBaseProp<T> {
 	onVideosAdded?: () => void;
 	addVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
 	removeVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
-	getVideos: (limit?: number) => Promise<any>;
+	getVideos: () => Promise<any>;
 	getEntityVideoIds: (entityId: T) => Promise<any>;
 }
 

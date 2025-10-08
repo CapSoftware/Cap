@@ -9,7 +9,7 @@ import { useState } from "react";
 import { addVideosToFolder } from "@/actions/folders/add-videos";
 import { getFolderVideoIds } from "@/actions/folders/get-folder-videos";
 import { removeVideosFromFolder } from "@/actions/folders/remove-videos";
-import { getUserVideos } from "@/actions/videos/get-user-videos";
+import { getUserVideos } from "@/actions/spaces/get-user-videos";
 import AddVideosDialogBase from "../../components/AddVideosDialogBase";
 
 export default function AddVideosButton({
@@ -38,7 +38,7 @@ export default function AddVideosButton({
 				}}
 				addVideos={addVideosToFolder}
 				removeVideos={removeVideosFromFolder}
-				getVideos={getUserVideos}
+				getVideos={() => getUserVideos()}
 				getEntityVideoIds={getFolderVideoIds}
 			/>
 		</>
