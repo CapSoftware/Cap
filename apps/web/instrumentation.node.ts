@@ -14,36 +14,33 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import path from "path";
 
 export async function register() {
-	if (process.env.NODE_ENV === "development") {
-	} else {
-		console.log("Waiting 5 seconds to run migrations");
-
-		// Function to trigger migrations with retry logic
-		const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
-			try {
-				await runMigrations();
-			} catch (error) {
-				console.error(
-					`🚨 Error triggering migrations (attempt ${retryCount + 1}):`,
-					error,
-				);
-				if (retryCount < maxRetries - 1) {
-					console.log(
-						`🔄 Retrying in 5 seconds... (${retryCount + 1}/${maxRetries})`,
-					);
-					setTimeout(() => triggerMigrations(retryCount + 1, maxRetries), 5000);
-				} else {
-					console.error(`🚨 All ${maxRetries} migration attempts failed.`);
-					process.exit(1); // Exit with error code if all attempts fail
-				}
-			}
-		};
-
-		// Add a timeout to trigger migrations after 5 seconds on server start
-		setTimeout(() => triggerMigrations(), 5000);
-
-		setTimeout(() => createS3Bucket(), 5000);
-	}
+	// if (process.env.NODE_ENV === "development") {
+	// } else {
+	// 	console.log("Waiting 5 seconds to run migrations");
+	// 	// Function to trigger migrations with retry logic
+	// 	const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
+	// 		try {
+	// 			await runMigrations();
+	// 		} catch (error) {
+	// 			console.error(
+	// 				`🚨 Error triggering migrations (attempt ${retryCount + 1}):`,
+	// 				error,
+	// 			);
+	// 			if (retryCount < maxRetries - 1) {
+	// 				console.log(
+	// 					`🔄 Retrying in 5 seconds... (${retryCount + 1}/${maxRetries})`,
+	// 				);
+	// 				setTimeout(() => triggerMigrations(retryCount + 1, maxRetries), 5000);
+	// 			} else {
+	// 				console.error(`🚨 All ${maxRetries} migration attempts failed.`);
+	// 				process.exit(1); // Exit with error code if all attempts fail
+	// 			}
+	// 		}
+	// 	};
+	// 	// Add a timeout to trigger migrations after 5 seconds on server start
+	// 	setTimeout(() => triggerMigrations(), 5000);
+	// 	setTimeout(() => createS3Bucket(), 5000);
+	// }
 }
 
 async function createS3Bucket() {

@@ -59,7 +59,10 @@
 		"./auth/session": "./auth/session.ts",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
-		"./helpers": "./helpers.ts"
+		"./helpers": "./helpers.ts",
+		"./emails/config": "./emails/config.ts",
+		"./emails/*": "./emails/*.tsx",
+		"./types": "./types/index.ts"
 	},
 	"publishConfig": {
 		"exports": {

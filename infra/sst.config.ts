@@ -8,6 +8,8 @@ const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 
 const CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
+const AXIOM_API_TOKEN = "xaat-8b4a0ead-c68d-4a65-aba6-151213f9d701";
+const AXIOM_DATASET = "cap";
 
 export default $config({
 	app(input) {
@@ -44,6 +46,14 @@ export default $config({
 
 		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
 
+		const vercelVariables = [
+			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
+			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
+			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
+			{ key: "NEXT_PUBLIC_CAP_AWS_BUCKET", value: recordingsBucket.bucket },
+			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_HTTP.value },
+		];
+
 		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
 		// 	bucket: recordingsBucket.id,
 		// 	status: "Enabled",
@@ -57,43 +67,12 @@ export default $config({
 
 		const vercelProject = vercel.getProjectOutput({ name: "cap-web" });
 
-		function vercelEnvVar(
-			name: string,
-			args: Omit<
-				vercel.ProjectEnvironmentVariableArgs,
-				"projectId" | "customEnvironmentIds" | "targets"
-			>,
-		) {
-			new vercel.ProjectEnvironmentVariable(name, {
-				...args,
-				projectId: vercelProject.id,
-				customEnvironmentIds:
-					$app.stage === "staging"
-						? ["env_CFbtmnpsI11e4o8X5UD8MZzxELQi"]
-						: undefined,
-				targets:
-					$app.stage === "staging" ? undefined : ["preview", "production"],
-			});
-		}
-
-		vercelEnvVar("VercelDatabaseURLEnv", {
-			key: "DATABASE_URL",
-			value: secrets.DATABASE_URL_HTTP.value,
-		});
-
 		if (webUrl) {
-			vercelEnvVar("VercelWebURLEnv", {
-				key: "WEB_URL",
-				value: webUrl,
-			});
-			vercelEnvVar("VercelNextPublicWebURLEnv", {
-				key: "NEXT_PUBLIC_WEB_URL",
-				value: webUrl,
-			});
-			vercelEnvVar("VercelNextAuthURLEnv", {
-				key: "NEXTAUTH_URL",
-				value: webUrl,
-			});
+			vercelVariables.push(
+				{ key: "WEB_URL", value: webUrl },
+				{ key: "NEXT_PUBLIC_WEB_URL", value: webUrl },
+				{ key: "NEXTAUTH_URL", value: webUrl },
+			);
 		}
 
 		// vercelEnvVar("VercelCloudfrontEnv", {
@@ -101,30 +80,26 @@ export default $config({
 		// 	value: cloudfrontDistribution.id,
 		// });
 
-		vercelEnvVar("VercelAWSBucketEnv", {
-			key: "CAP_AWS_BUCKET",
-			value: recordingsBucket.bucket,
-		});
+		const awsAccount = aws.getCallerIdentityOutput();
 
-		vercelEnvVar("VercelNextPublicAWSBucketEnv", {
-			key: "NEXT_PUBLIC_CAP_AWS_BUCKET",
-			value: recordingsBucket.bucket,
-		});
-
-		const oidc = (() => {
+		const oidc = await (async () => {
 			const aud = `https://vercel.com/${VERCEL_TEAM_SLUG}`;
 			const url = `oidc.vercel.com/${VERCEL_TEAM_SLUG}`;
 			return {
 				aud,
 				url,
-				provider: new aws.iam.OpenIdConnectProvider("VercelAWSOIDC", {
-					url: `https://${url}`,
-					clientIdLists: [aud],
-				}),
+				provider: await aws.iam
+					.getOpenIdConnectProvider({ url: `https://${url}` })
+					.catch(
+						() =>
+							new aws.iam.OpenIdConnectProvider(
+								"VercelAWSOIDC",
+								{ url: `https://${url}`, clientIdLists: [aud] },
+								{ retainOnDelete: true },
+							),
+					),
 			};
 		})();
-
-		const awsAccount = aws.getCallerIdentityOutput();
 
 		const vercelAwsAccessRole = new aws.iam.Role("VercelAWSAccessRole", {
 			assumeRolePolicy: {
@@ -173,12 +148,27 @@ export default $config({
 			],
 		});
 
-		vercelEnvVar("VercelAWSAccessRoleArn", {
-			key: "VERCEL_AWS_ROLE_ARN",
-			value: vercelAwsAccessRole.arn,
-		});
+		const workflowCluster = await WorkflowCluster(recordingsBucket, secrets);
 
-		// await WorkflowCluster(recordingsBucket, secrets);
+		if ($app.stage === "staging" || $app.stage === "production") {
+			[
+				...vercelVariables,
+				{ key: "REMOTE_WORKFLOW_URL", value: workflowCluster.api.url },
+				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
+			].map(
+				(v) =>
+					new vercel.ProjectEnvironmentVariable(`VercelEnv${v.key}`, {
+						...v,
+						projectId: vercelProject.id,
+						customEnvironmentIds:
+							$app.stage === "staging"
+								? ["env_CFbtmnpsI11e4o8X5UD8MZzxELQi"]
+								: undefined,
+						targets:
+							$app.stage === "staging" ? undefined : ["preview", "production"],
+					}),
+			);
+		}
 
 		// DiscordBot();
 	},
@@ -281,20 +271,26 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 			cloudmapNamespaceId: privateDnsNamespace.id,
 			cloudmapNamespaceName: privateDnsNamespace.name,
 		},
+		transform: {
+			cluster: {
+				settings: [{ name: "containerInsights", value: "enhanced" }],
+			},
+		},
 	});
 
 	const commonEnvironment = {
-		SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
 		CAP_AWS_REGION: bucket.region,
 		CAP_AWS_BUCKET: bucket.bucket,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
 		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
 		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
+		AXIOM_API_TOKEN,
+		AXIOM_DOMAIN: "api.axiom.co",
+		AXIOM_DATASET,
 	};
 
 	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
 		"GHCRCredentialsSecret",
-		{ name: "GhcrCredentials" },
 	);
 
 	new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
@@ -307,7 +303,39 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		),
 	});
 
-	const shardManager = new sst.aws.Service("ShardManager", {
+	const ghcrCredentialsTransform = {
+		taskRole(args) {
+			args.inlinePolicies = pulumi
+				.all([args.inlinePolicies ?? [], ghcrCredentialsSecret.arn])
+				.apply(([policies, arn]) => {
+					policies.push({
+						policy: JSON.stringify({
+							Version: "2012-10-17",
+							Statement: [
+								{
+									Effect: "Allow",
+									Action: ["secretsmanager:GetSecretValue"],
+									Resource: [arn],
+								},
+							],
+						}),
+					});
+					return policies;
+				});
+		},
+		taskDefinition(args) {
+			args.containerDefinitions = pulumi
+				.all([$jsonParse(args.containerDefinitions), ghcrCredentialsSecret.arn])
+				.apply(([def, arn]) => {
+					for (const container of def) {
+						container.repositoryCredentials = { credentialsParameter: arn };
+					}
+					return JSON.stringify(def);
+				});
+		},
+	} satisfies sst.aws.ServiceArgs["transform"];
+
+	new sst.aws.Service("ShardManager", {
 		cluster,
 		architecture: "arm64",
 		containers: [
@@ -317,51 +345,70 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 				command: ["src/shard-manager.ts"],
 				environment: {
 					...commonEnvironment,
+					SHARD_MANAGER_HOST: "0.0.0.0",
 				},
 			},
 		],
+		transform: ghcrCredentialsTransform,
+	});
+
+	const runner = new sst.aws.Service("Runner", {
+		cluster,
+		capacity: "spot",
+		cpu: "0.25 vCPU",
+		memory: "1 GB",
+		architecture: "arm64",
+		serviceRegistry: { port: 42169 },
+		image: "ghcr.io/brendonovich/cap-web-cluster:latest",
+		command: ["src/runner/index.ts"],
+		health: {
+			command: ["CMD", "deno", "run", "--allow-all", "src/health-check.ts"],
+		},
+		environment: {
+			...commonEnvironment,
+			SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
+			PORT: "42069",
+			HEALTH_CHECK_PORT: "3000",
+		},
+		scaling: {
+			min: 2,
+			max: 16,
+			cpuUtilization: 70,
+			memoryUtilization: 70,
+		},
 		transform: {
-			taskRole(args) {
-				args.inlinePolicies = pulumi
-					.all([args.inlinePolicies ?? [], ghcrCredentialsSecret.arn])
-					.apply(([policies, arn]) => {
-						policies.push({
-							policy: JSON.stringify({
-								Version: "2012-10-17",
-								Statement: [
-									{
-										Effect: "Allow",
-										Action: ["secretsmanager:GetSecretValue"],
-										Resource: [arn],
-									},
-								],
-							}),
-						});
-						return policies;
-					});
-			},
-			taskDefinition(args) {
-				args.containerDefinitions = pulumi
-					.all([
-						$jsonParse(args.containerDefinitions),
-						ghcrCredentialsSecret.arn,
-					])
-					.apply(([def, arn]) => {
-						def[0].repositoryCredentials = { credentialsParameter: arn };
-						return JSON.stringify(def);
-					});
+			...ghcrCredentialsTransform,
+			// Set a restart policy for all containers
+			// Not provided by the SST configs
+			taskDefinition: (args) => {
+				// "containerDefinitions" is a JSON string, parse first
+				let value = $jsonParse(args.containerDefinitions);
+
+				// Update "portMappings"
+				value = value.apply((containerDefinitions) => {
+					for (const container of containerDefinitions) {
+						container.restartPolicy = {
+							enabled: true,
+							restartAttemptPeriod: 60,
+						};
+					}
+					return containerDefinitions;
+				});
+
+				// Convert back to JSON string
+				args.containerDefinitions = $jsonStringify(value);
+
+				ghcrCredentialsTransform.taskDefinition(args);
 			},
 		},
 	});
 
-	// new sst.aws.Function("WorkflowClusterProxyLambda", {
-	// 	vpc,
-	// 	url: true,
-	// 	timeout: "5 minutes",
-	// 	link: [shardManager],
-	// 	handler: "src/serverless/lambda.handler",
-	// 	environment: {
-	// 		SHARD_MANAGER_HOST: generateServiceHostname("ShardManager"),
-	// 	},
-	// });
+	const api = new sst.aws.ApiGatewayV2("MyApi", {
+		vpc,
+	});
+	api.routePrivate("$default", runner.nodes.cloudmapService.arn);
+
+	return {
+		api,
+	};
 }

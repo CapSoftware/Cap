@@ -21,6 +21,25 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "GITHUB_PAT": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "MyApi": {
+      "type": "sst.aws.ApiGatewayV2"
+      "url": string
+    }
+    "Runner": {
+      "service": string
+      "type": "sst.aws.Service"
+    }
+    "ShardManager": {
+      "service": string
+      "type": "sst.aws.Service"
+    }
+    "Vpc": {
+      "type": "sst.aws.Vpc"
+    }
   }
 }
 /// <reference path="sst-env.d.ts" />

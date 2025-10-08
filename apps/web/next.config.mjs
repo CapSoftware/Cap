@@ -17,6 +17,8 @@ const nextConfig = {
 		"@cap/utils",
 		"@cap/web-api-contract",
 		"@cap/web-domain",
+		"@cap/env",
+		"@cap/database",
 		"next-mdx-remote",
 	],
 	eslint: {
@@ -29,9 +31,10 @@ const nextConfig = {
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",
-			"@cap/web-api-contract",
-			"@cap/web-domain",
-			"@cap/web-backend",
+			// "@cap/web-api-contract",
+			// "@cap/web-domain",
+			// "@cap/web-backend",
+			"@cap/database",
 		],
 	},
 	images: {

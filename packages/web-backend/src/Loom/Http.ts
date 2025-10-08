@@ -24,6 +24,7 @@ export const LoomHttpLive = HttpApiBuilder.group(
 							loom: payload.loom,
 						})
 						.pipe(
+							Effect.tapDefect(Effect.logError),
 							Effect.catchTag(
 								"RpcClientError",
 								() => new Http.InternalServerError({ cause: "unknown" }),
