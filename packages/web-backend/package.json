@@ -9,6 +9,7 @@
 		"@aws-sdk/cloudfront-signer": "^3.821.0",
 		"@aws-sdk/s3-presigned-post": "^3.485.0",
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
+		"@cap/apps": "workspace:*",
 		"@cap/database": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",

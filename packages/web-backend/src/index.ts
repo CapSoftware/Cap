@@ -1,3 +1,5 @@
+export { AppInstallationsRepo } from "./Apps/AppInstallationsRepo.ts";
+export { Apps } from "./Apps/index.ts";
 export * from "./Auth.ts";
 export * from "./Database.ts";
 export { Folders } from "./Folders/index.ts";

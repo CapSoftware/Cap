@@ -7,10 +7,15 @@ import { Effect, Layer, Option } from "effect";
 
 import { getCurrentUser } from "./Auth.ts";
 import { Database } from "./Database.ts";
+import { AppsRpcsLive } from "./Apps/AppsRpcs.ts";
 import { FolderRpcsLive } from "./Folders/FoldersRpcs.ts";
 import { VideosRpcsLive } from "./Videos/VideosRpcs.ts";
 
-export const RpcsLive = Layer.mergeAll(VideosRpcsLive, FolderRpcsLive);
+export const RpcsLive = Layer.mergeAll(
+	VideosRpcsLive,
+	FolderRpcsLive,
+	AppsRpcsLive,
+);
 
 export const RpcAuthMiddlewareLive = Layer.effect(
 	RpcAuthMiddleware,

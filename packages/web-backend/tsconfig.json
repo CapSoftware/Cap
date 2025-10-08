@@ -2,11 +2,18 @@
 	"extends": "../config/base.tsconfig.json",
 	"exclude": ["node_modules", "dist"],
 	"include": ["**/*.ts", "**/*.tsx"],
+	"references": [
+		{ "path": "../apps" }
+	],
 	"compilerOptions": {
 		"moduleResolution": "bundler",
 		"composite": true,
 		"outDir": "dist",
 		"noEmit": false,
-		"emitDeclarationOnly": true
+		"emitDeclarationOnly": true,
+		"paths": {
+			"@cap/apps": ["../apps/src/index.ts"],
+			"@cap/apps/*": ["../apps/src/*"]
+		}
 	}
 }
