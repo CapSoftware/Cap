@@ -349,15 +349,17 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[51]",
 					)}
 				>
-					<CapCardButton
-						tooltipContent="Share"
-						onClick={(e) => {
-							e.stopPropagation();
-							setIsSharingDialogOpen(true);
-						}}
-						className="delay-0"
-						icon={<FontAwesomeIcon icon={faShare} />}
-					/>
+					{isOwner && (
+						<CapCardButton
+							tooltipContent="Share"
+							onClick={(e) => {
+								e.stopPropagation();
+								setIsSharingDialogOpen(true);
+							}}
+							className="delay-0"
+							icon={<FontAwesomeIcon icon={faShare} />}
+						/>
+					)}
 
 					<CapCardButton
 						tooltipContent="Download Cap"
