@@ -37,7 +37,9 @@ export const CapCardButton = ({
 				size="sm"
 				aria-label={tooltipContent}
 			>
-				{React.cloneElement(icon, { className: "size-3.5" })}
+				{React.cloneElement(icon, {
+					className: clsx(icon.props.className, "size-3.5"),
+				})}
 			</Button>
 		</Tooltip>
 	);
