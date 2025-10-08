@@ -243,6 +243,7 @@ export const ShareHeader = ({
 											src={data.ownerImage}
 											alt={data.ownerName || ""}
 											width={32}
+											unoptimized
 											height={32}
 											className="rounded-full"
 										/>
