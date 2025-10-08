@@ -227,6 +227,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.where(
 			and(
 				eq(folders.organizationId, user.activeOrganizationId),
+				eq(folders.createdById, user.id),
 				isNull(folders.parentId),
 				isNull(folders.spaceId),
 			),

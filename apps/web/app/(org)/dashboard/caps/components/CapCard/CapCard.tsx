@@ -18,6 +18,7 @@ import {
 	faGear,
 	faLink,
 	faLock,
+	faShare,
 	faTrash,
 	faUnlock,
 	faVideo,
@@ -42,6 +43,7 @@ import {
 } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
+import { usePublicEnv } from "@/utils/public-env";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -121,6 +123,8 @@ export const CapCard = ({
 	const [passwordProtected, setPasswordProtected] = useState(
 		cap.hasPassword || false,
 	);
+	const { webUrl } = usePublicEnv();
+
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
@@ -345,71 +349,73 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[51]",
 					)}
 				>
-					{isOwner ? (
-						<CapCardButton
-							tooltipContent="Settings"
-							onClick={(e) => {
-								e.stopPropagation();
-								setIsSettingsDialogOpen(true);
-							}}
-							className="delay-0"
-							icon={() => {
-								return <FontAwesomeIcon className="size-4" icon={faGear} />;
-							}}
-						/>
-					) : (
-						<CapCardButton
-							tooltipContent="Download Cap"
-							onClick={(e) => {
-								e.stopPropagation();
-								handleDownload();
-							}}
-							className="delay-0"
-							icon={() => (
-								<FontAwesomeIcon className="size-4" icon={faDownload} />
-							)}
-						/>
-					)}
 					<CapCardButton
-						tooltipContent="Copy link"
+						tooltipContent="Share"
 						onClick={(e) => {
 							e.stopPropagation();
-							handleCopy(
-								buildEnv.NEXT_PUBLIC_IS_CAP &&
-									NODE_ENV === "production" &&
-									customDomain &&
-									domainVerified
-									? `https://${customDomain}/s/${cap.id}`
-									: buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-										? `https://cap.link/${cap.id}`
-										: `${location.origin}/s/${cap.id}`,
-							);
+							setIsSharingDialogOpen(true);
 						}}
 						className="delay-0"
-						icon={() => {
-							return !copyPressed ? (
-								<FontAwesomeIcon
-									className="text-gray-12 size-4"
-									icon={faLink}
-								/>
-							) : (
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									width="24"
-									height="24"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									className="text-gray-12 size-5 svgpathanimation"
-								>
-									<path d="M20 6 9 17l-5-5" />
-								</svg>
-							);
-						}}
+						icon={<FontAwesomeIcon icon={faShare} />}
 					/>
+
+					<CapCardButton
+						tooltipContent="Download Cap"
+						onClick={(e) => {
+							e.stopPropagation();
+							handleDownload();
+						}}
+						className="delay-0"
+						icon={<FontAwesomeIcon icon={faDownload} />}
+					/>
+
+					{!isOwner && (
+						<CapCardButton
+							tooltipContent="Copy link"
+							onClick={(e) => {
+								e.stopPropagation();
+								handleCopy(
+									NODE_ENV === "development"
+										? `${webUrl}/s/${cap.id}`
+										: buildEnv.NEXT_PUBLIC_IS_CAP &&
+												customDomain &&
+												domainVerified
+											? `https://${customDomain}/s/${cap.id}`
+											: buildEnv.NEXT_PUBLIC_IS_CAP &&
+													!customDomain &&
+													!domainVerified
+												? `https://cap.link/${cap.id}`
+												: `${webUrl}/s/${cap.id}`,
+								);
+							}}
+							className="delay-0"
+							icon={
+								<>
+									{!copyPressed ? (
+										<FontAwesomeIcon
+											className="text-gray-12 size-4"
+											icon={faLink}
+										/>
+									) : (
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="24"
+											height="24"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											className="text-gray-12 size-5 svgpathanimation"
+										>
+											<path d="M20 6 9 17l-5-5" />
+										</svg>
+									)}
+								</>
+							}
+						/>
+					)}
 
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
@@ -418,9 +424,7 @@ export const CapCard = ({
 									<CapCardButton
 										tooltipContent="More options"
 										className="delay-75"
-										icon={() => (
-											<FontAwesomeIcon className="size-4" icon={faEllipsis} />
-										)}
+										icon={<FontAwesomeIcon icon={faEllipsis} />}
 									/>
 								</div>
 							</DropdownMenuTrigger>
@@ -432,12 +436,33 @@ export const CapCard = ({
 								<DropdownMenuItem
 									onClick={(e) => {
 										e.stopPropagation();
-										handleDownload();
+										setIsSettingsDialogOpen(true);
 									}}
 									className="flex gap-2 items-center rounded-lg"
 								>
-									<FontAwesomeIcon className="size-3" icon={faDownload} />
-									<p className="text-sm text-gray-12">Download</p>
+									<FontAwesomeIcon className="size-3" icon={faGear} />
+									<p className="text-sm text-gray-12">Settings</p>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										handleCopy(
+											buildEnv.NEXT_PUBLIC_IS_CAP &&
+												NODE_ENV === "production" &&
+												customDomain &&
+												domainVerified
+												? `https://${customDomain}/s/${cap.id}`
+												: buildEnv.NEXT_PUBLIC_IS_CAP &&
+														NODE_ENV === "production"
+													? `https://cap.link/${cap.id}`
+													: `${location.origin}/s/${cap.id}`,
+										);
+										toast.success("Link copied to clipboard");
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faLink} />
+									<p className="text-sm text-gray-12">Copy link</p>
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
