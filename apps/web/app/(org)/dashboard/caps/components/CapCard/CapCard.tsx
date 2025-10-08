@@ -372,12 +372,11 @@ export const CapCard = ({
 							onClick={(e) => {
 								e.stopPropagation();
 								handleCopy(
-									buildEnv.NEXT_PUBLIC_IS_CAP &&
-										NODE_ENV === "production" &&
-										customDomain &&
-										domainVerified
+									buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified
 										? `https://${customDomain}/s/${cap.id}`
-										: buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+										: buildEnv.NEXT_PUBLIC_IS_CAP &&
+												!customDomain &&
+												!domainVerified
 											? `https://cap.link/${cap.id}`
 											: `${location.origin}/s/${cap.id}`,
 								);
