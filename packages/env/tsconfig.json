@@ -1,14 +1,37 @@
 {
-	"extends": "../config/base.tsconfig.json",
-	"exclude": ["node_modules", "dist"],
-	"include": ["next-env.d.ts", ".next/types/**/*.ts", "**/*.ts", "**/*.tsx"],
-	"compilerOptions": {
-		"baseUrl": ".",
-		"moduleResolution": "bundler",
-		"composite": true,
-		"outDir": "dist",
-		"noEmit": false,
-		"emitDeclarationOnly": true,
-		"types": ["node"]
-	}
+  "extends": "../config/base.tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist"
+  ],
+  "include": [
+    "next-env.d.ts",
+    ".next/types/**/*.ts",
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "moduleResolution": "bundler",
+    "composite": true,
+    "outDir": "dist",
+    "noEmit": false,
+    "emitDeclarationOnly": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@cap/apps": [
+        "../apps/src/index.ts"
+      ],
+      "@cap/apps/*": [
+        "../apps/src/*"
+      ]
+    }
+  },
+  "references": [
+    {
+      "path": "../apps"
+    }
+  ]
 }

@@ -1,14 +1,27 @@
 {
-	"name": "@cap/env",
-	"private": true,
-	"type": "module",
-	"main": "./index.ts",
-	"types": "./index.ts",
-	"dependencies": {
-		"@t3-oss/env-nextjs": "^0.12.0",
-		"zod": "^3.25.76"
-	},
-	"devDependencies": {
-		"@types/node": "^22.15.14"
-	}
+  "name": "@cap/env",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./build": "./build.ts",
+    "./server": "./server.ts",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "build": ["./build.ts"],
+      "server": ["./server.ts"],
+      "*": ["./index.ts"]
+    }
+  },
+  "dependencies": {
+    "@t3-oss/env-nextjs": "^0.12.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.14"
+  }
 }
