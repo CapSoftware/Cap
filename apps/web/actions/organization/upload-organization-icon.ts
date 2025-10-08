@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { S3Buckets } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
 import DOMPurify from "dompurify";

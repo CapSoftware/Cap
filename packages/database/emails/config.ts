@@ -1,4 +1,5 @@
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import type { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 

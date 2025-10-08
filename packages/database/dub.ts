@@ -1,4 +1,4 @@
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { Dub } from "dub";
 
 export const dub = () =>

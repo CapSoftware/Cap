@@ -8,7 +8,7 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { S3Buckets } from "@cap/web-backend";
 import { Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";

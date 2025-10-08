@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { organizations, s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";

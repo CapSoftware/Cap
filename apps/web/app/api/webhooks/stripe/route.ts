@@ -1,7 +1,8 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { users } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";

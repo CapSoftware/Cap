@@ -10,7 +10,8 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { buildEnv, NODE_ENV } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
 import { Organisation, Video } from "@cap/web-domain";

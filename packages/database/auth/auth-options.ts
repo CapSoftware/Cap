@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";

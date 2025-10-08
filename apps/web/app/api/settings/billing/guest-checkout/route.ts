@@ -1,4 +1,5 @@
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { PostHog } from "posthog-node";

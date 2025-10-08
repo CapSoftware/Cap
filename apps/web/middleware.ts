@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
@@ -10,14 +10,21 @@ const addHttps = (s?: string) => {
 	return `https://${s}`;
 };
 
+const runtimeEnv = {
+	WEB_URL: process.env.WEB_URL ?? buildEnv.NEXT_PUBLIC_WEB_URL ?? "http://localhost:3000",
+	VERCEL_URL_HOST: process.env.VERCEL_URL_HOST,
+	VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL_HOST,
+	VERCEL_PROJECT_PRODUCTION_URL_HOST: process.env.VERCEL_PROJECT_PRODUCTION_URL_HOST,
+};
+
 const mainOrigins = [
 	"https://cap.so",
 	"https://cap.link",
 	"http://localhost",
-	serverEnv().WEB_URL,
-	addHttps(serverEnv().VERCEL_URL_HOST),
-	addHttps(serverEnv().VERCEL_BRANCH_URL_HOST),
-	addHttps(serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST),
+	runtimeEnv.WEB_URL,
+	addHttps(runtimeEnv.VERCEL_URL_HOST),
+	addHttps(runtimeEnv.VERCEL_BRANCH_URL_HOST),
+	addHttps(runtimeEnv.VERCEL_PROJECT_PRODUCTION_URL_HOST),
 ].filter(Boolean) as string[];
 
 export async function middleware(request: NextRequest) {
@@ -61,7 +68,7 @@ export async function middleware(request: NextRequest) {
 		return NextResponse.next();
 	}
 
-	const webUrl = new URL(serverEnv().WEB_URL).hostname;
+	const webUrl = new URL(runtimeEnv.WEB_URL).hostname;
 
 	try {
 		// We're on a custom domain at this point

@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { Comment, User, Video } from "@cap/web-domain";
 import { headers } from "next/headers";
 import type { NextRequest } from "next/server";

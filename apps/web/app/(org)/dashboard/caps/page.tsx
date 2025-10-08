@@ -11,7 +11,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { Video } from "@cap/web-domain";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Metadata } from "next";

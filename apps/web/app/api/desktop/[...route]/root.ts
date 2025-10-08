@@ -1,7 +1,8 @@
 import * as crypto from "node:crypto";
 import { db } from "@cap/database";
 import { organizations, users } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { stripe, userIsPro } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";

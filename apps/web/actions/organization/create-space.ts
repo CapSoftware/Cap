@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { S3Buckets } from "@cap/web-backend";
 import { Space } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";

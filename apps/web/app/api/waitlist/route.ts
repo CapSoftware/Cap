@@ -1,4 +1,4 @@
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 
 export async function POST(request: Request) {
 	const res = await request.json();

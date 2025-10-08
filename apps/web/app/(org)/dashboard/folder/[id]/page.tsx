@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { CurrentUser, type Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";

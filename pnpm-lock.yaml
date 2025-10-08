@@ -444,6 +444,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.485.0
         version: 3.804.0
+      '@cap/apps':
+        specifier: workspace:*
+        version: link:../../packages/apps
       '@cap/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -896,6 +899,24 @@ importers:
         specifier: 3.10.13
         version: 3.10.13
 
+  packages/apps:
+    dependencies:
+      '@cap/database':
+        specifier: workspace:*
+        version: link:../database
+      '@cap/env':
+        specifier: workspace:*
+        version: link:../env
+      '@cap/web-domain':
+        specifier: workspace:*
+        version: link:../web-domain
+      '@effect/platform':
+        specifier: ^0.91.1
+        version: 0.91.1(effect@3.17.14)
+      effect:
+        specifier: ^3.17.14
+        version: 3.17.14
+
   packages/config:
     dependencies:
       '@vitejs/plugin-react':
@@ -1304,6 +1325,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.485.0
         version: 3.804.0
+      '@cap/apps':
+        specifier: workspace:*
+        version: link:../apps
       '@cap/database':
         specifier: workspace:*
         version: link:../database
@@ -5974,10 +5998,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.0.0-beta.9':
-    resolution: {integrity: sha512-R8nSDRWr9eFOF+Bi9+wfJA6jjXGcLCrbgBt2bLebzfXhCNmfHCMaqRG2ZaNdEV4u9KJyakKdzKEotvAkaPONUA==}
+  '@storybook/builder-vite@10.0.0-beta.10':
+    resolution: {integrity: sha512-Lr/nVrkZLzMBs1CIvIc0ddr2UyWRmqnoYalBLUKraGZUCOfCzpJ3ywzfj3lMhfOR4456Lld0X9SFd04DQFHDnQ==}
     peerDependencies:
-      storybook: ^10.0.0-beta.9
+      storybook: ^10.0.0-beta.10
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -5988,12 +6012,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.0.0-beta.9':
-    resolution: {integrity: sha512-0PfoiNKNJGNaWZBc31sevMOfhzX0VqrrKqE98DCMyEvZLUPnKy4t7iCE5TNFH+rUd5D7MdVzwgAmJ+CdtlmHIQ==}
+  '@storybook/csf-plugin@10.0.0-beta.10':
+    resolution: {integrity: sha512-sKCnWOHU97799zj6RoZuFygJCKPPUmohYZsESPddWQm6tHckjmKp1k4ISvd7Z5MIBwiEPYCnppQDDH1mOG6SPw==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.0.0-beta.9
+      storybook: ^10.0.0-beta.10
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -16721,7 +16745,7 @@ snapshots:
   '@jridgewell/source-map@0.3.6':
     dependencies:
       '@jridgewell/gen-mapping': 0.3.13
-      '@jridgewell/trace-mapping': 0.3.30
+      '@jridgewell/trace-mapping': 0.3.31
 
   '@jridgewell/sourcemap-codec@1.5.0': {}
 
@@ -19493,9 +19517,9 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
-  '@storybook/builder-vite@10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
+  '@storybook/builder-vite@10.0.0-beta.10(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
     dependencies:
-      '@storybook/csf-plugin': 10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
+      '@storybook/csf-plugin': 10.0.0-beta.10(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1)
@@ -19525,7 +19549,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
+  '@storybook/csf-plugin@10.0.0-beta.10(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 2.3.10
@@ -22057,10 +22081,6 @@ snapshots:
       ms: 2.1.3
 
   debug@4.3.7:
-    dependencies:
-      ms: 2.1.3
-
-  debug@4.4.0:
     dependencies:
       ms: 2.1.3
 
@@ -27933,7 +27953,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(esbuild@0.25.4)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4)):
     dependencies:
-      '@storybook/builder-vite': 10.0.0-beta.9(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
+      '@storybook/builder-vite': 10.0.0-beta.10(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.4))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6
@@ -28845,7 +28865,7 @@ snapshots:
       '@antfu/install-pkg': 0.4.1
       '@antfu/utils': 0.7.10
       '@iconify/utils': 2.3.0
-      debug: 4.4.0
+      debug: 4.4.0(supports-color@5.5.0)
       kolorist: 1.8.0
       local-pkg: 0.5.1
       unplugin: 1.16.1
@@ -29185,7 +29205,7 @@ snapshots:
 
   vite-tsconfig-paths@5.1.4(typescript@5.8.3)(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.44.0)(yaml@2.8.1)):
     dependencies:
-      debug: 4.4.0
+      debug: 4.4.0(supports-color@5.5.0)
       globrex: 0.1.2
       tsconfck: 3.1.5(typescript@5.8.3)
     optionalDependencies:
@@ -29260,7 +29280,7 @@ snapshots:
       '@vitest/spy': 2.1.9
       '@vitest/utils': 2.1.9
       chai: 5.2.0
-      debug: 4.4.0
+      debug: 4.4.0(supports-color@5.5.0)
       expect-type: 1.2.1
       magic-string: 0.30.17
       pathe: 1.1.2

@@ -1,4 +1,4 @@
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { provideOptionalAuth, S3Buckets, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import {

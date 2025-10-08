@@ -19,6 +19,7 @@
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
 		"@cap/database": "workspace:*",
 		"@cap/env": "workspace:*",
+		"@cap/apps": "workspace:*",
 		"@cap/ui": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-api-contract": "workspace:*",

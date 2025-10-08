@@ -9,7 +9,8 @@ import {
 	S3Client,
 } from "@aws-sdk/client-s3";
 import { db } from "@cap/database";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 import path from "path";
 

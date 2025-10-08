@@ -11,7 +11,7 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { Spaces } from "@cap/web-backend";
 import { CurrentUser, type Organisation, Space, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";

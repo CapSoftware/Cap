@@ -1,4 +1,5 @@
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { cookies } from "next/headers";
 import { PostHog } from "posthog-node";
 import { cache } from "react";

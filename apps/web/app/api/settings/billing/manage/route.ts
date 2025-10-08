@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env/server";
 import { stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
