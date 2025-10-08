@@ -1,9 +1,11 @@
 import { OTLPHttpJsonTraceExporter, registerOTel } from "@vercel/otel";
 
 export async function register() {
-	if (process.env.VERCEL === "1") {
+	if (process.env.NEXT_PUBLIC_AXIOM_TOKEN) {
+		console.log("token", process.env.NEXT_PUBLIC_AXIOM_TOKEN);
+		console.log("dataset", process.env.NEXT_PUBLIC_AXIOM_DATASET);
 		registerOTel({
-			serviceName: "your-project-name",
+			serviceName: "cap-web-backend",
 			traceExporter: new OTLPHttpJsonTraceExporter({
 				url: "https://api.axiom.co/v1/traces",
 				headers: {
