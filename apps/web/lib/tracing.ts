@@ -4,16 +4,19 @@ import { Effect, Option } from "effect";
 
 export const getTracingConfig = Effect.gen(function* () {
 	const axiomToken = Option.fromNullable(process.env.NEXT_PUBLIC_AXIOM_TOKEN);
+	const axiomDataset = Option.fromNullable(
+		process.env.NEXT_PUBLIC_AXIOM_DATASET,
+	);
 
 	const axiomProcessor = Option.map(
-		axiomToken,
-		(token) =>
+		Option.all([axiomToken, axiomDataset]),
+		([token, dataset]) =>
 			new BatchSpanProcessor(
 				new OTLPTraceExporter({
 					url: "https://api.axiom.co/v1/traces",
 					headers: {
 						Authorization: `Bearer ${token}`,
-						"X-Axiom-Dataset": "cap-web-test",
+						"X-Axiom-Dataset": dataset,
 					},
 				}),
 			),

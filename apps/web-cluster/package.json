@@ -2,7 +2,7 @@
 	"name": "@cap/web-cluster",
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/runner.ts",
+		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/runner/index.ts",
 		"build": "pnpm run --filter @cap/web-cluster^... build",
 		"build:docker": "cd ../.. && docker build -f apps/web-cluster/Dockerfile -t ghcr.io/brendonovich/cap-web-cluster:latest ."
 	},
