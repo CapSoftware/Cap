@@ -174,7 +174,7 @@ export const Comments = Object.assign(
 
 		const handleDeleteComment = async (
 			commentId: Comment.CommentId,
-			parentId?: Comment.CommentId,
+			parentId: Comment.CommentId | null,
 		) => {
 			try {
 				await deleteComment({

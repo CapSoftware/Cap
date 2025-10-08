@@ -13,7 +13,7 @@ export async function deleteComment({
 	videoId,
 }: {
 	commentId: Comment.CommentId;
-	parentId?: Comment.CommentId;
+	parentId: Comment.CommentId | null;
 	videoId: Video.VideoId;
 }) {
 	const user = await getCurrentUser();
