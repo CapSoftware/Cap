@@ -1,0 +1,14 @@
+{
+  "name": "@cap/apps",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "type": "module",
+  "dependencies": {
+    "@cap/database": "workspace:*",
+    "@cap/env": "workspace:*",
+    "@cap/web-domain": "workspace:*",
+    "@effect/platform": "^0.91.1",
+    "effect": "^3.17.14"
+  }
+}

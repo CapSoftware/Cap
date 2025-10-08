@@ -1,0 +1,16 @@
+{
+  "type": "discord",
+  "displayName": "Discord",
+  "description": "Automatically share new videos to a Discord channel so your team never misses an update.",
+  "icon": "discord",
+  "category": "automation",
+  "requiredEnvVars": [
+    "DISCORD_CLIENT_ID",
+    "DISCORD_CLIENT_SECRET",
+    "DISCORD_BOT_TOKEN"
+  ],
+  "installModule": "./install.ts",
+  "image": "./media/app-card.svg",
+  "documentation": "./README.md",
+  "contentPath": "./content"
+}
