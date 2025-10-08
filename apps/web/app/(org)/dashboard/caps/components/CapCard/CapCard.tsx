@@ -92,8 +92,6 @@ export interface CapCardProps extends PropsWithChildren {
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
 	onSelectToggle?: () => void;
-	customDomain?: string | null;
-	domainVerified?: boolean;
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
 	isDeleting?: boolean;
@@ -110,13 +108,15 @@ export const CapCard = ({
 	isLoadingAnalytics,
 	sharedCapCard = false,
 	hideSharedStatus = false,
-	customDomain,
-	domainVerified,
 	isSelected = false,
 	onSelectToggle,
 	anyCapSelected = false,
 	isDeleting = false,
 }: CapCardProps) => {
+	const { activeOrganization } = useDashboardContext();
+	const customDomain = activeOrganization?.organization.customDomain;
+	const domainVerified = activeOrganization?.organization.domainVerified;
+
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -392,29 +392,27 @@ export const CapCard = ({
 							}}
 							className="delay-0"
 							icon={
-								<>
-									{!copyPressed ? (
-										<FontAwesomeIcon
-											className="text-gray-12 size-4"
-											icon={faLink}
-										/>
-									) : (
-										<svg
-											xmlns="http://www.w3.org/2000/svg"
-											width="24"
-											height="24"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											className="text-gray-12 size-5 svgpathanimation"
-										>
-											<path d="M20 6 9 17l-5-5" />
-										</svg>
-									)}
-								</>
+								!copyPressed ? (
+									<FontAwesomeIcon
+										className="text-gray-12 size-4"
+										icon={faLink}
+									/>
+								) : (
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										width="24"
+										height="24"
+										viewBox="0 0 24 24"
+										fill="none"
+										stroke="currentColor"
+										strokeWidth="2"
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										className="text-gray-12 size-5 svgpathanimation"
+									>
+										<path d="M20 6 9 17l-5-5" />
+									</svg>
+								)
 							}
 						/>
 					)}
