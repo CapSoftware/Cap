@@ -7,7 +7,6 @@ import { Avatar, Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import Image from "next/image";
@@ -30,7 +29,10 @@ export const ShareHeader = ({
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect;
+	data: typeof videos.$inferSelect & {
+		ownerName?: string | null;
+		ownerImage?: string | null;
+	};
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
@@ -236,21 +238,19 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									{user?.image ? (
+									{data.ownerImage ? (
 										<Image
-											src={user.image}
-											alt={user.name || ""}
+											src={data.ownerImage}
+											alt={data.ownerName || ""}
 											width={32}
 											height={32}
 											className="rounded-full"
 										/>
 									) : (
-										<Avatar name={user?.name} className="size-8" />
+										<Avatar name={data.ownerName} className="size-8" />
 									)}
-									<div className="flex flex-col">
-										<p className="text-sm text-center text-gray-12">
-											{user?.name}
-										</p>
+									<div className="flex flex-col text-left">
+										<p className="text-sm text-gray-12">{data.ownerName}</p>
 										<p className="text-xs text-gray-10">
 											{moment(data.createdAt).fromNow()}
 										</p>
