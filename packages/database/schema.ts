@@ -55,6 +55,10 @@ const encryptedTextNullable = customType<{ data: string; notNull: false }>({
 	},
 });
 
+export type AppType = string;
+
+export type AppInstallationStatus = "connected" | "paused" | "needs_attention";
+
 export const users = mysqlTable(
 	"users",
 	{
@@ -355,6 +359,60 @@ export const sharedVideos = mysqlTable(
 	}),
 );
 
+export const appInstallations = mysqlTable(
+	"app_installations",
+	{
+		id: nanoId("id").notNull().primaryKey().unique(),
+		organizationId: nanoId("organizationId").notNull(),
+		spaceId: nanoIdNullable("spaceId"),
+		appType: varchar("appType", { length: 32 }).notNull().$type<AppType>(),
+		status: varchar("status", { length: 32 })
+			.notNull()
+			.default("connected")
+			.$type<AppInstallationStatus>(),
+		lastCheckedAt: timestamp("lastCheckedAt"),
+		installedByUserId: nanoId("installedByUserId").notNull(),
+		updatedByUserId: nanoIdNullable("updatedByUserId"),
+		accessToken: encryptedText("accessToken").notNull(),
+		refreshToken: encryptedTextNullable("refreshToken"),
+		expiresAt: timestamp("expiresAt"),
+		scope: encryptedTextNullable("scope"),
+		providerExternalId: varchar("providerExternalId", { length: 255 }),
+		providerDisplayName: varchar("providerDisplayName", { length: 255 }),
+		providerMetadata: json("providerMetadata")
+			.$type<Record<string, unknown> | null>()
+			.default(null),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+		spaceIdIndex: index("space_id_idx").on(table.spaceId),
+		appTypeIndex: index("app_type_idx").on(table.appType),
+		statusIndex: index("status_idx").on(table.status),
+		organizationAppTypeIndex: uniqueIndex("organization_app_type_idx").on(
+			table.organizationId,
+			table.appType,
+		),
+	}),
+);
+
+export const appInstallationSettings = mysqlTable(
+	"app_installation_settings",
+	{
+		id: nanoId("id").notNull().primaryKey().unique(),
+		installationId: nanoId("installationId").notNull(),
+		settings: json("settings").$type<Record<string, unknown>>().notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+	},
+	(table) => ({
+		installationIdIndex: uniqueIndex("installation_id_idx").on(
+			table.installationId,
+		),
+	}),
+);
+
 export const comments = mysqlTable(
 	"comments",
 	{
@@ -471,6 +529,12 @@ export const usersRelations = relations(users, ({ many, one }) => ({
 	customBucket: one(s3Buckets),
 	spaces: many(spaces),
 	spaceMembers: many(spaceMembers),
+	installedApps: many(appInstallations, {
+		relationName: "appInstallationsInstalledBy",
+	}),
+	updatedApps: many(appInstallations, {
+		relationName: "appInstallationsUpdatedBy",
+	}),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -498,6 +562,7 @@ export const organizationsRelations = relations(
 		sharedVideos: many(sharedVideos),
 		organizationInvites: many(organizationInvites),
 		spaces: many(spaces),
+		appInstallations: many(appInstallations),
 	}),
 );
 
@@ -655,6 +720,7 @@ export const spacesRelations = relations(spaces, ({ one, many }) => ({
 	}),
 	spaceMembers: many(spaceMembers),
 	spaceVideos: many(spaceVideos),
+	appInstallations: many(appInstallations),
 }));
 
 export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
@@ -682,6 +748,41 @@ export const spaceVideosRelations = relations(spaceVideos, ({ one }) => ({
 		references: [users.id],
 	}),
 }));
+
+export const appInstallationsRelations = relations(
+	appInstallations,
+	({ one, many }) => ({
+		organization: one(organizations, {
+			fields: [appInstallations.organizationId],
+			references: [organizations.id],
+		}),
+		installedBy: one(users, {
+			fields: [appInstallations.installedByUserId],
+			references: [users.id],
+			relationName: "appInstallationsInstalledBy",
+		}),
+		updatedBy: one(users, {
+			fields: [appInstallations.updatedByUserId],
+			references: [users.id],
+			relationName: "appInstallationsUpdatedBy",
+		}),
+		space: one(spaces, {
+			fields: [appInstallations.spaceId],
+			references: [spaces.id],
+		}),
+		settings: many(appInstallationSettings),
+	}),
+);
+
+export const appInstallationSettingsRelations = relations(
+	appInstallationSettings,
+	({ one }) => ({
+		installation: one(appInstallations, {
+			fields: [appInstallationSettings.installationId],
+			references: [appInstallations.id],
+		}),
+	}),
+);
 
 export const foldersRelations = relations(folders, ({ one, many }) => ({
 	organization: one(organizations, {
