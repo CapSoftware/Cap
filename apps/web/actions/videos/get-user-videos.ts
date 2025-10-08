@@ -2,7 +2,13 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { comments, users, videos, videoUploads } from "@cap/database/schema";
+import {
+	comments,
+	folders,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 
 export async function getUserVideos(limit?: number) {
@@ -25,6 +31,8 @@ export async function getUserVideos(limit?: number) {
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 				ownerName: users.name,
+				folderName: folders.name,
+				folderColor: folders.color,
 				effectiveDate: sql<string>`
           COALESCE(
             JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
@@ -39,6 +47,7 @@ export async function getUserVideos(limit?: number) {
 			.leftJoin(comments, eq(videos.id, comments.videoId))
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.leftJoin(folders, eq(videos.folderId, folders.id))
 			.where(eq(videos.ownerId, userId))
 			.groupBy(
 				videos.id,
@@ -47,6 +56,8 @@ export async function getUserVideos(limit?: number) {
 				videos.createdAt,
 				videos.metadata,
 				users.name,
+				folders.name,
+				folders.color,
 			)
 			.orderBy(
 				desc(sql`COALESCE(
@@ -57,12 +68,15 @@ export async function getUserVideos(limit?: number) {
 			.limit(limit || 20);
 
 		const processedVideoData = videoData.map((video) => {
-			const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
+				video;
 			return {
 				...videoWithoutEffectiveDate,
 				ownerName: video.ownerName ?? "",
+				folderName: video.folderName ?? null,
+				folderColor: video.folderColor ?? null,
 				metadata: video.metadata as
-					| { customCreatedAt?: string; [key: string]: any }
+					| { customCreatedAt?: string; [key: string]: unknown }
 					| undefined,
 			};
 		});

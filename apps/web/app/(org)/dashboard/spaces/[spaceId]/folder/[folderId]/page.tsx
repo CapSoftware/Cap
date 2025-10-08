@@ -17,6 +17,7 @@ import {
 	NewSubfolderButton,
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
+import AddVideosButton from "./AddVideosButton";
 
 const FolderPage = async (props: {
 	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
@@ -47,6 +48,10 @@ const FolderPage = async (props: {
 			<div>
 				<div className="flex gap-2 items-center mb-10">
 					<NewSubfolderButton parentFolderId={params.folderId} />
+					<AddVideosButton
+						folderId={params.folderId}
+						folderName={breadcrumb[breadcrumb.length - 1]?.name ?? "Folder"}
+					/>
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">

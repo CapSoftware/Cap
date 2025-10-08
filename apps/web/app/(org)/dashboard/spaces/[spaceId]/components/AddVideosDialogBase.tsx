@@ -43,6 +43,8 @@ export interface VideoData {
 	totalComments: number;
 	totalReactions: number;
 	ownerName: string;
+	folderName?: string | null;
+	folderColor?: "normal" | "blue" | "red" | "yellow" | null;
 	metadata?: {
 		customCreatedAt?: string;
 	};
@@ -101,6 +103,7 @@ function AddVideosDialogBase<T>({
 		},
 		enabled: open,
 		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 		gcTime: 1000 * 60 * 5,
 	});
 
@@ -189,6 +192,7 @@ function AddVideosDialogBase<T>({
 		updateVideosMutation.mutate({ toAdd, toRemove });
 	};
 
+	// Reset state when dialog closes
 	useEffect(() => {
 		if (!open) {
 			setSelectedVideos([]);
@@ -203,7 +207,7 @@ function AddVideosDialogBase<T>({
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faVideo} />}
 					description={
-						"Find and add videos you have previously recorded to share with people in this " +
+						"Find and add videos you have previously recorded to share with people in " +
 						entityName +
 						"."
 					}
