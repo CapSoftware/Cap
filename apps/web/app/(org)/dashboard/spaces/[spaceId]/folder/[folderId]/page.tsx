@@ -41,7 +41,12 @@ const FolderPage = async (props: {
 					: { variant: "org", organizationId: spaceOrOrg.organization.id },
 			),
 			getFolderBreadcrumb(params.folderId),
-			getVideosByFolderId(params.folderId),
+			getVideosByFolderId(
+				params.folderId,
+				spaceOrOrg.variant === "space"
+					? { variant: "space", spaceId: spaceOrOrg.space.id }
+					: { variant: "org", organizationId: spaceOrOrg.organization.id },
+			),
 		]);
 
 		return (

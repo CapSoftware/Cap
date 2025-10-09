@@ -2,7 +2,12 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { folders, spaceVideos, videos } from "@cap/database/schema";
+import {
+	folders,
+	sharedVideos,
+	spaceVideos,
+	videos,
+} from "@cap/database/schema";
 import type { Folder, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -30,6 +35,8 @@ export async function moveVideoToFolder({
 
 	const originalFolderId = currentVideo?.folderId;
 
+	const isAllSpacesEntry = spaceId === user.activeOrganizationId;
+
 	// If folderId is provided, verify it exists and belongs to the same organization
 	if (folderId) {
 		const [folder] = await db()
@@ -47,23 +54,28 @@ export async function moveVideoToFolder({
 		}
 	}
 
-	if (spaceId) {
+	if (spaceId && !isAllSpacesEntry) {
 		await db()
 			.update(spaceVideos)
 			.set({
 				folderId: folderId === null ? null : folderId,
 			})
 			.where(eq(spaceVideos.videoId, videoId));
+	} else if (spaceId && isAllSpacesEntry) {
+		await db()
+			.update(sharedVideos)
+			.set({
+				folderId: folderId === null ? null : folderId,
+			})
+			.where(eq(sharedVideos.videoId, videoId));
+	} else {
+		await db()
+			.update(videos)
+			.set({
+				folderId: folderId === null ? null : folderId,
+			})
+			.where(eq(videos.id, videoId));
 	}
-
-	// Update the video's folderId
-	await db()
-		.update(videos)
-		.set({
-			folderId,
-			updatedAt: new Date(),
-		})
-		.where(eq(videos.id, videoId));
 
 	// Always revalidate the main caps page
 	revalidatePath(`/dashboard/caps`);

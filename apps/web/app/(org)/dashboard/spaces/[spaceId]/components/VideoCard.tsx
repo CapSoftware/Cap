@@ -161,7 +161,11 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 					</div>
 					{video.folderName && (
 						<div className="flex gap-1 items-center text-xs text-gray-10">
-							<FolderRive color={folderColor} className="size-4" />
+							<FolderRive
+								key={theme + folderColor}
+								color={folderColor}
+								className="size-4"
+							/>
 							<p className="font-medium truncate text-gray-11">
 								{video.folderName}
 							</p>

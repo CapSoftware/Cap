@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { spaces, spaceVideos, videos } from "@cap/database/schema";
+import { spaceVideos, videos } from "@cap/database/schema";
 import type { Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -21,15 +21,6 @@ export async function addVideosToSpace(
 
 		if (!spaceId || !videoIds || videoIds.length === 0) {
 			throw new Error("Missing required data");
-		}
-
-		const [space] = await db()
-			.select()
-			.from(spaces)
-			.where(eq(spaces.id, spaceId));
-
-		if (!space) {
-			throw new Error("Space not found");
 		}
 
 		const userVideos = await db()

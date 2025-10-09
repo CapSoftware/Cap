@@ -5,14 +5,17 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
+	sharedVideos,
 	spaces,
+	spaceVideos,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import type { Space } from "@cap/web-domain";
+import { and, desc, eq, sql } from "drizzle-orm";
 
-export async function getUserVideos(spaceId: string) {
+export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
 		const user = await getCurrentUser();
 
@@ -21,54 +24,99 @@ export async function getUserVideos(spaceId: string) {
 		}
 
 		const userId = user.id;
+		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
-		const videoData = await db()
-			.select({
-				id: videos.id,
-				ownerId: videos.ownerId,
-				name: videos.name,
-				createdAt: videos.createdAt,
-				metadata: videos.metadata,
-				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-				ownerName: users.name,
-				folderName: sql<string>`CASE WHEN ${folders.spaceId} = ${spaceId} THEN ${folders.name} ELSE NULL END`,
-				folderColor: sql<string>`CASE WHEN ${folders.spaceId} = ${spaceId} THEN ${folders.color} ELSE NULL END`,
-				effectiveDate: sql<string>`
+		const selectFields = {
+			id: videos.id,
+			ownerId: videos.ownerId,
+			name: videos.name,
+			createdAt: videos.createdAt,
+			metadata: videos.metadata,
+			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
+			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+			ownerName: users.name,
+			folderName: folders.name,
+			folderColor: folders.color,
+			effectiveDate: sql<string>`
           COALESCE(
             JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
             ${videos.createdAt}
           )
         `,
-				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-					Boolean,
-				),
-			})
-			.from(videos)
-			.leftJoin(comments, eq(videos.id, comments.videoId))
-			.leftJoin(users, eq(videos.ownerId, users.id))
-			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-			.leftJoin(folders, eq(videos.folderId, folders.id))
-			.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-			.where(eq(videos.ownerId, userId))
-			.groupBy(
-				videos.id,
-				videos.ownerId,
-				videos.name,
-				videos.createdAt,
-				videos.metadata,
-				users.name,
-				folders.name,
-				folders.color,
-				folders.spaceId,
-				videos.folderId,
-			)
-			.orderBy(
-				desc(sql`COALESCE(
+			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+				Boolean,
+			),
+		};
+
+		const videoData = isAllSpacesEntry
+			? await db()
+					.select(selectFields)
+					.from(videos)
+					.leftJoin(comments, eq(videos.id, comments.videoId))
+					.leftJoin(users, eq(videos.ownerId, users.id))
+					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(
+						sharedVideos,
+						and(
+							eq(videos.id, sharedVideos.videoId),
+							eq(sharedVideos.organizationId, spaceId),
+						),
+					)
+					.leftJoin(folders, eq(sharedVideos.folderId, folders.id))
+					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
+					.where(eq(videos.ownerId, userId))
+					.groupBy(
+						videos.id,
+						videos.ownerId,
+						videos.name,
+						videos.createdAt,
+						videos.metadata,
+						users.name,
+						folders.name,
+						folders.color,
+						folders.spaceId,
+						videos.folderId,
+					)
+					.orderBy(
+						desc(sql`COALESCE(
           JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )`),
-			);
+					)
+			: await db()
+					.select(selectFields)
+					.from(videos)
+					.leftJoin(comments, eq(videos.id, comments.videoId))
+					.leftJoin(users, eq(videos.ownerId, users.id))
+					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(
+						spaceVideos,
+						and(
+							eq(videos.id, spaceVideos.videoId),
+							eq(spaceVideos.spaceId, spaceId),
+						),
+					)
+					.leftJoin(folders, eq(spaceVideos.folderId, folders.id))
+					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
+					.where(eq(videos.ownerId, userId))
+					.groupBy(
+						videos.id,
+						videos.ownerId,
+						videos.name,
+						videos.createdAt,
+						videos.metadata,
+						users.name,
+						folders.name,
+						folders.color,
+						folders.spaceId,
+						videos.folderId,
+					)
+					.orderBy(
+						desc(sql`COALESCE(
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
+          ${videos.createdAt}
+        )`),
+					);
 
 		const processedVideoData = videoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =

@@ -58,7 +58,7 @@ export const SharedCaps = ({
 	count: number;
 	dubApiKeyEnabled: boolean;
 	spaceData?: SpaceData;
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 	hideSharedWith?: boolean;
 	spaceMembers?: SpaceMemberData[];
 	organizationMembers?: OrganizationMemberData[];
@@ -182,7 +182,7 @@ export const SharedCaps = ({
 					<AddVideosDialog
 						open={isAddVideosDialogOpen}
 						onClose={() => setIsAddVideosDialogOpen(false)}
-						spaceId={spaceData.id}
+						spaceId={spaceId}
 						spaceName={spaceData.name}
 						onVideosAdded={handleVideosAdded}
 					/>
@@ -249,7 +249,7 @@ export const SharedCaps = ({
 					<AddVideosDialog
 						open={isAddVideosDialogOpen}
 						onClose={() => setIsAddVideosDialogOpen(false)}
-						spaceId={spaceData.id}
+						spaceId={spaceId}
 						spaceName={spaceData.name}
 						onVideosAdded={handleVideosAdded}
 					/>

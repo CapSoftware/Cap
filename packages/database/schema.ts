@@ -336,6 +336,7 @@ export const sharedVideos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
+		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		organizationId: nanoId("organizationId")
 			.notNull()
 			.$type<Organisation.OrganisationId>(),
@@ -344,6 +345,7 @@ export const sharedVideos = mysqlTable(
 	},
 	(table) => ({
 		videoIdIndex: index("video_id_idx").on(table.videoId),
+		folderIdIndex: index("folder_id_idx").on(table.folderId),
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		sharedByUserIdIndex: index("shared_by_user_id_idx").on(
 			table.sharedByUserId,
@@ -351,6 +353,10 @@ export const sharedVideos = mysqlTable(
 		videoIdOrganizationIdIndex: index("video_id_organization_id_idx").on(
 			table.videoId,
 			table.organizationId,
+		),
+		videoIdFolderIdIndex: index("video_id_folder_id_idx").on(
+			table.videoId,
+			table.folderId,
 		),
 	}),
 );

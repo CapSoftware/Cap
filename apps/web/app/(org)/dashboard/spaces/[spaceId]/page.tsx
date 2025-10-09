@@ -35,7 +35,11 @@ export type SpaceMemberData = {
 };
 
 // --- Helper functions ---
-async function fetchFolders(spaceId: Space.SpaceIdOrOrganisationId) {
+async function fetchFolders(
+	spaceId: Space.SpaceIdOrOrganisationId,
+	allSpacesEntry: boolean,
+) {
+	const table = allSpacesEntry ? sharedVideos : spaceVideos;
 	return db()
 		.select({
 			id: folders.id,
@@ -44,7 +48,7 @@ async function fetchFolders(spaceId: Space.SpaceIdOrOrganisationId) {
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
 			videoCount: sql<number>`(
-          SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+          SELECT COUNT(*) FROM ${table} WHERE ${table}.folderId = folders.id
         )`,
 		})
 		.from(folders)
@@ -110,7 +114,7 @@ export default async function SharedCapsPage(props: {
 			await Promise.all([
 				fetchSpaceMembers(space.id),
 				fetchOrganizationMembers(space.organizationId),
-				fetchFolders(space.id),
+				fetchFolders(space.id, false),
 			]);
 
 		async function fetchSpaceVideos(
@@ -195,7 +199,7 @@ export default async function SharedCapsPage(props: {
 				data={processedVideoData}
 				count={totalCount}
 				spaceData={space}
-				spaceId={params.spaceId}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				spaceMembers={spaceMembersData}
 				organizationMembers={organizationMembersData}
@@ -239,7 +243,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
-							isNull(videos.folderId),
+							isNull(sharedVideos.folderId),
 						),
 					)
 					.groupBy(
@@ -281,7 +285,7 @@ export default async function SharedCapsPage(props: {
 			await Promise.all([
 				fetchOrganizationVideos(organization.id, page, limit),
 				fetchOrganizationMembers(organization.id),
-				fetchFolders(organization.id),
+				fetchFolders(organization.id, true),
 			]);
 
 		const { videos: orgVideoData, totalCount } = organizationVideos;
@@ -303,7 +307,7 @@ export default async function SharedCapsPage(props: {
 				count={totalCount}
 				hideSharedWith
 				organizationData={organization}
-				spaceId={params.spaceId}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
