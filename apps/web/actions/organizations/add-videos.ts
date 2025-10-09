@@ -87,36 +87,40 @@ export async function addVideosToOrganization(
 			(id) => !existingVideoIds.includes(id),
 		);
 
-		if (newVideoIds.length === 0) {
-			return {
-				success: true,
-				message: "Videos already shared with organization",
-			};
+		// Update existing videos to move them to root (clear folderId)
+		if (existingVideoIds.length > 0) {
+			await db()
+				.update(sharedVideos)
+				.set({ folderId: null })
+				.where(
+					and(
+						eq(sharedVideos.organizationId, organizationId),
+						inArray(sharedVideos.videoId, existingVideoIds),
+					),
+				);
 		}
 
-		const sharedVideoEntries = newVideoIds.map((videoId) => ({
-			id: nanoId(),
-			videoId,
-			organizationId,
-			sharedByUserId: user.id,
-		}));
+		// Insert new videos
+		if (newVideoIds.length > 0) {
+			const sharedVideoEntries = newVideoIds.map((videoId) => ({
+				id: nanoId(),
+				videoId,
+				organizationId,
+				sharedByUserId: user.id,
+			}));
 
-		await db().insert(sharedVideos).values(sharedVideoEntries);
-
-		// Clear folderId for videos added to organization so they appear in main view
-		await db()
-			.update(videos)
-			.set({ folderId: null })
-			.where(inArray(videos.id, newVideoIds));
+			await db().insert(sharedVideos).values(sharedVideoEntries);
+		}
 
 		revalidatePath(`/dashboard/spaces/${organizationId}`);
 		revalidatePath("/dashboard/caps");
 
+		const totalUpdated = existingVideoIds.length + newVideoIds.length;
 		return {
 			success: true,
-			message: `${newVideoIds.length} video${
-				newVideoIds.length === 1 ? "" : "s"
-			} shared with organization`,
+			message: `${totalUpdated} video${
+				totalUpdated === 1 ? "" : "s"
+			} ${totalUpdated === 1 ? "is" : "are"} now in organization root`,
 		};
 	} catch (error) {
 		console.error("Error adding videos to organization:", error);

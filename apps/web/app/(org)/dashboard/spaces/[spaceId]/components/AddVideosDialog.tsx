@@ -4,8 +4,8 @@ import type { Space } from "@cap/web-domain";
 import type React from "react";
 import { addVideosToSpace } from "@/actions/spaces/add-videos";
 import { getSpaceVideoIds } from "@/actions/spaces/get-space-videos";
+import { getUserVideos } from "@/actions/spaces/get-user-videos";
 import { removeVideosFromSpace } from "@/actions/spaces/remove-videos";
-import { getUserVideos } from "@/actions/videos/get-user-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
 
 interface AddVideosDialogProps {
@@ -32,8 +32,8 @@ export const AddVideosDialog: React.FC<AddVideosDialogProps> = ({
 			onVideosAdded={onVideosAdded}
 			addVideos={addVideosToSpace}
 			removeVideos={removeVideosFromSpace}
-			getVideos={getUserVideos}
-			getEntityVideoIds={getSpaceVideoIds}
+			getVideos={() => getUserVideos(spaceId)}
+			getEntityVideoIds={() => getSpaceVideoIds(spaceId)}
 		/>
 	);
 };

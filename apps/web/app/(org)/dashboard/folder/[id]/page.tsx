@@ -26,7 +26,9 @@ const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
 			getChildFolders(params.id, { variant: "user" }),
 			getFolderBreadcrumb(params.id),
-			getVideosByFolderId(params.id),
+			getVideosByFolderId(params.id, {
+				variant: "user",
+			}),
 		]);
 
 		return (

@@ -1,7 +1,5 @@
 import "server-only";
 
-import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
@@ -19,7 +17,6 @@ import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
-import { revalidatePath } from "next/cache";
 
 export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
@@ -159,6 +156,10 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 
 export const getVideosByFolderId = Effect.fn(function* (
 	folderId: Folder.FolderId,
+	root:
+		| { variant: "user" }
+		| { variant: "space"; spaceId: Space.SpaceIdOrOrganisationId }
+		| { variant: "org"; organizationId: Organisation.OrganisationId },
 ) {
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
@@ -205,13 +206,20 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+			.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 			.leftJoin(
 				organizations,
 				eq(sharedVideos.organizationId, organizations.id),
 			)
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-			.where(eq(videos.folderId, folderId))
+			.where(
+				root.variant === "space"
+					? eq(spaceVideos.folderId, folderId)
+					: root.variant === "org"
+						? eq(sharedVideos.folderId, folderId)
+						: eq(videos.folderId, folderId),
+			)
 			.groupBy(
 				videos.id,
 				videos.ownerId,

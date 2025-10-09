@@ -2,9 +2,9 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaceVideos } from "@cap/database/schema";
+import { sharedVideos, spaceVideos } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -18,12 +18,28 @@ export async function getSpaceVideoIds(spaceId: Space.SpaceIdOrOrganisationId) {
 			throw new Error("Space ID is required");
 		}
 
-		const videoIds = await db()
-			.select({
-				videoId: spaceVideos.videoId,
-			})
-			.from(spaceVideos)
-			.where(eq(spaceVideos.spaceId, spaceId));
+		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
+		const videoIds = isAllSpacesEntry
+			? await db()
+					.select({
+						videoId: sharedVideos.videoId,
+					})
+					.from(sharedVideos)
+					.where(
+						and(
+							eq(sharedVideos.organizationId, spaceId),
+							isNull(sharedVideos.folderId),
+						),
+					)
+			: await db()
+					.select({
+						videoId: spaceVideos.videoId,
+					})
+					.from(spaceVideos)
+					.where(
+						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+					);
 
 		return {
 			success: true,
