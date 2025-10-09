@@ -37,11 +37,6 @@ export async function addVideosToSpace(
 		}
 
 		if (isAllSpacesEntry) {
-			console.log({
-				validVideoIds,
-			});
-
-			// Check which videos already exist in sharedVideos
 			const existingSharedVideos = await db()
 				.select({ videoId: sharedVideos.videoId })
 				.from(sharedVideos)
@@ -52,16 +47,11 @@ export async function addVideosToSpace(
 					),
 				);
 
-			console.log({
-				existingSharedVideos,
-			});
-
 			const existingVideoIds = existingSharedVideos.map((v) => v.videoId);
 			const newVideoIds = validVideoIds.filter(
 				(id) => !existingVideoIds.includes(id),
 			);
 
-			// Update existing videos to move them to root (clear folderId)
 			if (existingVideoIds.length > 0) {
 				await db()
 					.update(sharedVideos)
@@ -101,7 +91,6 @@ export async function addVideosToSpace(
 				(id) => !existingVideoIds.includes(id),
 			);
 
-			// Update existing videos to move them to root (clear folderId)
 			if (existingVideoIds.length > 0) {
 				await db()
 					.update(spaceVideos)
@@ -114,7 +103,6 @@ export async function addVideosToSpace(
 					);
 			}
 
-			// Insert new videos
 			if (newVideoIds.length > 0) {
 				const spaceVideoEntries = newVideoIds.map((videoId) => ({
 					id: nanoId(),

@@ -51,33 +51,7 @@ export async function removeVideosFromSpace(
 						inArray(sharedVideos.videoId, validVideoIds),
 					),
 				);
-
-			// Set folderId to null for any removed videos that are in org-level folders
-			const folderRows = await db()
-				.select({ id: folders.id })
-				.from(folders)
-				.where(
-					and(
-						isNull(folders.spaceId),
-						eq(folders.organizationId, user.activeOrganizationId),
-					),
-				);
-
-			const folderIds = folderRows.map((f) => f.id);
-
-			if (folderIds.length > 0) {
-				await db()
-					.update(videos)
-					.set({ folderId: null })
-					.where(
-						and(
-							inArray(videos.id, validVideoIds),
-							inArray(videos.folderId, folderIds),
-						),
-					);
-			}
 		} else {
-			// Remove from specific space (spaceVideos table)
 			await db()
 				.delete(spaceVideos)
 				.where(
@@ -86,31 +60,6 @@ export async function removeVideosFromSpace(
 						inArray(spaceVideos.videoId, validVideoIds),
 					),
 				);
-
-			// Set folderId to null for any removed videos that are in folders belonging to this space
-			const folderRows = await db()
-				.select({ id: folders.id })
-				.from(folders)
-				.where(
-					and(
-						isNull(folders.spaceId),
-						eq(folders.organizationId, user.activeOrganizationId),
-					),
-				);
-
-			const folderIds = folderRows.map((f) => f.id);
-
-			if (folderIds.length > 0) {
-				await db()
-					.update(videos)
-					.set({ folderId: null })
-					.where(
-						and(
-							inArray(videos.id, validVideoIds),
-							inArray(videos.folderId, folderIds),
-						),
-					);
-			}
 		}
 
 		revalidatePath(`/dashboard/spaces/${spaceId}`);
