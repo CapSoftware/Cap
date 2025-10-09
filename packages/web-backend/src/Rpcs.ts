@@ -4,10 +4,9 @@ import {
 	UnauthenticatedError,
 } from "@cap/web-domain";
 import { Effect, Layer, Option } from "effect";
-
+import { AppsRpcsLive } from "./Apps/AppsRpcs.ts";
 import { getCurrentUser } from "./Auth.ts";
 import { Database } from "./Database.ts";
-import { AppsRpcsLive } from "./Apps/AppsRpcs.ts";
 import { FolderRpcsLive } from "./Folders/FoldersRpcs.ts";
 import { VideosRpcsLive } from "./Videos/VideosRpcs.ts";
 

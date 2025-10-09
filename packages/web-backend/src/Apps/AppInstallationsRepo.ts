@@ -19,7 +19,7 @@ export class AppInstallationsRepo extends Effect.Service<AppInstallationsRepo>()
 		effect: Effect.gen(function* () {
 			const database = yield* Database;
 
-			const findByOrgAndType = (organizationId: string, appType: Db.AppType) =>
+			const findByOrgAndSlug = (organizationId: string, slug: Db.AppType) =>
 				database
 					.execute((db) =>
 						db
@@ -28,7 +28,7 @@ export class AppInstallationsRepo extends Effect.Service<AppInstallationsRepo>()
 							.where(
 								Dz.and(
 									Dz.eq(Db.appInstallations.organizationId, organizationId),
-									Dz.eq(Db.appInstallations.appType, appType),
+									Dz.eq(Db.appInstallations.appType, slug),
 								),
 							),
 					)
@@ -71,9 +71,9 @@ export class AppInstallationsRepo extends Effect.Service<AppInstallationsRepo>()
 					db
 						.delete(Db.appInstallations)
 						.where(Dz.eq(Db.appInstallations.id, id)),
-					);
+				);
 
-			return { findByOrgAndType, create, updateById, deleteById };
+			return { findByOrgAndSlug, create, updateById, deleteById };
 		}),
 		dependencies: [Database.Default],
 	},

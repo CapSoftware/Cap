@@ -2,9 +2,7 @@
 	"extends": "../config/base.tsconfig.json",
 	"exclude": ["node_modules", "dist"],
 	"include": ["**/*.ts", "**/*.tsx"],
-	"references": [
-		{ "path": "../apps" }
-	],
+	"references": [{ "path": "../apps" }],
 	"compilerOptions": {
 		"moduleResolution": "bundler",
 		"composite": true,
