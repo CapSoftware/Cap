@@ -1,670 +1,616 @@
-import { createHash, randomBytes } from "node:crypto";
-import { decrypt, encrypt } from "@cap/database/crypto";
-import { serverEnv } from "@cap/env/server";
-import { Policy } from "@cap/web-domain";
-import { HttpApiError, HttpServerRequest, HttpServerResponse } from "@effect/platform";
-import { Effect, Option, Schema } from "effect";
-
 import { createAppHandlerError } from "../core/errors.ts";
-import type {
-	AppAuthorizeContext,
-	AppCallbackContext,
-	AppDispatchContext,
-	AppDispatchResult,
-	AppHandlers,
-	AppModule,
-	AppOperationContext,
-	AppRefreshContext,
-} from "../core/types.ts";
+import {
+	createAppSettings,
+	type InferAppSettings,
+	stringSetting,
+} from "../core/settings.ts";
 import type { AppStatePayload } from "../core/state.ts";
 import {
-	DISCORD_APP_TYPE,
-	type DiscordAppSettings,
-	type DiscordDispatchPayload,
-	buildDiscordMessage,
-	discordDefinition,
-} from "./config.ts";
-import { leaveGuild, listGuildTextChannels, sendMessageToChannel } from "./client.ts";
+	createOAuthAppModule,
+	type OAuthAppHandlers,
+	OAuthCallbackError,
+	OAuthConfigError,
+	type OAuthHandlerDependencies,
+	OAuthPermissionError,
+	OAuthProviderError,
+} from "../core/templates/oauth-app.ts";
+import { getAppConfig } from "../core/manifest.ts";
 
-const DISCORD_API_BASE = "https://discord.com/api";
-const DISCORD_OAUTH_BASE = `${DISCORD_API_BASE}/oauth2`;
-const DISCORD_AUTHORIZE_URL = `${DISCORD_OAUTH_BASE}/authorize`;
-const DISCORD_TOKEN_URL = `${DISCORD_OAUTH_BASE}/token`;
-const DISCORD_USER_GUILDS_URL = `${DISCORD_API_BASE}/users/@me/guilds`;
+const discordAppSettings = createAppSettings({
+	channelId: stringSetting,
+	channelName: stringSetting,
+	spaceId: stringSetting,
+});
 
-type DiscordAppType = typeof DISCORD_APP_TYPE;
-const STATE_COOKIE = "discord_oauth_state";
-const VERIFIER_COOKIE = "discord_oauth_verifier";
+export const DiscordAppSettingsSchema = discordAppSettings.schema;
+export type DiscordAppSettings = InferAppSettings<typeof discordAppSettings>;
+export const DiscordAppSettings = DiscordAppSettingsSchema;
+
+const DISCORD_API_BASE = "https://discord.com/api" as const;
+const DISCORD_API_V10 = `${DISCORD_API_BASE}/v10` as const;
+const DISCORD_OAUTH_BASE = `${DISCORD_API_BASE}/oauth2` as const;
+const DISCORD_AUTHORIZE_URL = `${DISCORD_OAUTH_BASE}/authorize` as const;
+const DISCORD_TOKEN_URL = `${DISCORD_OAUTH_BASE}/token` as const;
+const DISCORD_USER_GUILDS_URL = `${DISCORD_API_BASE}/users/@me/guilds` as const;
+
+const STATE_COOKIE = "discord_oauth_state" as const;
+const VERIFIER_COOKIE = "discord_oauth_verifier" as const;
 const COOKIE_MAX_AGE_SECONDS = 600;
+
 const DEFAULT_BOT_PERMISSIONS = BigInt(2048 + 16384);
 const MANAGE_GUILD_PERMISSION = BigInt(1 << 5);
 
-const toBase64Url = (buffer: Buffer) =>
-  buffer
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+export const discordManifest = getAppConfig(import.meta.url);
 
-const generateCodeVerifier = () => toBase64Url(randomBytes(32));
-const generateCodeChallenge = (verifier: string) =>
-  toBase64Url(createHash("sha256").update(verifier).digest());
+export type DiscordAppSlug = typeof discordManifest.slug;
 
-const cookieOptions = (secure: boolean) => ({
-  httpOnly: true,
-  sameSite: "lax" as const,
-  secure,
-  path: "/",
-  maxAge: COOKIE_MAX_AGE_SECONDS,
-});
+export type DiscordDispatchPayload = {
+	readonly type: "video.published";
+	readonly videoId: string;
+	readonly videoTitle: string;
+	readonly videoDescription: string | null;
+	readonly videoUrl: string;
+	readonly spaceName: string;
+	readonly organizationName: string;
+	readonly authorName: string;
+	readonly authorAvatarUrl: string | null;
+};
 
-const clearCookieOptions = (secure: boolean) => ({
-  httpOnly: true,
-  sameSite: "lax" as const,
-  secure,
-  path: "/",
-  maxAge: 0,
-});
+export type DiscordMessagePayload = {
+	embeds: ReadonlyArray<Record<string, unknown>>;
+	components?: ReadonlyArray<Record<string, unknown>>;
+	allowed_mentions?: { parse: [] };
+};
+
+const truncate = (value: string, max: number) =>
+	value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+
+const DEFAULT_DESCRIPTION = "New recording ready to watch.";
+
+export const buildDiscordMessage = (
+	payload: DiscordDispatchPayload,
+): DiscordMessagePayload => {
+	if (payload.type !== "video.published") {
+		return {
+			embeds: [],
+			allowed_mentions: { parse: [] },
+		};
+	}
+
+	const title = truncate(payload.videoTitle, 80);
+	const descriptionSource = payload.videoDescription?.trim();
+	const description = truncate(
+		descriptionSource && descriptionSource.length > 0
+			? descriptionSource
+			: DEFAULT_DESCRIPTION,
+		140,
+	);
+
+	return {
+		embeds: [
+			{
+				title,
+				description,
+				url: payload.videoUrl,
+				author: {
+					name: payload.authorName,
+					icon_url: payload.authorAvatarUrl ?? undefined,
+				},
+				footer: {
+					text: `${payload.spaceName} • ${payload.organizationName}`,
+				},
+			},
+		],
+		components: [
+			{
+				type: 1,
+				components: [
+					{
+						type: 2,
+						style: 5,
+						label: "Watch recording",
+						url: payload.videoUrl,
+					},
+				],
+			},
+		],
+		allowed_mentions: { parse: [] },
+	};
+};
+
+export const discordDefinition = {
+	slug: discordManifest.slug,
+	displayName: discordManifest.displayName,
+	description: discordManifest.description,
+	icon: discordManifest.icon,
+	category: discordManifest.category,
+	settings: discordAppSettings,
+};
+
+const parseBigInt = (value: string, error: Error) => {
+	try {
+		return BigInt(value);
+	} catch {
+		throw error;
+	}
+};
+
+type DiscordEnvConfig = {
+	clientId: string;
+	clientSecret: string;
+	redirectUri: string;
+	requiredPermissions: bigint;
+	secureCookies: boolean;
+};
+
+type DiscordCallbackData = {
+	guildId: string;
+	grantedPermissions: bigint;
+};
 
 type DiscordTokenResponse = {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  refresh_token?: string;
-  scope?: string;
+	access_token: string;
+	token_type: string;
+	expires_in: number;
+	refresh_token?: string;
+	scope?: string;
 };
 
 type DiscordGuild = {
-  id: string;
-  name: string;
-  icon?: string | null;
-  permissions: string;
-  owner?: boolean;
-  features?: ReadonlyArray<string>;
+	id: string;
+	name: string;
+	icon?: string | null;
+	owner?: boolean;
+	features?: ReadonlyArray<string>;
+	permissions: string;
 };
 
-class DiscordConfigError extends Schema.TaggedError<DiscordConfigError>()(
-  "DiscordConfigError",
-  { missing: Schema.Array(Schema.String) },
-) {}
-
-class DiscordStateError extends Schema.TaggedError<DiscordStateError>()(
-  "DiscordStateError",
-  { message: Schema.String },
-) {}
-
-class DiscordOAuthError extends Schema.TaggedError<DiscordOAuthError>()(
-  "DiscordOAuthError",
-  { message: Schema.String },
-) {}
-
-class DiscordPermissionError extends Schema.TaggedError<DiscordPermissionError>()(
-  "DiscordPermissionError",
-  { reason: Schema.String },
-) {}
-
-const isPolicyDeniedError = (
-  error: unknown,
-): error is Policy.PolicyDeniedError => error instanceof Policy.PolicyDeniedError;
-
-const logAndFailInternalError = (error: unknown) =>
-  Effect.logError(error).pipe(
-    Effect.flatMap(() =>
-      Effect.fail(new HttpApiError.InternalServerError()),
-    ),
-  );
-
-type DiscordEnvConfig = {
-  clientId: string;
-  clientSecret: string;
-  redirectUri: string;
-  requiredPermissions: bigint;
-  secureCookies: boolean;
+type DiscordChannelResponse = {
+	id: string;
+	name: string;
+	type: number;
+	parent_id?: string | null;
 };
 
-const resolveConfig = (): Effect.Effect<DiscordEnvConfig, DiscordConfigError> =>
-  Effect.sync(() => {
-    const env = serverEnv();
-    const missing: string[] = [];
+type DiscordMessageResponse = {
+	id: string;
+	channel_id: string;
+};
 
-    if (!env.DISCORD_CLIENT_ID) missing.push("DISCORD_CLIENT_ID");
-    if (!env.DISCORD_CLIENT_SECRET) missing.push("DISCORD_CLIENT_SECRET");
+const readJson = async <T>(response: Response): Promise<T | undefined> => {
+	try {
+		return (await response.json()) as T;
+	} catch {
+		return undefined;
+	}
+};
 
-    let requiredPermissions = DEFAULT_BOT_PERMISSIONS;
+const requestDiscordToken = async (
+	params: Record<string, string>,
+	errorMessage: string,
+): Promise<DiscordTokenResponse> => {
+	let response: Response;
 
-    if (env.DISCORD_REQUIRED_PERMISSIONS) {
-      try {
-        requiredPermissions = BigInt(env.DISCORD_REQUIRED_PERMISSIONS);
-      } catch {
-        missing.push("DISCORD_REQUIRED_PERMISSIONS");
-      }
-    }
+	try {
+		response = await fetch(DISCORD_TOKEN_URL, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+				Accept: "application/json",
+			},
+			body: new URLSearchParams(params).toString(),
+		});
+	} catch (cause) {
+		throw new OAuthProviderError(
+			`${errorMessage}: ${cause instanceof Error ? cause.message : String(cause)}`,
+		);
+	}
 
-    if (missing.length > 0) {
-      throw new DiscordConfigError({ missing: Array.from(new Set(missing)) });
-    }
+	const payload = await readJson<Record<string, unknown>>(response);
 
-    return {
-      clientId: env.DISCORD_CLIENT_ID!,
-      clientSecret: env.DISCORD_CLIENT_SECRET!,
-      redirectUri:
-        env.DISCORD_REDIRECT_URI ??
-        `${env.WEB_URL.replace(/\/$/, "")}/api/apps/connect/callback`,
-      requiredPermissions,
-      secureCookies: env.NODE_ENV === "production",
-    } satisfies DiscordEnvConfig;
-  });
-const exchangeDiscordToken = (
-  code: string,
-  codeVerifier: string,
-  config: DiscordEnvConfig,
-) =>
-  Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(DISCORD_TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-          grant_type: "authorization_code",
-          code,
-          code_verifier: codeVerifier,
-          redirect_uri: config.redirectUri,
-        }).toString(),
-      });
+	if (!response.ok) {
+		const messageCandidate =
+			payload && typeof payload === "object"
+				? typeof payload.error_description === "string"
+					? payload.error_description
+					: typeof payload.error === "string"
+						? payload.error
+						: undefined
+				: undefined;
 
-      const payload = (await response.json()) as Record<string, unknown>;
+		throw new OAuthProviderError(messageCandidate ?? errorMessage);
+	}
 
-      if (!response.ok) {
-        throw new DiscordOAuthError({
-          message:
-            typeof payload.error_description === "string"
-              ? payload.error_description
-              : "Discord token exchange failed",
-        });
-      }
+	if (!payload || typeof payload !== "object") {
+		throw new OAuthProviderError(errorMessage);
+	}
 
-      return payload as unknown as DiscordTokenResponse;
-    },
-    catch: (cause) =>
-      cause instanceof DiscordOAuthError
-        ? cause
-        : new DiscordOAuthError({
-            message: `Failed to exchange Discord OAuth code: ${String(cause)}`,
-          }),
-  });
+	return payload as unknown as DiscordTokenResponse;
+};
 
-const refreshDiscordToken = (refreshToken: string, config: DiscordEnvConfig) =>
-  Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(DISCORD_TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-          grant_type: "refresh_token",
-          refresh_token: refreshToken,
-        }).toString(),
-      });
+const fetchDiscordGuilds = async (tokens: {
+	accessToken: string;
+	tokenType?: string | null;
+}): Promise<DiscordGuild[]> => {
+	let response: Response;
 
-      const payload = (await response.json()) as Record<string, unknown>;
+	try {
+		response = await fetch(DISCORD_USER_GUILDS_URL, {
+			headers: {
+				Authorization: `${tokens.tokenType ?? "Bearer"} ${tokens.accessToken}`,
+				Accept: "application/json",
+			},
+		});
+	} catch (cause) {
+		throw new OAuthProviderError(
+			`Failed to fetch Discord guilds: ${
+				cause instanceof Error ? cause.message : String(cause)
+			}`,
+		);
+	}
 
-      if (!response.ok) {
-        throw new DiscordOAuthError({
-          message:
-            typeof payload.error_description === "string"
-              ? payload.error_description
-              : "Discord token refresh failed",
-        });
-      }
+	const payload = await readJson<DiscordGuild[] | { error?: string }>(response);
 
-      return payload as unknown as DiscordTokenResponse;
-    },
-    catch: (cause) =>
-      cause instanceof DiscordOAuthError
-        ? cause
-        : new DiscordOAuthError({
-            message: `Failed to refresh Discord access token: ${String(cause)}`,
-          }),
-  });
+	if (!response.ok || !Array.isArray(payload)) {
+		const messageCandidate =
+			payload && typeof payload === "object" && !Array.isArray(payload)
+				? typeof payload.error === "string"
+					? payload.error
+					: undefined
+				: undefined;
 
-const fetchDiscordGuilds = (token: DiscordTokenResponse) =>
-  Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(DISCORD_USER_GUILDS_URL, {
-        headers: {
-          Authorization: `${token.token_type} ${token.access_token}`,
-          Accept: "application/json",
-        },
-      });
+		throw new OAuthProviderError(
+			messageCandidate ?? "Failed to fetch Discord guilds",
+		);
+	}
 
-      const payload = (await response.json()) as Record<string, unknown>;
+	return payload;
+};
 
-      if (!response.ok) {
-        throw new DiscordOAuthError({
-          message:
-            typeof payload.error === "string"
-              ? payload.error
-              : "Failed to fetch Discord guilds",
-        });
-      }
-
-      return payload as unknown as DiscordGuild[];
-    },
-    catch: (cause) =>
-      cause instanceof DiscordOAuthError
-        ? cause
-        : new DiscordOAuthError({
-            message: `Failed to fetch Discord guilds: ${String(cause)}`,
-          }),
-  });
-
-const cookiesSchema = Schema.Struct({
-  [STATE_COOKIE]: Schema.optional(Schema.String),
-  [VERIFIER_COOKIE]: Schema.optional(Schema.String),
+const buildInstallationMetadata = (guild: DiscordGuild) => ({
+	icon: guild.icon ?? null,
+	features: guild.features ?? [],
+	owner: guild.owner,
 });
 
-type InstallationMetadata = {
-  icon: string | null;
-  features: ReadonlyArray<string>;
-  owner: boolean | undefined;
+const createDiscordHandlers = (
+	dependencies: OAuthHandlerDependencies<DiscordAppSlug>,
+): OAuthAppHandlers<
+	DiscordAppSlug,
+	DiscordAppSettings,
+	DiscordDispatchPayload
+> => {
+	const { resolveAppSlug, getAppEnv } = dependencies;
+
+	const discordApiRequest = async <T>(
+		operation: string,
+		path: string,
+		init: RequestInit = {},
+	): Promise<T> => {
+		const token = getAppEnv().DISCORD_APP_BOT_TOKEN;
+
+		let response: Response;
+
+		try {
+			response = await fetch(`${DISCORD_API_V10}${path}`, {
+				...init,
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					Authorization: `Bot ${token}`,
+					...(init.headers ?? {}),
+				},
+			});
+		} catch (cause) {
+			throw createAppHandlerError({
+				app: resolveAppSlug(),
+				operation,
+				reason: `Discord request failed: ${
+					cause instanceof Error ? cause.message : String(cause)
+				}`,
+				retryable: true,
+			});
+		}
+
+		const body =
+			response.status === 204 ? undefined : await readJson<unknown>(response);
+
+		if (!response.ok) {
+			const message =
+				body && typeof body === "object" && body !== null && "message" in body
+					? String(
+							(body as { message?: unknown }).message ??
+								"Unknown Discord error",
+						)
+					: `Discord request failed (${response.status})`;
+
+			throw createAppHandlerError({
+				app: resolveAppSlug(),
+				operation,
+				reason: message,
+				retryable: response.status >= 500 || response.status === 429,
+				status: response.status,
+				detail: body,
+			});
+		}
+
+		return body as T;
+	};
+
+	const ensureGuildId = (
+		operation: string,
+		guildId: string | null | undefined,
+	) => {
+		if (!guildId) {
+			throw createAppHandlerError({
+				app: resolveAppSlug(),
+				operation,
+				reason: "Discord installation is missing a guild identifier",
+				retryable: false,
+			});
+		}
+
+		return guildId;
+	};
+
+	return {
+		uninstall: async (context) => {
+			const guildId = context.installation.providerExternalId;
+			if (!guildId) return;
+
+			await discordApiRequest<unknown>(
+				"uninstall",
+				`/users/@me/guilds/${guildId}`,
+				{ method: "DELETE" },
+			);
+		},
+		listDestinations: async (context) => {
+			const guildId = ensureGuildId(
+				"listDestinations",
+				context.installation.providerExternalId,
+			);
+
+			const channels = await discordApiRequest<DiscordChannelResponse[]>(
+				"listDestinations",
+				`/guilds/${guildId}/channels`,
+				{ method: "GET" },
+			);
+
+			return channels
+				.filter((channel) => channel.type === 0 || channel.type === 5)
+				.map((channel) => ({
+					id: channel.id,
+					name: channel.name,
+					type: channel.type === 5 ? "announcement" : "text",
+					parentId: channel.parent_id ?? null,
+				}));
+		},
+		dispatch: async (context) => {
+			const channelId = context.settings.channelId.trim();
+
+			if (channelId.length === 0) {
+				throw createAppHandlerError({
+					app: resolveAppSlug(),
+					operation: "dispatch",
+					reason: "Discord channel is not configured",
+					retryable: false,
+				});
+			}
+
+			const message = buildDiscordMessage(context.payload);
+
+			const response = await discordApiRequest<DiscordMessageResponse>(
+				"dispatch",
+				`/channels/${channelId}/messages`,
+				{
+					method: "POST",
+					body: JSON.stringify(message),
+				},
+			);
+
+			return {
+				remoteId: response.id,
+				metadata: {
+					channelId: response.channel_id,
+					channelName: context.settings.channelName,
+				},
+			};
+		},
+	};
 };
 
-const buildMetadata = (guild: DiscordGuild): InstallationMetadata => ({
-  icon: guild.icon ?? null,
-  features: guild.features ?? [],
-  owner: guild.owner,
-});
-export type DiscordAppStatePayload = AppStatePayload<DiscordAppType>;
+const createDiscordApp = ({
+	encodeAppState,
+}: {
+	encodeAppState: (payload: AppStatePayload<string>) => string;
+}) =>
+	createOAuthAppModule<
+		DiscordAppSlug,
+		DiscordAppSettings,
+		DiscordDispatchPayload,
+		DiscordEnvConfig,
+		DiscordCallbackData
+	>({
+		importMetaUrl: import.meta.url,
+		definition: discordDefinition,
+		encodeAppState: encodeAppState as (
+			payload: AppStatePayload<DiscordAppSlug>,
+		) => string,
+		session: {
+			stateCookie: STATE_COOKIE,
+			verifierCookie: VERIFIER_COOKIE,
+			maxAgeSeconds: COOKIE_MAX_AGE_SECONDS,
+		},
+		resolveConfig: ({ appEnv, serverEnv }) => {
+			let requiredPermissions = DEFAULT_BOT_PERMISSIONS;
 
-type DiscordAppDependencies = {
-  encodeAppState: (payload: AppStatePayload<string>) => string;
-};
+			const requiredPermissionsRaw =
+				typeof serverEnv.DISCORD_REQUIRED_PERMISSIONS === "string"
+					? serverEnv.DISCORD_REQUIRED_PERMISSIONS.trim()
+					: undefined;
 
-export const createDiscordApp = ({
-  encodeAppState,
-}: DiscordAppDependencies): AppModule<DiscordAppType> => {
-  const authorize = (context: AppAuthorizeContext) =>
-    Effect.gen(function* () {
-      const { user, organisationsPolicy } = context;
+			if (requiredPermissionsRaw && requiredPermissionsRaw.length > 0) {
+				requiredPermissions = parseBigInt(
+					requiredPermissionsRaw,
+					new OAuthConfigError("Invalid DISCORD_REQUIRED_PERMISSIONS value", {
+						missing: ["DISCORD_REQUIRED_PERMISSIONS"],
+					}),
+				);
+			}
 
-      yield* organisationsPolicy
-        .isOwner(user.activeOrganizationId)
-        .pipe(
-          Effect.catchIf(
-            isPolicyDeniedError,
-            () => Effect.fail(new HttpApiError.Forbidden()),
-          ),
-        );
+			const redirectUriRaw =
+				typeof serverEnv.DISCORD_REDIRECT_URI === "string"
+					? serverEnv.DISCORD_REDIRECT_URI.trim()
+					: "";
+			const webUrlRaw =
+				typeof serverEnv.WEB_URL === "string" ? serverEnv.WEB_URL.trim() : "";
 
-      const config = yield* resolveConfig();
-      const nonce = toBase64Url(randomBytes(16));
-      const state = encodeAppState({
-        app: DISCORD_APP_TYPE,
-        orgId: user.activeOrganizationId,
-        nonce,
-      });
-      const codeVerifier = generateCodeVerifier();
-      const codeChallenge = generateCodeChallenge(codeVerifier);
+			let redirectUri = redirectUriRaw;
 
-      const authorizeUrl = new URL(DISCORD_AUTHORIZE_URL);
-      authorizeUrl.searchParams.set("client_id", config.clientId);
-      authorizeUrl.searchParams.set("response_type", "code");
-      authorizeUrl.searchParams.set("redirect_uri", config.redirectUri);
-      authorizeUrl.searchParams.set("scope", "identify guilds bot");
-      authorizeUrl.searchParams.set("state", state);
-      authorizeUrl.searchParams.set("prompt", "consent");
-      authorizeUrl.searchParams.set("code_challenge", codeChallenge);
-      authorizeUrl.searchParams.set("code_challenge_method", "S256");
-      authorizeUrl.searchParams.set(
-        "permissions",
-        config.requiredPermissions.toString(),
-      );
+			if (redirectUri.length === 0) {
+				if (webUrlRaw.length === 0) {
+					throw new OAuthConfigError(
+						"WEB_URL is required to derive the Discord redirect URI",
+						{ missing: ["WEB_URL"] },
+					);
+				}
 
-      return { authorizationUrl: authorizeUrl.toString() } as unknown;
-    }).pipe(
-      Effect.catchIf(
-        (error): error is DiscordConfigError => error instanceof DiscordConfigError,
-        logAndFailInternalError,
-      ),
-    );
+				redirectUri = `${webUrlRaw.replace(/\/$/, "")}/api/apps/connect/callback`;
+			}
 
-  const callback = (context: AppCallbackContext<DiscordAppType>) =>
-    Effect.gen(function* () {
-      const { user, organisationsPolicy, repo, query, rawState, state } = context;
+			return {
+				clientId: appEnv.DISCORD_CLIENT_ID,
+				clientSecret: appEnv.DISCORD_CLIENT_SECRET,
+				redirectUri,
+				requiredPermissions,
+				secureCookies: serverEnv.NODE_ENV === "production",
+			} satisfies DiscordEnvConfig;
+		},
+		authorize: {
+			buildAuthorizeUrl: ({ config, state, codeChallenge }) => {
+				const authorizeUrl = new URL(DISCORD_AUTHORIZE_URL);
+				authorizeUrl.searchParams.set("client_id", config.clientId);
+				authorizeUrl.searchParams.set("response_type", "code");
+				authorizeUrl.searchParams.set("redirect_uri", config.redirectUri);
+				authorizeUrl.searchParams.set("scope", "identify guilds bot");
+				authorizeUrl.searchParams.set("state", state);
+				authorizeUrl.searchParams.set("prompt", "consent");
+				authorizeUrl.searchParams.set("code_challenge", codeChallenge);
+				authorizeUrl.searchParams.set("code_challenge_method", "S256");
+				authorizeUrl.searchParams.set(
+					"permissions",
+					config.requiredPermissions.toString(),
+				);
 
-      yield* organisationsPolicy
-        .isOwner(user.activeOrganizationId)
-        .pipe(
-          Effect.catchIf(
-            isPolicyDeniedError,
-            () => Effect.fail(new HttpApiError.Forbidden()),
-          ),
-        );
+				return authorizeUrl;
+			},
+		},
+		callback: {
+			parse: ({ query, config }) => {
+				const guildId =
+					typeof query.guild_id === "string" ? query.guild_id.trim() : "";
 
-      const config = yield* resolveConfig();
+				if (guildId.length === 0) {
+					throw new OAuthCallbackError("Missing Discord guild selection");
+				}
 
-      if (query.error) {
-        throw new DiscordOAuthError({
-          message: query.error_description ?? query.error,
-        });
-      }
+				const permissionsRaw =
+					typeof query.permissions === "string" ? query.permissions.trim() : "";
 
-      const cookies = yield* HttpServerRequest.schemaCookies(cookiesSchema);
-      const storedState = cookies[STATE_COOKIE];
-      const storedVerifier = cookies[VERIFIER_COOKIE];
+				if (permissionsRaw.length === 0) {
+					throw new OAuthPermissionError("missing_bot_permissions");
+				}
 
-      const code = query.code;
-      const receivedState = query.state;
+				const grantedPermissions = parseBigInt(
+					permissionsRaw,
+					new OAuthPermissionError("invalid_bot_permissions"),
+				);
 
-      if (typeof code !== "string" || typeof receivedState !== "string") {
-        throw new DiscordStateError({
-          message: "Missing Discord OAuth parameters",
-        });
-      }
+				if (
+					(grantedPermissions & config.requiredPermissions) !==
+					config.requiredPermissions
+				) {
+					throw new OAuthPermissionError("insufficient_bot_permissions");
+				}
 
-      if (!storedState || !storedVerifier || storedState !== rawState) {
-        throw new DiscordStateError({
-          message: "Discord OAuth session mismatch",
-        });
-      }
+				return {
+					guildId,
+					grantedPermissions,
+				} satisfies DiscordCallbackData;
+			},
+		},
+		tokens: {
+			exchange: async ({ code, codeVerifier, config }) => {
+				const payload = await requestDiscordToken(
+					{
+						client_id: config.clientId,
+						client_secret: config.clientSecret,
+						grant_type: "authorization_code",
+						code,
+						code_verifier: codeVerifier,
+						redirect_uri: config.redirectUri,
+					},
+					"Discord token exchange failed",
+				);
 
-      if (state.orgId !== user.activeOrganizationId) {
-        throw new DiscordStateError({
-          message: "Discord OAuth organization mismatch",
-        });
-      }
+				return {
+					accessToken: payload.access_token,
+					refreshToken: payload.refresh_token ?? null,
+					scope: payload.scope ?? null,
+					expiresIn: payload.expires_in ?? null,
+					tokenType: payload.token_type ?? "Bearer",
+				};
+			},
+			refresh: async ({ refreshToken, config }) => {
+				const payload = await requestDiscordToken(
+					{
+						client_id: config.clientId,
+						client_secret: config.clientSecret,
+						grant_type: "refresh_token",
+						refresh_token: refreshToken,
+					},
+					"Discord token refresh failed",
+				);
 
-      const guildId = query.guild_id;
+				return {
+					accessToken: payload.access_token,
+					refreshToken: payload.refresh_token ?? null,
+					scope: payload.scope ?? null,
+					expiresIn: payload.expires_in ?? null,
+					tokenType: payload.token_type ?? "Bearer",
+				};
+			},
+		},
+		installation: {
+			derive: async ({ tokens, callbackData }) => {
+				const guilds = await fetchDiscordGuilds({
+					accessToken: tokens.accessToken,
+					tokenType: tokens.tokenType,
+				});
 
-      if (typeof guildId !== "string" || guildId.length === 0) {
-        throw new DiscordStateError({
-          message: "Missing Discord guild selection",
-        });
-      }
+				const guild = guilds.find((entry) => entry.id === callbackData.guildId);
 
-      if (!query.permissions) {
-        throw new DiscordPermissionError({
-          reason: "missing_bot_permissions",
-        });
-      }
+				if (!guild) {
+					throw new OAuthPermissionError("guild_access");
+				}
 
-      let grantedPermissions: bigint;
-      try {
-        grantedPermissions = BigInt(query.permissions);
-      } catch {
-        throw new DiscordPermissionError({
-          reason: "invalid_bot_permissions",
-        });
-      }
+				const userPermissions = parseBigInt(
+					guild.permissions,
+					new OAuthPermissionError("invalid_user_permissions"),
+				);
 
-      if (
-        (grantedPermissions & config.requiredPermissions) !==
-        config.requiredPermissions
-      ) {
-        throw new DiscordPermissionError({
-          reason: "insufficient_bot_permissions",
-        });
-      }
+				if ((userPermissions & MANAGE_GUILD_PERMISSION) === BigInt(0)) {
+					throw new OAuthPermissionError("missing_manage_guild");
+				}
 
-      const token = yield* exchangeDiscordToken(
-        code,
-        storedVerifier,
-        config,
-      );
-
-      const guilds = yield* fetchDiscordGuilds(token);
-      const guild = guilds.find((entry) => entry.id === guildId);
-
-      if (!guild) {
-        throw new DiscordPermissionError({
-          reason: "guild_access",
-        });
-      }
-
-      let userPermissions: bigint;
-      try {
-        userPermissions = BigInt(guild.permissions);
-      } catch {
-        throw new DiscordPermissionError({
-          reason: "invalid_user_permissions",
-        });
-      }
-
-      if ((userPermissions & MANAGE_GUILD_PERMISSION) === BigInt(0)) {
-        throw new DiscordPermissionError({
-          reason: "missing_manage_guild",
-        });
-      }
-
-      const accessToken = yield* Effect.promise(() => encrypt(token.access_token));
-      const refreshToken = token.refresh_token
-        ? yield* Effect.promise(() => encrypt(token.refresh_token!))
-        : null;
-      const scope = token.scope
-        ? yield* Effect.promise(() => encrypt(token.scope!))
-        : null;
-
-      const expiresAt = new Date(Date.now() + token.expires_in * 1000);
-      const metadata = buildMetadata(guild);
-
-      const existing = yield* repo.findByOrgAndType(
-        state.orgId,
-        DISCORD_APP_TYPE,
-      );
-
-      if (Option.isSome(existing)) {
-        yield* repo.updateById(existing.value.id, {
-          accessToken,
-          refreshToken,
-          expiresAt,
-          scope,
-          status: "connected",
-          updatedByUserId: user.id,
-          providerExternalId: guild.id,
-          providerDisplayName: guild.name,
-          providerMetadata: metadata,
-          lastCheckedAt: new Date(),
-        });
-      } else {
-        yield* repo.create({
-          organizationId: state.orgId,
-          spaceId: null,
-          appType: DISCORD_APP_TYPE,
-          status: "connected",
-          lastCheckedAt: new Date(),
-          installedByUserId: user.id,
-          updatedByUserId: user.id,
-          accessToken,
-          refreshToken,
-          expiresAt,
-          scope,
-          providerExternalId: guild.id,
-          providerDisplayName: guild.name,
-          providerMetadata: metadata,
-        });
-      }
-
-      return HttpServerResponse.html(
-        "<html><body><script>window.close();</script><p>Discord connected. You may close this window.</p></body></html>",
-      ) as unknown;
-    });
-
-  const refresh = (context: AppRefreshContext) =>
-    Effect.gen(function* () {
-      const { user, organisationsPolicy, repo } = context;
-
-      yield* organisationsPolicy
-        .isOwner(user.activeOrganizationId)
-        .pipe(
-          Effect.catchIf(
-            isPolicyDeniedError,
-            () => Effect.fail(new HttpApiError.Forbidden()),
-          ),
-        );
-
-      const config = yield* resolveConfig();
-
-      const installation = yield* repo.findByOrgAndType(
-        user.activeOrganizationId,
-        DISCORD_APP_TYPE,
-      );
-
-      if (Option.isNone(installation)) {
-        throw new HttpApiError.NotFound();
-      }
-
-      if (!installation.value.refreshToken) {
-        throw new HttpApiError.BadRequest();
-      }
-
-      const decryptedRefreshToken = yield* Effect.tryPromise({
-        try: () => decrypt(installation.value.refreshToken!),
-        catch: (cause) =>
-          new DiscordOAuthError({
-            message: `Failed to decrypt refresh token: ${String(cause)}`,
-          }),
-      });
-
-      const refreshed = yield* refreshDiscordToken(
-        decryptedRefreshToken,
-        config,
-      );
-
-      const accessToken = yield* Effect.promise(() => encrypt(refreshed.access_token));
-      const refreshToken = refreshed.refresh_token
-        ? yield* Effect.promise(() => encrypt(refreshed.refresh_token!))
-        : installation.value.refreshToken!;
-      const scope = refreshed.scope
-        ? yield* Effect.promise(() => encrypt(refreshed.scope!))
-        : installation.value.scope!;
-
-      const expiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
-
-      yield* repo.updateById(installation.value.id, {
-        accessToken,
-        refreshToken,
-        scope,
-        expiresAt,
-        status: "connected",
-        updatedByUserId: user.id,
-        lastCheckedAt: new Date(),
-      });
-
-      return HttpServerResponse.json({
-        refreshed: true,
-        expiresAt: expiresAt.toISOString(),
-      }) as unknown;
-    }).pipe(
-      Effect.catchIf(
-        (error): error is DiscordConfigError => error instanceof DiscordConfigError,
-        logAndFailInternalError,
-      ),
-      Effect.catchIf(
-        (error): error is DiscordOAuthError => error instanceof DiscordOAuthError,
-        logAndFailInternalError,
-      ),
-    );
-
-  const missingGuildError = (operation: string, reason: string) =>
-    createAppHandlerError({
-      app: DISCORD_APP_TYPE,
-      operation,
-      reason,
-      retryable: false,
-    });
-
-  const handlers = {
-    pause: (_context: AppOperationContext<DiscordAppType, DiscordAppSettings>) =>
-      Effect.void,
-    resume: (
-      _context: AppOperationContext<DiscordAppType, DiscordAppSettings>,
-    ) => Effect.void,
-    uninstall: (context: AppOperationContext<DiscordAppType, DiscordAppSettings>) => {
-      const guildId = context.installation.providerExternalId;
-
-      if (!guildId) {
-        return Effect.void;
-      }
-
-      return leaveGuild(guildId).pipe(Effect.map(() => undefined));
-    },
-    listDestinations: (
-      context: AppOperationContext<DiscordAppType, DiscordAppSettings>,
-    ) =>
-      Effect.gen(function* () {
-        const guildId = context.installation.providerExternalId;
-
-        if (!guildId) {
-          return yield* Effect.fail(
-            missingGuildError(
-              "listDestinations",
-              "Discord installation is missing a guild identifier",
-            ),
-          );
-        }
-
-        return yield* listGuildTextChannels(guildId);
-      }),
-    dispatch: (
-      context: AppDispatchContext<
-        DiscordAppType,
-        DiscordAppSettings,
-        DiscordDispatchPayload
-      >,
-    ) =>
-      Effect.gen(function* () {
-        const channelId = context.settings.channelId.trim();
-
-        if (channelId.length === 0) {
-          return yield* Effect.fail(
-            createAppHandlerError({
-              app: DISCORD_APP_TYPE,
-              operation: "dispatch",
-              reason: "Discord channel is not configured",
-              retryable: false,
-            }),
-          );
-        }
-
-        const message = buildDiscordMessage(context.payload);
-
-        yield* Effect.logDebug(
-          `Dispatching Discord message to channel ${channelId} for installation ${context.installation.id}`,
-        );
-
-        const response = yield* sendMessageToChannel(channelId, message);
-
-        return {
-          remoteId: response.id,
-          metadata: {
-            channelId: response.channel_id,
-            channelName: context.settings.channelName,
-          },
-        } satisfies AppDispatchResult;
-      }),
-  };
-
-  const module: AppModule<DiscordAppType, DiscordAppSettings, DiscordDispatchPayload> = {
-    type: DISCORD_APP_TYPE,
-    oauth: {
-      authorize: authorize as (context: AppAuthorizeContext) => Effect.Effect<unknown, unknown, never>,
-      callback: callback as (context: AppCallbackContext<DiscordAppType>) => Effect.Effect<unknown, unknown, never>,
-      refresh: refresh as (context: AppRefreshContext) => Effect.Effect<unknown, unknown, never>,
-    },
-    definition: discordDefinition,
-    handlers,
-  };
-
-  return module as AppModule<DiscordAppType>;
-};
+				return {
+					providerExternalId: guild.id,
+					providerDisplayName: guild.name,
+					metadata: buildInstallationMetadata(guild),
+				};
+			},
+		},
+		handlers: (dependencies) => createDiscordHandlers(dependencies),
+	});
 
 export const createApp = createDiscordApp;

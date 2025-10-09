@@ -1,0 +1,1 @@
+export { DiscordManagementPanel } from "./ManagementPanel";

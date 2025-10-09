@@ -10,7 +10,7 @@ Welcome to the Discord integration for Cap. This guide walks through the install
 
 ## Getting started
 
-1. Ensure the required environment variables listed in the manifest (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`) are configured in your deployment.
+1. Ensure the required environment variables listed in the manifest (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_APP_BOT_TOKEN`) are configured in your deployment.
 2. From the Apps gallery inside Cap, click **Install** on the Discord card.
 3. Complete the OAuth consent flow, select the guild and text channel, and confirm the permissions requested by the Cap bot.
 4. Choose the target channel inside Cap and save your settings to start receiving automation updates.
