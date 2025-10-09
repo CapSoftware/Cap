@@ -143,6 +143,14 @@ pub struct H264Encoder {
     converter: Option<ffmpeg::software::scaling::Context>,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum QueueFrameError {
+    #[error("Converter: {0}")]
+    Converter(ffmpeg::Error),
+    #[error("Converter: {0}")]
+    Encode(ffmpeg::Error),
+}
+
 impl H264Encoder {
     const TIME_BASE: i32 = 90000;
 
@@ -155,36 +163,26 @@ impl H264Encoder {
         mut frame: frame::Video,
         timestamp: Duration,
         output: &mut format::context::Output,
-    ) {
+    ) -> Result<(), QueueFrameError> {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
         let frame = if let Some(converter) = &mut self.converter {
             let mut new_frame = frame::Video::empty();
-            match converter.run(&frame, &mut new_frame) {
-                Ok(_) => {
-                    new_frame.set_pts(frame.pts());
-                    new_frame
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to convert frame: {} from format {:?} to {:?}",
-                        e,
-                        frame.format(),
-                        converter.output().format
-                    );
-                    // Return early as we can't process this frame
-                    return;
-                }
-            }
+            converter
+                .run(&frame, &mut new_frame)
+                .map_err(QueueFrameError::Converter)?;
+            new_frame.set_pts(frame.pts());
+            new_frame
         } else {
             frame
         };
 
-        if let Err(e) = self.base.send_frame(&frame, output, &mut self.encoder) {
-            tracing::error!("Failed to send frame to encoder: {:?}", e);
-            return;
-        }
+        self.base
+            .send_frame(&frame, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
+
+        Ok(())
     }
 
     pub fn finish(&mut self, output: &mut format::context::Output) {

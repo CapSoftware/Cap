@@ -172,14 +172,13 @@ impl Muxer for WindowsMuxer {
 
                             use scap_ffmpeg::AsFFmpeg;
 
-                            encoder.queue_frame(
-                                frame
-                                    .as_ffmpeg()
-                                    .map_err(|e| format!("FrameAsFFmpeg: {e}"))
-                                    .unwrap(),
-                                time,
-                                &mut output,
-                            );
+                            encoder
+                                .queue_frame(
+                                    frame.as_ffmpeg().context("frame as_ffmpeg")?,
+                                    time,
+                                    &mut output,
+                                )
+                                .context("queue_frame")?;
                         }
                     }
                 }

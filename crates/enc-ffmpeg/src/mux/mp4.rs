@@ -5,6 +5,7 @@ use tracing::{info, trace};
 
 use crate::{
     audio::AudioEncoder,
+    h264,
     video::{H264Encoder, H264EncoderError},
 };
 
@@ -70,12 +71,16 @@ impl MP4File {
         RawVideoFormat::YUYV420
     }
 
-    pub fn queue_video_frame(&mut self, frame: frame::Video, timestamp: Duration) {
+    pub fn queue_video_frame(
+        &mut self,
+        frame: frame::Video,
+        timestamp: Duration,
+    ) -> Result<(), h264::QueueFrameError> {
         if self.is_finished {
             return;
         }
 
-        self.video.queue_frame(frame, timestamp, &mut self.output);
+        self.video.queue_frame(frame, timestamp, &mut self.output)
     }
 
     pub fn queue_audio_frame(&mut self, frame: frame::Audio) {
