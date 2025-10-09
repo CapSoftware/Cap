@@ -1,9 +1,9 @@
 import { MysqlClient } from "@effect/sql-mysql2";
-import { Config, Effect, Layer, Option, Redacted } from "effect";
+import { Config, Effect, Layer, Option } from "effect";
 
 export const DatabaseLive = Layer.unwrapEffect(
 	Effect.gen(function* () {
-		const url = Redacted.make(yield* Config.string("DATABASE_URL"));
+		const url = yield* Config.redacted(Config.string("DATABASE_URL"));
 
 		return MysqlClient.layer({ url });
 	}),

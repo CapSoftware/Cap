@@ -140,7 +140,9 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 							Effect.repeat(
 								Effect.gen(function* () {
 									const bytes = yield* Effect.succeed(downloadedBytes);
-									yield* Effect.log(`Downloaded ${bytes} bytes`);
+									yield* Effect.log(
+										`Downloaded ${bytes}/${contentLength} bytes`,
+									);
 								}),
 								Schedule.forever.pipe(Schedule.delayed(() => "2 seconds")),
 							).pipe(Effect.delay("100 millis")),

@@ -33,8 +33,8 @@ import {
 	Option,
 } from "effect";
 import { cookies } from "next/headers";
-import { allowedOrigins } from "@/utils/cors";
 
+import { allowedOrigins } from "@/utils/cors";
 import { layerTracer } from "./tracing";
 
 const CookiePasswordAttachmentLive = Layer.effect(

@@ -3,7 +3,8 @@ import {
 	NodeRuntime,
 } from "@effect/platform-node";
 import { Layer, Logger } from "effect";
-import { DatabaseLive, ShardDatabaseLive } from "./shared/database";
+
+import { DatabaseLive, ShardDatabaseLive } from "./shared/database.ts";
 
 NodeClusterShardManagerSocket.layer({
 	storage: "sql",

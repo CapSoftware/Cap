@@ -8,9 +8,7 @@ COPY . .
 RUN corepack enable pnpm
 
 RUN echo "inject-workspace-packages=true" >> .npmrc
-RUN pnpm i --lockfile-only
-
-RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm i --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm i
 
 RUN pnpm run --filter=@cap/web-cluster build
 RUN pnpm deploy --filter=@cap/web-cluster out

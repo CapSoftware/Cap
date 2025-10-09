@@ -7,6 +7,7 @@ import {
 	HttpApiBuilder,
 	HttpMiddleware,
 	HttpRouter,
+	HttpServer,
 } from "@effect/platform";
 import {
 	NodeClusterRunnerSocket,
@@ -46,21 +47,8 @@ const RpcsLive = RpcServer.layer(Workflows.RpcGroup).pipe(
 	Layer.provide(WorkflowProxyServer.layerRpcHandlers(Workflows.Workflows)),
 	Layer.provide(Workflows.WorkflowsLayer),
 	Layer.provide(ClusterWorkflowLive),
-);
-const RpcProtocol = RpcServer.layerProtocolHttp({ path: "/" }).pipe(
+	Layer.provide(RpcServer.layerProtocolHttp({ path: "/" })),
 	Layer.provide(Workflows.RpcSerialization),
-);
-
-const WorkflowApiHttpLive = HttpApiBuilder.api(Workflows.Api).pipe(
-	Layer.provide(
-		WorkflowProxyServer.layerHttpApi(
-			Workflows.Api,
-			"workflows",
-			Workflows.Workflows,
-		),
-	),
-	Layer.provide(Workflows.WorkflowsLayer),
-	Layer.provide(ClusterWorkflowLive),
 );
 
 const TracingLayer = Layer.unwrapEffect(
@@ -94,10 +82,9 @@ const TracingLayer = Layer.unwrapEffect(
 	}),
 );
 
-HttpRouter.Default.serve(HttpMiddleware.logger).pipe(
+HttpRouter.Default.serve().pipe(
 	Layer.provide(RpcsLive),
-	Layer.provide(RpcProtocol),
-	Layer.provide(WorkflowApiHttpLive),
+	HttpServer.withLogAddress,
 	Layer.provide(NodeHttpServer.layer(createServer, { port: 42169 })),
 	Layer.provide(Videos.Default),
 	Layer.provide(S3Buckets.Default),
@@ -105,7 +92,8 @@ HttpRouter.Default.serve(HttpMiddleware.logger).pipe(
 	Layer.provide(FetchHttpClient.layer),
 	Layer.provide(DatabaseLive),
 	Layer.provide(TracingLayer),
-	Layer.provide(HealthServerLive),
 	Layer.launch,
 	NodeRuntime.runMain,
 );
+
+HealthServerLive.pipe(Layer.launch, NodeRuntime.runMain);

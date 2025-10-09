@@ -1,4 +1,4 @@
-import { CurrentUser, Http, Policy } from "@cap/web-domain";
+import { CurrentUser, Http, Policy, Video } from "@cap/web-domain";
 import { HttpApiBuilder } from "@effect/platform";
 import { Effect } from "effect";
 
@@ -24,7 +24,6 @@ export const LoomHttpLive = HttpApiBuilder.group(
 							loom: payload.loom,
 						})
 						.pipe(
-							Effect.tapDefect(Effect.logError),
 							Effect.catchTag(
 								"RpcClientError",
 								() => new Http.InternalServerError({ cause: "unknown" }),

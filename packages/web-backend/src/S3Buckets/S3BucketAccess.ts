@@ -27,7 +27,7 @@ const wrapS3Promise = <T>(
 				Effect.tryPromise({
 					try: () => cbResult,
 					catch: (cause) => new S3Error({ cause }),
-				}),
+				}).pipe(Effect.tapError(Effect.logError)),
 			),
 		);
 	}).pipe(
