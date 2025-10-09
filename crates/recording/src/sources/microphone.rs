@@ -7,13 +7,13 @@ use cap_media_info::AudioInfo;
 use futures::{SinkExt, channel::mpsc};
 use std::sync::Arc;
 
-pub struct Microphone(AudioInfo);
+pub struct Microphone(AudioInfo, Arc<MicrophoneFeedLock>);
 
 impl AudioSource for Microphone {
     type Config = Arc<MicrophoneFeedLock>;
 
     fn setup(
-        config: Self::Config,
+        feed_lock: Self::Config,
         mut audio_tx: mpsc::Sender<AudioFrame>,
         _: &mut crate::SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
@@ -21,10 +21,10 @@ impl AudioSource for Microphone {
         Self: Sized,
     {
         async move {
-            let audio_info = config.audio_info();
+            let audio_info = feed_lock.audio_info();
             let (tx, rx) = flume::bounded(8);
 
-            config
+            feed_lock
                 .ask(microphone::AddSender(tx))
                 .await
                 .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
@@ -40,7 +40,7 @@ impl AudioSource for Microphone {
                 }
             });
 
-            Ok(Self(audio_info))
+            Ok(Self(audio_info, feed_lock))
         }
     }
 
