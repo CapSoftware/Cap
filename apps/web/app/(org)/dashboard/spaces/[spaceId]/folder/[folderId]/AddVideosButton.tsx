@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
@@ -19,7 +19,7 @@ export default function AddVideosButton({
 }: {
 	folderId: Folder.FolderId;
 	folderName: string;
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 }) {
 	const [open, setOpen] = useState(false);
 	const router = useRouter();
@@ -41,9 +41,11 @@ export default function AddVideosButton({
 				addVideos={(folderIdArg, videoIds) =>
 					addVideosToFolder(folderIdArg, videoIds, spaceId)
 				}
-				removeVideos={removeVideosFromFolder}
+				removeVideos={(folderIdArg, videoIds) =>
+					removeVideosFromFolder(folderIdArg, videoIds, spaceId)
+				}
 				getVideos={() => getUserVideos(spaceId)}
-				getEntityVideoIds={getFolderVideoIds}
+				getEntityVideoIds={() => getFolderVideoIds(folderId, spaceId)}
 			/>
 		</>
 	);

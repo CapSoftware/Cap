@@ -8,10 +8,9 @@ import {
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
-import type { Folder, Video } from "@cap/web-domain";
+import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-
 export async function moveVideoToFolder({
 	videoId,
 	folderId,
@@ -19,7 +18,7 @@ export async function moveVideoToFolder({
 }: {
 	videoId: Video.VideoId;
 	folderId: Folder.FolderId | null;
-	spaceId?: string | null;
+	spaceId: Space.SpaceIdOrOrganisationId;
 }) {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId)
@@ -60,14 +59,21 @@ export async function moveVideoToFolder({
 			.set({
 				folderId: folderId === null ? null : folderId,
 			})
-			.where(eq(spaceVideos.videoId, videoId));
+			.where(
+				and(eq(spaceVideos.videoId, videoId), eq(spaceVideos.spaceId, spaceId)),
+			);
 	} else if (spaceId && isAllSpacesEntry) {
 		await db()
 			.update(sharedVideos)
 			.set({
 				folderId: folderId === null ? null : folderId,
 			})
-			.where(eq(sharedVideos.videoId, videoId));
+			.where(
+				and(
+					eq(sharedVideos.videoId, videoId),
+					eq(sharedVideos.organizationId, user.activeOrganizationId),
+				),
+			);
 	} else {
 		await db()
 			.update(videos)

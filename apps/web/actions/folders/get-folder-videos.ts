@@ -2,11 +2,14 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { videos } from "@cap/database/schema";
-import type { Folder, Video } from "@cap/web-domain";
+import { sharedVideos, spaceVideos } from "@cap/database/schema";
+import type { Folder, Space, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
-export async function getFolderVideoIds(folderId: Folder.FolderId) {
+export async function getFolderVideoIds(
+	folderId: Folder.FolderId,
+	spaceId: Space.SpaceIdOrOrganisationId,
+) {
 	try {
 		const user = await getCurrentUser();
 
@@ -18,10 +21,17 @@ export async function getFolderVideoIds(folderId: Folder.FolderId) {
 			throw new Error("Folder ID is required");
 		}
 
-		const rows = await db()
-			.select({ id: videos.id })
-			.from(videos)
-			.where(eq(videos.folderId, folderId));
+		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
+		const rows = isAllSpacesEntry
+			? await db()
+					.select({ id: sharedVideos.videoId })
+					.from(sharedVideos)
+					.where(eq(sharedVideos.folderId, folderId))
+			: await db()
+					.select({ id: spaceVideos.videoId })
+					.from(spaceVideos)
+					.where(eq(spaceVideos.folderId, folderId));
 
 		return {
 			success: true,

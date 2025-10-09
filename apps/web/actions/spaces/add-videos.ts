@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { spaceVideos, videos } from "@cap/database/schema";
+import { sharedVideos, spaceVideos, videos } from "@cap/database/schema";
 import type { Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -23,6 +23,8 @@ export async function addVideosToSpace(
 			throw new Error("Missing required data");
 		}
 
+		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
+
 		const userVideos = await db()
 			.select({ id: videos.id })
 			.from(videos)
@@ -34,21 +36,103 @@ export async function addVideosToSpace(
 			throw new Error("No valid videos found");
 		}
 
-		const spaceVideoEntries = validVideoIds.map((videoId) => ({
-			id: nanoId(),
-			videoId,
-			spaceId,
-			addedById: user.id,
-		}));
+		if (isAllSpacesEntry) {
+			console.log({
+				validVideoIds,
+			});
 
-		await db().insert(spaceVideos).values(spaceVideoEntries);
+			// Check which videos already exist in sharedVideos
+			const existingSharedVideos = await db()
+				.select({ videoId: sharedVideos.videoId })
+				.from(sharedVideos)
+				.where(
+					and(
+						eq(sharedVideos.organizationId, spaceId),
+						inArray(sharedVideos.videoId, validVideoIds),
+					),
+				);
+
+			console.log({
+				existingSharedVideos,
+			});
+
+			const existingVideoIds = existingSharedVideos.map((v) => v.videoId);
+			const newVideoIds = validVideoIds.filter(
+				(id) => !existingVideoIds.includes(id),
+			);
+
+			// Update existing videos to move them to root (clear folderId)
+			if (existingVideoIds.length > 0) {
+				await db()
+					.update(sharedVideos)
+					.set({ folderId: null })
+					.where(
+						and(
+							eq(sharedVideos.organizationId, spaceId),
+							inArray(sharedVideos.videoId, existingVideoIds),
+						),
+					);
+			}
+
+			// Insert new videos
+			if (newVideoIds.length > 0) {
+				const sharedVideoEntries = newVideoIds.map((videoId) => ({
+					id: nanoId(),
+					videoId,
+					organizationId: spaceId,
+					sharedByUserId: user.id,
+				}));
+				await db().insert(sharedVideos).values(sharedVideoEntries);
+			}
+		} else {
+			// Check which videos already exist in spaceVideos
+			const existingSpaceVideos = await db()
+				.select({ videoId: spaceVideos.videoId })
+				.from(spaceVideos)
+				.where(
+					and(
+						eq(spaceVideos.spaceId, spaceId),
+						inArray(spaceVideos.videoId, validVideoIds),
+					),
+				);
+
+			const existingVideoIds = existingSpaceVideos.map((v) => v.videoId);
+			const newVideoIds = validVideoIds.filter(
+				(id) => !existingVideoIds.includes(id),
+			);
+
+			// Update existing videos to move them to root (clear folderId)
+			if (existingVideoIds.length > 0) {
+				await db()
+					.update(spaceVideos)
+					.set({ folderId: null })
+					.where(
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							inArray(spaceVideos.videoId, existingVideoIds),
+						),
+					);
+			}
+
+			// Insert new videos
+			if (newVideoIds.length > 0) {
+				const spaceVideoEntries = newVideoIds.map((videoId) => ({
+					id: nanoId(),
+					videoId,
+					spaceId,
+					addedById: user.id,
+				}));
+
+				await db().insert(spaceVideos).values(spaceVideoEntries);
+			}
+		}
 
 		revalidatePath(`/dashboard/spaces/${spaceId}`);
 		revalidatePath("/dashboard/caps");
 
 		return {
 			success: true,
-			message: `${validVideoIds.length} video${validVideoIds.length === 1 ? "" : "s"} added to space`,
+			message: `${validVideoIds.length} video${validVideoIds.length === 1 ? "" : "s"} added to ${isAllSpacesEntry ? "organization" : "space"}`,
 		};
 	} catch (error) {
 		console.error("Error adding videos to space:", error);

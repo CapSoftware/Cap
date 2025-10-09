@@ -2,7 +2,12 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { folders, spaceVideos, videos } from "@cap/database/schema";
+import {
+	folders,
+	sharedVideos,
+	spaceVideos,
+	videos,
+} from "@cap/database/schema";
 import type { Folder, Space, Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -10,7 +15,7 @@ import { revalidatePath } from "next/cache";
 export async function addVideosToFolder(
 	folderId: Folder.FolderId,
 	videoIds: Video.VideoId[],
-	spaceId?: string,
+	spaceId: Space.SpaceIdOrOrganisationId,
 ) {
 	try {
 		const user = await getCurrentUser();
@@ -23,7 +28,6 @@ export async function addVideosToFolder(
 			throw new Error("Missing required data");
 		}
 
-		// Verify folder exists and is accessible
 		const [folder] = await db()
 			.select({ id: folders.id, spaceId: folders.spaceId })
 			.from(folders)
@@ -33,7 +37,6 @@ export async function addVideosToFolder(
 			throw new Error("Folder not found");
 		}
 
-		// Only allow updating videos the user owns
 		const userVideos = await db()
 			.select({ id: videos.id })
 			.from(videos)
@@ -45,38 +48,35 @@ export async function addVideosToFolder(
 			throw new Error("No valid videos found");
 		}
 
-		// Update the video's folderId
-		await db()
-			.update(videos)
-			.set({ folderId: folderId, updatedAt: new Date() })
-			.where(inArray(videos.id, validVideoIds));
+		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
 
-		// If this folder belongs to a space and we have a spaceId context, update spaceVideos relation
-		const effectiveSpaceId = spaceId || folder.spaceId;
-		if (effectiveSpaceId) {
-			// Update folderId for videos that are already in this space
+		//if video already exists in the space, then move it
+		if (isAllSpacesEntry) {
+			await db()
+				.update(sharedVideos)
+				.set({ folderId })
+				.where(
+					and(
+						eq(sharedVideos.organizationId, user.activeOrganizationId),
+						inArray(sharedVideos.videoId, validVideoIds),
+					),
+				);
+		} else {
 			await db()
 				.update(spaceVideos)
 				.set({ folderId })
 				.where(
 					and(
-						eq(
-							spaceVideos.spaceId,
-							effectiveSpaceId as Space.SpaceIdOrOrganisationId,
-						),
+						eq(spaceVideos.spaceId, spaceId),
 						inArray(spaceVideos.videoId, validVideoIds),
 					),
 				);
 		}
 
-		// Revalidate relevant paths
 		revalidatePath(`/dashboard/caps`);
 		revalidatePath(`/dashboard/folder/${folderId}`);
-		const effectiveSpaceIdForRevalidate = spaceId || folder.spaceId;
-		if (effectiveSpaceIdForRevalidate) {
-			revalidatePath(
-				`/dashboard/spaces/${effectiveSpaceIdForRevalidate}/folder/${folderId}`,
-			);
+		if (spaceId) {
+			revalidatePath(`/dashboard/spaces/${spaceId}/folder/${folderId}`);
 		}
 
 		return {

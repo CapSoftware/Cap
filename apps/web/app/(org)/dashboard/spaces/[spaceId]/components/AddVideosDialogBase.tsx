@@ -31,7 +31,7 @@ interface AddVideosDialogBaseProp<T> {
 	addVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
 	removeVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
 	getVideos: () => Promise<any>;
-	getEntityVideoIds: (entityId: T) => Promise<any>;
+	getEntityVideoIds: () => Promise<any>;
 }
 
 export interface VideoData {
@@ -94,7 +94,7 @@ function AddVideosDialogBase<T>({
 	const { data: entityVideoIds } = useQuery<Video.VideoId[]>({
 		queryKey: ["entity-video-ids", entityId, entityName],
 		queryFn: async () => {
-			const result = await getEntityVideoIds(entityId);
+			const result = await getEntityVideoIds();
 			if (!result.success) {
 				throw new Error(result.error);
 			}

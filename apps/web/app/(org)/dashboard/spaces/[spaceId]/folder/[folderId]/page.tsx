@@ -20,7 +20,10 @@ import FolderVideosSection from "../../../../folder/[id]/components/FolderVideos
 import AddVideosButton from "./AddVideosButton";
 
 const FolderPage = async (props: {
-	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
+	params: Promise<{
+		spaceId: Space.SpaceIdOrOrganisationId;
+		folderId: Folder.FolderId;
+	}>;
 }) => {
 	const params = await props.params;
 	const user = await getCurrentUser();

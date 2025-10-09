@@ -1,3 +1,5 @@
+import { faHome, faRecordVinyl } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
@@ -159,18 +161,36 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 							{moment(effectiveDate).format("MMM D, YYYY")}
 						</p>
 					</div>
-					{video.folderName && (
-						<div className="flex gap-1 items-center text-xs text-gray-10">
-							<FolderRive
-								key={theme + folderColor}
-								color={folderColor}
-								className="size-4"
-							/>
-							<p className="font-medium truncate text-gray-11">
-								{video.folderName}
-							</p>
-						</div>
-					)}
+					<div className="flex gap-1 items-center text-xs text-gray-10">
+						{video.folderName ? (
+							<>
+								<FolderRive
+									key={theme + folderColor}
+									color={folderColor}
+									className="size-4"
+								/>
+								<p className="font-medium truncate text-gray-11">
+									{video.folderName}
+								</p>
+							</>
+						) : isAlreadyInEntity ? (
+							<>
+								<FontAwesomeIcon
+									icon={faHome}
+									className="size-3 text-gray-10"
+								/>
+								<p className="font-medium truncate text-gray-11">Root</p>
+							</>
+						) : (
+							<>
+								<FontAwesomeIcon
+									icon={faRecordVinyl}
+									className="size-3 text-gray-10"
+								/>
+								<p className="font-medium truncate text-gray-11">Caps</p>
+							</>
+						)}
+					</div>
 				</div>
 			</div>
 		);

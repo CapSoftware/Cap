@@ -2,14 +2,20 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { folders, spaceVideos, videos } from "@cap/database/schema";
-import type { Folder, Video } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import {
+	folders,
+	sharedVideos,
+	spaceVideos,
+	videos,
+} from "@cap/database/schema";
+import type { Folder, Space, Video } from "@cap/web-domain";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function removeVideosFromFolder(
 	folderId: Folder.FolderId,
 	videoIds: Video.VideoId[],
+	spaceId: Space.SpaceIdOrOrganisationId,
 ) {
 	try {
 		const user = await getCurrentUser();
@@ -17,6 +23,8 @@ export async function removeVideosFromFolder(
 		if (!user || !user.id) {
 			throw new Error("Unauthorized");
 		}
+
+		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
 		if (!folderId || !videoIds || videoIds.length === 0) {
 			throw new Error("Missing required data");
@@ -52,14 +60,27 @@ export async function removeVideosFromFolder(
 				and(inArray(videos.id, validVideoIds), eq(videos.folderId, folderId)),
 			);
 
-		// If folder belongs to a space, also clear the folderId in spaceVideos relation
-		if (folder.spaceId) {
+		// Clear the folderId in the appropriate table based on context
+		if (isAllSpacesEntry || !folder.spaceId) {
+			// Organization-level folder - clear folderId in sharedVideos
+			await db()
+				.update(sharedVideos)
+				.set({ folderId: null })
+				.where(
+					and(
+						eq(sharedVideos.organizationId, user.activeOrganizationId),
+						inArray(sharedVideos.videoId, validVideoIds),
+						eq(sharedVideos.folderId, folderId),
+					),
+				);
+		} else if (folder.spaceId) {
+			// Space-level folder - clear folderId in spaceVideos
 			await db()
 				.update(spaceVideos)
 				.set({ folderId: null })
 				.where(
 					and(
-						eq(spaceVideos.spaceId, folder.spaceId),
+						sql`${spaceVideos.spaceId} = ${folder.spaceId}`,
 						inArray(spaceVideos.videoId, validVideoIds),
 						eq(spaceVideos.folderId, folderId),
 					),
