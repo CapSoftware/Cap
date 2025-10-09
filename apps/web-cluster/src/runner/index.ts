@@ -14,23 +14,14 @@ import {
 	NodeRuntime,
 } from "@effect/platform-node";
 import { RpcServer } from "@effect/rpc";
-import { MysqlClient } from "@effect/sql-mysql2";
 import { WorkflowProxyServer } from "@effect/workflow";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { Config, Effect, Layer, Option } from "effect";
 
 import { ContainerMetadata } from "../cluster/container-metadata.ts";
+import { DatabaseLive, ShardDatabaseLive } from "../shared/database.ts";
 import { HealthServerLive } from "./health-server.ts";
-
-const SqlLayer = Layer.unwrapEffect(
-	Effect.gen(function* () {
-		const url = yield* Config.string("DATABASE_URL").pipe((v) =>
-			Config.redacted(v),
-		);
-		return MysqlClient.layer({ url });
-	}),
-);
 
 const ClusterWorkflowLive = Layer.unwrapEffect(
 	Effect.gen(function* () {
@@ -46,7 +37,7 @@ const ClusterWorkflowLive = Layer.unwrapEffect(
 					},
 				}),
 			),
-			Layer.provide(SqlLayer),
+			Layer.provide(ShardDatabaseLive),
 		);
 	}),
 ).pipe(Layer.provide(ContainerMetadata.Default));
@@ -112,7 +103,7 @@ HttpRouter.Default.serve(HttpMiddleware.logger).pipe(
 	Layer.provide(S3Buckets.Default),
 	Layer.provide(Database.Default),
 	Layer.provide(FetchHttpClient.layer),
-	Layer.provide(SqlLayer),
+	Layer.provide(DatabaseLive),
 	Layer.provide(TracingLayer),
 	Layer.provide(HealthServerLive),
 	Layer.launch,

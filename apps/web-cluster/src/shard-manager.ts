@@ -2,20 +2,13 @@ import {
 	NodeClusterShardManagerSocket,
 	NodeRuntime,
 } from "@effect/platform-node";
-import { MysqlClient } from "@effect/sql-mysql2";
-import { Config, Effect, Layer, Logger, Redacted } from "effect";
-
-const DatabaseLive = Layer.unwrapEffect(
-	Effect.gen(function* () {
-		const url = Redacted.make(yield* Config.string("DATABASE_URL"));
-
-		return MysqlClient.layer({ url });
-	}),
-);
+import { Layer, Logger } from "effect";
+import { DatabaseLive, ShardDatabaseLive } from "./shared/database";
 
 NodeClusterShardManagerSocket.layer({
 	storage: "sql",
 }).pipe(
+	Layer.provide(ShardDatabaseLive),
 	Layer.provide(DatabaseLive),
 	Layer.provide(Logger.pretty),
 	Layer.launch,
