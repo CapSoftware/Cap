@@ -1,4 +1,5 @@
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
+use anyhow::Context;
 use anyhow::anyhow;
 use cap_enc_ffmpeg::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -172,14 +173,19 @@ impl Muxer for WindowsMuxer {
 
                             use scap_ffmpeg::AsFFmpeg;
 
-                            encoder.queue_frame(
+                            if let Err(e) =
                                 frame
                                     .as_ffmpeg()
-                                    .map_err(|e| format!("FrameAsFFmpeg: {e}"))
-                                    .unwrap(),
-                                time,
-                                &mut output,
-                            );
+                                    .context("frame as_ffmpeg")
+                                    .and_then(|frame| {
+                                        encoder
+                                            .queue_frame(frame, time, &mut output)
+                                            .context("queue_frame")
+                                    })
+                            {
+                                error!("{e}");
+                                return;
+                            }
                         }
                     }
                 }
