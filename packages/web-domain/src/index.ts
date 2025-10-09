@@ -1,7 +1,7 @@
+export * as Apps from "./Apps.ts";
 export * from "./Authentication.ts";
 export * as Comment from "./Comment.ts";
 export * from "./Errors.ts";
-export * as Apps from "./Apps.ts";
 export * as Folder from "./Folder.ts";
 export * as Organisation from "./Organisation.ts";
 export * as Policy from "./Policy.ts";

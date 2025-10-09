@@ -77,13 +77,19 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 				href={href || undefined}
 				{...props}
 			>
-				{spinner && <LoadingSpinner className="mr-1" size={16} />}
-				{icon && icon}
-				{props.children}
-				{kbd && (
-					<kbd className="hidden justify-center items-center ml-1 text-xs rounded-full border md:flex size-5 bg-gray-11 border-gray-10">
-						{kbd}
-					</kbd>
+				{asChild ? (
+					props.children
+				) : (
+					<>
+						{spinner && <LoadingSpinner className="mr-1" size={16} />}
+						{icon && icon}
+						{props.children}
+						{kbd && (
+							<kbd className="hidden justify-center items-center ml-1 text-xs rounded-full border md:flex size-5 bg-gray-11 border-gray-10">
+								{kbd}
+							</kbd>
+						)}
+					</>
 				)}
 			</Comp>
 		);

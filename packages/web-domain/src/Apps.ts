@@ -5,8 +5,8 @@ import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 
-export const AppType = Schema.Literal("discord");
-export type AppType = typeof AppType.Type;
+export const AppSlug = Schema.Literal("discord");
+export type AppSlug = typeof AppSlug.Type;
 
 export const AppStatus = Schema.Literal(
 	"connected",
@@ -23,25 +23,30 @@ export const AppDestination = Schema.Struct({
 });
 export type AppDestination = typeof AppDestination.Type;
 
-export class AppDefinition extends Schema.Class<AppDefinition>(
-	"AppDefinition",
-)({
-	type: AppType,
-	displayName: Schema.String,
-	description: Schema.String,
-	icon: Schema.String,
-	category: Schema.String,
-	requiredEnvVars: Schema.Array(Schema.String),
-	image: Schema.String,
-	documentation: Schema.String,
-	contentPath: Schema.OptionFromNullOr(Schema.String),
-}) {}
+export class AppDefinition extends Schema.Class<AppDefinition>("AppDefinition")(
+	{
+		slug: AppSlug,
+		displayName: Schema.String,
+		description: Schema.String,
+		icon: Schema.String,
+		category: Schema.String,
+		requiredEnvVars: Schema.Array(Schema.String),
+		image: Schema.String,
+		documentation: Schema.String,
+		content: Schema.String,
+		contentPath: Schema.OptionFromNullOr(Schema.String),
+		publisher: Schema.Struct({
+			name: Schema.String,
+			email: Schema.String,
+		}),
+	},
+) {}
 
 export class AppInstallationView extends Schema.Class<AppInstallationView>(
 	"AppInstallationView",
 )({
 	id: Schema.String,
-	appType: AppType,
+	slug: AppSlug,
 	status: AppStatus,
 	organizationId: Schema.String,
 	spaceId: Schema.OptionFromNullOr(Schema.String),
@@ -51,29 +56,32 @@ export class AppInstallationView extends Schema.Class<AppInstallationView>(
 	settings: Schema.OptionFromNullOr(Schema.Unknown),
 }) {}
 
-export class AppNotInstalledError extends Schema.TaggedError<
-	AppNotInstalledError
->()("AppNotInstalledError", {
-	appType: AppType,
-}) {}
+export class AppNotInstalledError extends Schema.TaggedError<AppNotInstalledError>()(
+	"AppNotInstalledError",
+	{
+		slug: AppSlug,
+	},
+) {}
 
-export class AppUnsupportedError extends Schema.TaggedError<
-	AppUnsupportedError
->()("AppUnsupportedError", {
-	appType: Schema.String,
-}) {}
+export class AppUnsupportedError extends Schema.TaggedError<AppUnsupportedError>()(
+	"AppUnsupportedError",
+	{
+		slug: Schema.String,
+	},
+) {}
 
-export class AppSettingsValidationError extends Schema.TaggedError<
-	AppSettingsValidationError
->()("AppSettingsValidationError", {
-	appType: AppType,
-	issues: Schema.Array(Schema.String),
-}) {}
+export class AppSettingsValidationError extends Schema.TaggedError<AppSettingsValidationError>()(
+	"AppSettingsValidationError",
+	{
+		slug: AppSlug,
+		issues: Schema.Array(Schema.String),
+	},
+) {}
 
 export class AppOperationError extends Schema.TaggedError<AppOperationError>()(
 	"AppOperationError",
 	{
-		appType: AppType,
+		slug: AppSlug,
 		operation: Schema.String,
 		reason: Schema.String,
 		retryable: Schema.Boolean,
@@ -81,16 +89,17 @@ export class AppOperationError extends Schema.TaggedError<AppOperationError>()(
 	},
 ) {}
 
-export class AppSettingsMissingError extends Schema.TaggedError<
-	AppSettingsMissingError
->()("AppSettingsMissingError", {
-	appType: AppType,
-}) {}
+export class AppSettingsMissingError extends Schema.TaggedError<AppSettingsMissingError>()(
+	"AppSettingsMissingError",
+	{
+		slug: AppSlug,
+	},
+) {}
 
-const AppTypePayload = Schema.Struct({ appType: AppType });
+const AppSlugPayload = Schema.Struct({ slug: AppSlug });
 
 const UpdateSettingsPayload = Schema.Struct({
-	appType: AppType,
+	slug: AppSlug,
 	settings: Schema.Unknown,
 });
 
@@ -101,16 +110,12 @@ export class AppsRpcs extends RpcGroup.make(
 		error: Schema.Union(PolicyDeniedError, InternalError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsGetInstallation", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: Schema.Option(AppInstallationView),
-		error: Schema.Union(
-			AppUnsupportedError,
-			PolicyDeniedError,
-			InternalError,
-		),
+		error: Schema.Union(AppUnsupportedError, PolicyDeniedError, InternalError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsListDestinations", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: Schema.Array(AppDestination),
 		error: Schema.Union(
 			AppNotInstalledError,
@@ -133,7 +138,7 @@ export class AppsRpcs extends RpcGroup.make(
 		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsPause", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: AppInstallationView,
 		error: Schema.Union(
 			AppNotInstalledError,
@@ -144,7 +149,7 @@ export class AppsRpcs extends RpcGroup.make(
 		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsResume", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: AppInstallationView,
 		error: Schema.Union(
 			AppNotInstalledError,
@@ -155,7 +160,7 @@ export class AppsRpcs extends RpcGroup.make(
 		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsUninstall", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: Schema.Struct({ uninstalled: Schema.Boolean }),
 		error: Schema.Union(
 			AppNotInstalledError,
@@ -166,7 +171,7 @@ export class AppsRpcs extends RpcGroup.make(
 		),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("AppsDispatchTest", {
-		payload: AppTypePayload,
+		payload: AppSlugPayload,
 		success: Schema.Struct({
 			remoteId: Schema.OptionFromNullOr(Schema.String),
 		}),

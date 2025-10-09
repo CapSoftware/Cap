@@ -907,15 +907,34 @@ importers:
       '@cap/env':
         specifier: workspace:*
         version: link:../env
+      '@cap/ui':
+        specifier: workspace:*
+        version: link:../ui
       '@cap/web-domain':
         specifier: workspace:*
         version: link:../web-domain
       '@effect/platform':
         specifier: ^0.91.1
         version: 0.91.1(effect@3.17.14)
+      '@tanstack/react-query':
+        specifier: ^5.90.1
+        version: 5.90.2(react@19.1.1)
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      date-fns:
+        specifier: ^4.1.0
+        version: 4.1.0
       effect:
         specifier: ^3.17.14
         version: 3.17.14
+    devDependencies:
+      '@types/react':
+        specifier: 19.1.13
+        version: 19.1.13
+      react:
+        specifier: 19.1.1
+        version: 19.1.1
 
   packages/config:
     dependencies:

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(pnpm typecheck:*)",
       "Bash(pnpm exec tsc:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(pnpm typecheck:apps-web:*)"
     ],
     "deny": [],
     "ask": []

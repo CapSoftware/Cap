@@ -35,6 +35,7 @@
 	"include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
 	"exclude": ["node_modules"],
 	"references": [
+		{ "path": "../../packages/apps" },
 		{ "path": "../../packages/database" },
 		{ "path": "../../packages/env" },
 		{ "path": "../../packages/ui" },

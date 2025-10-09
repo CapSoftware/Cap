@@ -2,6 +2,7 @@ import "server-only";
 
 import { decrypt } from "@cap/database/crypto";
 import {
+	Apps,
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
@@ -42,6 +43,7 @@ const CookiePasswordAttachmentLive = Layer.effect(
 );
 
 export const Dependencies = Layer.mergeAll(
+	Apps.Default,
 	S3Buckets.Default,
 	Videos.Default,
 	VideosPolicy.Default,

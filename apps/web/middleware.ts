@@ -11,10 +11,14 @@ const addHttps = (s?: string) => {
 };
 
 const runtimeEnv = {
-	WEB_URL: process.env.WEB_URL ?? buildEnv.NEXT_PUBLIC_WEB_URL ?? "http://localhost:3000",
+	WEB_URL:
+		process.env.WEB_URL ??
+		buildEnv.NEXT_PUBLIC_WEB_URL ??
+		"http://localhost:3000",
 	VERCEL_URL_HOST: process.env.VERCEL_URL_HOST,
 	VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL_HOST,
-	VERCEL_PROJECT_PRODUCTION_URL_HOST: process.env.VERCEL_PROJECT_PRODUCTION_URL_HOST,
+	VERCEL_PROJECT_PRODUCTION_URL_HOST:
+		process.env.VERCEL_PROJECT_PRODUCTION_URL_HOST,
 };
 
 const mainOrigins = [
