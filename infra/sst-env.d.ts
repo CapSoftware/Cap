@@ -5,6 +5,17 @@
 
 declare module "sst" {
   export interface Resource {
+    "AuroraDB": {
+      "clusterArn": string
+      "database": string
+      "host": string
+      "password": string
+      "port": number
+      "reader": string
+      "secretArn": string
+      "type": "sst.aws.Aurora"
+      "username": string
+    }
     "CAP_AWS_ACCESS_KEY": {
       "type": "sst.sst.Secret"
       "value": string

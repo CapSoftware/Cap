@@ -8,8 +8,8 @@ const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 
 const CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
-const AXIOM_API_TOKEN = "xaat-8b4a0ead-c68d-4a65-aba6-151213f9d701";
-const AXIOM_DATASET = "cap";
+const AXIOM_API_TOKEN = "xaat-c0704be6-e942-4935-b068-3b491d7cc00f";
+const AXIOM_DATASET = "cap-otel";
 
 export default $config({
 	app(input) {
@@ -28,7 +28,6 @@ export default $config({
 				},
 				cloudflare: true,
 				aws: {
-					profile: "cap-staging",
 				},
 				planetscale: true,
 				awsx: "2.21.1",
@@ -278,10 +277,19 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		},
 	});
 
+	const db = new sst.aws.Aurora('AuroraDB', {
+		engine: "mysql",
+		vpc,
+		scaling: {
+			min: "0.5 ACU",
+			max: "4 ACU",
+		}
+	});
+
 	const commonEnvironment = {
 		CAP_AWS_REGION: bucket.region,
 		CAP_AWS_BUCKET: bucket.bucket,
-		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
+		DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`, // secrets.DATABASE_URL_MYSQL.value,
 		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
 		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
 		AXIOM_API_TOKEN,
