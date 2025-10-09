@@ -77,7 +77,7 @@ impl MP4File {
         timestamp: Duration,
     ) -> Result<(), h264::QueueFrameError> {
         if self.is_finished {
-            return;
+            return Ok(());
         }
 
         self.video.queue_frame(frame, timestamp, &mut self.output)
