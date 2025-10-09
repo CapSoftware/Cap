@@ -1,7 +1,7 @@
 use crate::{
     RecordingBaseInputs,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
-    feeds::microphone::MicrophoneFeedLock,
+    feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     output_pipeline::{self, OutputPipeline},
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };

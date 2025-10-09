@@ -8,6 +8,8 @@ use cap_project::{
     cursor::CursorEvents,
 };
 use cap_recording::PipelineDoneError;
+use cap_recording::feeds::camera::CameraFeedLock;
+use cap_recording::feeds::microphone::MicrophoneFeedLock;
 use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
@@ -53,20 +55,24 @@ use crate::{
     windows::{CapWindowId, ShowCapWindow},
 };
 
+pub struct InProgressRecordingCommon {
+    pub target_name: String,
+    pub inputs: StartRecordingInputs,
+    pub recording_dir: PathBuf,
+    pub camera_feed: Option<Arc<CameraFeedLock>>,
+    pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
+}
+
 pub enum InProgressRecording {
     Instant {
-        target_name: String,
         handle: instant_recording::ActorHandle,
         progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
-        inputs: StartRecordingInputs,
-        recording_dir: PathBuf,
+        common: InProgressRecordingCommon,
     },
     Studio {
-        target_name: String,
         handle: studio_recording::ActorHandle,
-        inputs: StartRecordingInputs,
-        recording_dir: PathBuf,
+        common: InProgressRecordingCommon,
     },
 }
 
@@ -80,8 +86,8 @@ impl InProgressRecording {
 
     pub fn inputs(&self) -> &StartRecordingInputs {
         match self {
-            Self::Instant { inputs, .. } => inputs,
-            Self::Studio { inputs, .. } => inputs,
+            Self::Instant { common, .. } => &common.inputs,
+            Self::Studio { common, .. } => &common.inputs,
         }
     }
 
@@ -101,8 +107,8 @@ impl InProgressRecording {
 
     pub fn recording_dir(&self) -> &PathBuf {
         match self {
-            Self::Instant { recording_dir, .. } => recording_dir,
-            Self::Studio { recording_dir, .. } => recording_dir,
+            Self::Instant { common, .. } => &common.recording_dir,
+            Self::Studio { common, .. } => &common.recording_dir,
         }
     }
 
@@ -112,21 +118,17 @@ impl InProgressRecording {
                 handle,
                 progressive_upload,
                 video_upload_info,
-                target_name,
+                common,
                 ..
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
                 progressive_upload,
                 video_upload_info,
-                target_name,
+                target_name: common.target_name,
             },
-            Self::Studio {
-                handle,
-                target_name,
-                ..
-            } => CompletedRecording::Studio {
+            Self::Studio { handle, common, .. } => CompletedRecording::Studio {
                 recording: handle.stop().await?,
-                target_name,
+                target_name: common.target_name,
             },
         })
     }
@@ -449,6 +451,14 @@ pub async fn start_recording(
                     .map_err(|e| format!("GetShareableContent: {e}"))?
                     .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
 
+                let common = InProgressRecordingCommon {
+                    target_name,
+                    inputs: inputs.clone(),
+                    recording_dir: recording_dir.clone(),
+                    camera_feed: camera_feed.clone(),
+                    mic_feed: mic_feed.clone(),
+                };
+
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
@@ -481,12 +491,7 @@ pub async fn start_recording(
                                 e.to_string()
                             })?;
 
-                        InProgressRecording::Studio {
-                            handle,
-                            target_name,
-                            inputs,
-                            recording_dir: recording_dir.clone(),
-                        }
+                        InProgressRecording::Studio { handle, common }
                     }
                     RecordingMode::Instant => {
                         let Some(video_upload_info) = video_upload_info.clone() else {
@@ -526,9 +531,7 @@ pub async fn start_recording(
                             handle,
                             progressive_upload,
                             video_upload_info,
-                            target_name,
-                            inputs,
-                            recording_dir: recording_dir.clone(),
+                            common,
                         }
                     }
                 };
