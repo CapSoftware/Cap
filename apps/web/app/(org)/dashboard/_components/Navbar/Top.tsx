@@ -265,6 +265,7 @@ const User = () => {
 			<Popover open={menuOpen} onOpenChange={setMenuOpen}>
 				<PopoverTrigger asChild>
 					<div
+						suppressHydrationWarning
 						data-state={menuOpen ? "open" : "closed"}
 						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
 					>

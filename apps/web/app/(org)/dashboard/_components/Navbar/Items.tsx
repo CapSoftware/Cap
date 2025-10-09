@@ -36,7 +36,7 @@ import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, CogIcon } from "../AnimatedIcons";
+import { CapIcon, CogIcon, IntegrationsIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import CapAIBox from "./CapAIBox";
 import SpacesList from "./SpacesList";
@@ -65,6 +65,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			href: `/dashboard/settings/organization`,
 			ownerOnly: true,
 			icon: <CogIcon />,
+			subNav: [],
+		},
+		{
+			name: "Apps",
+			href: `/dashboard/apps`,
+			ownerOnly: true,
+			icon: <IntegrationsIcon />,
 			subNav: [],
 		},
 	];

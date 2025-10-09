@@ -4,6 +4,7 @@ import MessageCircleMoreIcon from "./Chat";
 import CogIcon from "./Cog";
 import DownloadIcon from "./Download";
 import HomeIcon from "./Home";
+import IntegrationsIcon from "./Integrations";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
 import ReferIcon from "./Refer";
@@ -20,4 +21,5 @@ export {
 	LogoutIcon,
 	SettingsGearIcon,
 	ReferIcon,
+	IntegrationsIcon,
 };
