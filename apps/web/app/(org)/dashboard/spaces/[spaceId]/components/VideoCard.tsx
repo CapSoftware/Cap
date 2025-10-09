@@ -61,7 +61,7 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 					}
 				}}
 				className={clsx(
-					"flex relative flex-col p-3 w-full min-h-fit rounded-xl border transition-all duration-200 group",
+					"flex relative flex-col p-3 w-full h-full rounded-xl border transition-all duration-200 group",
 					className,
 					isAlreadyInEntity && isSelected && "border-red-500",
 					isAlreadyInEntity && !isSelected && "border-blue-500",
