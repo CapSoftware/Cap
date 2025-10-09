@@ -59,8 +59,6 @@ pub struct InProgressRecordingCommon {
     pub target_name: String,
     pub inputs: StartRecordingInputs,
     pub recording_dir: PathBuf,
-    pub camera_feed: Option<Arc<CameraFeedLock>>,
-    pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
 }
 
 pub enum InProgressRecording {
@@ -455,8 +453,6 @@ pub async fn start_recording(
                     target_name,
                     inputs: inputs.clone(),
                     recording_dir: recording_dir.clone(),
-                    camera_feed: camera_feed.clone(),
-                    mic_feed: mic_feed.clone(),
                 };
 
                 let actor = match inputs.mode {

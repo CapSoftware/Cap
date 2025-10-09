@@ -15,7 +15,7 @@ impl VideoSource for Camera {
     type Frame = FFmpegVideoFrame;
 
     async fn setup(
-        config: Self::Config,
+        feed_lock: Self::Config,
         mut video_tx: mpsc::Sender<Self::Frame>,
         _: &mut SetupCtx,
     ) -> anyhow::Result<Self>
@@ -24,7 +24,7 @@ impl VideoSource for Camera {
     {
         let (tx, rx) = flume::bounded(8);
 
-        config
+        feed_lock
             .ask(camera::AddSender(tx))
             .await
             .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
@@ -35,7 +35,7 @@ impl VideoSource for Camera {
             }
         });
 
-        Ok(Self(config))
+        Ok(Self(feed_lock))
     }
 
     fn video_info(&self) -> VideoInfo {
