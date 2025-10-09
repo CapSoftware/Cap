@@ -67,6 +67,8 @@ pub enum InProgressRecording {
         progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
+        // camera isn't used as part of recording pipeline so we hold lock here
+        camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
         handle: studio_recording::ActorHandle,
@@ -528,6 +530,7 @@ pub async fn start_recording(
                             progressive_upload,
                             video_upload_info,
                             common,
+                            camera_feed,
                         }
                     }
                 };
