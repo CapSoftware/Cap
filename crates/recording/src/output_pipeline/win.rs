@@ -1,4 +1,5 @@
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
+use anyhow::Context;
 use anyhow::anyhow;
 use cap_enc_ffmpeg::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
