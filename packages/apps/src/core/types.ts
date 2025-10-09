@@ -1,8 +1,8 @@
 import type { AppInstallationStatus } from "@cap/database/schema";
 import type { CurrentUser, Organisation, Policy } from "@cap/web-domain";
-import { Effect, Option, Schema } from "effect";
-
+import type { Effect, Option } from "effect";
 import type { AppHandlerError } from "./errors.ts";
+import type { AppSettingsDefinition } from "./settings.ts";
 import type { AppStatePayload } from "./state.ts";
 
 export type OrganisationsPolicyInstance = {
@@ -14,11 +14,11 @@ export type OrganisationsPolicyInstance = {
 	) => Effect.Effect<unknown, Policy.PolicyDeniedError | unknown, unknown>;
 };
 
-export type AppInstallationRepoRecord<AppType extends string = string> = {
+export type AppInstallationRepoRecord<AppSlug extends string = string> = {
 	id: string;
 	organizationId: string;
 	spaceId: string | null;
-	appType: AppType;
+	appSlug: AppSlug;
 	status: AppInstallationStatus;
 	lastCheckedAt: Date | null;
 	installedByUserId: string;
@@ -34,10 +34,10 @@ export type AppInstallationRepoRecord<AppType extends string = string> = {
 	updatedAt: Date;
 };
 
-export type AppInstallationRepoCreate<AppType extends string = string> = {
+export type AppInstallationRepoCreate<AppSlug extends string = string> = {
 	organizationId: string;
 	spaceId: string | null;
-	appType: AppType;
+	appSlug: AppSlug;
 	status: AppInstallationStatus;
 	lastCheckedAt: Date | null;
 	installedByUserId: string;
@@ -52,27 +52,28 @@ export type AppInstallationRepoCreate<AppType extends string = string> = {
 	id?: string;
 };
 
-export type AppInstallationRepoUpdate<AppType extends string = string> = Partial<{
-	organizationId: string;
-	spaceId: string | null;
-	appType: AppType;
-	status: AppInstallationStatus;
-	lastCheckedAt: Date | null;
-	installedByUserId: string;
-	updatedByUserId: string | null;
-	accessToken: string;
-	refreshToken: string | null;
-	expiresAt: Date | null;
-	scope: string | null;
-	providerExternalId: string | null;
-	providerDisplayName: string | null;
-	providerMetadata: Record<string, unknown> | null;
-}>;
+export type AppInstallationRepoUpdate<AppSlug extends string = string> =
+	Partial<{
+		organizationId: string;
+		spaceId: string | null;
+		appSlug: AppSlug;
+		status: AppInstallationStatus;
+		lastCheckedAt: Date | null;
+		installedByUserId: string;
+		updatedByUserId: string | null;
+		accessToken: string;
+		refreshToken: string | null;
+		expiresAt: Date | null;
+		scope: string | null;
+		providerExternalId: string | null;
+		providerDisplayName: string | null;
+		providerMetadata: Record<string, unknown> | null;
+	}>;
 
 export type AppInstallationsRepository = {
-	findByOrgAndType: (
+	findByOrgAndSlug: (
 		organizationId: string,
-		appType: string,
+		slug: string,
 	) => Effect.Effect<
 		Option.Option<AppInstallationRepoRecord>,
 		unknown,
@@ -96,7 +97,7 @@ export type AppAuthorizeContext<
 };
 
 export type AppCallbackContext<
-	AppType extends string = string,
+	AppSlug extends string = string,
 	Policy extends OrganisationsPolicyInstance = OrganisationsPolicyInstance,
 	Repo extends AppInstallationsRepository = AppInstallationsRepository,
 > = {
@@ -105,7 +106,7 @@ export type AppCallbackContext<
 	repo: Repo;
 	query: Record<string, string | undefined>;
 	rawState: string;
-	state: AppStatePayload<AppType>;
+	state: AppStatePayload<AppSlug>;
 };
 
 export type AppRefreshContext<
@@ -118,19 +119,19 @@ export type AppRefreshContext<
 };
 
 export type AppOAuthHandlers<
-	AppType extends string = string,
+	AppSlug extends string = string,
 	Policy extends OrganisationsPolicyInstance = OrganisationsPolicyInstance,
 	Repo extends AppInstallationsRepository = AppInstallationsRepository,
 > = {
 	authorize: (
 		context: AppAuthorizeContext<Policy>,
-	) => Effect.Effect<unknown, unknown, never>;
+	) => Effect.Effect<unknown, unknown, unknown>;
 	callback: (
-		context: AppCallbackContext<AppType, Policy, Repo>,
-	) => Effect.Effect<unknown, unknown, never>;
+		context: AppCallbackContext<AppSlug, Policy, Repo>,
+	) => Effect.Effect<unknown, unknown, unknown>;
 	refresh: (
 		context: AppRefreshContext<Policy, Repo>,
-	) => Effect.Effect<unknown, unknown, never>;
+	) => Effect.Effect<unknown, unknown, unknown>;
 };
 
 export type AppCredentials = {
@@ -140,24 +141,19 @@ export type AppCredentials = {
 	scope?: string | null;
 };
 
-export type AppInstallationRecord<AppType extends string = string> = {
+export type AppInstallationRecord<AppSlug extends string = string> = {
 	id: string;
 	organizationId: string;
 	spaceId: string | null;
-	appType: AppType;
+	slug: AppSlug;
 	status: AppInstallationStatus;
 	providerExternalId: string | null;
 	providerDisplayName: string | null;
 	providerMetadata: Record<string, unknown> | null;
 };
 
-export type AppSettingsDefinition<Settings> = {
-	schema: Schema.Schema<Settings, unknown>;
-	createDefault?: () => Settings;
-};
-
-export type AppDefinition<AppType extends string, Settings> = {
-	type: AppType;
+export type AppDefinition<AppSlug extends string, Settings> = {
+	slug: AppSlug;
 	displayName: string;
 	description: string;
 	icon: string;
@@ -172,21 +168,14 @@ export type AppDestination = {
 	parentId?: string | null;
 };
 
-export type AppOperationContext<
-	AppType extends string,
-	Settings,
-> = {
-	installation: AppInstallationRecord<AppType>;
+export type AppOperationContext<AppSlug extends string, Settings> = {
+	installation: AppInstallationRecord<AppSlug>;
 	credentials: AppCredentials | null;
 	settings: Settings | null;
 };
 
-export type AppDispatchContext<
-	AppType extends string,
-	Settings,
-	Payload,
-> = {
-	installation: AppInstallationRecord<AppType>;
+export type AppDispatchContext<AppSlug extends string, Settings, Payload> = {
+	installation: AppInstallationRecord<AppSlug>;
 	credentials: AppCredentials | null;
 	settings: Settings;
 	payload: Payload;
@@ -197,35 +186,31 @@ export type AppDispatchResult = {
 	metadata?: Record<string, unknown>;
 };
 
-export type AppHandlers<
-	AppType extends string,
-	Settings,
-	Payload,
-> = {
+export type AppHandlers<AppSlug extends string, Settings, Payload> = {
 	pause: (
-		context: AppOperationContext<AppType, Settings>,
+		context: AppOperationContext<AppSlug, Settings>,
 	) => Effect.Effect<void, AppHandlerError>;
 	resume: (
-		context: AppOperationContext<AppType, Settings>,
+		context: AppOperationContext<AppSlug, Settings>,
 	) => Effect.Effect<void, AppHandlerError>;
 	uninstall: (
-		context: AppOperationContext<AppType, Settings>,
+		context: AppOperationContext<AppSlug, Settings>,
 	) => Effect.Effect<void, AppHandlerError>;
 	listDestinations: (
-		context: AppOperationContext<AppType, Settings>,
+		context: AppOperationContext<AppSlug, Settings>,
 	) => Effect.Effect<ReadonlyArray<AppDestination>, AppHandlerError>;
 	dispatch: (
-		context: AppDispatchContext<AppType, Settings, Payload>,
+		context: AppDispatchContext<AppSlug, Settings, Payload>,
 	) => Effect.Effect<AppDispatchResult, AppHandlerError>;
 };
 
 export type AppModule<
-	AppType extends string = string,
+	AppSlug extends string = string,
 	Settings = unknown,
 	Payload = unknown,
 > = {
-	type: AppType;
-	oauth: AppOAuthHandlers<AppType>;
-	definition: AppDefinition<AppType, Settings>;
-	handlers: AppHandlers<AppType, Settings, Payload>;
+	slug: AppSlug;
+	oauth: AppOAuthHandlers<AppSlug>;
+	definition: AppDefinition<AppSlug, Settings>;
+	handlers: AppHandlers<AppSlug, Settings, Payload>;
 };

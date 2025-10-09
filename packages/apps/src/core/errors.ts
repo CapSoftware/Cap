@@ -23,4 +23,3 @@ export type AppHandlerErrorInput = {
 
 export const createAppHandlerError = (input: AppHandlerErrorInput) =>
 	new AppHandlerError(input);
-
