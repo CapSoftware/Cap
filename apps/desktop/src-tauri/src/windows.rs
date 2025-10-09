@@ -168,7 +168,7 @@ impl CapWindowId {
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
-            Self::Camera => (460.0, 920.0),
+            Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (900.0, 500.0),
             _ => return None,
