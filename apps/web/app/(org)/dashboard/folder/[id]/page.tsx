@@ -43,7 +43,7 @@ const FolderPage = async ({
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink spaceId={params.spaceId} />
+						<ClientMyCapsLink />
 
 						{breadcrumb.map((folder, index) => (
 							<div key={folder.id} className="flex items-center">
@@ -72,7 +72,6 @@ const FolderPage = async ({
 									key={folder.id}
 									name={folder.name}
 									color={folder.color}
-									spaceId={params.spaceId}
 									id={folder.id}
 									parentId={folder.parentId}
 									videoCount={folder.videoCount}

@@ -18,7 +18,7 @@ export async function moveVideoToFolder({
 }: {
 	videoId: Video.VideoId;
 	folderId: Folder.FolderId | null;
-	spaceId: Space.SpaceIdOrOrganisationId | null;
+	spaceId?: Space.SpaceIdOrOrganisationId | null;
 }) {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId)

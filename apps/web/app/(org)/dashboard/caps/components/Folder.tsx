@@ -21,7 +21,7 @@ export type FolderDataType = {
 	id: Folder.FolderId;
 	color: "normal" | "blue" | "red" | "yellow";
 	videoCount: number;
-	spaceId: Space.SpaceIdOrOrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	parentId: Folder.FolderId | null;
 };
 

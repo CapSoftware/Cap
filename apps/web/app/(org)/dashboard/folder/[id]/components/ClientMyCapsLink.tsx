@@ -15,7 +15,7 @@ import { registerDropTarget } from "./ClientCapCard";
 export function ClientMyCapsLink({
 	spaceId,
 }: {
-	spaceId: Space.SpaceIdOrOrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId;
 }) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
@@ -94,11 +94,11 @@ export function ClientMyCapsLink({
 			await moveVideoToFolder({
 				videoId: capData.id,
 				folderId: null,
-				spaceId,
+				spaceId: spaceId ?? null,
 			});
 			router.refresh();
-			if (spaceId) {
-				toast.success(`Moved "${capData.name}" to "${spaceId}"`);
+			if (activeSpace) {
+				toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
 			} else {
 				toast.success(`Moved "${capData.name}" to My Caps`);
 			}

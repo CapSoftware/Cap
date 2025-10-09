@@ -56,7 +56,13 @@ export async function removeVideosFromSpace(
 			const folderRows = await db()
 				.select({ id: folders.id })
 				.from(folders)
-				.where(isNull(folders.spaceId));
+				.where(
+					and(
+						isNull(folders.spaceId),
+						eq(folders.organizationId, user.activeOrganizationId),
+					),
+				);
+
 			const folderIds = folderRows.map((f) => f.id);
 
 			if (folderIds.length > 0) {
@@ -85,7 +91,13 @@ export async function removeVideosFromSpace(
 			const folderRows = await db()
 				.select({ id: folders.id })
 				.from(folders)
-				.where(eq(folders.spaceId, spaceId));
+				.where(
+					and(
+						isNull(folders.spaceId),
+						eq(folders.organizationId, user.activeOrganizationId),
+					),
+				);
+
 			const folderIds = folderRows.map((f) => f.id);
 
 			if (folderIds.length > 0) {
