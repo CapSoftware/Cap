@@ -15,7 +15,7 @@ interface BreadcrumbItemProps {
 	id: Folder.FolderId;
 	name: string;
 	color: "normal" | "blue" | "red" | "yellow";
-	spaceId: Space.SpaceIdOrOrganisationId;
+	spaceId?: Space.SpaceIdOrOrganisationId | null;
 	isLast: boolean;
 }
 
@@ -64,7 +64,7 @@ export function BreadcrumbItem({
 			await moveVideoToFolder({
 				videoId: capData.id,
 				folderId: id,
-				spaceId,
+				spaceId: spaceId ?? null,
 			});
 			router.refresh();
 			toast.success(`"${capData.name}" moved to "${name}" folder`);

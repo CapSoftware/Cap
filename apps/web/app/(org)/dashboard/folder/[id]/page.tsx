@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { CurrentUser, type Folder, type Space } from "@cap/web-domain";
+import { CurrentUser, type Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import {
@@ -18,11 +18,7 @@ import {
 } from "./components";
 import FolderVideosSection from "./components/FolderVideosSection";
 
-const FolderPage = async ({
-	params,
-}: {
-	params: { id: Folder.FolderId; spaceId: Space.SpaceIdOrOrganisationId };
-}) => {
+const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId) return notFound();
 
@@ -50,7 +46,6 @@ const FolderPage = async ({
 								<p className="mx-2 text-gray-10">/</p>
 								<BreadcrumbItem
 									id={folder.id}
-									spaceId={params.spaceId}
 									name={folder.name}
 									color={folder.color}
 									isLast={index === breadcrumb.length - 1}
