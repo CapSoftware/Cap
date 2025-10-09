@@ -5,25 +5,26 @@ export const createAppRegistry = <
 >(
 	modules: Modules,
 ) => {
-  type AppKey = Extract<keyof Modules, string>;
-  const appTypes = Object.freeze(Object.keys(modules) as AppKey[]);
+	type AppKey = Extract<keyof Modules, string>;
+	const appSlugs = Object.freeze(Object.keys(modules) as AppKey[]);
 
-  const isAppType = (value: string): value is AppKey =>
-    Object.prototype.hasOwnProperty.call(modules, value);
+	const isAppSlug = (value: string): value is AppKey =>
+		Object.hasOwn(modules, value);
 
-  const getAppModule = (type: AppKey) => modules[type];
+	const getAppModule = (type: AppKey) => modules[type];
 
-  const getAppModuleByName = (value: string) =>
-    isAppType(value) ? modules[value] : undefined;
+	const getAppModuleByName = (value: string) =>
+		isAppSlug(value) ? modules[value] : undefined;
 
-  return {
-    modules,
-    appTypes,
-    isAppType,
-    getAppModule,
-    getAppModuleByName,
-  } as const;
+	return {
+		modules,
+		appSlugs,
+		isAppSlug,
+		getAppModule,
+		getAppModuleByName,
+	} as const;
 };
 
-export type InferAppType<Registry extends { readonly appTypes: readonly string[] }> =
-  Registry["appTypes"][number];
+export type InferAppSlug<
+	Registry extends { readonly appSlugs: readonly string[] },
+> = Registry["appSlugs"][number];
