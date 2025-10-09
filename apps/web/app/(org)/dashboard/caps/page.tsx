@@ -133,20 +133,6 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 		.where(eq(organizations.id, user.activeOrganizationId))
 		.limit(1);
 
-	let customDomain: string | null = null;
-	let domainVerified = false;
-
-	if (
-		organizationData.length > 0 &&
-		organizationData[0] &&
-		organizationData[0].customDomain
-	) {
-		customDomain = organizationData[0].customDomain;
-		if (organizationData[0].domainVerified !== null) {
-			domainVerified = true;
-		}
-	}
-
 	const videoData = await db()
 		.select({
 			id: videos.id,

@@ -1,9 +1,13 @@
+import { faHome, faRecordVinyl } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, Minus, Plus } from "lucide-react";
 import moment from "moment";
 import type React from "react";
 import { memo, useState } from "react";
+import { useTheme } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import {
 	type ImageLoadingStatus,
@@ -21,6 +25,7 @@ interface VideoCardProps {
 
 const VideoCard: React.FC<VideoCardProps> = memo(
 	({ video, isSelected, onToggle, isAlreadyInEntity, className }) => {
+		const { theme } = useTheme();
 		const effectiveDate = video.metadata?.customCreatedAt
 			? new Date(video.metadata.customCreatedAt)
 			: video.createdAt;
@@ -28,11 +33,37 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 		const [imageStatus, setImageStatus] =
 			useState<ImageLoadingStatus>("loading");
 
+		const folderColor = video.folderColor || "normal";
+		const artboard =
+			theme === "dark" && folderColor === "normal"
+				? "folder"
+				: folderColor === "normal"
+					? "folder-dark"
+					: `folder-${folderColor}`;
+
+		const { RiveComponent: FolderRive } = useRive({
+			src: "/rive/dashboard.riv",
+			artboard,
+			animations: "idle",
+			autoplay: true,
+			layout: new Layout({
+				fit: Fit.Contain,
+			}),
+		});
+
 		return (
 			<div
 				onClick={onToggle}
+				role="button"
+				tabIndex={0}
+				onKeyDown={(e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						onToggle();
+					}
+				}}
 				className={clsx(
-					"flex relative flex-col p-3 w-full min-h-fit rounded-xl border transition-all duration-200 group",
+					"flex relative flex-col p-3 w-full h-full rounded-xl border transition-all duration-200 group",
 					className,
 					isAlreadyInEntity && isSelected && "border-red-500",
 					isAlreadyInEntity && !isSelected && "border-blue-500",
@@ -115,20 +146,51 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 					/>
 				</div>
 
-				<div className="space-y-1 min-h-fit">
-					<Tooltip content={video.name}>
-						<h3
-							className={clsx(
-								"text-sm font-medium leading-tight truncate",
-								isAlreadyInEntity ? "text-gray-11" : "text-gray-12",
-							)}
-						>
-							{video.name}
-						</h3>
-					</Tooltip>
-					<p className="text-xs text-gray-9">
-						{moment(effectiveDate).format("MMM D, YYYY")}
-					</p>
+				<div className="space-y-2 min-h-fit">
+					<div className="flex flex-col gap-1">
+						<Tooltip content={video.name}>
+							<h3
+								className={clsx(
+									"text-sm font-medium leading-tight truncate text-gray-12",
+								)}
+							>
+								{video.name}
+							</h3>
+						</Tooltip>
+						<p className="text-xs text-gray-10">
+							{moment(effectiveDate).format("MMM D, YYYY")}
+						</p>
+					</div>
+					<div className="flex gap-1 items-center text-xs text-gray-10">
+						{video.folderName ? (
+							<>
+								<FolderRive
+									key={theme + folderColor}
+									color={folderColor}
+									className="size-4"
+								/>
+								<p className="font-medium truncate text-gray-11">
+									{video.folderName}
+								</p>
+							</>
+						) : isAlreadyInEntity ? (
+							<>
+								<FontAwesomeIcon
+									icon={faHome}
+									className="size-3 text-gray-10"
+								/>
+								<p className="font-medium truncate text-gray-11">Root</p>
+							</>
+						) : (
+							<>
+								<FontAwesomeIcon
+									icon={faRecordVinyl}
+									className="size-3 text-gray-10"
+								/>
+								<p className="font-medium truncate text-gray-11">Caps</p>
+							</>
+						)}
+					</div>
 				</div>
 			</div>
 		);

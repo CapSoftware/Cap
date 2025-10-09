@@ -83,7 +83,7 @@ const VirtualizedVideoGrid = ({
 					return (
 						<div
 							key={video.id}
-							className="px-2 mx-auto md:mx-0 md:px-0 w-[96%]"
+							className="px-2 mx-auto md:mx-0 md:px-0 w-[96%] h-full"
 						>
 							<VideoCard
 								video={video}
