@@ -2,14 +2,9 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import {
-	folders,
-	sharedVideos,
-	spaceVideos,
-	videos,
-} from "@cap/database/schema";
+import { sharedVideos, spaceVideos, videos } from "@cap/database/schema";
 import type { Space, Video } from "@cap/web-domain";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function removeVideosFromSpace(
@@ -42,7 +37,6 @@ export async function removeVideosFromSpace(
 		const isAllSpacesEntry = user.activeOrganizationId === spaceId;
 
 		if (isAllSpacesEntry) {
-			// Remove from organization level (sharedVideos table)
 			await db()
 				.delete(sharedVideos)
 				.where(
