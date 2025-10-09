@@ -1,7 +1,7 @@
 "use client";
 
 import { Avatar } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Image from "next/image";
 import Link from "next/link";
@@ -12,7 +12,11 @@ import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
 
-export function ClientMyCapsLink() {
+export function ClientMyCapsLink({
+	spaceId,
+}: {
+	spaceId: Space.SpaceIdOrOrganisationId;
+}) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
 	const linkRef = useRef<HTMLAnchorElement>(null);
@@ -90,11 +94,11 @@ export function ClientMyCapsLink() {
 			await moveVideoToFolder({
 				videoId: capData.id,
 				folderId: null,
-				spaceId: activeSpace?.id,
+				spaceId,
 			});
 			router.refresh();
-			if (activeSpace) {
-				toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
+			if (spaceId) {
+				toast.success(`Moved "${capData.name}" to "${spaceId}"`);
 			} else {
 				toast.success(`Moved "${capData.name}" to My Caps`);
 			}
@@ -109,9 +113,7 @@ export function ClientMyCapsLink() {
 	return (
 		<Link
 			ref={linkRef}
-			href={
-				activeSpace ? `/dashboard/spaces/${activeSpace.id}` : "/dashboard/caps"
-			}
+			href={spaceId ? `/dashboard/spaces/${spaceId}` : "/dashboard/caps"}
 			className={clsx(
 				"text-xl whitespace-nowrap flex items-center gap-1.5 transition-colors duration-200 hover:text-gray-12",
 				isDragOver ? "text-blue-10" : "text-gray-9",

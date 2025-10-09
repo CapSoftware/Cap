@@ -64,11 +64,12 @@ const FolderPage = async (props: {
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink />
+						<ClientMyCapsLink spaceId={params.spaceId} />
 						{breadcrumb.map((folder, index) => (
 							<div key={folder.id} className="flex items-center">
 								<p className="mx-2 text-gray-10">/</p>
 								<BreadcrumbItem
+									spaceId={params.spaceId}
 									id={folder.id}
 									name={folder.name}
 									color={folder.color}

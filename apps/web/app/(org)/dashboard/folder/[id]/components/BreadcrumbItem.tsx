@@ -1,6 +1,6 @@
 "use client";
 
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -15,6 +15,7 @@ interface BreadcrumbItemProps {
 	id: Folder.FolderId;
 	name: string;
 	color: "normal" | "blue" | "red" | "yellow";
+	spaceId: Space.SpaceIdOrOrganisationId;
 	isLast: boolean;
 }
 
@@ -23,6 +24,7 @@ export function BreadcrumbItem({
 	name,
 	color,
 	isLast,
+	spaceId,
 }: BreadcrumbItemProps) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMoving, setIsMoving] = useState(false);
@@ -59,7 +61,11 @@ export function BreadcrumbItem({
 			if (!capData.id) return;
 
 			setIsMoving(true);
-			await moveVideoToFolder({ videoId: capData.id, folderId: id });
+			await moveVideoToFolder({
+				videoId: capData.id,
+				folderId: id,
+				spaceId,
+			});
 			router.refresh();
 			toast.success(`"${capData.name}" moved to "${name}" folder`);
 		} catch (error) {
