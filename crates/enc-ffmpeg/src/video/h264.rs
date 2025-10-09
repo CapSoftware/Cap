@@ -147,7 +147,7 @@ pub struct H264Encoder {
 pub enum QueueFrameError {
     #[error("Converter: {0}")]
     Converter(ffmpeg::Error),
-    #[error("Converter: {0}")]
+    #[error("Encode: {0}")]
     Encode(ffmpeg::Error),
 }
 
