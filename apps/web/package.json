@@ -84,7 +84,7 @@
 		"date-fns": "^4.1.0",
 		"dompurify": "^3.2.6",
 		"dotenv": "^16.3.1",
-		"drizzle-orm": "0.44.5",
+		"drizzle-orm": "0.44.6",
 		"dub": "^0.64.0",
 		"effect": "^3.18.4",
 		"file-saver": "^2.0.5",
