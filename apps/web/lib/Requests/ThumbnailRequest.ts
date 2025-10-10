@@ -20,8 +20,8 @@ export namespace ThumbnailRequest {
 				const rpc = yield* Rpc;
 
 				const requestResolver = RequestResolver.makeBatched(
-					(requests: NonEmptyArray<ThumbnailRequest>) => {
-						return rpc.VideosGetThumbnails(requests.map((r) => r.videoId)).pipe(
+					(requests: NonEmptyArray<ThumbnailRequest>) =>
+						rpc.VideosGetThumbnails(requests.map((r) => r.videoId)).pipe(
 							Effect.flatMap(
 								// biome-ignore lint/suspicious/useIterableCallbackReturn: effect
 								Effect.forEach((result, index) =>
@@ -40,8 +40,7 @@ export namespace ThumbnailRequest {
 									},
 								),
 							),
-						);
-					},
+						),
 				);
 
 				return yield* dataLoader(requestResolver, {

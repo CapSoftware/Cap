@@ -6,7 +6,7 @@ import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef } from "react";
 import { useEffectQuery } from "@/lib/EffectRuntime";
-import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
+import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export type ImageLoadingStatus = "loading" | "success" | "error";
 

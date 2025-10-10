@@ -1,4 +1,5 @@
 import * as Db from "@cap/database/schema";
+import { dub } from "@cap/utils";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
@@ -191,6 +192,30 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					),
 					Effect.map(Option.flatten),
 				);
+			}),
+
+			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
+				videoId: Video.VideoId,
+			) {
+				const [video] = yield* getById(videoId).pipe(
+					Effect.flatten,
+					Effect.catchTag(
+						"NoSuchElementException",
+						() => new Video.NotFoundError(),
+					),
+				);
+
+				const response = yield* Effect.tryPromise(() =>
+					dub().analytics.retrieve({
+						domain: "cap.link",
+						key: video.id,
+					}),
+				);
+				const { clicks } = response as { clicks: unknown };
+
+				if (typeof clicks !== "number" || clicks === null) return { count: 0 };
+
+				return { count: clicks };
 			}),
 		};
 	}),

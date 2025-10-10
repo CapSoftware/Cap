@@ -17,7 +17,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
+import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export const UploadCapButton = ({
 	size = "md",

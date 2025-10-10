@@ -8,6 +8,7 @@ import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Requests/AnalyticsRequest";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
@@ -108,49 +109,10 @@ export default function FolderVideosSection({
 		});
 	};
 
-	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-		queryKey: ["analytics", initialVideos.map((video) => video.id)],
-		queryFn: async () => {
-			if (!dubApiKeyEnabled || initialVideos.length === 0) {
-				return {};
-			}
-
-			const analyticsPromises = initialVideos.map(async (video) => {
-				try {
-					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-						},
-					});
-
-					if (response.ok) {
-						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
-					}
-					return { videoId: video.id, count: 0 };
-				} catch (error) {
-					console.warn(
-						`Failed to fetch analytics for video ${video.id}:`,
-						error,
-					);
-					return { videoId: video.id, count: 0 };
-				}
-			});
-
-			const results = await Promise.allSettled(analyticsPromises);
-			const analyticsData: Record<string, number> = {};
-
-			results.forEach((result) => {
-				if (result.status === "fulfilled" && result.value) {
-					analyticsData[result.value.videoId] = result.value.count;
-				}
-			});
-			return analyticsData;
-		},
-		refetchOnWindowFocus: false,
-		refetchOnMount: true,
-	});
+	const analyticsQuery = useVideosAnalyticsQuery(
+		initialVideos.map((video) => video.id),
+		dubApiKeyEnabled,
+	);
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
@@ -161,7 +123,7 @@ export default function FolderVideosSection({
 		[initialVideos, isUploading, uploadingCapId],
 	);
 
-	const analytics = analyticsData || {};
+	const analytics = analyticsQuery.data || {};
 
 	return (
 		<>
@@ -185,7 +147,7 @@ export default function FolderVideosSection({
 								cap={video}
 								analytics={analytics[video.id] || 0}
 								userId={user?.id}
-								isLoadingAnalytics={isLoadingAnalytics}
+								isLoadingAnalytics={analyticsQuery.isLoading}
 								isSelected={selectedCaps.includes(video.id)}
 								anyCapSelected={selectedCaps.length > 0}
 								isDeleting={isDeletingCaps || isDeletingCap}
