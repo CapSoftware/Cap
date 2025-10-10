@@ -24,15 +24,21 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				Config.option,
 			),
 			region: yield* Config.string("CAP_AWS_REGION"),
-			credentials: yield* Config.string("CAP_AWS_ACCESS_KEY").pipe(
-				Effect.zip(Config.string("CAP_AWS_SECRET_KEY")),
-				Effect.map(([accessKeyId, secretAccessKey]) => ({
-					accessKeyId,
-					secretAccessKey,
-				})),
-				Effect.catchAll(() =>
-					Config.string("VERCEL_AWS_ROLE_ARN").pipe(
-						Effect.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+			credentials: Option.getOrUndefined(
+				yield* Config.option(
+					Config.all([
+						Config.string("CAP_AWS_ACCESS_KEY"),
+						Config.string("CAP_AWS_SECRET_KEY"),
+					]).pipe(
+						Config.map(([accessKeyId, secretAccessKey]) => ({
+							accessKeyId,
+							secretAccessKey,
+						})),
+						Config.orElse(() =>
+							Config.string("VERCEL_AWS_ROLE_ARN").pipe(
+								Config.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+							),
+						),
 					),
 				),
 			),
