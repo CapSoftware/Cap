@@ -71,7 +71,7 @@ export class LoomHttpApi extends HttpApiGroup.make("loom")
 		HttpApiEndpoint.post("importVideo", "/video")
 			.setPayload(
 				Schema.Struct({
-					cap: Schema.Struct({ orgId: Schema.String }),
+					cap: Schema.Struct({ orgId: OrganisationId }),
 					loom: ImportVideoLoomData,
 				}),
 			)
