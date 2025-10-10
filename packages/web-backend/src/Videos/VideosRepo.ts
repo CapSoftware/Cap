@@ -23,7 +23,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 */
 		const getById = (id: Video.VideoId) =>
 			Effect.gen(function* () {
-				const [video] = yield* db.execute((db) =>
+				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
@@ -45,7 +45,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			});
 
 		const delete_ = (id: Video.VideoId) =>
-			db.execute(async (db) =>
+			db.use(async (db) =>
 				db.transaction((db) =>
 					Promise.all([
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
@@ -60,7 +60,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			Effect.gen(function* () {
 				const id = Video.VideoId.make(nanoId());
 
-				yield* db.execute((db) =>
+				yield* db.use((db) =>
 					db.transaction(async (db) => {
 						const promises: MySqlInsertBase<any, any, any>[] = [
 							db.insert(Db.videos).values([

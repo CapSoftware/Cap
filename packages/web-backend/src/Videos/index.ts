@@ -108,7 +108,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				videoId: Video.VideoId,
 			) {
 				const [result] = yield* db
-					.execute((db) =>
+					.use((db) =>
 						db
 							.select({
 								uploaded: Db.videoUploads.uploaded,
