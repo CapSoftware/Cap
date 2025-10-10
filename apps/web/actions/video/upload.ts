@@ -9,14 +9,13 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
+import { dub, userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
 import { type Folder, type Organisation, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
-import { dub } from "@/utils/dub";
 
 async function getVideoUploadPresignedUrl({
 	fileKey,

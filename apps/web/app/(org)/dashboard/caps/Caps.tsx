@@ -10,7 +10,7 @@ import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../Contexts";
 import {
@@ -25,6 +25,10 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
+import {
+	AnalyticsRequest,
+	useVideosAnalyticsQuery,
+} from "@/lib/Requests/AnalyticsRequest";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -73,54 +77,8 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const videoIds = data.map((video) => video.id).sort();
-
-	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-		queryKey: ["analytics", videoIds],
-		queryFn: async () => {
-			if (!dubApiKeyEnabled || data.length === 0) {
-				return {};
-			}
-
-			const analyticsPromises = data.map(async (video) => {
-				try {
-					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-						},
-					});
-
-					if (response.ok) {
-						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
-					}
-					return { videoId: video.id, count: 0 };
-				} catch (error) {
-					console.warn(
-						`Failed to fetch analytics for video ${video.id}:`,
-						error,
-					);
-					return { videoId: video.id, count: 0 };
-				}
-			});
-
-			const results = await Promise.allSettled(analyticsPromises);
-			const analyticsData: Record<string, number> = {};
-
-			results.forEach((result) => {
-				if (result.status === "fulfilled" && result.value) {
-					analyticsData[result.value.videoId] = result.value.count;
-				}
-			});
-
-			return analyticsData;
-		},
-		refetchOnWindowFocus: false,
-		refetchOnMount: true,
-	});
-
-	const analytics = analyticsData || {};
+	const analyticsQuery = useVideosAnalyticsQuery(data.map((video) => video.id));
+	const analytics = analyticsQuery.data || {};
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -318,7 +276,7 @@ export const Caps = ({
 										}
 									}}
 									userId={user?.id}
-									isLoadingAnalytics={isLoadingAnalytics}
+									isLoadingAnalytics={analyticsQuery.isLoading}
 									isSelected={selectedCaps.includes(video.id)}
 									anyCapSelected={anyCapSelected}
 									onSelectToggle={() => handleCapSelection(video.id)}

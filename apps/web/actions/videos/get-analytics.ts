@@ -1,6 +1,6 @@
 "use server";
 
-import { dub } from "@/utils/dub";
+import { dub } from "@cap/utils";
 
 export async function getVideoAnalytics(videoId: string) {
 	if (!videoId) {
