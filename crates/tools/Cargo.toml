@@ -1,0 +1,15 @@
+[package]
+name = "cursor_hash_collector"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cursor_hash_collector"
+path = "cursor_hash_collector.rs"
+
+[dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.1", features = ["NSCursor", "NSApplication", "NSImage", "NSBitmapImageRep"] }
+objc2-foundation = "0.3.1"
+sha2 = "0.10.6"
+hex = "0.4.3"
