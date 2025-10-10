@@ -1,8 +1,6 @@
 import { Effect, Store, useStore } from "@tanstack/react-store";
 
-const defaultFeatureFlags = {
-	enableUploadProgress: false,
-};
+const defaultFeatureFlags = {};
 
 type FeatureFlags = typeof defaultFeatureFlags;
 

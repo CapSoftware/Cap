@@ -107,7 +107,7 @@ function CapDevtools() {
 	return (
 		<div className="flex flex-col space-y-4 p-4">
 			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
-			<div className="space-y-2">
+			{/*<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Features</h1>
 				<label className="flex items-center space-x-2">
 					<input
@@ -122,7 +122,7 @@ function CapDevtools() {
 					/>
 					<span>Enable Upload Progress UI</span>
 				</label>
-			</div>
+			</div>*/}
 			<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Cap Pro</h1>
 				<p className="text-xs text-muted-foreground">

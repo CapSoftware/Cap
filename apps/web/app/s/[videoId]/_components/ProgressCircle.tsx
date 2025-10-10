@@ -23,10 +23,7 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
-	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
-	const enabled = enableBetaUploadProgress ? enabledRaw : false;
-
+export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
