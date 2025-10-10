@@ -8,13 +8,13 @@ import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Requests/AnalyticsRequest";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { useUploadingStatus } from "../../../caps/UploadingContext";
-import { useVideosAnalyticsQuery } from "@/lib/Requests/AnalyticsRequest";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
