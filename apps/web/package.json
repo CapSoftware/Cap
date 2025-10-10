@@ -28,6 +28,7 @@
 		"@deepgram/sdk": "^3.3.4",
 		"@dub/analytics": "^0.0.27",
 		"@effect/cluster": "^0.50.4",
+		"@effect/experimental": "^0.56.0",
 		"@effect/opentelemetry": "^0.58.0",
 		"@effect/platform": "^0.92.1",
 		"@effect/platform-node": "^0.98.3",

@@ -1,6 +1,9 @@
+import { useEffectQuery } from "@/lib/EffectRuntime";
+import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
 import { LogoSpinner } from "@cap/ui";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { Video } from "@cap/web-domain";
 import clsx from "clsx";
+import { Effect } from "effect";
 import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef } from "react";
@@ -8,7 +11,7 @@ import { memo, useEffect, useRef } from "react";
 export type ImageLoadingStatus = "loading" | "success" | "error";
 
 interface VideoThumbnailProps {
-	videoId: string;
+	videoId: Video.VideoId;
 	alt: string;
 	imageClass?: string;
 	objectFit?: string;
@@ -45,17 +48,17 @@ function generateRandomGrayScaleColor() {
 	return `rgb(${grayScaleValue}, ${grayScaleValue}, ${grayScaleValue})`;
 }
 
-export const imageUrlQuery = (videoId: string) =>
-	queryOptions({
-		queryKey: ["thumbnail", videoId],
-		queryFn: async () => {
-			const response = await fetch(`/api/thumbnail?videoId=${videoId}`);
-			if (response.ok) {
-				const data = await response.json();
-				return data.screen;
-			} else throw new Error("Failed to fetch pre-signed URLs");
-		},
+export const useThumnailQuery = (videoId: Video.VideoId) => {
+	return useEffectQuery({
+		queryKey: ThumbnailRequest.queryKey(videoId),
+		queryFn: Effect.fn(function* () {
+			return yield* Effect.request(
+				new ThumbnailRequest.ThumbnailRequest({ videoId }),
+				yield* ThumbnailRequest.DataLoaderResolver,
+			);
+		}),
 	});
+};
 
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 	({
@@ -68,7 +71,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		imageStatus,
 		setImageStatus,
 	}) => {
-		const imageUrl = useQuery(imageUrlQuery(videoId));
+		const thumbnailUrl = useThumnailQuery(videoId);
 		const imageRef = useRef<HTMLImageElement>(null);
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
@@ -87,26 +90,21 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 				)}
 			>
 				<div className="flex absolute inset-0 z-10 justify-center items-center">
-					{imageUrl.isError || imageStatus === "error" ? (
+					{thumbnailUrl.isError || imageStatus === "error" ? (
 						<div
 							className="w-full h-full"
 							style={{ backgroundImage: randomGradient }}
 						/>
 					) : (
-						(imageUrl.isPending || imageStatus === "loading") && (
+						(thumbnailUrl.isPending || imageStatus === "loading") && (
 							<LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
 						)
 					)}
 				</div>
-				{videoDuration && (
-					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
-						{formatDuration(videoDuration)}
-					</p>
-				)}
-				{imageUrl.data && (
+				{thumbnailUrl.data && (
 					<Image
 						ref={imageRef}
-						src={imageUrl.data}
+						src={thumbnailUrl.data}
 						fill={true}
 						sizes="(max-width: 768px) 100vw, 33vw"
 						alt={alt}
@@ -120,6 +118,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						onLoad={() => setImageStatus("success")}
 						onError={() => setImageStatus("error")}
 					/>
+				)}
+				{videoDuration && (
+					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
+						{formatDuration(videoDuration)}
+					</p>
 				)}
 			</div>
 		);

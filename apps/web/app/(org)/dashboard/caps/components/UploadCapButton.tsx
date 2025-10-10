@@ -17,7 +17,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { imageUrlQuery } from "@/components/VideoThumbnail";
+import { thumbnailQueryKey } from "@/components/VideoThumbnail";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -495,7 +495,9 @@ async function legacyUploadCap(
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
 						resolve();
-						queryClient.refetchQueries(imageUrlQuery(uploadId));
+						queryClient.refetchQueries({
+							queryKey: thumbnailQueryKey(uploadId),
+						});
 					} else {
 						reject(
 							new Error(`Screenshot upload failed with status ${xhr.status}`),
