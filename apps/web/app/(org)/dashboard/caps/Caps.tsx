@@ -77,7 +77,10 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const analyticsQuery = useVideosAnalyticsQuery(data.map((video) => video.id));
+	const analyticsQuery = useVideosAnalyticsQuery(
+		data.map((video) => video.id),
+		dubApiKeyEnabled,
+	);
 	const analytics = analyticsQuery.data || {};
 
 	useEffect(() => {
