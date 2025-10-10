@@ -8,6 +8,7 @@ pub struct BlurLayer {
     sampler: wgpu::Sampler,
     uniforms_buffer: wgpu::Buffer,
     pipeline: BlurPipeline,
+    cached_uniforms: Option<BlurUniforms>,
 }
 
 impl BlurLayer {
@@ -29,6 +30,7 @@ impl BlurLayer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
             pipeline: BlurPipeline::new(device),
+            cached_uniforms: None,
         }
     }
 
@@ -45,11 +47,14 @@ impl BlurLayer {
             _padding: 0.0,
         };
 
-        queue.write_buffer(
-            &self.uniforms_buffer,
-            0,
-            bytemuck::cast_slice(&[blur_uniform]),
-        );
+        if self.cached_uniforms.as_ref() != Some(&blur_uniform) {
+            queue.write_buffer(
+                &self.uniforms_buffer,
+                0,
+                bytemuck::cast_slice(&[blur_uniform]),
+            );
+            self.cached_uniforms = Some(blur_uniform);
+        }
     }
 
     pub fn render(
@@ -71,7 +76,7 @@ impl BlurLayer {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default, PartialEq)]
 pub struct BlurUniforms {
     output_size: [f32; 2],
     blur_strength: f32,

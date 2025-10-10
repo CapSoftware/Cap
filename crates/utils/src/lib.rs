@@ -1,5 +1,6 @@
-use std::{future::Future, path::PathBuf};
+use std::{fs, future::Future, path::PathBuf, time::SystemTime};
 
+use directories::{BaseDirs, ProjectDirs};
 use tracing::Instrument;
 
 #[cfg(windows)]
@@ -46,4 +47,61 @@ where
 pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
     std::fs::create_dir_all(path)?;
     Ok(path.clone())
+}
+
+pub fn get_recordings_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    for app_name in ["Cap - Development", "Cap"] {
+        if let Some(proj_dirs) = ProjectDirs::from("so", "cap", app_name) {
+            candidates.push(proj_dirs.data_dir().join("recordings"));
+        }
+    }
+
+    if let Some(base_dirs) = BaseDirs::new() {
+        let data_dir = base_dirs.data_dir();
+        for identifier in ["so.cap.desktop.dev", "so.cap.desktop"] {
+            candidates.push(data_dir.join(identifier).join("recordings"));
+        }
+    }
+
+    candidates.into_iter().find(|dir| dir.exists())
+}
+
+pub fn list_recordings() -> Vec<PathBuf> {
+    let Some(recordings_dir) = get_recordings_dir() else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = fs::read_dir(&recordings_dir) else {
+        return Vec::new();
+    };
+
+    let mut recordings: Vec<(SystemTime, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+
+            if !path.is_dir() {
+                return None;
+            }
+
+            if !path.join("project-config.json").exists()
+                || !path.join("recording-meta.json").exists()
+            {
+                return None;
+            }
+
+            let created = path
+                .metadata()
+                .and_then(|m| m.created())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+
+            Some((created, path))
+        })
+        .collect();
+
+    recordings.sort_by(|a, b| b.0.cmp(&a.0));
+
+    recordings.into_iter().map(|(_, path)| path).collect()
 }

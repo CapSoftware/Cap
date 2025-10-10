@@ -319,15 +319,21 @@ impl RenderVideoConstants {
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
             .await
             .map_err(|_| RenderingError::NoAdapter)?;
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-                ..Default::default()
-            })
-            .await?;
+
+        let device_descriptor = wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features: wgpu::Features::empty(),
+            ..Default::default()
+        };
+
+        let (device, queue) = adapter.request_device(&device_descriptor).await?;
 
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
@@ -1259,6 +1265,9 @@ pub struct RenderSession {
     textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     current_is_left: bool,
+    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
+    readback_buffer_size: u64,
+    current_readback_is_left: bool,
 }
 
 impl RenderSession {
@@ -1291,6 +1300,9 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
+            readback_buffers: (None, None),
+            readback_buffer_size: 0,
+            current_readback_is_left: true,
         }
     }
 
@@ -1347,6 +1359,46 @@ impl RenderSession {
 
     pub fn swap_textures(&mut self) {
         self.current_is_left = !self.current_is_left;
+    }
+
+    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
+        let needs_new = self
+            .readback_buffers
+            .0
+            .as_ref()
+            .map_or(true, |_| self.readback_buffer_size < size);
+
+        if needs_new {
+            let make_buffer = || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("RenderSession Readback Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            };
+
+            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
+            self.readback_buffer_size = size;
+        }
+    }
+
+    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
+        if self.current_readback_is_left {
+            self.readback_buffers
+                .0
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        } else {
+            self.readback_buffers
+                .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        }
+    }
+
+    pub(crate) fn swap_readback_buffers(&mut self) {
+        self.current_readback_is_left = !self.current_readback_is_left;
     }
 }
 

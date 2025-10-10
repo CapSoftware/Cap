@@ -13,6 +13,7 @@ use cidre::{
 use ffmpeg::{Rational, format, frame};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
+use super::frame_converter::{FrameConverter, copy_rgba_plane};
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
@@ -30,150 +31,126 @@ enum CachedFrame {
     Processed(ProcessedFrame),
 }
 
-impl CachedFrame {
-    fn process(&mut self) -> ProcessedFrame {
-        match self {
-            CachedFrame::Raw { image_buf, number } => {
-                let format = cap_video_decode::avassetreader::pixel_format_to_pixel(
-                    image_buf.pixel_format(),
-                );
+struct ImageBufProcessor {
+    converter: FrameConverter,
+    scratch_frame: frame::Video,
+    scratch_spec: Option<(format::Pixel, u32, u32)>,
+}
 
-                let data = if matches!(format, format::Pixel::RGBA) {
-                    unsafe {
-                        image_buf
-                            .lock_base_addr(LockFlags::READ_ONLY)
-                            .result()
-                            .unwrap()
-                    };
+impl ImageBufProcessor {
+    fn new() -> Self {
+        Self {
+            converter: FrameConverter::new(),
+            scratch_frame: frame::Video::empty(),
+            scratch_spec: None,
+        }
+    }
 
-                    let bytes_per_row = image_buf.plane_bytes_per_row(0);
-                    let width = image_buf.width();
-                    let height = image_buf.height();
+    fn convert(&mut self, image_buf: &mut R<cv::ImageBuf>) -> Vec<u8> {
+        let format =
+            cap_video_decode::avassetreader::pixel_format_to_pixel(image_buf.pixel_format());
+
+        if matches!(format, format::Pixel::RGBA) {
+            return self.copy_rgba(image_buf);
+        }
+
+        let width = image_buf.width() as u32;
+        let height = image_buf.height() as u32;
+        self.ensure_scratch(format, width, height);
+
+        unsafe {
+            image_buf
+                .lock_base_addr(LockFlags::READ_ONLY)
+                .result()
+                .unwrap();
+        }
+
+        self.copy_planes(image_buf);
+
+        unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
+
+        self.converter.convert(&mut self.scratch_frame)
+    }
+
+    fn ensure_scratch(&mut self, format: format::Pixel, width: u32, height: u32) {
+        let needs_new =
+            self.scratch_spec
+                .map_or(true, |(current_format, current_width, current_height)| {
+                    current_format != format || current_width != width || current_height != height
+                });
+
+        if needs_new {
+            self.scratch_frame = frame::Video::new(format, width, height);
+            self.scratch_spec = Some((format, width, height));
+        }
+    }
+
+    fn copy_rgba(&mut self, image_buf: &mut R<cv::ImageBuf>) -> Vec<u8> {
+        unsafe {
+            image_buf
+                .lock_base_addr(LockFlags::READ_ONLY)
+                .result()
+                .unwrap();
+        }
+
+        let bytes_per_row = image_buf.plane_bytes_per_row(0);
+        let width = image_buf.width() as usize;
+        let height = image_buf.height() as usize;
+
+        let slice = unsafe {
+            std::slice::from_raw_parts::<'static, _>(
+                image_buf.plane_base_address(0),
+                bytes_per_row * height,
+            )
+        };
+
+        let bytes = copy_rgba_plane(slice, bytes_per_row, width, height);
+
+        unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
+
+        bytes
+    }
+
+    fn copy_planes(&mut self, image_buf: &mut R<cv::ImageBuf>) {
+        match self.scratch_frame.format() {
+            format::Pixel::NV12 | format::Pixel::YUV420P => {
+                let scratch = &mut self.scratch_frame;
+                for plane_i in 0..image_buf.plane_count() {
+                    let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                    let height = image_buf.plane_height(plane_i);
+
+                    let ffmpeg_stride = scratch.stride(plane_i);
+                    let row_length = bytes_per_row.min(ffmpeg_stride);
 
                     let slice = unsafe {
                         std::slice::from_raw_parts::<'static, _>(
-                            image_buf.plane_base_address(0),
+                            image_buf.plane_base_address(plane_i),
                             bytes_per_row * height,
                         )
                     };
 
-                    let mut bytes = Vec::with_capacity(width * height * 4);
-
-                    let row_length = width * 4;
-
                     for i in 0..height {
-                        bytes.as_mut_slice()[i * row_length..((i + 1) * row_length)]
+                        scratch.data_mut(plane_i)
+                            [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
                             .copy_from_slice(
                                 &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
-                            )
+                            );
                     }
+                }
+            }
+            format => todo!("implement {:?}", format),
+        }
+    }
+}
 
-                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
-
-                    bytes
-                } else {
-                    let mut ffmpeg_frame = ffmpeg::frame::Video::new(
-                        format,
-                        image_buf.width() as u32,
-                        image_buf.height() as u32,
-                    );
-
-                    unsafe {
-                        image_buf
-                            .lock_base_addr(LockFlags::READ_ONLY)
-                            .result()
-                            .unwrap()
-                    };
-
-                    match ffmpeg_frame.format() {
-                        format::Pixel::NV12 => {
-                            for plane_i in 0..image_buf.plane_count() {
-                                let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                                let height = image_buf.plane_height(plane_i);
-
-                                let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                                let row_length = bytes_per_row.min(ffmpeg_stride);
-
-                                let slice = unsafe {
-                                    std::slice::from_raw_parts::<'static, _>(
-                                        image_buf.plane_base_address(plane_i),
-                                        bytes_per_row * height,
-                                    )
-                                };
-
-                                for i in 0..height {
-                                    ffmpeg_frame.data_mut(plane_i)
-                                        [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                        .copy_from_slice(
-                                            &slice[i * bytes_per_row
-                                                ..(i * bytes_per_row + row_length)],
-                                        )
-                                }
-                            }
-                        }
-                        format::Pixel::YUV420P => {
-                            for plane_i in 0..image_buf.plane_count() {
-                                let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                                let height = image_buf.plane_height(plane_i);
-
-                                let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                                let row_length = bytes_per_row.min(ffmpeg_stride);
-
-                                let slice = unsafe {
-                                    std::slice::from_raw_parts::<'static, _>(
-                                        image_buf.plane_base_address(plane_i),
-                                        bytes_per_row * height,
-                                    )
-                                };
-
-                                for i in 0..height {
-                                    ffmpeg_frame.data_mut(plane_i)
-                                        [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                        .copy_from_slice(
-                                            &slice[i * bytes_per_row
-                                                ..(i * bytes_per_row + row_length)],
-                                        )
-                                }
-                            }
-                        }
-                        format => todo!("implement {:?}", format),
-                    }
-
-                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
-
-                    let mut converter = ffmpeg::software::converter(
-                        (ffmpeg_frame.width(), ffmpeg_frame.height()),
-                        ffmpeg_frame.format(),
-                        format::Pixel::RGBA,
-                    )
-                    .unwrap();
-
-                    let mut rgb_frame = frame::Video::empty();
-                    converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
-
-                    let slice = rgb_frame.data(0);
-                    let width = rgb_frame.width();
-                    let height = rgb_frame.height();
-                    let bytes_per_row = rgb_frame.stride(0);
-                    let row_length = width * 4;
-
-                    let mut bytes = vec![0; (width * height * 4) as usize];
-
-                    // TODO: allow for decoded frames to have stride, handle stride in shaders
-                    for i in 0..height as usize {
-                        bytes.as_mut_slice()[i * row_length as usize..(i + 1) * row_length as usize]
-                            .copy_from_slice(
-                                &slice
-                                    [(i * bytes_per_row)..i * bytes_per_row + row_length as usize],
-                            )
-                    }
-
-                    bytes
-                };
-
+impl CachedFrame {
+    fn process(&mut self, processor: &mut ImageBufProcessor) -> ProcessedFrame {
+        match self {
+            CachedFrame::Raw { image_buf, number } => {
+                let frame_buffer = processor.convert(image_buf);
                 let data = ProcessedFrame {
                     number: *number,
-                    data: Arc::new(data),
+                    data: Arc::new(frame_buffer),
                 };
 
                 *self = Self::Processed(data.clone());
@@ -240,6 +217,7 @@ impl AVAssetReaderDecoder {
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
         let mut frames = this.inner.frames();
+        let mut processor = ImageBufProcessor::new();
 
         while let Ok(r) = rx.recv() {
             match r {
@@ -247,7 +225,7 @@ impl AVAssetReaderDecoder {
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
                     let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                        let data = cached.process();
+                        let data = cached.process(&mut processor);
 
                         sender.send(data.data.clone()).ok();
                         *last_sent_frame.borrow_mut() = Some(data);
@@ -310,7 +288,7 @@ impl AVAssetReaderDecoder {
                             cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
                             && let Some(sender) = sender.take()
                         {
-                            (sender)(most_recent_prev_frame.1.process());
+                            (sender)(most_recent_prev_frame.1.process(&mut processor));
                         }
 
                         let exceeds_cache_bounds = current_frame > cache_max;
@@ -320,7 +298,7 @@ impl AVAssetReaderDecoder {
                             if current_frame == requested_frame
                                 && let Some(sender) = sender.take()
                             {
-                                let data = cache_frame.process();
+                                let data = cache_frame.process(&mut processor);
                                 // info!("sending frame {requested_frame}");
 
                                 (sender)(data);
@@ -368,7 +346,7 @@ impl AVAssetReaderDecoder {
                                 //     "sending forward frame {current_frame} for {requested_frame}",
                                 // );
 
-                                (sender)(cache_frame.process());
+                                (sender)(cache_frame.process(&mut processor));
                             }
                         }
 
