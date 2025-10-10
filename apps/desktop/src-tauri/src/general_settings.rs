@@ -111,7 +111,7 @@ fn default_enable_new_recording_flow() -> bool {
 }
 
 fn default_enable_new_uploader() -> bool {
-    cfg!(debug_assertions)
+    true
 }
 
 fn no(_: &bool) -> bool {
