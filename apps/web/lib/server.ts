@@ -68,18 +68,6 @@ const WorkflowRpcLive = Layer.scoped(
 	}),
 );
 
-const WorkflowHttpLive = Layer.scoped(
-	Workflows.HttpClient,
-	Effect.gen(function* () {
-		const url = Option.getOrElse(
-			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
-			() => "http://127.0.0.1:42169",
-		);
-
-		return yield* HttpApiClient.make(Workflows.Api, { baseUrl: url });
-	}),
-);
-
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
@@ -89,7 +77,6 @@ export const Dependencies = Layer.mergeAll(
 	OrganisationsPolicy.Default,
 	Spaces.Default,
 	WorkflowRpcLive,
-	WorkflowHttpLive,
 ).pipe(
 	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
 );
