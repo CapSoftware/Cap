@@ -48,6 +48,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					.delete(video.id)
 					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
 
+				yield* Effect.log(`Deleted video ${video.id}`);
+
 				const user = yield* CurrentUser;
 
 				const prefix = `${user.id}/${video.id}/`;

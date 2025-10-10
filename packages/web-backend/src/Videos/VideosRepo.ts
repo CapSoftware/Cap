@@ -45,16 +45,16 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			});
 
 		const delete_ = (id: Video.VideoId) =>
-			db.use(async (db) =>
-				db.transaction((db) =>
-					Promise.all([
+			db.use(async (db) => {
+				await db.transaction(async (db) => {
+					await Promise.all([
 						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
 						db
 							.delete(Db.videoUploads)
 							.where(Dz.eq(Db.videoUploads.videoId, id)),
-					]),
-				),
-			);
+					]);
+				});
+			});
 
 		const create = (data: CreateVideoInput) =>
 			Effect.gen(function* () {
