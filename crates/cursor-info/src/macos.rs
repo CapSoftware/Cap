@@ -2,6 +2,23 @@ use strum::{EnumString, IntoStaticStr};
 
 use crate::{CursorShape, ResolvedCursor};
 
+// TODO: Add macOS Tahoe cursor support
+// macOS Tahoe (macOS 16) introduced a new "Liquid Glass" design language which may include
+// updated cursor designs. Once macOS Tahoe is publicly released, the cursor hashes should be
+// extracted and added to the from_hash() function below. The process for extracting cursor
+// hashes is documented in cursors.html and the README.md file.
+//
+// Expected Tahoe cursor variants to check:
+// - All existing cursor types may have new designs/hashes
+// - Potentially new cursor types introduced in Tahoe
+//
+// To extract Tahoe cursor hashes:
+// 1. Run the cursors.html file on a macOS Tahoe system
+// 2. Note any new hash values for existing cursors
+// 3. Check for any completely new cursor types
+// 4. Update the from_hash() function with new/changed hashes
+// 5. Update cursor SVG assets if designs have changed
+
 /// macOS Cursors
 /// https://developer.apple.com/documentation/appkit/nscursor
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, IntoStaticStr)]
@@ -122,8 +139,17 @@ impl CursorShapeMacOS {
     /// Derive the cursor type from a hash
     /// macOS doesn't allow comparing `NSCursor` instances directly so we hash the image data.
     /// macOS cursor are also resolution-independent so this works.
+    /// 
+    /// Note: macOS Tahoe (macOS 16) may have different cursor hashes due to the new "Liquid Glass"
+    /// design language. Once Tahoe is publicly available, new hashes should be extracted and added
+    /// to this function. Hashes can be extracted using the cursors.html tool on a Tahoe system.
     pub fn from_hash(hash: &str) -> Option<Self> {
         Some(match hash {
+            // NOTE: The hashes below are for macOS versions prior to Tahoe (macOS 16)
+            // TODO: Add macOS Tahoe cursor hashes once available
+            // If running on macOS Tahoe and cursors aren't being detected, extract new hashes
+            // using cursors.html and add them here.
+            
             "de2d1f4a81e520b65fd1317b845b00a1c51a4d1f71cca3cd4ccdab52b98d1ac9" => Self::Arrow,
             "ab26ca862492d41355b711c58544687a799dd7ae14cf161959ca524bbc97c322" => {
                 Self::ContextualMenu
