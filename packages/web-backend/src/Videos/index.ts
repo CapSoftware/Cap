@@ -160,6 +160,38 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					Effect.transposeOption,
 				);
 			}),
+
+			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (
+				videoId: Video.VideoId,
+			) {
+				const videoOpt = yield* repo
+					.getById(videoId)
+					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+
+				return yield* videoOpt.pipe(
+					Effect.transposeMapOption(
+						Effect.fn(function* ([video]) {
+							const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+
+							const listResponse = yield* bucket.listObjects({
+								prefix: `${video.ownerId}/${video.id}/`,
+							});
+							const contents = listResponse.Contents || [];
+
+							const thumbnailKey = contents.find((item) =>
+								item.Key?.endsWith("screen-capture.jpg"),
+							)?.Key;
+
+							if (!thumbnailKey) return Option.none();
+
+							return Option.some(
+								yield* bucket.getSignedObjectUrl(thumbnailKey),
+							);
+						}),
+					),
+					Effect.map(Option.flatten),
+				);
+			}),
 		};
 	}),
 	dependencies: [

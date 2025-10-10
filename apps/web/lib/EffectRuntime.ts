@@ -5,8 +5,13 @@ import {
 	makeUseEffectQuery,
 } from "./effect-react-query";
 import { Rpc } from "./Rpcs";
+import { ThumbnailRequest } from "./ThumbnailRequest";
 
-const RuntimeLayer = Layer.mergeAll(Rpc.Default, FetchHttpClient.layer);
+export const RuntimeLayer = Layer.mergeAll(
+	ThumbnailRequest.DataLoaderResolver.Default,
+	Rpc.Default,
+	FetchHttpClient.layer,
+);
 
 export type RuntimeLayer = typeof RuntimeLayer;
 
