@@ -17,7 +17,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { thumbnailQueryKey } from "@/components/VideoThumbnail";
+import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -496,7 +496,7 @@ async function legacyUploadCap(
 					if (xhr.status >= 200 && xhr.status < 300) {
 						resolve();
 						queryClient.refetchQueries({
-							queryKey: thumbnailQueryKey(uploadId),
+							queryKey: ThumbnailRequest.queryKey(uploadId),
 						});
 					} else {
 						reject(
