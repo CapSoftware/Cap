@@ -322,23 +322,6 @@ app.post(
 								.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
 					}
 
-					if (videoIdFromFileKey) {
-						try {
-							await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-								method: "POST",
-								headers: {
-									"Content-Type": "application/json",
-								},
-								body: JSON.stringify({ videoId: videoIdFromFileKey }),
-							});
-							console.log(
-								`Revalidation triggered for videoId: ${videoIdFromFileKey}`,
-							);
-						} catch (revalidateError) {
-							console.error("Failed to revalidate page:", revalidateError);
-						}
-					}
-
 					return c.json({
 						location: result.Location,
 						success: true,

@@ -41,6 +41,7 @@
 		"@hono/zod-validator": "^0.4.3",
 		"@hookform/resolvers": "^3.3.2",
 		"@intercom/messenger-js-sdk": "^0.0.14",
+		"@kubiks/otel-drizzle": "^2.1.0",
 		"@mux/mux-node": "^8.5.1",
 		"@mux/mux-player-react": "^3.3.0",
 		"@number-flow/react": "^0.5.9",

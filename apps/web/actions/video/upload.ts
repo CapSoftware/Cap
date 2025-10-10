@@ -131,21 +131,6 @@ async function getVideoUploadPresignedUrl({
 			return presignedPostData;
 		}).pipe(runPromise);
 
-		const videoId = fileKey.split("/")[1];
-		if (videoId) {
-			try {
-				await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({ videoId }),
-				});
-			} catch (revalidateError) {
-				console.error("Failed to revalidate page:", revalidateError);
-			}
-		}
-
 		return { presignedPostData };
 	} catch (error) {
 		console.error("Error getting presigned URL:", error);
