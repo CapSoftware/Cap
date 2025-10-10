@@ -18,7 +18,7 @@
 	"dependencies": {
 		"@cap/env": "workspace:*",
 		"@cap/web-domain": "workspace:*",
-		"@effect/sql-mysql2": "^0.45.1",
+		"@effect/sql-mysql2": "^0.47.0",
 		"@mattrax/mysql-planetscale": "^0.0.3",
 		"@paralleldrive/cuid2": "^2.2.2",
 		"@planetscale/database": "^1.13.0",
@@ -27,7 +27,7 @@
 		"@react-email/tailwind": "^1.0.5",
 		"drizzle-orm": "0.44.5",
 		"dub": "^0.64.0",
-		"effect": "^3.17.14",
+		"effect": "^3.18.4",
 		"nanoid": "^5.0.4",
 		"next": "15.5.4",
 		"next-auth": "^4.24.5",
