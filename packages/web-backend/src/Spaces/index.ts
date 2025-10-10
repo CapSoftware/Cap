@@ -19,7 +19,7 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 			spaceOrOrgId: Space.SpaceIdOrOrganisationId,
 		) {
 			const [[space], [org]] = yield* Effect.all([
-				db.execute((db) =>
+				db.use((db) =>
 					db
 						.select({
 							id: Db.spaces.id,
@@ -31,7 +31,7 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 						.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
 						.limit(1),
 				),
-				db.execute((db) =>
+				db.use((db) =>
 					db
 						.select({
 							id: Db.organizations.id,

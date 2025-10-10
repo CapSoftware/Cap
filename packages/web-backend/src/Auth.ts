@@ -19,7 +19,7 @@ export const getCurrentUser = Effect.gen(function* () {
 	).pipe(
 		Option.map((session) =>
 			Effect.gen(function* () {
-				const [currentUser] = yield* db.execute((db) =>
+				const [currentUser] = yield* db.use((db) =>
 					db
 						.select()
 						.from(Db.users)
@@ -50,7 +50,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 				if (authHeader?.length === 36) {
 					user = yield* database
-						.execute((db) =>
+						.use((db) =>
 							db
 								.select()
 								.from(Db.users)
