@@ -30,18 +30,13 @@
 		"@clack/prompts": "^0.10.0",
 		"@effect/language-service": "^0.34.0",
 		"dotenv-cli": "latest",
-		"prettier": "^3.5.3",
+		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
 	},
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",
 	"engines": {
-		"node": "20"
-	},
-	"pnpm": {
-		"overrides": {
-			"undici": "5.28.4"
-		}
+		"node": "24"
 	}
 }

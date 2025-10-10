@@ -1,6 +1,7 @@
 import * as Db from "@cap/database/schema";
 import {
 	CurrentUser,
+	type DatabaseError,
 	Folder,
 	Organisation,
 	Policy,
@@ -10,7 +11,7 @@ import {
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
-import { Database, type DatabaseError } from "../Database.ts";
+import { Database } from "../Database.ts";
 import { FoldersPolicy } from "./FoldersPolicy.ts";
 import { FoldersRepo } from "./FoldersRepo.ts";
 

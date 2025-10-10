@@ -12,7 +12,8 @@
 		"db:drop": "drizzle-kit drop --config=drizzle.config.ts",
 		"db:studio": "drizzle-kit studio --config=drizzle.config.ts",
 		"db:check-integrity": "node scripts/check-migration-integrity.js",
-		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts"
+		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts",
+		"build": "tsdown"
 	},
 	"dependencies": {
 		"@cap/env": "workspace:*",
@@ -56,11 +57,21 @@
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
 		"./auth/session": "./auth/session.ts",
-		"./emails/config": "./emails/config.ts",
-		"./emails/*": "./emails/*.tsx",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",
+		"./emails/config": "./emails/config.ts",
+		"./emails/*": "./emails/*.tsx",
 		"./types": "./types/index.ts"
+	},
+	"publishConfig": {
+		"exports": {
+			".": "./dist/index.js",
+			"./auth/auth-options": "./dist/auth/auth-options.js",
+			"./auth/session": "./dist/auth/session.js",
+			"./schema": "./dist/schema.js",
+			"./crypto": "./dist/crypto.js",
+			"./helpers": "./dist/helpers.js"
+		}
 	}
 }

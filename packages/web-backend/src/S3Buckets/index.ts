@@ -1,7 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
-import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket, User } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Effect, Layer, Option } from "effect";
@@ -25,15 +24,21 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				Config.option,
 			),
 			region: yield* Config.string("CAP_AWS_REGION"),
-			credentials: yield* Config.string("CAP_AWS_ACCESS_KEY").pipe(
-				Effect.zip(Config.string("CAP_AWS_SECRET_KEY")),
-				Effect.map(([accessKeyId, secretAccessKey]) => ({
-					accessKeyId,
-					secretAccessKey,
-				})),
-				Effect.catchAll(() =>
-					Config.string("VERCEL_AWS_ROLE_ARN").pipe(
-						Effect.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+			credentials: Option.getOrUndefined(
+				yield* Config.option(
+					Config.all([
+						Config.string("CAP_AWS_ACCESS_KEY"),
+						Config.string("CAP_AWS_SECRET_KEY"),
+					]).pipe(
+						Config.map(([accessKeyId, secretAccessKey]) => ({
+							accessKeyId,
+							secretAccessKey,
+						})),
+						Config.orElse(() =>
+							Config.string("VERCEL_AWS_ROLE_ARN").pipe(
+								Config.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+							),
+						),
 					),
 				),
 			),
@@ -81,6 +86,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			distributionId: Config.string("CAP_CLOUDFRONT_DISTRIBUTION_ID"),
 			keypairId: Config.string("CLOUDFRONT_KEYPAIR_ID"),
 			privateKey: Config.string("CLOUDFRONT_KEYPAIR_PRIVATE_KEY"),
+			bucketUrl: Config.string("CAP_AWS_BUCKET_URL"),
 		}).pipe(
 			Effect.match({
 				onSuccess: (v) => v,
@@ -95,7 +101,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					Effect.succeed<typeof s3>({
 						...s3,
 						getSignedObjectUrl: (key) => {
-							const url = `${S3_BUCKET_URL}/${key}`;
+							const url = `${cloudfrontEnvs.bucketUrl}/${key}`;
 							const expires = Math.floor((Date.now() + 3600 * 1000) / 1000);
 
 							const policy = {
@@ -177,11 +183,13 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 			getBucketAccessForUser: Effect.fn("S3Buckets.getProviderForUser")(
 				function* (userId: User.UserId) {
-					const customBucket = yield* repo
+					return yield* repo
 						.getForUser(userId)
-						.pipe(Effect.option, Effect.map(Option.flatten));
-
-					return yield* getBucketAccess(customBucket);
+						.pipe(
+							Effect.option,
+							Effect.map(Option.flatten),
+							Effect.flatMap(getBucketAccess),
+						);
 				},
 			),
 		};

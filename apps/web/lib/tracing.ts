@@ -1,29 +1,32 @@
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { Effect, Option } from "effect";
+import { Resource, Tracer } from "@effect/opentelemetry";
+import { trace } from "@opentelemetry/api";
+import { Effect, Layer } from "effect";
 
-export const getTracingConfig = Effect.gen(function* () {
-	const axiomToken = Option.fromNullable(process.env.NEXT_PUBLIC_AXIOM_TOKEN);
+export const layerTracer = Layer.unwrapEffect(
+	Effect.gen(function* () {
+		const provider = Layer.sync(Tracer.OtelTracerProvider, () =>
+			trace.getTracerProvider(),
+		);
 
-	const axiomProcessor = Option.map(
-		axiomToken,
-		(token) =>
-			new BatchSpanProcessor(
-				new OTLPTraceExporter({
-					url: "https://api.axiom.co/v1/traces",
-					headers: {
-						Authorization: `Bearer ${token}`,
-						"X-Axiom-Dataset": "cap-web-test",
-					},
-				}),
+		const otelTracer = Layer.effect(
+			Tracer.OtelTracer,
+			Effect.flatMap(Tracer.OtelTracerProvider, (provider) =>
+				Effect.sync(() => provider.getTracer("cap-web-backend")),
 			),
-	);
+		);
 
-	return {
-		resource: { serviceName: "cap-web" },
-		spanProcessor: Option.match(axiomProcessor, {
-			onNone: () => [new BatchSpanProcessor(new OTLPTraceExporter({}))],
-			onSome: (processor) => [processor],
-		}),
-	};
-});
+		const tracer = yield* Tracer.make.pipe(
+			Effect.provide(
+				Layer.mergeAll(
+					otelTracer.pipe(Layer.provideMerge(provider)),
+					Resource.layer({ serviceName: "cap-web-backend" }),
+				),
+			),
+		);
+
+		return Layer.setTracer(tracer).pipe(
+			Layer.provideMerge(otelTracer),
+			Layer.provideMerge(provider),
+		);
+	}),
+);
