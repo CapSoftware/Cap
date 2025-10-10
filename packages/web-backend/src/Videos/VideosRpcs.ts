@@ -44,7 +44,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					}),
 				),
 
-			VideosGetThumbanils: (videoIds) =>
+			VideosGetThumbnails: (videoIds) =>
 				Effect.all(
 					videoIds.map((id) =>
 						videos.getThumbnailURL(id).pipe(

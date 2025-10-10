@@ -169,7 +169,7 @@ export class VideoRpcs extends RpcGroup.make(
 			VerifyVideoPasswordError,
 		),
 	}),
-	Rpc.make("VideosGetThumbanils", {
+	Rpc.make("VideosGetThumbnails", {
 		payload: Schema.Array(VideoId).pipe(
 			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
 		),

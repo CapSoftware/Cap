@@ -21,7 +21,7 @@ export namespace ThumbnailRequest {
 
 				const requestResolver = RequestResolver.makeBatched(
 					(requests: NonEmptyArray<ThumbnailRequest>) => {
-						return rpc.VideosGetThumbanils(requests.map((r) => r.videoId)).pipe(
+						return rpc.VideosGetThumbnails(requests.map((r) => r.videoId)).pipe(
 							Effect.flatMap(
 								// biome-ignore lint/suspicious/useIterableCallbackReturn: effect
 								Effect.forEach((result, index) =>
