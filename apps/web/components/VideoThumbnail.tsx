@@ -1,12 +1,12 @@
-import { useEffectQuery } from "@/lib/EffectRuntime";
-import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
 import { LogoSpinner } from "@cap/ui";
-import { Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect } from "effect";
 import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef } from "react";
+import { useEffectQuery } from "@/lib/EffectRuntime";
+import { ThumbnailRequest } from "@/lib/ThumbnailRequest";
 
 export type ImageLoadingStatus = "loading" | "success" | "error";
 
