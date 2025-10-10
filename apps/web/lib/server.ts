@@ -77,6 +77,7 @@ export const Dependencies = Layer.mergeAll(
 	OrganisationsPolicy.Default,
 	Spaces.Default,
 	WorkflowRpcLive,
+	layerTracer,
 ).pipe(
 	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
 );
@@ -126,13 +127,12 @@ export const apiToHandler = (
 	api.pipe(
 		HttpMiddleware.withSpanNameGenerator((req) => `${req.method} ${req.url}`),
 		Layer.provideMerge(HttpAuthMiddlewareLive),
-		Layer.provideMerge(Dependencies),
 		Layer.merge(HttpServer.layerContext),
 		Layer.provide(cors),
 		Layer.provide(
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
-		Layer.provide(layerTracer),
+		Layer.provideMerge(Dependencies),
 		HttpApiBuilder.toWebHandler,
 		(v) => (req: Request) => v.handler(req),
 	);
