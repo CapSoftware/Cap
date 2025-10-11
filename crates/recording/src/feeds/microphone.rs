@@ -146,14 +146,14 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
             });
             configs
                 .into_iter()
-                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000)
+                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
                 .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
         })
         .and_then(|config| {
             device
                 .name()
                 .ok()
-                .map(|name| (name, device, config.with_max_sample_rate()))
+                .map(|name| (name, device, config.with_sample_rate(cpal::SampleRate(48000))))
         })
 }
 
