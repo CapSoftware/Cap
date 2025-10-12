@@ -20,6 +20,8 @@ export const AppsRpcsLive = AppsDomain.AppsRpcs.toLayer(
 				slug: string;
 				settings: unknown;
 			}) => apps.updateSettings(slug, settings),
+			AppsVerifyDestination: ({ slug }: { slug: string }) =>
+				apps.verifyDestination(slug),
 			AppsPause: ({ slug }: { slug: string }) => apps.pause(slug),
 			AppsResume: ({ slug }: { slug: string }) => apps.resume(slug),
 			AppsUninstall: ({ slug }: { slug: string }) =>

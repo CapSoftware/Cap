@@ -13,17 +13,27 @@ export class OrganisationsPolicy extends Effect.Service<OrganisationsPolicy>()(
 
 			const isMember = (orgId: Organisation.OrganisationId) =>
 				Policy.policy((user) =>
-					repo.membership(user.id, orgId).pipe(Effect.map(Option.isSome)),
+					repo
+						.membership(user.id, orgId)
+						.pipe(
+							Effect.flatMap((membership) =>
+								Option.isSome(membership)
+									? Effect.succeed(true)
+									: repo.isOwner(user.id, orgId),
+							),
+						),
 				);
 
 			const isOwner = (orgId: Organisation.OrganisationId) =>
 				Policy.policy((user) =>
-					repo.membership(user.id, orgId).pipe(
-						Effect.map((v) =>
-							v.pipe(
-								Option.filter((v) => v.role === "owner"),
-								Option.isSome,
-							),
+					repo
+						.membership(user.id, orgId)
+						.pipe(
+							Effect.flatMap((membership) =>
+								Option.match(membership, {
+									onSome: (value) => Effect.succeed(value.role === "owner"),
+									onNone: () => repo.isOwner(user.id, orgId),
+								}),
 						),
 					),
 				);

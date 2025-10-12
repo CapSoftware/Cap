@@ -1,7 +1,7 @@
 import * as Db from "@cap/database/schema";
 import type { Organisation, User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Effect } from "effect";
+import { Array, Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
 
@@ -47,7 +47,24 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 									),
 								),
 						)
-						.pipe(Effect.map(Array.get(0))),
+					.pipe(Effect.map(Array.get(0))),
+				isOwner: (
+					userId: User.UserId,
+					orgId: Organisation.OrganisationId,
+				) =>
+					db
+						.execute((db) =>
+							db
+								.select({ ownerId: Db.organizations.ownerId })
+								.from(Db.organizations)
+								.where(Dz.eq(Db.organizations.id, orgId)),
+						)
+						.pipe(
+							Effect.map(Array.get(0)),
+							Effect.map((owner) =>
+								Option.exists(owner, (entry) => entry.ownerId === userId),
+							),
+						),
 			};
 		}),
 		dependencies: [Database.Default],

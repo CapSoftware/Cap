@@ -1,4 +1,5 @@
 import type {
+	AppDestinationVerificationResult,
 	AppDispatchResult,
 	AppInstallationRecord,
 	AppModule,
@@ -59,7 +60,7 @@ const toOperationError = (slug: string, error: AppHandlerError) =>
 		operation: error.operation,
 		reason: error.reason,
 		retryable: error.retryable,
-		status: Option.fromNullable(error.status),
+		status: error.status,
 	});
 
 type RuntimeAppManifest = ReturnType<typeof getAppManifest> & {
@@ -103,6 +104,12 @@ type InstallationHandlerContext = {
 
 const mapDatabaseError = <A, R>(effect: Effect.Effect<A, DatabaseError, R>) =>
 	effect.pipe(Effect.mapError(() => new InternalError({ type: "database" })));
+
+const toIsoString = (value: Date | string | null | undefined) => {
+	if (!value) return null;
+	const date = value instanceof Date ? value : new Date(value);
+	return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
 
 const readTextAsset = (
 	appSlug: string,
@@ -149,6 +156,87 @@ const readImageAsset = (
 		return null;
 	}
 };
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const extractChannelDetails = (settings: unknown) => {
+	if (!isPlainRecord(settings)) {
+		return { channelId: null, channelName: null };
+	}
+
+	const channelIdCandidate = settings.channelId;
+	const channelNameCandidate = settings.channelName;
+
+	const channelId =
+		typeof channelIdCandidate === "string"
+			? channelIdCandidate.trim() || null
+			: null;
+	const channelName =
+		typeof channelNameCandidate === "string" && channelNameCandidate.trim().length > 0
+			? channelNameCandidate
+			: null;
+
+	return { channelId, channelName };
+};
+
+const mergeVerificationMetadata = (
+	existing: unknown,
+	details: {
+		status: AppDestinationVerificationResult["status"];
+		missingPermissions: ReadonlyArray<string>;
+		checkedAt: Date;
+		channelId: string | null;
+		channelName: string | null;
+	},
+) => {
+	const record: Record<string, unknown> = isPlainRecord(existing)
+		? { ...existing }
+		: {};
+
+	const missingPermissions = [
+		...new Set(
+			details.missingPermissions.filter((item) => typeof item === "string"),
+		),
+	];
+
+	record.channelVerification = {
+		status: details.status,
+		missingPermissions,
+		checkedAt: details.checkedAt.toISOString(),
+		channelId: details.channelId,
+		channelName: details.channelName,
+	};
+
+	return record;
+};
+
+const resolveStatusFromVerification = (
+	verification: AppDestinationVerificationResult,
+): "connected" | "needs_attention" =>
+	verification.status === "verified" ? "connected" : "needs_attention";
+
+const verifyDestinationWithModule = (
+	module: AnyAppModule,
+	installation: AppInstallationRow,
+	credentials: Option.Option<{
+		accessToken: string;
+		refreshToken: string | null;
+		scope: string | null;
+		expiresAt: Date | null;
+	}>,
+	settings: unknown,
+) =>
+	module.handlers.verifyDestination
+		? mapHandlerError(
+				module,
+				module.handlers.verifyDestination({
+					installation: toInstallationRecord(installation),
+					credentials: Option.getOrNull(credentials),
+					settings: settings as any,
+				}),
+			)
+		: Effect.succeed<AppDestinationVerificationResult>({ status: "verified" });
 
 const toDefinition = (module: AppModule<string, unknown, unknown>) => {
 	const runtimeModule = module as AnyAppModule;
@@ -258,7 +346,7 @@ const buildView = (
 				encodeSettings(module.definition.settings.schema, value),
 		});
 
-		return yield* decodeAppInstallationView({
+		const payload = {
 			id: installation.id,
 			slug: module.slug,
 			status: installation.status,
@@ -266,9 +354,18 @@ const buildView = (
 			spaceId: installation.spaceId,
 			providerDisplayName: installation.providerDisplayName,
 			providerMetadata: installation.providerMetadata ?? null,
-			lastCheckedAt: installation.lastCheckedAt ?? null,
+			lastCheckedAt: toIsoString(installation.lastCheckedAt),
 			settings: encodedSettings,
-		}).pipe(Effect.mapError(() => new InternalError({ type: "unknown" })));
+		};
+
+		return yield* decodeAppInstallationView(payload).pipe(
+			Effect.tapError((error) =>
+				Effect.logError(
+					`Failed to decode AppInstallationView slug=${module.slug} installation=${installation.id} error=${String(error)}`,
+				).pipe(Effect.asVoid),
+			),
+			Effect.mapError(() => new InternalError({ type: "unknown" })),
+		);
 	});
 
 const decryptToken = (value: string | null | undefined) =>
@@ -322,6 +419,15 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 			never
 		> = () => Effect.sync(() => Object.values(appsRegistry).map(toDefinition));
 
+		const ensureMember = (orgId: Organisation.OrganisationId) =>
+			organisationsPolicy.isMember(orgId).pipe(
+				Effect.catchTag(
+					"DatabaseError",
+					() => new InternalError({ type: "database" }),
+				),
+				Effect.catchTag("PolicyDenied", () => new Policy.PolicyDeniedError()),
+			);
+
 		const ensureOwner = (orgId: Organisation.OrganisationId) =>
 			organisationsPolicy.isOwner(orgId).pipe(
 				Effect.catchTag(
@@ -329,6 +435,11 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 					() => new InternalError({ type: "database" }),
 				),
 				Effect.catchTag("PolicyDenied", () => new Policy.PolicyDeniedError()),
+			);
+
+		const ensureMemberOrOwner = (orgId: Organisation.OrganisationId) =>
+			ensureMember(orgId).pipe(
+				Effect.catchTag("PolicyDenied", () => ensureOwner(orgId)),
 			);
 
 		const lookupModule = (
@@ -360,13 +471,24 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 		> =>
 			Effect.gen(function* () {
 				const user = yield* CurrentUser;
-				yield* ensureOwner(user.activeOrganizationId);
+				yield* ensureMemberOrOwner(user.activeOrganizationId);
 				const module = yield* lookupModule(slug);
 
 				const installationOption = yield* mapDatabaseError(
 					installationsRepo.findByOrgAndSlug(
 						user.activeOrganizationId,
 						module.slug,
+					),
+				).pipe(
+					Effect.tap((result) =>
+						Effect.logInfo(
+							Option.match(result, {
+								onNone: () =>
+									`Apps.getInstallation slug=${module.slug} org=${user.activeOrganizationId} found=false`,
+								onSome: (installation) =>
+									`Apps.getInstallation slug=${module.slug} org=${user.activeOrganizationId} found=true id=${installation.id}`,
+							}),
+						),
 					),
 				);
 
@@ -542,38 +664,128 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 			| Policy.PolicyDeniedError,
 			CurrentUser
 		> =>
-			withInstallation(slug, ({ module, installation, user }) =>
-				Effect.gen(function* () {
-				const settingsSchema = module.definition.settings.schema;
+		withInstallation(
+			slug,
+			({ module, installation, user, credentials }) =>
+			Effect.gen(function* () {
+			const settingsSchema = module.definition.settings.schema;
 
-				const settingsValue = yield* Schema.decodeUnknown(
-					toSettingsSchema(settingsSchema),
-				)(rawSettings).pipe(
-						Effect.mapError(
-							(error) =>
-								new AppsDomain.AppSettingsValidationError({
-									slug: module.slug,
-									issues: [formatValidationIssues(error)],
-								}),
-						),
-					);
+			const settingsValue = yield* Schema.decodeUnknown(
+				toSettingsSchema(settingsSchema),
+			)(rawSettings).pipe(
+					Effect.mapError(
+						(error) =>
+							new AppsDomain.AppSettingsValidationError({
+								slug: module.slug,
+								issues: [formatValidationIssues(error)],
+							}),
+					),
+				);
 
-					const persistable = yield* encodeSettings(
-						settingsSchema,
+				const persistable = yield* encodeSettings(
+					settingsSchema,
+					settingsValue,
+				);
+				const record = yield* toSettingsRecord(persistable);
+				yield* mapDatabaseError(settingsRepo.upsert(installation.id, record));
+
+				const nextSpaceId = extractSpaceId(settingsValue);
+				const updatedAt = new Date();
+				const verificationResult = yield* verifyDestinationWithModule(
+					module,
+					installation,
+					credentials,
+					settingsValue,
+				);
+				const status = resolveStatusFromVerification(verificationResult);
+				const { channelId, channelName } = extractChannelDetails(settingsValue);
+				const providerMetadata = mergeVerificationMetadata(
+					installation.providerMetadata,
+					{
+						status: verificationResult.status,
+						missingPermissions:
+							verificationResult.missingPermissions ?? [],
+						checkedAt: updatedAt,
+						channelId,
+						channelName,
+					},
+				);
+
+				yield* mapDatabaseError(
+					installationsRepo.updateById(installation.id, {
+						status,
+						updatedByUserId: user.id,
+						lastCheckedAt: updatedAt,
+						providerMetadata,
+						...(nextSpaceId !== undefined ? { spaceId: nextSpaceId } : {}),
+					}),
+				);
+
+				return yield* buildView(
+					module,
+					{
+						...installation,
+						status,
+						spaceId: nextSpaceId ?? installation.spaceId,
+						lastCheckedAt: updatedAt,
+						providerMetadata,
+					},
+					Option.some(settingsValue),
+				);
+			}),
+		);
+
+		const verifyDestination = (
+			slug: string,
+		): Effect.Effect<
+			AppsDomain.AppInstallationView,
+			| AppsDomain.AppNotInstalledError
+			| AppsDomain.AppUnsupportedError
+			| AppsDomain.AppSettingsMissingError
+			| AppsDomain.AppOperationError
+			| InternalError
+			| Policy.PolicyDeniedError,
+			CurrentUser
+		> =>
+			withInstallation(
+				slug,
+				{ requireSettings: true },
+				({ module, installation, settings, credentials, user }) =>
+					Effect.gen(function* () {
+					if (Option.isNone(settings)) {
+						return yield* Effect.fail(
+							new AppsDomain.AppSettingsMissingError({ slug: module.slug }),
+						);
+					}
+
+					const settingsValue = settings.value;
+					const updatedAt = new Date();
+					const verificationResult = yield* verifyDestinationWithModule(
+						module,
+						installation,
+						credentials,
 						settingsValue,
 					);
-					const record = yield* toSettingsRecord(persistable);
-					yield* mapDatabaseError(settingsRepo.upsert(installation.id, record));
-
-					const nextSpaceId = extractSpaceId(settingsValue);
-					const updatedAt = new Date();
+					const status = resolveStatusFromVerification(verificationResult);
+					const { channelId, channelName } = extractChannelDetails(settingsValue);
+					const providerMetadata = mergeVerificationMetadata(
+						installation.providerMetadata,
+						{
+							status: verificationResult.status,
+							missingPermissions:
+								verificationResult.missingPermissions ?? [],
+							checkedAt: updatedAt,
+							channelId,
+							channelName,
+						},
+					);
 
 					yield* mapDatabaseError(
 						installationsRepo.updateById(installation.id, {
-							status: "connected",
+							status,
 							updatedByUserId: user.id,
 							lastCheckedAt: updatedAt,
-							...(nextSpaceId !== undefined ? { spaceId: nextSpaceId } : {}),
+							providerMetadata,
 						}),
 					);
 
@@ -581,11 +793,11 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 						module,
 						{
 							...installation,
-							status: "connected",
-							spaceId: nextSpaceId ?? installation.spaceId,
+							status,
+							providerMetadata,
 							lastCheckedAt: updatedAt,
 						},
-						Option.some(settingsValue),
+						settings,
 					);
 				}),
 			);
@@ -759,6 +971,7 @@ export class Apps extends Effect.Service<Apps>()("Apps", {
 			getInstallation,
 			listDestinations,
 			updateSettings,
+			verifyDestination,
 			pause,
 			resume,
 			uninstall,
