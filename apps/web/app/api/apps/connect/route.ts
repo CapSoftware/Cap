@@ -47,12 +47,14 @@ const callbackQuerySchema = Schema.Struct({
 type AuthorizeErrors =
 	| HttpApiError.BadRequest
 	| HttpApiError.Forbidden
+	| HttpApiError.ServiceUnavailable
 	| HttpApiError.InternalServerError;
 
 type RefreshErrors =
 	| HttpApiError.BadRequest
 	| HttpApiError.Forbidden
 	| HttpApiError.NotFound
+	| HttpApiError.ServiceUnavailable
 	| HttpApiError.InternalServerError;
 
 const toRepoCreate = (
@@ -95,6 +97,7 @@ class Api extends HttpApi.make("AppsConnectApi").add(
 				.setPayload(authorizeRequestSchema)
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError),
 		)
 		.add(
@@ -106,6 +109,7 @@ class Api extends HttpApi.make("AppsConnectApi").add(
 				.setUrlParams(callbackQuerySchema)
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.Forbidden)
+				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError),
 		)
 		.add(
@@ -118,6 +122,7 @@ class Api extends HttpApi.make("AppsConnectApi").add(
 				.addError(HttpApiError.BadRequest)
 				.addError(HttpApiError.Forbidden)
 				.addError(HttpApiError.NotFound)
+				.addError(HttpApiError.ServiceUnavailable)
 				.addError(HttpApiError.InternalServerError),
 		),
 ) {}
