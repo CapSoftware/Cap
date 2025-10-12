@@ -25,8 +25,6 @@ export type AppManifest = typeof AppManifestSchema.Type;
 
 export const DEFAULT_INSTALL_MODULE = "./install.ts" as const;
 
-const manifestCache = new Map<string, ResolvedAppManifest>();
-
 const normalizeManifest = (manifest: AppManifest): ResolvedAppManifest =>
 	Object.freeze({
 		...manifest,
@@ -106,12 +104,6 @@ export type AppConfig = ResolvedAppManifest;
 
 export const getAppConfig = (importMetaUrl: string): AppConfig => {
 	const manifestPath = resolveManifestPath(importMetaUrl);
-	const cached = manifestCache.get(manifestPath);
-
-	if (cached) return cached;
-
 	const manifest = loadManifest(manifestPath);
-	manifestCache.set(manifestPath, manifest);
-
 	return manifest;
 };

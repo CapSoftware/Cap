@@ -6,25 +6,12 @@ import { getAppEnvVarsForModule, getAppSlugForModule } from "./app-env.ts";
 export const createAppModuleContext = <AppSlug extends string = string>(
 	importMetaUrl: string,
 ) => {
-	let cachedAppSlug: AppSlug | undefined;
-	let cachedEnv: ReturnType<typeof getAppEnvVarsForModule> | undefined;
-
 	const resolveAppSlug = () => {
-		if (cachedAppSlug !== undefined) {
-			return cachedAppSlug;
-		}
-
-		cachedAppSlug = getAppSlugForModule(importMetaUrl) as AppSlug;
-		return cachedAppSlug;
+		return getAppSlugForModule(importMetaUrl) as AppSlug;
 	};
 
 	const resolveAppEnv = () => {
-		if (cachedEnv !== undefined) {
-			return cachedEnv;
-		}
-
-		cachedEnv = getAppEnvVarsForModule(importMetaUrl);
-		return cachedEnv;
+		return getAppEnvVarsForModule(importMetaUrl);
 	};
 
 	return { resolveAppSlug, resolveAppEnv } as const;

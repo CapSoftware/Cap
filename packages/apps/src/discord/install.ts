@@ -686,8 +686,6 @@ const createDiscordApp = ({
 
 			const redirectUri = `${webUrl.replace(/\/$/, "")}/api/apps/connect/callback`;
 
-			console.log("redirectUri", redirectUri);
-
 			return {
 				clientId: appEnv.DISCORD_CLIENT_ID,
 				clientSecret: appEnv.DISCORD_CLIENT_SECRET,

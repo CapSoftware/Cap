@@ -8,7 +8,6 @@ export type AppEnvRequirements = Readonly<
 
 let requirements: AppEnvRequirements | undefined;
 let hasValidated = false;
-const appEnvCache = new Map<string, Readonly<Record<string, string>>>();
 const appDirectoryToSlug = new Map<string, string>();
 
 const isServerRuntime = () =>
@@ -57,16 +56,12 @@ const ensureAppEnvValidated = () => {
 export const registerAppEnvRequirements = (value: AppEnvRequirements) => {
 	requirements = value;
 	hasValidated = false;
-	appEnvCache.clear();
 	ensureAppEnvValidated();
 };
 
 export const getAppEnvVars = (appSlug: string) => {
 	ensureRequirementsRegistered();
 	ensureAppEnvValidated();
-
-	const cached = appEnvCache.get(appSlug);
-	if (cached) return cached;
 
 	const env = serverEnv();
 	const keys = requirements![appSlug];
@@ -98,10 +93,7 @@ export const getAppEnvVars = (appSlug: string) => {
 		collected[key] = trimmed;
 	}
 
-	const frozen = Object.freeze(collected);
-	appEnvCache.set(appSlug, frozen);
-	
-	return frozen;
+	return Object.freeze(collected);
 };
 
 export const getServerEnv = () => serverEnv();
