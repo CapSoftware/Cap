@@ -1,25 +1,25 @@
 import { HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import type { CookiesError } from "@effect/platform/Cookies";
 import type { HttpServerResponse as HttpServerResponseType } from "@effect/platform/HttpServerResponse";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 
 type CookieOptions = {
 	httpOnly: true;
 	sameSite: "lax";
 	secure: boolean;
 	path: "/";
-	maxAge: number;
+	maxAge: Duration.DurationInput;
 };
 
 const buildCookieOptions = (
 	secure: boolean,
-	maxAge: number,
+	maxAgeSeconds: number,
 ): CookieOptions => ({
 	httpOnly: true,
 	sameSite: "lax",
 	secure,
 	path: "/",
-	maxAge,
+	maxAge: Duration.seconds(maxAgeSeconds),
 });
 
 const buildClearCookieOptions = (secure: boolean): CookieOptions => ({

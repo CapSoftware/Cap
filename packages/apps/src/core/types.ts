@@ -168,6 +168,11 @@ export type AppDestination = {
 	parentId?: string | null;
 };
 
+export type AppDestinationVerificationResult = {
+	status: "verified" | "missing_permissions" | "unknown_destination";
+	missingPermissions?: ReadonlyArray<string>;
+};
+
 export type AppOperationContext<AppSlug extends string, Settings> = {
 	installation: AppInstallationRecord<AppSlug>;
 	credentials: AppCredentials | null;
@@ -199,6 +204,9 @@ export type AppHandlers<AppSlug extends string, Settings, Payload> = {
 	listDestinations: (
 		context: AppOperationContext<AppSlug, Settings>,
 	) => Effect.Effect<ReadonlyArray<AppDestination>, AppHandlerError>;
+	verifyDestination?: (
+		context: AppOperationContext<AppSlug, Settings>,
+	) => Effect.Effect<AppDestinationVerificationResult, AppHandlerError>;
 	dispatch: (
 		context: AppDispatchContext<AppSlug, Settings, Payload>,
 	) => Effect.Effect<AppDispatchResult, AppHandlerError>;

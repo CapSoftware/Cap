@@ -37,6 +37,7 @@ export type {
 	AppCredentials,
 	AppDefinition,
 	AppDestination,
+	AppDestinationVerificationResult,
 	AppDispatchContext,
 	AppDispatchResult,
 	AppInstallationRecord,

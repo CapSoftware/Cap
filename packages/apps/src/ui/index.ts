@@ -14,6 +14,11 @@ export {
 
 export { getAppManagementComponent } from "./registry";
 
+export {
+	createManagementPanel,
+	ManagementPanelSection,
+} from "./management/ManagementPanelBuilder.tsx";
+
 export type {
 	AppDefinitionType,
 	AppDestinationType,

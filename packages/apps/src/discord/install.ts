@@ -1,4 +1,4 @@
-import { createAppHandlerError } from "../core/errors.ts";
+import { AppHandlerError, createAppHandlerError } from "../core/errors.ts";
 import {
 	createAppSettings,
 	type InferAppSettings,
@@ -37,7 +37,8 @@ const STATE_COOKIE = "discord_oauth_state" as const;
 const VERIFIER_COOKIE = "discord_oauth_verifier" as const;
 const COOKIE_MAX_AGE_SECONDS = 600;
 
-const DEFAULT_BOT_PERMISSIONS = BigInt(2048 + 16384);
+// View Channel (1024) + Send Messages (2048) + Embed Links (16384)
+const DEFAULT_BOT_PERMISSIONS = BigInt(1024 + 2048 + 16384);
 const MANAGE_GUILD_PERMISSION = BigInt(1 << 5);
 
 export const discordManifest = getAppConfig(import.meta.url);
@@ -164,12 +165,32 @@ type DiscordGuild = {
 	features?: ReadonlyArray<string>;
 	permissions: string;
 };
+type DiscordPermissionOverwrite = {
+	id: string;
+	type: number | string;
+	allow: string;
+	deny: string;
+};
+
+type DiscordRole = {
+	id: string;
+	name: string;
+	permissions: string;
+};
+
+type DiscordGuildMember = {
+	user: { id: string };
+	roles: ReadonlyArray<string>;
+	permissions?: string;
+};
 
 type DiscordChannelResponse = {
 	id: string;
 	name: string;
 	type: number;
+	guild_id?: string;
 	parent_id?: string | null;
+	permission_overwrites?: ReadonlyArray<DiscordPermissionOverwrite>;
 };
 
 type DiscordMessageResponse = {
@@ -353,6 +374,113 @@ const createDiscordHandlers = (
 		return guildId;
 	};
 
+	const PERMISSION_VIEW_CHANNEL = 1n << 10n;
+	const PERMISSION_SEND_MESSAGES = 1n << 11n;
+	const PERMISSION_EMBED_LINKS = 1n << 14n;
+	const PERMISSION_ADMINISTRATOR = 1n << 3n;
+
+	const REQUIRED_PERMISSION_BITS = [
+		{ bit: PERMISSION_VIEW_CHANNEL, name: "VIEW_CHANNEL" },
+		{ bit: PERMISSION_SEND_MESSAGES, name: "SEND_MESSAGES" },
+		{ bit: PERMISSION_EMBED_LINKS, name: "EMBED_LINKS" },
+	] as const;
+
+	const parsePermissionBits = (value: string | null | undefined): bigint => {
+		if (!value) return 0n;
+		try {
+			return BigInt(value);
+		} catch {
+			return 0n;
+		}
+	};
+
+	const resolveOverwriteType = (
+		overwrite: DiscordPermissionOverwrite,
+	): "role" | "member" | "unknown" => {
+		if (overwrite.type === 0 || overwrite.type === "role") return "role";
+		if (overwrite.type === 1 || overwrite.type === "member") return "member";
+		return "unknown";
+	};
+
+	const applyOverwrite = (
+		current: bigint,
+		overwrite: DiscordPermissionOverwrite,
+	) => {
+		const allowBits = parsePermissionBits(overwrite.allow);
+		const denyBits = parsePermissionBits(overwrite.deny);
+		return (current & ~denyBits) | allowBits;
+	};
+
+	const computeEffectivePermissions = ({
+		channel,
+		roles,
+		member,
+		guildId,
+		botUserId,
+	}: {
+		channel: DiscordChannelResponse;
+		roles: ReadonlyArray<DiscordRole>;
+		member: DiscordGuildMember;
+		guildId: string;
+		botUserId: string;
+	}): bigint => {
+		const rolesById = new Map(roles.map((role) => [role.id, role]));
+		const memberRoleIds = new Set(member.roles ?? []);
+		const everyoneRole = rolesById.get(guildId);
+
+		let permissions = everyoneRole
+			? parsePermissionBits(everyoneRole.permissions)
+			: 0n;
+
+		if (typeof member.permissions === "string") {
+			permissions |= parsePermissionBits(member.permissions);
+		}
+
+		for (const roleId of memberRoleIds) {
+			const role = rolesById.get(roleId);
+			if (role) {
+				permissions |= parsePermissionBits(role.permissions);
+			}
+		}
+
+		if ((permissions & PERMISSION_ADMINISTRATOR) === PERMISSION_ADMINISTRATOR) {
+			return -1n;
+		}
+
+		const overwrites = channel.permission_overwrites ?? [];
+
+		const everyoneOverwrite = overwrites.find(
+			(overwrite) =>
+				resolveOverwriteType(overwrite) === "role" && overwrite.id === guildId,
+		);
+		if (everyoneOverwrite) {
+			permissions = applyOverwrite(permissions, everyoneOverwrite);
+		}
+
+		let roleAllow = 0n;
+		let roleDeny = 0n;
+		for (const overwrite of overwrites) {
+			if (resolveOverwriteType(overwrite) !== "role") continue;
+			if (overwrite.id === guildId) continue;
+			if (!memberRoleIds.has(overwrite.id)) continue;
+
+			roleAllow |= parsePermissionBits(overwrite.allow);
+			roleDeny |= parsePermissionBits(overwrite.deny);
+		}
+
+		permissions = (permissions & ~roleDeny) | roleAllow;
+
+		const memberOverwrite = overwrites.find(
+			(overwrite) =>
+				resolveOverwriteType(overwrite) === "member" && overwrite.id === botUserId,
+		);
+		if (memberOverwrite) {
+			permissions = applyOverwrite(permissions, memberOverwrite);
+		}
+
+		return permissions;
+	};
+
 	return {
 		uninstall: async (context) => {
 			const guildId = context.installation.providerExternalId;
@@ -384,6 +512,118 @@ const createDiscordHandlers = (
 					type: channel.type === 5 ? "announcement" : "text",
 					parentId: channel.parent_id ?? null,
 				}));
+		},
+		verifyDestination: async (context) => {
+			const guildId = ensureGuildId(
+				"verifyDestination",
+				context.installation.providerExternalId,
+			);
+			const channelIdRaw =
+				context.settings?.channelId &&
+				typeof context.settings.channelId === "string"
+					? context.settings.channelId.trim()
+					: "";
+
+			if (channelIdRaw.length === 0) {
+				return { status: "unknown_destination" };
+			}
+
+			let channel: DiscordChannelResponse | null = null;
+
+			try {
+				channel = await discordApiRequest<DiscordChannelResponse>(
+					"verifyDestination",
+					`/channels/${channelIdRaw}`,
+					{ method: "GET" },
+				);
+			} catch (error) {
+				if (error instanceof AppHandlerError) {
+					if (error.status === 404) {
+						return { status: "unknown_destination" };
+					}
+					if (error.status === 403) {
+						return {
+							status: "missing_permissions",
+							missingPermissions: ["VIEW_CHANNEL"],
+						};
+					}
+				}
+
+				throw error;
+			}
+
+			if (!channel) {
+				return { status: "unknown_destination" };
+			}
+
+			if (channel.guild_id && channel.guild_id !== guildId) {
+				return { status: "unknown_destination" };
+			}
+
+			if (channel.type !== 0 && channel.type !== 5) {
+				return { status: "unknown_destination" };
+			}
+
+			const botUserId = getAppEnv().DISCORD_CLIENT_ID?.trim();
+			if (!botUserId) {
+				throw createAppHandlerError({
+					app: resolveAppSlug(),
+					operation: "verifyDestination",
+					reason: "Discord bot client identifier is not configured",
+					retryable: false,
+				});
+			}
+
+			let roles: DiscordRole[];
+			let member: DiscordGuildMember;
+
+			try {
+				[roles, member] = await Promise.all([
+					discordApiRequest<DiscordRole[]>(
+						"verifyDestination",
+						`/guilds/${guildId}/roles`,
+						{ method: "GET" },
+					),
+					discordApiRequest<DiscordGuildMember>(
+						"verifyDestination",
+						`/guilds/${guildId}/members/${botUserId}`,
+						{ method: "GET" },
+					),
+				]);
+			} catch (error) {
+				if (error instanceof AppHandlerError) {
+					if (error.status === 404 || error.status === 403) {
+						return {
+							status: "missing_permissions",
+							missingPermissions: ["VIEW_CHANNEL"],
+						};
+					}
+				}
+
+				throw error;
+			}
+
+			const effectivePermissions = computeEffectivePermissions({
+				channel,
+				roles,
+				member,
+				guildId,
+				botUserId,
+			});
+
+			if (effectivePermissions === -1n) {
+				return { status: "verified" };
+			}
+
+			const missingPermissions = REQUIRED_PERMISSION_BITS.filter(
+				({ bit }) => (effectivePermissions & bit) !== bit,
+			).map(({ name }) => name);
+
+			if (missingPermissions.length > 0) {
+				return { status: "missing_permissions", missingPermissions };
+			}
+
+			return { status: "verified" };
 		},
 		dispatch: async (context) => {
 			const channelId = context.settings.channelId.trim();
@@ -442,47 +682,17 @@ const createDiscordApp = ({
 			maxAgeSeconds: COOKIE_MAX_AGE_SECONDS,
 		},
 		resolveConfig: ({ appEnv, serverEnv }) => {
-			let requiredPermissions = DEFAULT_BOT_PERMISSIONS;
+			const webUrl = serverEnv.WEB_URL as string;
 
-			const requiredPermissionsRaw =
-				typeof serverEnv.DISCORD_REQUIRED_PERMISSIONS === "string"
-					? serverEnv.DISCORD_REQUIRED_PERMISSIONS.trim()
-					: undefined;
+			const redirectUri = `${webUrl.replace(/\/$/, "")}/api/apps/connect/callback`;
 
-			if (requiredPermissionsRaw && requiredPermissionsRaw.length > 0) {
-				requiredPermissions = parseBigInt(
-					requiredPermissionsRaw,
-					new OAuthConfigError("Invalid DISCORD_REQUIRED_PERMISSIONS value", {
-						missing: ["DISCORD_REQUIRED_PERMISSIONS"],
-					}),
-				);
-			}
-
-			const redirectUriRaw =
-				typeof serverEnv.DISCORD_REDIRECT_URI === "string"
-					? serverEnv.DISCORD_REDIRECT_URI.trim()
-					: "";
-			const webUrlRaw =
-				typeof serverEnv.WEB_URL === "string" ? serverEnv.WEB_URL.trim() : "";
-
-			let redirectUri = redirectUriRaw;
-
-			if (redirectUri.length === 0) {
-				if (webUrlRaw.length === 0) {
-					throw new OAuthConfigError(
-						"WEB_URL is required to derive the Discord redirect URI",
-						{ missing: ["WEB_URL"] },
-					);
-				}
-
-				redirectUri = `${webUrlRaw.replace(/\/$/, "")}/api/apps/connect/callback`;
-			}
+			console.log("redirectUri", redirectUri);
 
 			return {
 				clientId: appEnv.DISCORD_CLIENT_ID,
 				clientSecret: appEnv.DISCORD_CLIENT_SECRET,
 				redirectUri,
-				requiredPermissions,
+				requiredPermissions: DEFAULT_BOT_PERMISSIONS,
 				secureCookies: serverEnv.NODE_ENV === "production",
 			} satisfies DiscordEnvConfig;
 		},

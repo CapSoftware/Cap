@@ -80,7 +80,7 @@ export const getAppEnvVars = (appSlug: string) => {
 	const collected: Record<string, string> = {};
 
 	for (const key of keys) {
-		const value = env[key];
+		const value = env[key as keyof typeof env];
 		if (typeof value !== "string") {
 			throw new Error(
 				`Missing environment variable '${key}' for app '${appSlug}'.`,

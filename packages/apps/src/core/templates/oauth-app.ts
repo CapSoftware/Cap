@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { decrypt, encrypt } from "@cap/database/crypto";
 import type { AppInstallationStatus } from "@cap/database/schema";
-import { HttpApiError, HttpServerResponse } from "@effect/platform";
+import { HttpApiError, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { Effect, Option } from "effect";
 
 import { getServerEnv } from "../app-env.ts";
@@ -20,6 +20,7 @@ import type {
 	AppCallbackContext,
 	AppDefinition,
 	AppDestination,
+	AppDestinationVerificationResult,
 	AppDispatchContext,
 	AppDispatchResult,
 	AppModule,
@@ -120,6 +121,9 @@ export type OAuthAppHandlers<
 	listDestinations?: (
 		context: AppOperationContext<AppType, Settings>,
 	) => OptionalPromise<ReadonlyArray<AppDestination>>;
+	verifyDestination?: (
+		context: AppOperationContext<AppType, Settings>,
+	) => OptionalPromise<AppDestinationVerificationResult>;
 	dispatch: (
 		context: AppDispatchContext<AppType, Settings, DispatchPayload>,
 	) => OptionalPromise<AppDispatchResult>;
@@ -285,6 +289,7 @@ export const createOAuthAppModule = <
 
 	const authorize = (context: AppAuthorizeContext) =>
 		Effect.gen(function* () {
+			const appSlug = resolveAppSlug();
 			if (options.requireOrganisationOwner !== false) {
 				yield* ensureOrganisationOwner(
 					context.organisationsPolicy,
@@ -325,6 +330,9 @@ export const createOAuthAppModule = <
 				{ state, verifier: codeVerifier },
 				config.secureCookies,
 			);
+			yield* Effect.logInfo(
+				`[${appSlug}] oauth.authorize:session-set org=${context.user.activeOrganizationId} user=${context.user.id} ${JSON.stringify({ stateSet: true, secure: config.secureCookies, cookieNames: Object.keys(response.cookies ?? {}) })}`,
+			);
 
 			return response as unknown;
 		}).pipe(
@@ -332,10 +340,39 @@ export const createOAuthAppModule = <
 				(error): error is OAuthConfigError => error instanceof OAuthConfigError,
 				logAndFailInternalError,
 			),
+			Effect.catchIf(
+				(error): error is OAuthProviderError =>
+					error instanceof OAuthProviderError,
+				(error) =>
+					Effect.logError(error).pipe(
+						Effect.flatMap(() =>
+							Effect.fail(new HttpApiError.ServiceUnavailable()),
+						),
+					),
+			),
 		);
 
-	const callback = (context: AppCallbackContext<AppType>) =>
-		Effect.gen(function* () {
+	const callback = (context: AppCallbackContext<AppType>) => {
+		const appSlug = resolveAppSlug();
+		const logCallbackTrace = (
+			phase: string,
+			details?: Record<string, unknown>,
+		) => {
+			let serializedDetails = "";
+			if (details && Object.keys(details).length > 0) {
+				try {
+					serializedDetails = ` ${JSON.stringify(details)}`;
+				} catch {
+					serializedDetails = " [unserializable-details]";
+				}
+			}
+
+			return Effect.logInfo(
+				`[${appSlug}] oauth.callback:${phase} org=${context.state.orgId} user=${context.user.id}${serializedDetails}`,
+			);
+		};
+
+		return Effect.gen(function* () {
 			if (options.requireOrganisationOwner !== false) {
 				yield* ensureOrganisationOwner(
 					context.organisationsPolicy,
@@ -344,6 +381,14 @@ export const createOAuthAppModule = <
 			}
 
 			const config = yield* resolveConfigEffect();
+			yield* logCallbackTrace("start", {
+				queryKeys: Object.keys(context.query),
+				error: context.query.error ?? null,
+				hasCode: typeof context.query.code === "string",
+				hasState: typeof context.query.state === "string",
+				hasGuildId: typeof context.query.guild_id === "string",
+				hasPermissions: typeof context.query.permissions === "string",
+			});
 
 			if (context.query.error) {
 				throw new OAuthCallbackError(
@@ -362,7 +407,20 @@ export const createOAuthAppModule = <
 				throw new OAuthCallbackError("Missing OAuth state parameter");
 			}
 
+			const request = yield* HttpServerRequest.HttpServerRequest;
+			yield* logCallbackTrace("request", {
+				hasHeaderCookie: request.headers.cookie ? true : false,
+				cookieHeaderLength: request.headers.cookie
+					? request.headers.cookie.length
+					: 0,
+				cookieKeys: Object.keys(request.cookies ?? {}),
+			});
+
 			const session = yield* sessionManager.read();
+			yield* logCallbackTrace("session", {
+				hasState: Boolean(session.state),
+				hasVerifier: Boolean(session.verifier),
+			});
 			ensureStateMatches(context, session.state, session.verifier);
 
 			const callbackData = options.callback.parse({
@@ -370,6 +428,11 @@ export const createOAuthAppModule = <
 				config,
 				context,
 			});
+			const callbackDataSummary =
+				callbackData && typeof callbackData === "object" && !Array.isArray(callbackData)
+					? { keys: Object.keys(callbackData as Record<string, unknown>) }
+					: { type: typeof callbackData };
+			yield* logCallbackTrace("parsed", callbackDataSummary);
 
 			const tokens = yield* Effect.tryPromise({
 				try: () =>
@@ -390,6 +453,11 @@ export const createOAuthAppModule = <
 									: "Failed to exchange OAuth code",
 							),
 			});
+			yield* logCallbackTrace("tokens", {
+				hasRefreshToken: tokens.refreshToken != null,
+				hasScope: tokens.scope != null,
+				expiresIn: typeof tokens.expiresIn === "number" ? tokens.expiresIn : null,
+			});
 
 			const installDetails = yield* Effect.tryPromise({
 				try: () =>
@@ -400,6 +468,13 @@ export const createOAuthAppModule = <
 						context,
 					}),
 				catch: (cause) => cause,
+			});
+			yield* logCallbackTrace("installation", {
+				providerExternalId: installDetails.providerExternalId,
+				displayName: installDetails.providerDisplayName,
+				status: installDetails.status ?? "connected",
+				hasMetadata: installDetails.metadata != null,
+				spaceId: installDetails.spaceId ?? null,
 			});
 
 			const refreshTokenValue = tokens.refreshToken ?? null;
@@ -420,10 +495,16 @@ export const createOAuthAppModule = <
 
 			const existing = yield* context.repo.findByOrgAndSlug(
 				context.state.orgId,
-				resolveAppSlug(),
+				appSlug,
 			);
+			yield* logCallbackTrace("persist", {
+				hasExisting: Option.isSome(existing),
+			});
 
 			if (Option.isSome(existing)) {
+				yield* logCallbackTrace("persist:update", {
+					installationId: existing.value.id,
+				});
 				yield* context.repo.updateById(existing.value.id, {
 					accessToken: encryptedAccessToken,
 					refreshToken: encryptedRefreshToken,
@@ -438,10 +519,11 @@ export const createOAuthAppModule = <
 					spaceId: installDetails.spaceId ?? null,
 				});
 			} else {
+				yield* logCallbackTrace("persist:create");
 				yield* context.repo.create({
 					organizationId: context.state.orgId,
 					spaceId: installDetails.spaceId ?? null,
-					appSlug: resolveAppSlug(),
+					appSlug,
 					status: installDetails.status ?? "connected",
 					lastCheckedAt: now,
 					installedByUserId: context.user.id,
@@ -456,15 +538,83 @@ export const createOAuthAppModule = <
 				});
 			}
 
-			const response = HttpServerResponse.html(
-				"<html><body><script>window.close();</script><p>OAuth connection complete. You may close this window.</p></body></html>",
-			);
+			const redirectPath = (() => {
+				const stateData = context.state.data;
+				if (
+					stateData &&
+					typeof stateData === "object" &&
+					!Array.isArray(stateData)
+				) {
+					const candidate = (stateData as { returnTo?: unknown }).returnTo;
+					if (typeof candidate === "string" && candidate.startsWith("/")) {
+						return candidate;
+					}
+				}
 
-			return (yield* sessionManager.clear(
+				return `/dashboard/apps/${appSlug}`;
+			})();
+			const redirectUrl = (() => {
+				try {
+					return new URL(redirectPath, request.url);
+				} catch {
+					return redirectPath;
+				}
+			})();
+
+			const response = HttpServerResponse.redirect(redirectUrl);
+			const clearedResponse = yield* sessionManager.clear(
 				response,
 				config.secureCookies,
-			)) as unknown;
-		}).pipe(
+			);
+			yield* logCallbackTrace("success", { redirect: redirectPath });
+
+			return clearedResponse as unknown;
+		})
+			.pipe(
+				Effect.tapError((error) => {
+					const details: Record<string, unknown> = {
+						message:
+							error instanceof Error
+								? error.message
+								: String(error),
+						name: error instanceof Error ? error.name : undefined,
+					};
+					if (error instanceof OAuthPermissionError) {
+						details.reason = error.reason;
+					}
+
+					const isHandledError =
+						error instanceof OAuthCallbackError ||
+						error instanceof OAuthStateError ||
+						error instanceof OAuthPermissionError ||
+						error instanceof OAuthConfigError ||
+						error instanceof OAuthProviderError;
+
+					const traceEffect = logCallbackTrace("error", details);
+
+					if (isHandledError) {
+						return traceEffect;
+					}
+
+					return traceEffect.pipe(Effect.andThen(Effect.logError(error)));
+				}),
+			Effect.catchIf(
+				(error): error is OAuthCallbackError | OAuthStateError =>
+					error instanceof OAuthCallbackError ||
+					error instanceof OAuthStateError,
+				() =>
+					Effect.fail(new HttpApiError.BadRequest()),
+			),
+			Effect.catchIf(
+				(error): error is OAuthPermissionError =>
+					error instanceof OAuthPermissionError,
+				(error) =>
+					Effect.fail(
+						error.reason === "insufficient_bot_permissions"
+							? new HttpApiError.Forbidden()
+							: new HttpApiError.BadRequest(),
+					),
+			),
 			Effect.catchIf(
 				(error): error is OAuthConfigError => error instanceof OAuthConfigError,
 				logAndFailInternalError,
@@ -472,9 +622,11 @@ export const createOAuthAppModule = <
 			Effect.catchIf(
 				(error): error is OAuthProviderError =>
 					error instanceof OAuthProviderError,
-				logAndFailInternalError,
+				() =>
+					Effect.fail(new HttpApiError.ServiceUnavailable()),
 			),
 		);
+	};
 
 	const refresh = (context: AppRefreshContext) =>
 		Effect.gen(function* () {
@@ -570,7 +722,12 @@ export const createOAuthAppModule = <
 			Effect.catchIf(
 				(error): error is OAuthProviderError =>
 					error instanceof OAuthProviderError,
-				logAndFailInternalError,
+				(error) =>
+				Effect.logError(error).pipe(
+					Effect.flatMap(() =>
+						Effect.fail(new HttpApiError.ServiceUnavailable()),
+					),
+				),
 			),
 		);
 
@@ -624,6 +781,18 @@ export const createOAuthAppModule = <
 			"listDestinations",
 			handlerImplementations.listDestinations,
 			() => [],
+		),
+		verifyDestination: wrapOperation<
+			AppType,
+			Settings,
+			DispatchPayload,
+			AppOperationContext<AppType, Settings>,
+			AppDestinationVerificationResult
+		>(
+			resolveAppSlug,
+			"verifyDestination",
+			handlerImplementations.verifyDestination,
+			() => ({ status: "verified" }),
 		),
 		dispatch: wrapOperation<
 			AppType,
