@@ -37,6 +37,6 @@
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",
 	"engines": {
-		"node": "24"
+		"node": ">=20"
 	}
 }

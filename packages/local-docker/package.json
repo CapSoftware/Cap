@@ -10,6 +10,6 @@
 		"docker:clean": "docker compose down -v"
 	},
 	"engines": {
-		"node": "20"
+		"node": ">=20"
 	}
 }
