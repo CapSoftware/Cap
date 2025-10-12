@@ -2,14 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
 
-import { AppDetailsClient } from "../../apps/components/AppDetailsClient";
-import type { SerializableAppDefinition } from "../../apps/types";
-import { AppPageLayout } from "./AppPageLayout";
+import { AppPageLayout } from "../AppPageLayout";
 import {
   fetchDefinition,
   loadAppMediaAssets,
+  loadAppSpaces,
   requireActiveOrganizationOwner,
-} from "./server";
+} from "../server";
+
+import { AppManageClient } from "./AppManageClient";
 
 type PageParams = {
   slug: string;
@@ -18,11 +19,6 @@ type PageParams = {
 type PageProps = {
   params: Promise<PageParams>;
 };
-
-const buildDescription = (definition: SerializableAppDefinition) =>
-  definition.description.trim().length > 0
-    ? definition.description
-    : `${definition.displayName} integration for Cap.`;
 
 export async function generateMetadata(
   props: PageProps
@@ -35,15 +31,15 @@ export async function generateMetadata(
   }
 
   return {
-    title: `${definition.displayName} — Cap Apps`,
-    description: buildDescription(definition),
+    title: `Manage ${definition.displayName} — Cap Apps`,
+    description: `Configure ${definition.displayName} for your workspace.`,
   };
 }
 
-export default async function AppDetailsPage(props: PageProps) {
+export default async function ManageAppPage(props: PageProps) {
   const params = await props.params;
 
-  await requireActiveOrganizationOwner();
+  const { organizationId } = await requireActiveOrganizationOwner();
 
   const definition = await fetchDefinition(params.slug);
 
@@ -51,11 +47,13 @@ export default async function AppDetailsPage(props: PageProps) {
     notFound();
   }
 
+  const spaces = await loadAppSpaces(organizationId);
   const gallery = await loadAppMediaAssets(definition.slug);
 
   return (
     <AppPageLayout definition={definition} gallery={gallery}>
-      <AppDetailsClient definition={definition}>
+      <AppManageClient definition={definition} spaces={spaces} />
+      <div className="rounded-2xl border border-gray-3 bg-gray-1 p-6">
         {definition.content && definition.content.trim().length > 0 ? (
           <article className="prose max-w-none prose-headings:font-semibold">
             <MDXRemote source={definition.content} />
@@ -66,7 +64,7 @@ export default async function AppDetailsPage(props: PageProps) {
             soon.
           </p>
         )}
-      </AppDetailsClient>
+      </div>
     </AppPageLayout>
   );
 }

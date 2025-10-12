@@ -85,7 +85,7 @@ export class AppOperationError extends Schema.TaggedError<AppOperationError>()(
 		operation: Schema.String,
 		reason: Schema.String,
 		retryable: Schema.Boolean,
-		status: Schema.OptionFromNullOr(Schema.Number),
+		status: Schema.optional(Schema.Number),
 	},
 ) {}
 
@@ -132,6 +132,18 @@ export class AppsRpcs extends RpcGroup.make(
 			AppNotInstalledError,
 			AppUnsupportedError,
 			AppSettingsValidationError,
+			AppOperationError,
+			PolicyDeniedError,
+			InternalError,
+		),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("AppsVerifyDestination", {
+		payload: AppSlugPayload,
+		success: AppInstallationView,
+		error: Schema.Union(
+			AppNotInstalledError,
+			AppUnsupportedError,
+			AppSettingsMissingError,
 			AppOperationError,
 			PolicyDeniedError,
 			InternalError,

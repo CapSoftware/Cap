@@ -3,16 +3,13 @@
 import {
 	type AppDefinitionType,
 	type AppSelection,
-	type AppSpace,
 	AppsUiProvider,
-	getAppManagementComponent,
 } from "@cap/apps/ui";
-import { Apps } from "@cap/web-domain";
 import { useQueryClient } from "@tanstack/react-query";
 import { Effect } from "effect";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 
@@ -24,18 +21,7 @@ const toastApi = {
 };
 
 const AppsClient = () => {
-	const [selectedApp, setSelectedApp] = useState<AppSelection | null>(null);
-	const { spacesData } = useDashboardContext();
-	const spaces = spacesData ?? [];
-	const appSpaces: AppSpace[] = useMemo(
-		() =>
-			spaces.map((space) => ({
-				id: space.id,
-				name: space.name,
-			})),
-		[spaces],
-	);
-
+	const router = useRouter();
 	const uiDependencies = useMemo(
 		() => ({
 			useEffectQuery,
@@ -73,9 +59,12 @@ const AppsClient = () => {
 		[],
 	);
 
-	const ManagementComponent = selectedApp
-		? getAppManagementComponent(selectedApp.definition.slug)
-		: null;
+	const handleOpenManage = useCallback(
+		(selection: AppSelection) => {
+			router.push(`/dashboard/apps/${selection.definition.slug}/manage`);
+		},
+		[router],
+	);
 
 	return (
 		<AppsUiProvider value={uiDependencies}>
@@ -111,27 +100,11 @@ const AppsClient = () => {
 							<AppCard
 								key={definition.slug}
 								definition={definition}
-								isActive={selectedApp?.definition.slug === definition.slug}
-								onOpenManage={(selection) => setSelectedApp(selection)}
+								onOpenManage={handleOpenManage}
 							/>
 						))}
 					</div>
 				)}
-
-				{selectedApp &&
-					(ManagementComponent ? (
-						<ManagementComponent
-							selection={selectedApp}
-							spaces={appSpaces}
-							onClose={() => setSelectedApp(null)}
-							onSelectionChange={(next) => setSelectedApp(next)}
-						/>
-					) : (
-						<div className="rounded-xl border border-gray-4 bg-gray-2 p-6 text-sm text-gray-10">
-							Management for {selectedApp.definition.displayName} isn&apos;t
-							available yet.
-						</div>
-					))}
 			</div>
 		</AppsUiProvider>
 	);

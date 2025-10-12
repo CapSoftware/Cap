@@ -13,13 +13,11 @@ import { useAppInstallation } from "./useAppInstallation";
 type AppCardProps = {
 	definition: AppDefinitionType;
 	onOpenManage?: (selection: AppSelection) => void;
-	isActive?: boolean;
 };
 
 const AppCard = ({
 	definition,
 	onOpenManage,
-	isActive = false,
 }: AppCardProps) => {
 	const {
 		status,
@@ -54,7 +52,6 @@ const AppCard = ({
 			className={clsx(
 				"flex h-full flex-col gap-5 border-gray-3 bg-gray-1 p-5 transition-colors duration-200",
 				onOpenManage && "hover:border-gray-4",
-				isActive && "border-blue-7 ring-2 ring-blue-8/40",
 			)}
 		>
 			<div className="flex items-start gap-3">

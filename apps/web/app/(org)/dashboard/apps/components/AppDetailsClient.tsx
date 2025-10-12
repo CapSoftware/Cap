@@ -4,16 +4,14 @@ import {
 	AppsUiProvider,
 	AppStatusBadge,
 	type AppDefinitionType,
-	type AppSelection,
-	getAppManagementComponent,
 } from "@cap/apps/ui";
 import { Button, Card } from "@cap/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Option } from "effect";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 
@@ -22,6 +20,7 @@ import type { SerializableAppDefinition } from "../types";
 
 type AppDetailsClientProps = {
 	definition: SerializableAppDefinition;
+	children?: ReactNode;
 };
 
 const toastApi = {
@@ -29,7 +28,7 @@ const toastApi = {
 	error: toast.error,
 };
 
-export const AppDetailsClient = ({ definition }: AppDetailsClientProps) => {
+export const AppDetailsClient = ({ definition, children }: AppDetailsClientProps) => {
 	const uiDependencies = useMemo(
 		() => ({
 			useEffectQuery,
@@ -43,14 +42,18 @@ export const AppDetailsClient = ({ definition }: AppDetailsClientProps) => {
 
 	return (
 		<AppsUiProvider value={uiDependencies}>
-			<AppDetailsContent definition={definition} />
+			<AppDetailsContent definition={definition}>
+				{children}
+			</AppDetailsContent>
 		</AppsUiProvider>
 	);
 };
 
 const AppDetailsContent = ({
 	definition,
+	children,
 }: AppDetailsClientProps) => {
+	const router = useRouter();
 	const hydratedDefinition = useMemo<AppDefinitionType>(() => {
 		const base = {
 			...definition,
@@ -62,21 +65,13 @@ const AppDetailsContent = ({
 		return base as unknown as AppDefinitionType;
 	}, [definition]);
 
-	const [selectedApp, setSelectedApp] = useState<AppSelection | null>(null);
-	const { spacesData } = useDashboardContext();
-	const spaces = spacesData ?? [];
-	const appSpaces = useMemo(
-		() =>
-			spaces.map((space) => ({
-				id: space.id,
-				name: space.name,
-			})),
-		[spaces],
-	);
+	const handleOpenManage = useCallback(() => {
+		router.push(`/dashboard/apps/${definition.slug}/manage`);
+	}, [router, definition.slug]);
 
 	const installationState = useAppInstallation({
 		definition: hydratedDefinition,
-		onOpenManage: setSelectedApp,
+		onOpenManage: handleOpenManage,
 	});
 
 	const {
@@ -89,10 +84,6 @@ const AppDetailsContent = ({
 		installationQuery,
 		status,
 	} = installationState;
-
-	const ManagementComponent = selectedApp
-		? getAppManagementComponent(selectedApp.definition.slug)
-		: null;
 
 	const appInitial = definition.displayName?.[0]?.toUpperCase() ?? "A";
 
@@ -156,38 +147,29 @@ const AppDetailsContent = ({
 							We couldn&apos;t load the latest status.
 						</p>
 					)}
-				</div>
+			</div>
 
-				<div className="flex flex-wrap items-center gap-3">
-					<Button
-						variant="dark"
-						size="md"
-						disabled={buttonDisabled}
-						spinner={buttonSpinner}
-						onClick={handleAction}
-					>
-						{buttonLabel}
-					</Button>
-					<span className="text-xs font-medium uppercase tracking-wide text-gray-9">
-						{definition.category.replace(/_/g, " ")}
-					</span>
-				</div>
-			</Card>
+			<div className="flex flex-wrap items-center gap-3">
+				<Button
+					variant="dark"
+					size="md"
+					disabled={buttonDisabled}
+					spinner={buttonSpinner}
+					onClick={handleAction}
+				>
+					{buttonLabel}
+				</Button>
+				<span className="text-xs font-medium uppercase tracking-wide text-gray-9">
+					{definition.category.replace(/_/g, " ")}
+				</span>
+			</div>
 
-			{selectedApp &&
-				(ManagementComponent ? (
-					<ManagementComponent
-						selection={selectedApp}
-						spaces={appSpaces}
-						onClose={() => setSelectedApp(null)}
-						onSelectionChange={(next) => setSelectedApp(next)}
-					/>
-				) : (
-					<div className="rounded-xl border border-gray-4 bg-gray-2 p-6 text-sm text-gray-10">
-						Management for {selectedApp.definition.displayName} isn&apos;t
-						available yet.
-					</div>
-				))}
-		</div>
+			{children ? (
+				<div className="border-t border-gray-4 pt-6">
+					{children}
+				</div>
+			) : null}
+		</Card>
+	</div>
 	);
 };
