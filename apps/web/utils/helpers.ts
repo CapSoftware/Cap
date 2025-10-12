@@ -1,5 +1,4 @@
 import { buildEnv } from "@cap/env";
-import { serverEnv } from "@cap/env/server";
 import { type ClassValue, clsx } from "clsx";
 import type { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
 import type { NextRequest } from "next/server";

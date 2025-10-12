@@ -212,6 +212,26 @@ const resolveExpiresAt = (tokens: OAuthTokenSet) => {
 	return null;
 };
 
+const sanitizeRedirectPath = (value: unknown): string | null => {
+	if (typeof value !== "string") {
+		return null;
+	}
+
+	if (!value.startsWith("/")) {
+		return null;
+	}
+
+	if (value.startsWith("//")) {
+		return null;
+	}
+
+	if (/[\r\n\0]/.test(value)) {
+		return null;
+	}
+
+	return value;
+};
+
 const wrapOperation = <
 	AppType extends string,
 	Settings,
@@ -545,9 +565,11 @@ export const createOAuthAppModule = <
 					typeof stateData === "object" &&
 					!Array.isArray(stateData)
 				) {
-					const candidate = (stateData as { returnTo?: unknown }).returnTo;
-					if (typeof candidate === "string" && candidate.startsWith("/")) {
-						return candidate;
+					const sanitizedReturnTo = sanitizeRedirectPath(
+						(stateData as { returnTo?: unknown }).returnTo,
+					);
+					if (sanitizedReturnTo) {
+						return sanitizedReturnTo;
 					}
 				}
 
