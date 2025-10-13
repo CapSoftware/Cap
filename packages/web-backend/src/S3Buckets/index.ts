@@ -1,6 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
-import { fromInstanceMetadata, fromSSO } from "@aws-sdk/credential-providers";
+import { fromContainerMetadata, fromSSO } from "@aws-sdk/credential-providers";
 import { decrypt } from "@cap/database/crypto";
 import type { S3Bucket, User } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
@@ -46,7 +46,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						Effect.succeed(
 							process.env.NODE_ENV === "development"
 								? fromSSO({ profile: process.env.AWS_DEFAULT_PROFILE })
-								: fromInstanceMetadata(),
+								: fromContainerMetadata(),
 						),
 					),
 				),
