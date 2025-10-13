@@ -13,8 +13,6 @@ export async function POST() {
 		return NextResponse.json({ error: true }, { status: 401 });
 	}
 
-	const onboardingCompletedAt = new Date();
-
 	try {
 		await db()
 			.update(users)
@@ -25,7 +23,7 @@ export async function POST() {
 					customDomain: true,
 					inviteTeam: true,
 				},
-				onboarding_completed_at: onboardingCompletedAt,
+				onboarding_completed_at: new Date(),
 			})
 			.where(eq(users.id, user.id));
 
