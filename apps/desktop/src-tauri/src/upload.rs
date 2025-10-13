@@ -210,8 +210,6 @@ pub async fn create_or_get_video(
     name: Option<String>,
     meta: Option<S3VideoMeta>,
 ) -> Result<S3UploadMeta, AuthedApiError> {
-    return Err(AuthedApiError::Other("A made up error".into())); // TODO
-
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
