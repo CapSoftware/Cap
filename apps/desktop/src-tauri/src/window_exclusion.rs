@@ -75,7 +75,7 @@ pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
             let window_title = window.name();
 
             #[cfg(target_os = "macos")]
-            let bundle_identifier = window.bundle_identifier();
+            let bundle_identifier = window.raw_handle().bundle_identifier();
 
             #[cfg(not(target_os = "macos"))]
             let bundle_identifier = None;
