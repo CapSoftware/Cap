@@ -378,7 +378,6 @@ function RecordingItem(props: {
 					<IconCapTrash class="size-4" />
 				</TooltipIconButton>
 			</div>
-			<StatsForNerds />
 		</li>
 	);
 }

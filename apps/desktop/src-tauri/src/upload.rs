@@ -25,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     pin::pin,
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -597,17 +597,25 @@ fn retryable_client(host: String) -> reqwest::ClientBuilder {
 pub struct UploadDebugEvent {
     pub video_id: String,
     pub upload_id: String,
+    pub epoch: String,
     pub state: UploadDebugEventState,
 }
 
 #[derive(Serialize, Type, Debug, Clone)]
 pub enum UploadDebugEventState {
     Pending,
+    Presigning {
+        part_number: u32,
+        chunk_size: String,
+        total_size: String,
+    },
     Uploading {
         part_number: u32,
         chunk_size: String,
         total_size: String,
-        duration: String,
+    },
+    PendingNextChunk {
+        prev_part_number: u32,
     },
     Done,
 }
@@ -628,6 +636,11 @@ fn multipart_uploader(
     UploadDebugEvent {
         video_id: video_id.clone(),
         upload_id: upload_id.clone(),
+        epoch: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|v| v.as_millis())
+            .unwrap_or_default()
+            .to_string(),
         state: UploadDebugEventState::Pending,
     }
     .emit(&app)
@@ -643,9 +656,43 @@ fn multipart_uploader(
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
 
+            UploadDebugEvent {
+                video_id: video_id.clone(),
+                upload_id: upload_id.clone(),
+                epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|v| v.as_millis())
+                    .unwrap_or_default()
+                    .to_string(),
+                state: UploadDebugEventState::Presigning {
+                    part_number,
+                    chunk_size: size.to_string(),
+                    total_size: total_size.to_string(),
+                },
+            }
+            .emit(&app)
+            .ok();
+
             let presigned_url =
                 api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
                     .await?;
+
+            UploadDebugEvent {
+                video_id: video_id.clone(),
+                upload_id: upload_id.clone(),
+                epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|v| v.as_millis())
+                    .unwrap_or_default()
+                    .to_string(),
+                state: UploadDebugEventState::Uploading {
+                    part_number,
+                    chunk_size: size.to_string(),
+                    total_size: total_size.to_string(),
+                },
+            }
+            .emit(&app)
+            .ok();
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
@@ -670,11 +717,13 @@ fn multipart_uploader(
             UploadDebugEvent {
                 video_id: video_id.clone(),
                 upload_id: upload_id.clone(),
-                state: UploadDebugEventState::Uploading {
-                    part_number,
-                    chunk_size: size.to_string(),
-                    total_size: total_size.to_string(),
-                    duration: format!("{:?}", start.elapsed()),
+                epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|v| v.as_millis())
+                    .unwrap_or_default()
+                    .to_string(),
+                state: UploadDebugEventState::PendingNextChunk {
+                    prev_part_number: part_number
                 },
             }
             .emit(&app)
@@ -692,6 +741,11 @@ fn multipart_uploader(
         UploadDebugEvent {
             video_id: video_id.clone(),
             upload_id: upload_id.clone(),
+            epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|v| v.as_millis())
+                .unwrap_or_default()
+                .to_string(),
             state: UploadDebugEventState::Done,
         }
         .emit(&app)
