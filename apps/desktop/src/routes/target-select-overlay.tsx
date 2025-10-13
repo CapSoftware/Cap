@@ -25,6 +25,7 @@ import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
@@ -36,7 +37,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { handleRecordingResult } from "~/utils/recording";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);

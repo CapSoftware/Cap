@@ -592,13 +592,13 @@ import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./OptionsContext";
-import { handleRecordingResult } from "~/utils/recording";
 
 let hasChecked = false;
 function createUpdateCheck() {

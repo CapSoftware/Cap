@@ -1,8 +1,12 @@
 import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { commands, RecordingAction, type StartRecordingInputs } from "./tauri";
 import type { SetStoreFunction } from "solid-js/store";
-import { createOptionsQuery } from "./queries";
+import type { createOptionsQuery } from "./queries";
+import {
+	commands,
+	type RecordingAction,
+	type StartRecordingInputs,
+} from "./tauri";
 
 const buttons = {
 	yes: "Login",
