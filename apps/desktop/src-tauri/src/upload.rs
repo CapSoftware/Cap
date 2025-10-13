@@ -607,6 +607,11 @@ fn multipart_uploader(
     try_stream! {
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
+
+        let mut optimistic_presigned_url =
+            (1, api::upload_multipart_presign_part(&app, &video_id, &upload_id, 1)
+                .await?);
+
         while let Some(item) = stream.next().await {
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
             debug!("Uploading chunk {part_number} for video {video_id:?}");
@@ -614,9 +619,14 @@ fn multipart_uploader(
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
 
-            let presigned_url =
-                api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
-                    .await?;
+            // The optimistically generated `upload_multipart_presign_part` could be wrong.
+            // In that case throw it out and generate a new correct one.
+            if optimistic_presigned_url.0 != part_number {
+                warn!("Throwing out optimistic presigned URL for part {part_number} as part {part_number} was requested!");
+                optimistic_presigned_url = (part_number, api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
+                    .await?);
+            }
+            let (part_number, presigned_url) = optimistic_presigned_url;
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
@@ -644,6 +654,12 @@ fn multipart_uploader(
                 size,
                 total_size
             };
+
+            // We generate the presigned URL ahead of time.
+            // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, we aren't just doing nothing.
+            optimistic_presigned_url =
+                (part_number + 1, api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number + 1)
+                    .await?);
         }
     }
 }
