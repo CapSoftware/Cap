@@ -20,11 +20,13 @@ export default function CustomDomainPage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/onboarding/invite-team");
-			}, 100);
+			}, 200);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setLoading(false);
+			setTimeout(() => {
+				setLoading(false);
+			}, 200);
 		}
 	};
 
@@ -64,6 +66,7 @@ export default function CustomDomainPage() {
 			</Button>
 
 			<UpgradeModal
+				currentOnboardingStep="custom-domain"
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}

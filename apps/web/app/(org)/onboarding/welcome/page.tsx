@@ -36,11 +36,13 @@ export default function YourNamePage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/onboarding/organization-setup");
-			}, 100);
+			}, 200);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setLoading(false);
+			setTimeout(() => {
+				setLoading(false);
+			}, 200);
 		}
 	};
 

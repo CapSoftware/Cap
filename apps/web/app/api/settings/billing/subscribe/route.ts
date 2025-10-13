@@ -11,7 +11,8 @@ import type Stripe from "stripe";
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnboarding } = await request.json();
+	const { priceId, quantity, isOnboarding, currentOnboardingStep } =
+		await request.json();
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -66,8 +67,10 @@ export async function POST(request: NextRequest) {
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
-			success_url: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}&onboarding=${isOnboarding}`,
-			cancel_url: `${serverEnv().WEB_URL}/pricing`,
+			success_url: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+			cancel_url: isOnboarding
+				? `https://cap-web-git-onboarding-mc-ilroy.vercel.app/onboarding/${currentOnboardingStep}`
+				: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/pricing`,
 			allow_promotion_codes: true,
 			metadata: {
 				platform: "web",

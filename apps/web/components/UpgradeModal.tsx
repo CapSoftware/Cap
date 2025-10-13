@@ -28,6 +28,7 @@ interface UpgradeModalProps {
 	open: boolean;
 	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
+	currentOnboardingStep?: "custom-domain" | "invite-team";
 }
 
 const modalVariants = {
@@ -61,6 +62,7 @@ export const UpgradeModal = ({
 	open,
 	onOpenChange,
 	onboarding = false,
+	currentOnboardingStep = "custom-domain",
 }: UpgradeModalProps) => {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
 
@@ -151,6 +153,7 @@ export const UpgradeModal = ({
 				priceId: planId,
 				quantity: proQuantity,
 				isOnboarding: onboarding,
+				currentOnboardingStep: currentOnboardingStep,
 			}),
 		});
 		const data = await response.json();

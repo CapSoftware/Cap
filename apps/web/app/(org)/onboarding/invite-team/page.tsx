@@ -45,11 +45,13 @@ export default function InviteTeamPage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/dashboard/caps");
-			}, 100);
+			}, 200);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setLoading(false);
+			setTimeout(() => {
+				setLoading(false);
+			}, 200);
 		}
 	};
 
@@ -69,6 +71,7 @@ export default function InviteTeamPage() {
 				priceId: planId,
 				quantity: users,
 				isOnboarding: true,
+				currentOnboardingStep: "invite-team",
 			}),
 		});
 		const data = await response.json();
