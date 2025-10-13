@@ -46,6 +46,7 @@ export default function CustomDomainPage() {
 			<Button
 				onClick={() => setShowUpgradeModal(true)}
 				className="w-full"
+				disabled={loading}
 				variant="blue"
 			>
 				Upgrade to Pro
@@ -63,6 +64,7 @@ export default function CustomDomainPage() {
 			</Button>
 
 			<UpgradeModal
+				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}
 			/>

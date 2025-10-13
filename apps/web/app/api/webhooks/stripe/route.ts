@@ -239,15 +239,41 @@ export const POST = async (req: Request) => {
 					inviteQuota,
 				});
 
-				await db()
-					.update(users)
-					.set({
-						stripeSubscriptionId: session.subscription as string,
-						stripeSubscriptionStatus: subscription.status,
-						stripeCustomerId: customer.id,
-						inviteQuota: inviteQuota,
-					})
-					.where(eq(users.id, dbUser.id));
+				// Check if this is an onboarding purchase
+				const isOnboarding = session.metadata?.isOnboarding === "true";
+
+				const updateData: {
+					stripeSubscriptionId: string;
+					stripeSubscriptionStatus: string;
+					stripeCustomerId: string;
+					inviteQuota: number;
+					onboardingSteps?: {
+						welcome: boolean;
+						organizationSetup: boolean;
+						customDomain: boolean;
+						inviteTeam: boolean;
+					};
+				} = {
+					stripeSubscriptionId: session.subscription as string,
+					stripeSubscriptionStatus: subscription.status,
+					stripeCustomerId: customer.id,
+					inviteQuota: inviteQuota,
+				};
+
+				// If this is an onboarding purchase, mark all onboarding steps as complete
+				if (isOnboarding) {
+					updateData.onboardingSteps = {
+						welcome: true,
+						organizationSetup: true,
+						customDomain: true,
+						inviteTeam: true,
+					};
+					console.log(
+						"Onboarding purchase detected, marking all steps complete",
+					);
+				}
+
+				await db().update(users).set(updateData).where(eq(users.id, dbUser.id));
 
 				console.log("Successfully updated user in database");
 

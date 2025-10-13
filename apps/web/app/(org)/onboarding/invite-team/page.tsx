@@ -65,7 +65,11 @@ export default function InviteTeamPage() {
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ priceId: planId, quantity: users }),
+			body: JSON.stringify({
+				priceId: planId,
+				quantity: users,
+				isOnboarding: true,
+			}),
 		});
 		const data = await response.json();
 

@@ -26,6 +26,7 @@ import { toast } from "sonner";
 
 interface UpgradeModalProps {
 	open: boolean;
+	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
 }
 
@@ -56,7 +57,11 @@ const modalVariants = {
 	},
 };
 
-export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
+export const UpgradeModal = ({
+	open,
+	onOpenChange,
+	onboarding = false,
+}: UpgradeModalProps) => {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
 
 	const [proLoading, setProLoading] = useState(false);
@@ -142,7 +147,11 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 			headers: {
 				"Content-Type": "application/json",
 			},
-			body: JSON.stringify({ priceId: planId, quantity: proQuantity }),
+			body: JSON.stringify({
+				priceId: planId,
+				quantity: proQuantity,
+				isOnboarding: onboarding,
+			}),
 		});
 		const data = await response.json();
 
