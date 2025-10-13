@@ -1,26 +1,27 @@
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::frame;
-use std::path::PathBuf;
+use std::{ops::Sub, path::PathBuf, time::Duration};
 use tracing::{debug, info};
 
+// before pausing at all, subtract 0.
+// on pause, record last frame time.
+// on resume, store last frame time and clear offset timestamp
+// on next frame, set offset timestamp and subtract (offset timestamp - last frame time - previous offset)
+// on next pause, store (offset timestamp - last frame time) into previous offset
+
 pub struct MP4Encoder {
-    #[allow(unused)]
-    tag: &'static str,
-    #[allow(unused)]
-    last_pts: Option<i64>,
     #[allow(unused)]
     config: VideoInfo,
     asset_writer: arc::R<av::AssetWriter>,
     video_input: arc::R<av::AssetWriterInput>,
     audio_input: Option<arc::R<av::AssetWriterInput>>,
-    start_time: cm::Time,
-    first_timestamp: Option<cm::Time>,
-    segment_first_timestamp: Option<cm::Time>,
-    last_timestamp: Option<cm::Time>,
+    most_recent_timestamp: Option<Duration>,
+    pause_timestamp: Option<Duration>,
+    timestamp_offset: Duration,
     is_writing: bool,
     is_paused: bool,
-    elapsed_duration: cm::Time,
+    // elapsed_duration: cm::Time,
     video_frames_appended: usize,
     audio_frames_appended: usize,
 }
@@ -46,7 +47,7 @@ pub enum InitError {
 #[derive(thiserror::Error, Debug)]
 pub enum QueueVideoFrameError {
     #[error("AppendError/{0}")]
-    AppendError(&'static cidre::ns::Exception),
+    AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
 }
@@ -67,10 +68,9 @@ pub enum QueueAudioFrameError {
 
 impl MP4Encoder {
     pub fn init(
-        tag: &'static str,
+        output: PathBuf,
         video_config: VideoInfo,
         audio_config: Option<AudioInfo>,
-        output: PathBuf,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
         debug!("{video_config:#?}");
@@ -176,19 +176,15 @@ impl MP4Encoder {
         asset_writer.start_writing();
 
         Ok(Self {
-            tag,
-            last_pts: None,
             config: video_config,
             audio_input,
             asset_writer,
             video_input,
-            first_timestamp: None,
-            segment_first_timestamp: None,
-            last_timestamp: None,
+            most_recent_timestamp: None,
+            pause_timestamp: None,
+            timestamp_offset: Duration::ZERO,
             is_writing: false,
             is_paused: false,
-            start_time: cm::Time::zero(),
-            elapsed_duration: cm::Time::zero(),
             video_frames_appended: 0,
             audio_frames_appended: 0,
         })
@@ -199,35 +195,36 @@ impl MP4Encoder {
     pub fn queue_video_frame(
         &mut self,
         frame: &cidre::cm::SampleBuf,
+        timestamp: Duration,
     ) -> Result<(), QueueVideoFrameError> {
         if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
             return Ok(());
-        }
-
-        let time = frame.pts();
-
-        let new_pts = self
-            .elapsed_duration
-            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
+        };
 
         if !self.is_writing {
             self.is_writing = true;
-            self.asset_writer.start_session_at_src_time(new_pts);
-            self.start_time = time;
+            self.asset_writer
+                .start_session_at_src_time(cm::Time::new(timestamp.as_millis() as i64, 1_000));
+        }
+
+        self.most_recent_timestamp = Some(timestamp);
+
+        if let Some(pause_timestamp) = self.pause_timestamp {
+            self.timestamp_offset += timestamp - pause_timestamp;
+            self.pause_timestamp = None;
         }
 
         let mut timing = frame.timing_info(0).unwrap();
-        timing.pts = new_pts;
+        timing.pts = cm::Time::new(
+            timestamp.sub(self.timestamp_offset).as_millis() as i64,
+            1_000,
+        );
         let frame = frame.copy_with_new_timing(&[timing]).unwrap();
 
         self.video_input
             .append_sample_buf(&frame)
-            .map_err(QueueVideoFrameError::AppendError)
+            .map_err(|e| QueueVideoFrameError::AppendError(e.retained()))
             .and_then(|v| v.then_some(()).ok_or(QueueVideoFrameError::Failed))?;
-
-        self.first_timestamp.get_or_insert(time);
-        self.segment_first_timestamp.get_or_insert(time);
-        self.last_timestamp = Some(time);
 
         self.video_frames_appended += 1;
 
@@ -236,7 +233,11 @@ impl MP4Encoder {
 
     /// Expects frames with pts values relative to the first frame's pts
     /// in the timebase of 1 / sample rate
-    pub fn queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), QueueAudioFrameError> {
+    pub fn queue_audio_frame(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+    ) -> Result<(), QueueAudioFrameError> {
         if self.is_paused || !self.is_writing {
             return Ok(());
         }
@@ -279,12 +280,10 @@ impl MP4Encoder {
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
 
-        let time = cm::Time::new(frame.pts().unwrap_or(0), frame.rate() as i32);
-
-        let pts = self
-            .start_time
-            .add(self.elapsed_duration)
-            .add(time.sub(self.segment_first_timestamp.unwrap()));
+        let pts = cm::Time::new(
+            (timestamp.sub(self.timestamp_offset).as_secs_f64() * frame.rate() as f64) as i64,
+            frame.rate() as i32,
+        );
 
         let buffer = cm::SampleBuf::create(
             Some(&block_buf),
@@ -311,18 +310,15 @@ impl MP4Encoder {
     }
 
     pub fn pause(&mut self) {
-        if self.is_paused {
+        if self.is_paused || !self.is_writing {
             return;
         }
 
-        let clock = cm::Clock::host_time_clock();
-        let time = clock.time();
+        let Some(timestamp) = self.most_recent_timestamp else {
+            return;
+        };
 
-        self.elapsed_duration = self
-            .elapsed_duration
-            .add(time.sub(self.segment_first_timestamp.unwrap()));
-        self.segment_first_timestamp = None;
-        self.last_timestamp = None;
+        self.pause_timestamp = Some(timestamp);
         self.is_paused = true;
     }
 
@@ -339,10 +335,16 @@ impl MP4Encoder {
             return;
         }
 
+        let Some(most_recent_timestamp) = self.most_recent_timestamp else {
+            return;
+        };
+
         self.is_writing = false;
 
-        self.asset_writer
-            .end_session_at_src_time(self.last_timestamp.unwrap_or(cm::Time::zero()));
+        self.asset_writer.end_session_at_src_time(cm::Time::new(
+            most_recent_timestamp.sub(self.timestamp_offset).as_millis() as i64,
+            1000,
+        ));
         self.video_input.mark_as_finished();
         if let Some(i) = self.audio_input.as_mut() {
             i.mark_as_finished()
@@ -353,10 +355,16 @@ impl MP4Encoder {
         debug!("Appended {} video frames", self.video_frames_appended);
         debug!("Appended {} audio frames", self.audio_frames_appended);
 
-        debug!("First video timestamp: {:?}", self.first_timestamp);
-        debug!("Last video timestamp: {:?}", self.last_timestamp);
+        // debug!("First video timestamp: {:?}", self.first_timestamp);
+        // debug!("Last video timestamp: {:?}", self.last_pts);
 
         info!("Finished writing");
+    }
+}
+
+impl Drop for MP4Encoder {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 

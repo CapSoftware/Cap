@@ -11,16 +11,15 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
+import { dub, userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, gt, gte, lt, lte, or } from "drizzle-orm";
+import { and, count, eq, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
-import { dub } from "@/utils/dub";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -41,7 +40,12 @@ app.get(
 			width: stringOrNumberOptional,
 			height: stringOrNumberOptional,
 			fps: stringOrNumberOptional,
-			orgId: z.string().optional(),
+			orgId: z
+				.string()
+				.optional()
+				.transform((v) =>
+					v ? Organisation.OrganisationId.make(v) : undefined,
+				),
 		}),
 	),
 	async (c) => {
@@ -125,7 +129,7 @@ app.get(
 				.orderBy(organizations.createdAt);
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
-			let videoOrgId: string;
+			let videoOrgId: Organisation.OrganisationId;
 			if (orgId) {
 				// Hard error if the user requested org is non-existent or they don't have access.
 				if (!userOrgIds.includes(orgId))

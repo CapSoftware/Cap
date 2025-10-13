@@ -1,19 +1,28 @@
 use cap_fail::fail;
+use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CursorClickEvent, CursorMoveEvent, Platform, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment,
-    ZoomMode, ZoomSegment, cursor::CursorEvents,
+    CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
+    RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
+    TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
+    cursor::CursorEvents,
 };
+use cap_recording::PipelineDoneError;
+use cap_recording::feeds::camera::CameraFeedLock;
+use cap_recording::feeds::microphone::MicrophoneFeedLock;
 use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
-    sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+    sources::{
+        screen_capture,
+        screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
+    },
     studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+use futures::stream;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
@@ -26,39 +35,44 @@ use std::{
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
-use tracing::{debug, error, info, warn};
+use tracing::*;
 
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
+    api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
+    thumbnails::*,
     upload::{
-        InstantMultipartUpload, build_video_meta, create_or_get_video, prepare_screenshot_upload,
-        upload_video,
+        InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
 
+pub struct InProgressRecordingCommon {
+    pub target_name: String,
+    pub inputs: StartRecordingInputs,
+    pub recording_dir: PathBuf,
+}
+
 pub enum InProgressRecording {
     Instant {
-        target_name: String,
         handle: instant_recording::ActorHandle,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
-        inputs: StartRecordingInputs,
-        recording_dir: PathBuf,
+        common: InProgressRecordingCommon,
+        // camera isn't used as part of recording pipeline so we hold lock here
+        camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
-        target_name: String,
         handle: studio_recording::ActorHandle,
-        inputs: StartRecordingInputs,
-        recording_dir: PathBuf,
+        common: InProgressRecordingCommon,
     },
 }
 
@@ -72,58 +86,61 @@ impl InProgressRecording {
 
     pub fn inputs(&self) -> &StartRecordingInputs {
         match self {
-            Self::Instant { inputs, .. } => inputs,
-            Self::Studio { inputs, .. } => inputs,
+            Self::Instant { common, .. } => &common.inputs,
+            Self::Studio { common, .. } => &common.inputs,
         }
     }
 
-    pub async fn pause(&self) -> Result<(), RecordingError> {
+    pub async fn pause(&self) -> anyhow::Result<()> {
         match self {
             Self::Instant { handle, .. } => handle.pause().await,
             Self::Studio { handle, .. } => handle.pause().await,
         }
     }
 
-    pub async fn resume(&self) -> Result<(), String> {
+    pub async fn resume(&self) -> anyhow::Result<()> {
         match self {
-            Self::Instant { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
-            Self::Studio { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
+            Self::Instant { handle, .. } => handle.resume().await,
+            Self::Studio { handle, .. } => handle.resume().await,
         }
     }
 
     pub fn recording_dir(&self) -> &PathBuf {
         match self {
-            Self::Instant { recording_dir, .. } => recording_dir,
-            Self::Studio { recording_dir, .. } => recording_dir,
+            Self::Instant { common, .. } => &common.recording_dir,
+            Self::Studio { common, .. } => &common.recording_dir,
         }
     }
 
-    pub async fn stop(self) -> Result<CompletedRecording, RecordingError> {
+    pub async fn stop(self) -> anyhow::Result<CompletedRecording> {
         Ok(match self {
             Self::Instant {
                 handle,
                 progressive_upload,
                 video_upload_info,
-                target_name,
+                common,
                 ..
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
                 progressive_upload,
                 video_upload_info,
-                target_name,
+                target_name: common.target_name,
             },
-            Self::Studio {
-                handle,
-                target_name,
-                ..
-            } => CompletedRecording::Studio {
+            Self::Studio { handle, common, .. } => CompletedRecording::Studio {
                 recording: handle.stop().await?,
-                target_name,
+                target_name: common.target_name,
             },
         })
     }
 
-    pub async fn cancel(self) -> Result<(), RecordingError> {
+    pub fn done_fut(&self) -> cap_recording::DoneFut {
+        match self {
+            Self::Instant { handle, .. } => handle.done_fut(),
+            Self::Studio { handle, .. } => handle.done_fut(),
+        }
+    }
+
+    pub async fn cancel(self) -> anyhow::Result<()> {
         match self {
             Self::Instant { handle, .. } => handle.cancel().await,
             Self::Studio { handle, .. } => handle.cancel().await,
@@ -142,11 +159,11 @@ pub enum CompletedRecording {
     Instant {
         recording: instant_recording::CompletedRecording,
         target_name: String,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: studio_recording::CompletedStudioRecording,
+        recording: studio_recording::CompletedRecording,
         target_name: String,
     },
 }
@@ -191,823 +208,24 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     cap_camera::list_cameras().collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CaptureDisplayWithThumbnail {
-    pub id: scap_targets::DisplayId,
-    pub name: String,
-    pub refresh_rate: u32,
-    pub thumbnail: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct CaptureWindowWithThumbnail {
-    pub id: scap_targets::WindowId,
-    pub owner_name: String,
-    pub name: String,
-    pub bounds: scap_targets::bounds::LogicalBounds,
-    pub refresh_rate: u32,
-    pub thumbnail: Option<String>,
-    pub app_icon: Option<String>,
-}
-
-#[cfg(any(target_os = "macos", windows))]
-const THUMBNAIL_WIDTH: u32 = 320;
-#[cfg(any(target_os = "macos", windows))]
-const THUMBNAIL_HEIGHT: u32 = 180;
-
-#[cfg(any(target_os = "macos", windows))]
-fn normalize_thumbnail_dimensions(image: &image::RgbaImage) -> image::RgbaImage {
-    let width = image.width();
-    let height = image.height();
-
-    if width == THUMBNAIL_WIDTH && height == THUMBNAIL_HEIGHT {
-        return image.clone();
-    }
-
-    if width == 0 || height == 0 {
-        return image::RgbaImage::from_pixel(
-            THUMBNAIL_WIDTH,
-            THUMBNAIL_HEIGHT,
-            image::Rgba([0, 0, 0, 0]),
-        );
-    }
-
-    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
-        .min(THUMBNAIL_HEIGHT as f32 / height as f32)
-        .max(f32::MIN_POSITIVE);
-
-    let scaled_width = (width as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_WIDTH as f32) as u32;
-    let scaled_height = (height as f32 * scale)
-        .round()
-        .clamp(1.0, THUMBNAIL_HEIGHT as f32) as u32;
-
-    let resized = image::imageops::resize(
-        image,
-        scaled_width.max(1),
-        scaled_height.max(1),
-        image::imageops::FilterType::Lanczos3,
-    );
-
-    let mut canvas =
-        image::RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
-
-    let offset_x = (THUMBNAIL_WIDTH - scaled_width) / 2;
-    let offset_y = (THUMBNAIL_HEIGHT - scaled_height) / 2;
-
-    image::imageops::overlay(&mut canvas, &resized, offset_x as i64, offset_y as i64);
-
-    canvas
-}
-
-#[cfg(target_os = "macos")]
-async fn capture_thumbnail_from_filter(filter: &cidre::sc::ContentFilter) -> Option<String> {
-    use cidre::{cv, sc};
-    use image::{ImageEncoder, RgbaImage, codecs::png::PngEncoder};
-    use std::io::Cursor;
-
-    let mut config = sc::StreamCfg::new();
-    config.set_width(THUMBNAIL_WIDTH as usize);
-    config.set_height(THUMBNAIL_HEIGHT as usize);
-    config.set_shows_cursor(false);
-
-    let sample_buf =
-        match unsafe { sc::ScreenshotManager::capture_sample_buf(filter, &config) }.await {
-            Ok(buf) => buf,
-            Err(err) => {
-                warn!(error = ?err, "Failed to capture sample buffer for thumbnail");
-                return None;
-            }
-        };
-
-    let Some(image_buf) = sample_buf.image_buf() else {
-        warn!("Sample buffer missing image data");
-        return None;
-    };
-    let mut image_buf = image_buf.retained();
-
-    let width = image_buf.width();
-    let height = image_buf.height();
-    if width == 0 || height == 0 {
-        warn!(
-            width = width,
-            height = height,
-            "Captured thumbnail had empty dimensions"
-        );
-        return None;
-    }
-
-    let pixel_format = image_buf.pixel_format();
-
-    let lock =
-        match PixelBufferLock::new(image_buf.as_mut(), cv::pixel_buffer::LockFlags::READ_ONLY) {
-            Ok(lock) => lock,
-            Err(err) => {
-                warn!(error = ?err, "Failed to lock pixel buffer for thumbnail");
-                return None;
-            }
-        };
-
-    let rgba_data = match pixel_format {
-        cv::PixelFormat::_32_BGRA
-        | cv::PixelFormat::_32_RGBA
-        | cv::PixelFormat::_32_ARGB
-        | cv::PixelFormat::_32_ABGR => {
-            convert_32bit_pixel_buffer(&lock, width, height, pixel_format)?
-        }
-        cv::PixelFormat::_420V => {
-            convert_nv12_pixel_buffer(&lock, width, height, Nv12Range::Video)?
-        }
-        other => {
-            warn!(?other, "Unsupported pixel format for thumbnail capture");
-            return None;
-        }
-    };
-
-    let Some(img) = RgbaImage::from_raw(width as u32, height as u32, rgba_data) else {
-        warn!("Failed to construct RGBA image for thumbnail");
-        return None;
-    };
-    let thumbnail = normalize_thumbnail_dimensions(&img);
-    let mut png_data = Cursor::new(Vec::new());
-    let encoder = PngEncoder::new(&mut png_data);
-    if let Err(err) = encoder.write_image(
-        thumbnail.as_raw(),
-        thumbnail.width(),
-        thumbnail.height(),
-        image::ColorType::Rgba8.into(),
-    ) {
-        warn!(error = ?err, "Failed to encode thumbnail as PNG");
-        return None;
-    }
-
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        png_data.into_inner(),
-    ))
-}
-
-#[cfg(target_os = "macos")]
-fn convert_32bit_pixel_buffer(
-    lock: &PixelBufferLock<'_>,
-    width: usize,
-    height: usize,
-    pixel_format: cidre::cv::PixelFormat,
-) -> Option<Vec<u8>> {
-    let base_ptr = lock.base_address();
-    if base_ptr.is_null() {
-        warn!("Pixel buffer base address was null");
-        return None;
-    }
-
-    let bytes_per_row = lock.bytes_per_row();
-    let total_len = bytes_per_row.checked_mul(height)?;
-    let raw_data = unsafe { std::slice::from_raw_parts(base_ptr, total_len) };
-
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        let row_start = y * bytes_per_row;
-        let row_end = row_start + width * 4;
-        if row_end > raw_data.len() {
-            warn!(
-                row_start = row_start,
-                row_end = row_end,
-                raw_len = raw_data.len(),
-                "Row bounds exceeded raw data length during thumbnail capture",
-            );
-            return None;
-        }
-
-        let row = &raw_data[row_start..row_end];
-        for chunk in row.chunks_exact(4) {
-            match pixel_format {
-                cidre::cv::PixelFormat::_32_BGRA => {
-                    rgba_data.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]])
-                }
-                cidre::cv::PixelFormat::_32_RGBA => rgba_data.extend_from_slice(chunk),
-                cidre::cv::PixelFormat::_32_ARGB => {
-                    rgba_data.extend_from_slice(&[chunk[1], chunk[2], chunk[3], chunk[0]])
-                }
-                cidre::cv::PixelFormat::_32_ABGR => {
-                    rgba_data.extend_from_slice(&[chunk[3], chunk[2], chunk[1], chunk[0]])
-                }
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    Some(rgba_data)
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Copy, Clone)]
-enum Nv12Range {
-    Video,
-    Full,
-}
-
-#[cfg(target_os = "macos")]
-fn convert_nv12_pixel_buffer(
-    lock: &PixelBufferLock<'_>,
-    width: usize,
-    height: usize,
-    range: Nv12Range,
-) -> Option<Vec<u8>> {
-    let y_base = lock.base_address_of_plane(0);
-    let uv_base = lock.base_address_of_plane(1);
-    if y_base.is_null() || uv_base.is_null() {
-        warn!("NV12 plane base address was null");
-        return None;
-    }
-
-    let y_stride = lock.bytes_per_row_of_plane(0);
-    let uv_stride = lock.bytes_per_row_of_plane(1);
-    if y_stride == 0 || uv_stride == 0 {
-        warn!(y_stride, uv_stride, "NV12 plane bytes per row was zero");
-        return None;
-    }
-
-    let y_plane_height = lock.height_of_plane(0);
-    let uv_plane_height = lock.height_of_plane(1);
-    if y_plane_height < height || uv_plane_height < (height + 1) / 2 {
-        warn!(
-            y_plane_height,
-            uv_plane_height,
-            expected_y = height,
-            expected_uv = (height + 1) / 2,
-            "NV12 plane height smaller than expected",
-        );
-        return None;
-    }
-
-    let y_plane = unsafe { std::slice::from_raw_parts(y_base, y_stride * y_plane_height) };
-    let uv_plane = unsafe { std::slice::from_raw_parts(uv_base, uv_stride * uv_plane_height) };
-
-    let mut rgba_data = vec![0u8; width * height * 4];
-
-    for y_idx in 0..height {
-        let y_row_start = y_idx * y_stride;
-        if y_row_start + width > y_plane.len() {
-            warn!(
-                y_row_start,
-                width,
-                y_plane_len = y_plane.len(),
-                "Y row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let y_row = &y_plane[y_row_start..y_row_start + width];
-
-        let uv_row_start = (y_idx / 2) * uv_stride;
-        if uv_row_start + width > uv_plane.len() {
-            warn!(
-                uv_row_start,
-                width,
-                uv_plane_len = uv_plane.len(),
-                "UV row exceeded plane length during conversion",
-            );
-            return None;
-        }
-        let uv_row = &uv_plane[uv_row_start..uv_row_start + width];
-
-        for x in 0..width {
-            let uv_index = (x / 2) * 2;
-            if uv_index + 1 >= uv_row.len() {
-                warn!(
-                    uv_index,
-                    uv_row_len = uv_row.len(),
-                    "UV index out of bounds during conversion",
-                );
-                return None;
-            }
-
-            let y_val = y_row[x];
-            let cb = uv_row[uv_index];
-            let cr = uv_row[uv_index + 1];
-            let (r, g, b) = ycbcr_to_rgb(y_val, cb, cr, range);
-            let out = (y_idx * width + x) * 4;
-            rgba_data[out] = r;
-            rgba_data[out + 1] = g;
-            rgba_data[out + 2] = b;
-            rgba_data[out + 3] = 255;
-        }
-    }
-
-    Some(rgba_data)
-}
-
-#[cfg(target_os = "macos")]
-fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
-    let y = y as f32;
-    let cb = cb as f32 - 128.0;
-    let cr = cr as f32 - 128.0;
-
-    let (y_value, scale) = match range {
-        Nv12Range::Video => ((y - 16.0).max(0.0), 1.164383_f32),
-        Nv12Range::Full => (y, 1.0_f32),
-    };
-
-    let r = scale * y_value + 1.596027_f32 * cr;
-    let g = scale * y_value - 0.391762_f32 * cb - 0.812968_f32 * cr;
-    let b = scale * y_value + 2.017232_f32 * cb;
-
-    (clamp_channel(r), clamp_channel(g), clamp_channel(b))
-}
-
-#[cfg(target_os = "macos")]
-fn clamp_channel(value: f32) -> u8 {
-    value.max(0.0).min(255.0) as u8
-}
-
-#[cfg(target_os = "macos")]
-struct PixelBufferLock<'a> {
-    buffer: &'a mut cidre::cv::PixelBuf,
-    flags: cidre::cv::pixel_buffer::LockFlags,
-}
-
-#[cfg(target_os = "macos")]
-impl<'a> PixelBufferLock<'a> {
-    fn new(
-        buffer: &'a mut cidre::cv::PixelBuf,
-        flags: cidre::cv::pixel_buffer::LockFlags,
-    ) -> cidre::os::Result<Self> {
-        unsafe { buffer.lock_base_addr(flags) }.result()?;
-        Ok(Self { buffer, flags })
-    }
-
-    fn base_address(&self) -> *const u8 {
-        unsafe { cv_pixel_buffer_get_base_address(self.buffer) as *const u8 }
-    }
-
-    fn bytes_per_row(&self) -> usize {
-        unsafe { cv_pixel_buffer_get_bytes_per_row(self.buffer) }
-    }
-
-    fn base_address_of_plane(&self, plane_index: usize) -> *const u8 {
-        unsafe { cv_pixel_buffer_get_base_address_of_plane(self.buffer, plane_index) as *const u8 }
-    }
-
-    fn bytes_per_row_of_plane(&self, plane_index: usize) -> usize {
-        unsafe { cv_pixel_buffer_get_bytes_per_row_of_plane(self.buffer, plane_index) }
-    }
-
-    fn height_of_plane(&self, plane_index: usize) -> usize {
-        unsafe { cv_pixel_buffer_get_height_of_plane(self.buffer, plane_index) }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for PixelBufferLock<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = self.buffer.unlock_lock_base_addr(self.flags);
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn cv_pixel_buffer_get_base_address(buffer: &cidre::cv::PixelBuf) -> *mut std::ffi::c_void {
-    unsafe extern "C" {
-        fn CVPixelBufferGetBaseAddress(pixel_buffer: &cidre::cv::PixelBuf)
-        -> *mut std::ffi::c_void;
-    }
-
-    unsafe { CVPixelBufferGetBaseAddress(buffer) }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn cv_pixel_buffer_get_bytes_per_row(buffer: &cidre::cv::PixelBuf) -> usize {
-    unsafe extern "C" {
-        fn CVPixelBufferGetBytesPerRow(pixel_buffer: &cidre::cv::PixelBuf) -> usize;
-    }
-
-    unsafe { CVPixelBufferGetBytesPerRow(buffer) }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn cv_pixel_buffer_get_base_address_of_plane(
-    buffer: &cidre::cv::PixelBuf,
-    plane_index: usize,
-) -> *mut std::ffi::c_void {
-    unsafe extern "C" {
-        fn CVPixelBufferGetBaseAddressOfPlane(
-            pixel_buffer: &cidre::cv::PixelBuf,
-            plane_index: usize,
-        ) -> *mut std::ffi::c_void;
-    }
-
-    unsafe { CVPixelBufferGetBaseAddressOfPlane(buffer, plane_index) }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn cv_pixel_buffer_get_bytes_per_row_of_plane(
-    buffer: &cidre::cv::PixelBuf,
-    plane_index: usize,
-) -> usize {
-    unsafe extern "C" {
-        fn CVPixelBufferGetBytesPerRowOfPlane(
-            pixel_buffer: &cidre::cv::PixelBuf,
-            plane_index: usize,
-        ) -> usize;
-    }
-
-    unsafe { CVPixelBufferGetBytesPerRowOfPlane(buffer, plane_index) }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn cv_pixel_buffer_get_height_of_plane(
-    buffer: &cidre::cv::PixelBuf,
-    plane_index: usize,
-) -> usize {
-    unsafe extern "C" {
-        fn CVPixelBufferGetHeightOfPlane(
-            pixel_buffer: &cidre::cv::PixelBuf,
-            plane_index: usize,
-        ) -> usize;
-    }
-
-    unsafe { CVPixelBufferGetHeightOfPlane(buffer, plane_index) }
-}
-
-#[cfg(target_os = "macos")]
-async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<String> {
-    let filter = display.raw_handle().as_content_filter().await?;
-    capture_thumbnail_from_filter(filter.as_ref()).await
-}
-
-#[cfg(windows)]
-async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<String> {
-    use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
-    use scap_direct3d::{Capturer, Settings};
-    use std::io::Cursor;
-
-    let item = display.raw_handle().try_as_capture_item().ok()?;
-
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    let settings = Settings {
-        is_cursor_capture_enabled: Some(false),
-        pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
-        ..Default::default()
-    };
-
-    let mut capturer = Capturer::new(
-        item,
-        settings.clone(),
-        move |frame| {
-            let _ = tx.send(frame);
-            Ok(())
-        },
-        || Ok(()),
-        None,
-    )
-    .ok()?;
-
-    capturer.start().ok()?;
-
-    let frame = rx.recv_timeout(std::time::Duration::from_secs(2)).ok()?;
-    let _ = capturer.stop();
-
-    let width = frame.width();
-    let height = frame.height();
-
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let frame_buffer = frame.as_buffer().ok()?;
-    let data = frame_buffer.data();
-    let stride = frame_buffer.stride() as usize;
-
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-
-    let Some(row_bytes) = width_usize.checked_mul(4) else {
-        warn!(
-            frame_width = width,
-            "Windows display thumbnail row size overflowed"
-        );
-        return None;
-    };
-
-    if stride < row_bytes {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            expected_row_bytes = row_bytes,
-            "Windows display thumbnail stride smaller than row size"
-        );
-        return None;
-    }
-
-    let rows_before_last = height_usize.saturating_sub(1);
-    let Some(last_row_start) = rows_before_last.checked_mul(stride) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            "Windows display thumbnail row offset overflowed"
-        );
-        return None;
-    };
-
-    let Some(required_len) = last_row_start.checked_add(row_bytes) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            required_row_bytes = row_bytes,
-            "Windows display thumbnail required length overflowed"
-        );
-        return None;
-    };
-
-    if data.len() < required_len {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            frame_data_len = data.len(),
-            expected_len = required_len,
-            "Windows display thumbnail frame buffer missing pixel data"
-        );
-        return None;
-    }
-
-    let Some(rgba_capacity) = height_usize.checked_mul(row_bytes) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            total_row_bytes = row_bytes,
-            "Windows display thumbnail RGBA capacity overflowed"
-        );
-        return None;
-    };
-
-    let mut rgba_data = Vec::with_capacity(rgba_capacity);
-    for y in 0..height_usize {
-        let row_start = y * stride;
-        let row_end = row_start + row_bytes;
-        rgba_data.extend_from_slice(&data[row_start..row_end]);
-    }
-
-    let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data) else {
-        warn!("Windows display thumbnail failed to construct RGBA image");
-        return None;
-    };
-    let thumbnail = normalize_thumbnail_dimensions(&img);
-
-    let mut png_data = Cursor::new(Vec::new());
-    let encoder = PngEncoder::new(&mut png_data);
-    encoder
-        .write_image(
-            thumbnail.as_raw(),
-            thumbnail.width(),
-            thumbnail.height(),
-            ColorType::Rgba8.into(),
-        )
-        .ok()?;
-
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        png_data.into_inner(),
-    ))
-}
-
-#[cfg(target_os = "macos")]
-async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<String> {
-    let sc_window = window.raw_handle().as_sc().await?;
-    let filter = cidre::sc::ContentFilter::with_desktop_independent_window(&sc_window);
-    capture_thumbnail_from_filter(filter.as_ref()).await
-}
-
-#[cfg(windows)]
-async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<String> {
-    use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
-    use scap_direct3d::{Capturer, Settings};
-    use std::io::Cursor;
-
-    let item = window.raw_handle().try_as_capture_item().ok()?;
-
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    let settings = Settings {
-        is_cursor_capture_enabled: Some(false),
-        pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
-        ..Default::default()
-    };
-
-    let mut capturer = Capturer::new(
-        item,
-        settings.clone(),
-        move |frame| {
-            let _ = tx.send(frame);
-            Ok(())
-        },
-        || Ok(()),
-        None,
-    )
-    .ok()?;
-
-    capturer.start().ok()?;
-
-    let frame = rx.recv_timeout(std::time::Duration::from_secs(2)).ok()?;
-    let _ = capturer.stop();
-
-    let width = frame.width();
-    let height = frame.height();
-
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let frame_buffer = frame.as_buffer().ok()?;
-    let data = frame_buffer.data();
-    let stride = frame_buffer.stride() as usize;
-
-    let width_usize = width as usize;
-    let height_usize = height as usize;
-
-    let Some(row_bytes) = width_usize.checked_mul(4) else {
-        warn!(
-            frame_width = width,
-            "Windows window thumbnail row size overflowed"
-        );
-        return None;
-    };
-
-    if stride < row_bytes {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            expected_row_bytes = row_bytes,
-            "Windows window thumbnail stride smaller than row size"
-        );
-        return None;
-    }
-
-    let rows_before_last = height_usize.saturating_sub(1);
-    let Some(last_row_start) = rows_before_last.checked_mul(stride) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            "Windows window thumbnail row offset overflowed"
-        );
-        return None;
-    };
-
-    let Some(required_len) = last_row_start.checked_add(row_bytes) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            required_row_bytes = row_bytes,
-            "Windows window thumbnail required length overflowed"
-        );
-        return None;
-    };
-
-    if data.len() < required_len {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            stride,
-            frame_data_len = data.len(),
-            expected_len = required_len,
-            "Windows window thumbnail frame buffer missing pixel data"
-        );
-        return None;
-    }
-
-    let Some(rgba_capacity) = height_usize.checked_mul(row_bytes) else {
-        warn!(
-            frame_width = width,
-            frame_height = height,
-            total_row_bytes = row_bytes,
-            "Windows window thumbnail RGBA capacity overflowed"
-        );
-        return None;
-    };
-
-    let mut rgba_data = Vec::with_capacity(rgba_capacity);
-    for y in 0..height_usize {
-        let row_start = y * stride;
-        let row_end = row_start + row_bytes;
-        rgba_data.extend_from_slice(&data[row_start..row_end]);
-    }
-
-    let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data) else {
-        warn!("Windows window thumbnail failed to construct RGBA image");
-        return None;
-    };
-    let thumbnail = normalize_thumbnail_dimensions(&img);
-
-    let mut png_data = Cursor::new(Vec::new());
-    let encoder = PngEncoder::new(&mut png_data);
-    encoder
-        .write_image(
-            thumbnail.as_raw(),
-            thumbnail.width(),
-            thumbnail.height(),
-            ColorType::Rgba8.into(),
-        )
-        .ok()?;
-
-    Some(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        png_data.into_inner(),
-    ))
-}
-
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| collect_displays_with_thumbnails())
-        .await
-        .map_err(|err| err.to_string())?
+    tokio::task::spawn_blocking(|| {
+        tauri::async_runtime::block_on(collect_displays_with_thumbnails())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| collect_windows_with_thumbnails())
-        .await
-        .map_err(|err| err.to_string())?
-}
-
-fn collect_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tauri::async_runtime::block_on(async move {
-        let displays = screen_capture::list_displays();
-
-        let mut results = Vec::new();
-        for (capture_display, display) in displays {
-            let thumbnail = capture_display_thumbnail(&display).await;
-            results.push(CaptureDisplayWithThumbnail {
-                id: capture_display.id,
-                name: capture_display.name,
-                refresh_rate: capture_display.refresh_rate,
-                thumbnail,
-            });
-        }
-
-        Ok(results)
-    })
-}
-
-fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tauri::async_runtime::block_on(async move {
-        let windows = screen_capture::list_windows();
-
-        debug!(window_count = windows.len(), "Collecting window thumbnails");
-        let mut results = Vec::new();
-        for (capture_window, window) in windows {
-            let thumbnail = capture_window_thumbnail(&window).await;
-            let app_icon = window.app_icon().and_then(|bytes| {
-                if bytes.is_empty() {
-                    None
-                } else {
-                    Some(base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        bytes,
-                    ))
-                }
-            });
-
-            if thumbnail.is_none() {
-                warn!(
-                    window_id = ?capture_window.id,
-                    window_name = %capture_window.name,
-                    owner_name = %capture_window.owner_name,
-                    "Window thumbnail capture returned None",
-                );
-            } else {
-                debug!(
-                    window_id = ?capture_window.id,
-                    window_name = %capture_window.name,
-                    owner_name = %capture_window.owner_name,
-                    "Captured window thumbnail",
-                );
-            }
-
-            results.push(CaptureWindowWithThumbnail {
-                id: capture_window.id,
-                name: capture_window.name,
-                owner_name: capture_window.owner_name,
-                bounds: capture_window.bounds,
-                refresh_rate: capture_window.refresh_rate,
-                thumbnail,
-                app_icon,
-            });
-        }
-
-        info!(windows = results.len(), "Collected window thumbnail data");
-
-        Ok(results)
-    })
+    tokio::task::spawn_blocking(
+        || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
+    )
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
@@ -1076,7 +294,7 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = create_or_get_video(
+                    let s3_config = create_or_get_video(
                         &app,
                         false,
                         None,
@@ -1087,18 +305,19 @@ pub async fn start_recording(
                         None,
                     )
                     .await
-                    {
-                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
-                        info!("Pre-created shareable link: {}", link);
+                    .map_err(|err| {
+                        error!("Error creating instant mode video: {err}");
+                        err
+                    })?;
 
-                        Some(VideoUploadInfo {
-                            id: s3_config.id().to_string(),
-                            link: link.clone(),
-                            config: s3_config,
-                        })
-                    } else {
-                        None
-                    }
+                    let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+                    info!("Pre-created shareable link: {}", link);
+
+                    Some(VideoUploadInfo {
+                        id: s3_config.id.to_string(),
+                        link: link.clone(),
+                        config: s3_config,
+                    })
                 }
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {
@@ -1109,6 +328,38 @@ pub async fn start_recording(
         }
         RecordingMode::Studio => None,
     };
+
+    let date_time = if cfg!(windows) {
+        // Windows doesn't support colon in file paths
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.clone(),
+        pretty_name: format!("{target_name} {date_time}"),
+        inner: match inputs.mode {
+            RecordingMode::Studio => {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                    inner: MultipleSegments {
+                        segments: Default::default(),
+                        cursors: Default::default(),
+                        status: Some(StudioRecordingStatus::InProgress),
+                    },
+                })
+            }
+            RecordingMode::Instant => {
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+        },
+        sharing: None,
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
     match &inputs.capture_target {
         ScreenCaptureTarget::Window { id: _id } => {
@@ -1168,26 +419,16 @@ pub async fn start_recording(
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
-    let progressive_upload = video_upload_info
-        .as_ref()
-        .filter(|_| matches!(inputs.mode, RecordingMode::Instant))
-        .map(|video_upload_info| {
-            InstantMultipartUpload::spawn(
-                app.clone(),
-                id.clone(),
-                recording_dir.join("content/output.mp4"),
-                video_upload_info.clone(),
-                Some(finish_upload_rx),
-            )
-        });
 
     debug!("spawning start_recording actor");
 
     // done in spawn to catch panics just in case
+    let app_handle = app.clone();
     let spawn_actor_res = async {
         spawn_actor({
             let state_mtx = Arc::clone(&state_mtx);
             let general_settings = general_settings.cloned();
+            let recording_dir = recording_dir.clone();
             async move {
                 fail!("recording::spawn_actor");
                 let mut state = state_mtx.write().await;
@@ -1204,8 +445,19 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
+                #[cfg(target_os = "macos")]
+                let shareable_content = crate::platform::get_shareable_content()
+                    .await
+                    .map_err(|e| format!("GetShareableContent: {e}"))?
+                    .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
 
-                let (actor, actor_done_rx) = match inputs.mode {
+                let common = InProgressRecordingCommon {
+                    target_name,
+                    inputs: inputs.clone(),
+                    recording_dir: recording_dir.clone(),
+                };
+
+                let actor = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
@@ -1226,25 +478,31 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
-                            error!("Failed to spawn studio recording actor: {e}");
-                            e.to_string()
-                        })?;
+                        let handle = builder
+                            .build(
+                                #[cfg(target_os = "macos")]
+                                shareable_content,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to spawn studio recording actor: {e}");
+                                e.to_string()
+                            })?;
 
-                        (
-                            InProgressRecording::Studio {
-                                handle,
-                                target_name,
-                                inputs,
-                                recording_dir: recording_dir.clone(),
-                            },
-                            actor_done_rx,
-                        )
+                        InProgressRecording::Studio { handle, common }
                     }
                     RecordingMode::Instant => {
                         let Some(video_upload_info) = video_upload_info.clone() else {
                             return Err("Video upload info not found".to_string());
                         };
+
+                        let progressive_upload = InstantMultipartUpload::spawn(
+                            app_handle,
+                            recording_dir.join("content/output.mp4"),
+                            video_upload_info.clone(),
+                            Some(finish_upload_rx),
+                            recording_dir.clone(),
+                        );
 
                         let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
@@ -1256,28 +514,32 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
-                            error!("Failed to spawn studio recording actor: {e}");
-                            e.to_string()
-                        })?;
+                        let handle = builder
+                            .build(
+                                #[cfg(target_os = "macos")]
+                                shareable_content,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to spawn instant recording actor: {e}");
+                                e.to_string()
+                            })?;
 
-                        (
-                            InProgressRecording::Instant {
-                                handle,
-                                progressive_upload,
-                                video_upload_info,
-                                target_name,
-                                inputs,
-                                recording_dir: recording_dir.clone(),
-                            },
-                            actor_done_rx,
-                        )
+                        InProgressRecording::Instant {
+                            handle,
+                            progressive_upload,
+                            video_upload_info,
+                            common,
+                            camera_feed,
+                        }
                     }
                 };
 
+                let done_fut = actor.done_fut();
+
                 state.set_current_recording(actor);
 
-                Ok::<_, String>(actor_done_rx)
+                Ok::<_, String>(done_fut)
             }
         })
         .await
@@ -1285,15 +547,15 @@ pub async fn start_recording(
     }
     .await;
 
-    let actor_done_rx = match spawn_actor_res {
+    let actor_done_fut = match spawn_actor_res {
         Ok(rx) => rx,
-        Err(e) => {
-            let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+        Err(err) => {
+            let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
 
             let mut dialog = MessageDialogBuilder::new(
                 app.dialog().clone(),
                 "An error occurred".to_string(),
-                e.clone(),
+                err.clone(),
             )
             .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -1304,9 +566,9 @@ pub async fn start_recording(
             dialog.blocking_show();
 
             let mut state = state_mtx.write().await;
-            let _ = handle_recording_end(app, None, &mut state).await;
+            let _ = handle_recording_end(app, Err(err.clone()), &mut state, recording_dir).await;
 
-            return Err(e);
+            return Err(err);
         }
     };
 
@@ -1317,22 +579,25 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            let res = actor_done_rx.await;
+            let res = actor_done_fut.await;
             info!("recording wait actor done: {:?}", &res);
             match res {
-                Ok(Ok(_)) => {
+                Ok(()) => {
                     let _ = finish_upload_tx.send(());
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     let mut state = state_mtx.write().await;
 
-                    let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+                    let _ = RecordingEvent::Failed {
+                        error: e.to_string(),
+                    }
+                    .emit(&app);
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e,
+                        e.to_string(),
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -1343,11 +608,9 @@ pub async fn start_recording(
                     dialog.blocking_show();
 
                     // this clears the current recording for us
-                    handle_recording_end(app, None, &mut state).await.ok();
-                }
-                // Actor hasn't errored, it's just finished
-                v => {
-                    info!("recording actor ended: {v:?}");
+                    handle_recording_end(app, Err(e.to_string()), &mut state, recording_dir)
+                        .await
+                        .ok();
                 }
             }
         }
@@ -1391,8 +654,9 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
+    let recording_dir = completed_recording.project_path().clone();
 
-    handle_recording_end(app, Some(completed_recording), &mut state).await?;
+    handle_recording_end(app, Ok(completed_recording), &mut state, recording_dir).await?;
 
     Ok(())
 }
@@ -1438,7 +702,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
-        let _ = recording.cancel().await;
+        // let _ = recording.cancel().await;
 
         std::fs::remove_dir_all(&recording_dir).ok();
 
@@ -1479,17 +743,42 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
-    recording: Option<CompletedRecording>,
+    recording: Result<CompletedRecording, String>,
     app: &mut App,
+    recording_dir: PathBuf,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
     app.clear_current_recording();
 
-    let res = if let Some(recording) = recording {
+    let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Some(handle_recording_finish(&handle, recording).await)
-    } else {
-        None
+        Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
+        Err(error) => {
+            if let Ok(mut project_meta) =
+                RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+                    error!("Error loading recording meta while finishing recording: {err}")
+                })
+            {
+                match &mut project_meta.inner {
+                    RecordingMetaInner::Studio(meta) => {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = meta {
+                            inner.status = Some(StudioRecordingStatus::Failed { error });
+                        }
+                    }
+                    RecordingMetaInner::Instant(meta) => {
+                        *meta = InstantRecordingMeta::Failed { error: error };
+                    }
+                }
+                project_meta
+                    .save_for_project()
+                    .map_err(|err| {
+                        error!("Error saving recording meta while finishing recording: {err}")
+                    })
+                    .ok();
+            }
+
+            None
+        }
     };
 
     let _ = RecordingStopped.emit(&handle);
@@ -1553,8 +842,6 @@ async fn handle_recording_finish(
         None,
     ));
 
-    let target_name = completed_recording.target_name().clone();
-
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
             let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
@@ -1576,7 +863,6 @@ async fn handle_recording_finish(
             video_upload_info,
             ..
         } => {
-            // shareable_link = Some(video_upload_info.link.clone());
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
@@ -1584,74 +870,78 @@ async fn handle_recording_finish(
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();
+                let recording_dir = recording_dir.clone();
 
                 async move {
-                    if let Some(progressive_upload) = progressive_upload {
-                        let video_upload_succeeded = match progressive_upload
-                            .handle
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|r| r)
-                        {
-                            Ok(()) => {
-                                info!(
-                                    "Not attempting instant recording upload as progressive upload succeeded"
-                                );
-                                true
-                            }
-                            Err(e) => {
-                                error!("Progressive upload failed: {}", e);
-                                false
-                            }
-                        };
-
-                        let _ = screenshot_task.await;
-
-                        if video_upload_succeeded {
-                            let resp = prepare_screenshot_upload(
-                                &app,
-                                &video_upload_info.config.clone(),
-                                display_screenshot,
-                            )
-                            .await;
-
-                            match resp {
-                                Ok(r)
-                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
-                                {
-                                    info!("Screenshot uploaded successfully");
-                                }
-                                Ok(r) => {
-                                    error!("Failed to upload screenshot: {}", r.status());
-                                }
-                                Err(e) => {
-                                    error!("Failed to upload screenshot: {e}");
-                                }
-                            }
-                        } else {
-                            let meta = build_video_meta(&output_path).ok();
-                            // The upload_video function handles screenshot upload, so we can pass it along
-                            match upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                Some(video_upload_info.config.clone()),
-                                Some(display_screenshot.clone()),
-                                meta,
-                                None,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    info!(
-                                        "Final video upload with screenshot completed successfully"
-                                    )
-                                }
-                                Err(e) => {
-                                    error!("Error in final upload with screenshot: {}", e)
-                                }
-                            }
+                    let video_upload_succeeded = match progressive_upload
+                        .handle
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r)
+                    {
+                        Ok(()) => {
+                            info!(
+                                "Not attempting instant recording upload as progressive upload succeeded"
+                            );
+                            true
                         }
+                        Err(e) => {
+                            error!("Progressive upload failed: {}", e);
+                            false
+                        }
+                    };
+
+                    let _ = screenshot_task.await;
+
+                    if video_upload_succeeded {
+                        if let Ok(bytes) =
+                            compress_image(display_screenshot).await
+                            .map_err(|err|
+                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                            ) {
+                                crate::upload::singlepart_uploader(
+                                    app.clone(),
+                                    crate::api::PresignedS3PutRequest {
+                                        video_id: video_upload_info.id.clone(),
+                                        subpath: "screenshot/screen-capture.jpg".to_string(),
+                                        method: PresignedS3PutRequestMethod::Put,
+                                        meta: None,
+                                    },
+                                    bytes.len() as u64,
+                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
+
+                                )
+                                .await
+                                .map_err(|err| {
+                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
+                                })
+                                .ok();
+                            }
+                    } else if let Ok(meta) = build_video_meta(&output_path)
+                        .map_err(|err| error!("Error getting video metadata: {}", err))
+                    {
+                        // The upload_video function handles screenshot upload, so we can pass it along
+                        upload_video(
+                            &app,
+                            video_upload_info.id.clone(),
+                            output_path,
+                            display_screenshot.clone(),
+                            meta,
+                            None,
+                        )
+                        .await
+                        .map(|_| info!("Final video upload with screenshot completed successfully"))
+                        .map_err(|error| {
+                            error!("Error in upload_video: {error}");
+
+                            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                                meta.upload = Some(UploadMeta::Failed { error });
+                                meta.save_for_project()
+                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                    .ok();
+                            }
+                        })
+                        .ok();
                     }
                 }
             });
@@ -1666,25 +956,16 @@ async fn handle_recording_finish(
         }
     };
 
-    let date_time = if cfg!(windows) {
-        // Windows doesn't support colon in file paths
-        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
-    } else {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    };
+    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+        error!("Failed to load recording meta while saving finished recording: {err}")
+    }) {
+        meta.inner = meta_inner.clone();
+        meta.sharing = sharing;
+        meta.save_for_project()
+            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+    }
 
-    let meta = RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: recording_dir.clone(),
-        sharing,
-        pretty_name: format!("{target_name} {date_time}"),
-        inner: meta_inner,
-    };
-
-    meta.save_for_project()
-        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
-
-    if let RecordingMetaInner::Studio(_) = meta.inner {
+    if let RecordingMetaInner::Studio(_) = meta_inner {
         match GeneralSettingsStore::get(app)
             .ok()
             .flatten()
@@ -1855,11 +1136,11 @@ fn generate_zoom_segments_from_clicks_impl(
 
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for interval in intervals {
-        if let Some(last) = merged.last_mut() {
-            if interval.0 <= last.1 + MERGE_GAP_THRESHOLD {
-                last.1 = last.1.max(interval.1);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && interval.0 <= last.1 + MERGE_GAP_THRESHOLD
+        {
+            last.1 = last.1.max(interval.1);
+            continue;
         }
         merged.push(interval);
     }
@@ -1885,7 +1166,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &studio_recording::CompletedStudioRecording,
+    recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -1895,6 +1176,7 @@ pub fn generate_zoom_segments_from_clicks(
         pretty_name: String::new(),
         sharing: None,
         inner: RecordingMetaInner::Studio(recording.meta.clone()),
+        upload: None,
     };
 
     generate_zoom_segments_for_project(&recording_meta, recordings)
@@ -1942,7 +1224,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &studio_recording::CompletedStudioRecording,
+    completed_recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {

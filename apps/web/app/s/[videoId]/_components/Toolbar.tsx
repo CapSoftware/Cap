@@ -1,9 +1,11 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
+import { Comment, User } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
 
@@ -11,10 +13,13 @@ const MotionButton = motion.create(Button);
 
 // million-ignore
 interface ToolbarProps {
-	data: typeof videos.$inferSelect;
+	data: typeof videos.$inferSelect & {
+		orgSettings?: OrganizationSettings | null;
+	};
 	user: typeof userSelectProps | null;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
+	disableReactions?: boolean;
 }
 
 export const Toolbar = ({
@@ -22,6 +27,7 @@ export const Toolbar = ({
 	user,
 	onOptimisticComment,
 	onCommentSuccess,
+	disableReactions,
 }: ToolbarProps) => {
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
@@ -31,13 +37,13 @@ export const Toolbar = ({
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}`,
-			authorId: user?.id || "anonymous",
+			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			authorId: User.UserId.make(user?.id || "anonymous"),
 			authorName: user?.name || "Anonymous",
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: "",
+			parentCommentId: Comment.CommentId.make(""),
 			type: "emoji",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -50,7 +56,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: emoji,
 				videoId: data.id,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "emoji",
 				timestamp: currentTime,
 			});
@@ -72,13 +78,13 @@ export const Toolbar = ({
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
-			id: `temp-${Date.now()}`,
-			authorId: user?.id || "anonymous",
-			authorName: user?.name || "Anonymous",
+			id: Comment.CommentId.make(`temp-${Date.now()}`),
+			authorId: User.UserId.make(user?.id || "anonymous"),
+			authorName: Comment.CommentId.make(user?.name || "Anonymous"),
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,
-			parentCommentId: "",
+			parentCommentId: Comment.CommentId.make(""),
 			type: "text",
 			timestamp: currentTime,
 			updatedAt: new Date(),
@@ -91,7 +97,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: comment,
 				videoId: data.id,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "text",
 				timestamp: currentTime,
 			});
@@ -167,6 +173,10 @@ export const Toolbar = ({
 		}
 		setCommentBoxOpen(true);
 	};
+
+	if (disableReactions) {
+		return null;
+	}
 
 	return (
 		<>

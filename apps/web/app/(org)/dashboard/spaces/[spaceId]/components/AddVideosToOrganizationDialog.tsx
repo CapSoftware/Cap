@@ -1,18 +1,20 @@
 "use client";
 
+import type { Organisation } from "@cap/web-domain";
 import type React from "react";
 import { addVideosToOrganization } from "@/actions/organizations/add-videos";
 import { getOrganizationVideoIds } from "@/actions/organizations/get-organization-videos";
 import { removeVideosFromOrganization } from "@/actions/organizations/remove-videos";
-import { getUserVideos } from "@/actions/videos/get-user-videos";
+import { getUserVideos } from "@/actions/spaces/get-user-videos";
 import AddVideosDialogBase from "./AddVideosDialogBase";
 
 interface AddVideosToOrganizationDialogProps {
 	open: boolean;
 	onClose: () => void;
-	organizationId: string;
+	organizationId: Organisation.OrganisationId;
 	organizationName: string;
 	onVideosAdded?: () => void;
+	spaceId: string;
 }
 
 export const AddVideosToOrganizationDialog: React.FC<
@@ -27,8 +29,8 @@ export const AddVideosToOrganizationDialog: React.FC<
 			onVideosAdded={onVideosAdded}
 			removeVideos={removeVideosFromOrganization}
 			addVideos={addVideosToOrganization}
-			getVideos={getUserVideos}
-			getEntityVideoIds={getOrganizationVideoIds}
+			getVideos={() => getUserVideos(organizationId)}
+			getEntityVideoIds={() => getOrganizationVideoIds(organizationId)}
 		/>
 	);
 };

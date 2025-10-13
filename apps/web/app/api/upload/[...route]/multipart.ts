@@ -319,24 +319,7 @@ app.post(
 						if (result.rowsAffected > 0)
 							await db()
 								.delete(videoUploads)
-								.where(eq(videoUploads.videoId, videoId));
-					}
-
-					if (videoIdFromFileKey) {
-						try {
-							await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-								method: "POST",
-								headers: {
-									"Content-Type": "application/json",
-								},
-								body: JSON.stringify({ videoId: videoIdFromFileKey }),
-							});
-							console.log(
-								`Revalidation triggered for videoId: ${videoIdFromFileKey}`,
-							);
-						} catch (revalidateError) {
-							console.error("Failed to revalidate page:", revalidateError);
-						}
+								.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
 					}
 
 					return c.json({

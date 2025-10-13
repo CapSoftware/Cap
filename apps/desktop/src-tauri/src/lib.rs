@@ -1,3 +1,4 @@
+mod api;
 mod audio;
 mod audio_meter;
 mod auth;
@@ -19,8 +20,10 @@ mod presets;
 mod recording;
 mod recording_settings;
 mod target_select_overlay;
+mod thumbnails;
 mod tray;
 mod upload;
+mod upload_legacy;
 mod web_api;
 mod windows;
 
@@ -29,8 +32,8 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, XY,
-    ZoomSegment,
+    InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, StudioRecordingStatus, UploadMeta, VideoUploadInfo, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -39,15 +42,15 @@ use cap_recording::{
         camera::{CameraFeed, DeviceOrModelID},
         microphone::{self, MicrophoneFeed},
     },
-    sources::ScreenCaptureTarget,
+    sources::screen_capture::ScreenCaptureTarget,
 };
 use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::{EditorInstances, WindowEditorInstance};
+use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
-use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
@@ -64,7 +67,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     future::Future,
-    io::{BufReader, BufWriter},
+    io::BufWriter,
     marker::PhantomData,
     path::{Path, PathBuf},
     process::Command,
@@ -79,8 +82,10 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+#[cfg(target_os = "macos")]
+use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
@@ -89,6 +94,7 @@ use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparen
 use crate::{
     camera::CameraPreviewManager,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    upload::InstantMultipartUpload,
 };
 use crate::{recording::start_recording, upload::build_video_meta};
 
@@ -142,13 +148,6 @@ pub enum UploadResult {
 pub struct VideoRecordingMetadata {
     pub duration: f64,
     pub size: f64,
-}
-
-#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
-pub struct VideoUploadInfo {
-    id: String,
-    link: String,
-    config: S3UploadMeta,
 }
 
 impl App {
@@ -322,6 +321,12 @@ pub struct RequestOpenSettings {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScreenCapturePrewarm {
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewNotification {
     title: String,
     body: String,
@@ -422,11 +427,6 @@ async fn create_screenshot(
     println!("Creating screenshot: input={input:?}, output={output:?}, size={size:?}");
 
     let result: Result<(), String> = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        ffmpeg::init().map_err(|e| {
-            eprintln!("Failed to initialize ffmpeg: {e}");
-            e.to_string()
-        })?;
-
         let mut ictx = ffmpeg::format::input(&input).map_err(|e| {
             eprintln!("Failed to create input context: {e}");
             e.to_string()
@@ -585,11 +585,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
         return Err(format!("Source file {src} does not exist"));
     }
 
-    if !is_screenshot && !is_gif && !is_valid_mp4(src_path) {
+    if !is_screenshot && !is_gif && !is_valid_video(src_path) {
         let mut attempts = 0;
         while attempts < 10 {
             std::thread::sleep(std::time::Duration::from_secs(1));
-            if is_valid_mp4(src_path) {
+            if is_valid_video(src_path) {
                 break;
             }
             attempts += 1;
@@ -632,8 +632,8 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                if !is_screenshot && !is_gif && !is_valid_mp4(std::path::Path::new(&dst)) {
-                    last_error = Some("Destination file is not a valid MP4".to_string());
+                if !is_screenshot && !is_gif && !is_valid_video(std::path::Path::new(&dst)) {
+                    last_error = Some("Destination file is not a valid".to_string());
                     let _ = tokio::fs::remove_file(&dst).await;
                     attempts += 1;
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -683,16 +683,15 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     Err(last_error.unwrap_or_else(|| "Maximum retry attempts exceeded".to_string()))
 }
 
-pub fn is_valid_mp4(path: &std::path::Path) -> bool {
-    if let Ok(file) = std::fs::File::open(path) {
-        let file_size = match file.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(_) => return false,
-        };
-        let reader = std::io::BufReader::new(file);
-        Mp4Reader::read_header(reader, file_size).is_ok()
-    } else {
-        false
+pub fn is_valid_video(path: &std::path::Path) -> bool {
+    match ffmpeg::format::input(path) {
+        Ok(input_context) => {
+            // Check if we have at least one video stream
+            input_context
+                .streams()
+                .any(|stream| stream.parameters().medium() == ffmpeg::media::Type::Video)
+        }
+        Err(_) => false,
     }
 }
 
@@ -878,45 +877,53 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
     let recording_meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
-        let reader = BufReader::new(
-            File::open(&path).map_err(|e| format!("Failed to open video file: {e}"))?,
-        );
-        let file_size = path
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {e}"))?
-            .len();
+        let input =
+            ffmpeg::format::input(&path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
-        let current_duration = match Mp4Reader::read_header(reader, file_size) {
-            Ok(mp4) => mp4.duration().as_secs_f64(),
-            Err(e) => {
-                println!("Failed to read MP4 header: {e}. Falling back to default duration.");
-                0.0_f64
-            }
-        };
+        let raw_duration = input.duration();
+        if raw_duration <= 0 {
+            return Err(format!(
+                "Unknown or invalid duration for video file: {:?}",
+                path
+            ));
+        }
 
-        Ok(current_duration)
+        let duration = raw_duration as f64 / AV_TIME_BASE as f64;
+        Ok(duration)
     }
 
     let display_paths = match &recording_meta.inner {
         RecordingMetaInner::Instant(_) => {
             vec![path.join("content/output.mp4")]
         }
-        RecordingMetaInner::Studio(meta) => match meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                vec![recording_meta.path(&segment.display.path)]
+        RecordingMetaInner::Studio(meta) => {
+            let status = meta.status();
+            if let StudioRecordingStatus::Failed { .. } = status {
+                return Err("Unable to get metadata on failed recording".to_string());
+            } else if let StudioRecordingStatus::InProgress = status {
+                return Err("Unable to get metadata on in-progress recording".to_string());
             }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
-                .segments
-                .iter()
-                .map(|s| recording_meta.path(&s.display.path))
-                .collect(),
-        },
+
+            match meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    vec![recording_meta.path(&segment.display.path)]
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => inner
+                    .segments
+                    .iter()
+                    .map(|s| recording_meta.path(&s.display.path))
+                    .collect(),
+            }
+        }
     };
 
     let duration = display_paths
         .into_iter()
         .map(get_duration_for_path)
-        .sum::<Result<_, _>>()?;
+        .try_fold(0f64, |acc, item| -> Result<f64, String> {
+            let d = item?;
+            Ok(acc + d)
+        })?;
 
     let (width, height) = (1920, 1080);
     let fps = 30;
@@ -1063,13 +1070,13 @@ async fn upload_exported_video(
 
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
-    let output_path = meta.output_path();
-    if !output_path.exists() {
+    let file_path = meta.output_path();
+    if !file_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
     }
 
-    let metadata = build_video_meta(&output_path)
+    let metadata = build_video_meta(&file_path)
         .map_err(|err| format!("Error getting output video meta: {err}"))?;
 
     if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
@@ -1112,15 +1119,23 @@ async fn upload_exported_video(
         Err(err) => return Err(err.to_string()),
     };
 
-    let upload_id = s3_config.id().to_string();
+    let screenshot_path = meta.project_path.join("screenshots/display.jpg");
+    meta.upload = Some(UploadMeta::SinglePartUpload {
+        video_id: s3_config.id.clone(),
+        file_path: file_path.clone(),
+        screenshot_path: screenshot_path.clone(),
+        recording_dir: path.clone(),
+    });
+    meta.save_for_project()
+        .map_err(|e| error!("Failed to save recording meta: {e}"))
+        .ok();
 
     match upload_video(
         &app,
-        upload_id.clone(),
-        output_path,
-        Some(s3_config),
-        Some(meta.project_path.join("screenshots/display.jpg")),
-        Some(metadata),
+        s3_config.id.clone(),
+        file_path,
+        screenshot_path,
+        metadata,
         Some(channel.clone()),
     )
     .await
@@ -1128,11 +1143,14 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             channel.send(UploadProgress { progress: 1.0 }).ok();
 
+            meta.upload = Some(UploadMeta::Complete);
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
                 id: uploaded_video.id.clone(),
             });
-            meta.save_for_project().ok();
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
 
             let _ = app
                 .state::<ArcLock<ClipboardContext>>()
@@ -1148,6 +1166,12 @@ async fn upload_exported_video(
             error!("Failed to upload video: {e}");
 
             NotificationType::UploadFailed.send(&app);
+
+            meta.upload = Some(UploadMeta::Failed { error: e.to_string() });
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
+
             Err(e.to_string().into())
         }
     }
@@ -1311,6 +1335,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                     cursor: None,
                 },
             }),
+            upload: None,
         }
         .save_for_project()
         .unwrap();
@@ -1398,18 +1423,43 @@ async fn save_file_dialog(
 }
 
 #[derive(Serialize, specta::Type)]
-pub struct RecordingMetaWithMode {
+pub struct RecordingMetaWithMetadata {
     #[serde(flatten)]
     pub inner: RecordingMeta,
+    // Easier accessors for within webview
+    // THESE MUST COME AFTER `inner` to override flattened fields with the same name
     pub mode: RecordingMode,
+    pub status: StudioRecordingStatus,
 }
 
-impl RecordingMetaWithMode {
+impl RecordingMetaWithMetadata {
     fn new(inner: RecordingMeta) -> Self {
         Self {
             mode: match &inner.inner {
                 RecordingMetaInner::Studio(_) => RecordingMode::Studio,
                 RecordingMetaInner::Instant(_) => RecordingMode::Instant,
+            },
+            status: match &inner.inner {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
+                    inner
+                        .status
+                        .clone()
+                        .unwrap_or(StudioRecordingStatus::Complete)
+                }
+                RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { .. }) => {
+                    StudioRecordingStatus::Complete
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+                    StudioRecordingStatus::InProgress
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::Failed { error }) => {
+                    StudioRecordingStatus::Failed {
+                        error: error.clone(),
+                    }
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
+                    StudioRecordingStatus::Complete
+                }
             },
             inner,
         }
@@ -1428,15 +1478,15 @@ pub enum FileType {
 fn get_recording_meta(
     path: PathBuf,
     _file_type: FileType,
-) -> Result<RecordingMetaWithMode, String> {
+) -> Result<RecordingMetaWithMetadata, String> {
     RecordingMeta::load_for_project(&path)
-        .map(RecordingMetaWithMode::new)
+        .map(RecordingMetaWithMetadata::new)
         .map_err(|e| format!("Failed to load recording meta: {e}"))
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMode)>, String> {
+fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
     let recordings_dir = recordings_path(&app);
 
     if !recordings_dir.exists() {
@@ -1708,7 +1758,7 @@ async fn editor_delete_project(
 
     let _ = tokio::fs::remove_dir_all(&path).await;
 
-    RecordingDeleted { path }.emit(&app);
+    RecordingDeleted { path }.emit(&app).ok();
 
     Ok(())
 }
@@ -1843,6 +1893,12 @@ type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle) {
+    ffmpeg::init()
+        .map_err(|e| {
+            error!("Failed to initialize ffmpeg: {e}");
+        })
+        .ok();
+
     let tauri_context = tauri::generate_context!();
 
     let specta_builder = tauri_specta::Builder::new()
@@ -1942,6 +1998,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RequestOpenRecordingPicker,
             RequestNewScreenshot,
             RequestOpenSettings,
+            RequestScreenCapturePrewarm,
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
@@ -1950,6 +2007,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingDeleted,
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
+            upload::UploadProgressEvent,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2080,6 +2138,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            #[cfg(target_os = "macos")]
+            app.manage(crate::platform::ScreenCapturePrewarmer::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2109,6 +2169,27 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 });
             }
 
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
+                        .map_err(|err| {
+                            error!(
+                                "Error checking status of new uploader flow from settings: {err}"
+                            )
+                        })
+                        .ok()
+                        .and_then(|v| v.map(|v| v.enable_new_uploader))
+                        .unwrap_or(false);
+                    if is_new_uploader_enabled {
+                        resume_uploads(app)
+                            .await
+                            .map_err(|err| warn!("Error resuming uploads: {err}"))
+                            .ok();
+                    }
+                }
+            });
+
             {
                 app.manage(Arc::new(RwLock::new(App {
                     camera_ws_port,
@@ -2118,15 +2199,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     recording_logging_handle,
                     mic_feed,
                     camera_feed,
-                    server_url: GeneralSettingsStore::get(&app)
-                        .ok()
-                        .flatten()
-                        .map(|v| v.server_url.clone())
-                        .unwrap_or_else(|| {
-                            std::option_env!("VITE_SERVER_URL")
-                                .unwrap_or("https://cap.so")
-                                .to_string()
-                        }),
+                    server_url: std::option_env!("VITE_SERVER_URL")
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            GeneralSettingsStore::get(&app)
+                                .ok()
+                                .flatten()
+                                .map(|v| v.server_url.clone())
+                        })
+                        .unwrap_or_else(|| "https://cap.so".to_string()),
                 })));
 
                 app.manage(Arc::new(RwLock::new(
@@ -2207,6 +2288,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
                 .show(&app)
                 .await;
+            });
+
+            #[cfg(target_os = "macos")]
+            RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
+                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
+                prewarmer.request(event.force).await;
             });
 
             let app_handle = app.clone();
@@ -2376,6 +2463,128 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         });
 }
 
+async fn resume_uploads(app: AppHandle) -> Result<(), String> {
+    let recordings_dir = recordings_path(&app);
+    if !recordings_dir.exists() {
+        return Err("Recording directory missing".to_string());
+    }
+
+    let entries = std::fs::read_dir(&recordings_dir)
+        .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
+            // Load recording meta to check for in-progress recordings
+            if let Ok(mut meta) = RecordingMeta::load_for_project(&path) {
+                let mut needs_save = false;
+
+                // Check if recording is still marked as in-progress and if so mark as failed
+                // This should only happen if the application crashes while recording
+                match &mut meta.inner {
+                    RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
+                        if let Some(StudioRecordingStatus::InProgress) = &inner.status {
+                            inner.status = Some(StudioRecordingStatus::Failed {
+                                error: "Recording crashed".to_string(),
+                            });
+                            needs_save = true;
+                        }
+                    }
+                    RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+                        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                            error: "Recording crashed".to_string(),
+                        });
+                        needs_save = true;
+                    }
+                    _ => {}
+                }
+
+                // Save the updated meta if we made changes
+                if needs_save && let Err(err) = meta.save_for_project() {
+                    error!("Failed to save recording meta for {path:?}: {err}");
+                }
+
+                // Handle upload resumption
+                if let Some(upload_meta) = meta.upload {
+                    match upload_meta {
+                        UploadMeta::MultipartUpload {
+                            video_id: _,
+                            file_path,
+                            pre_created_video,
+                            recording_dir,
+                        } => {
+                            InstantMultipartUpload::spawn(
+                                app.clone(),
+                                file_path,
+                                pre_created_video,
+                                None,
+                                recording_dir,
+                            );
+                        }
+                        UploadMeta::SinglePartUpload {
+                            video_id,
+                            file_path,
+                            screenshot_path,
+                            recording_dir,
+                        } => {
+                            let app = app.clone();
+                            tokio::spawn(async move {
+                                if let Ok(meta) = build_video_meta(&file_path)
+                                    .map_err(|error| {
+                                        error!("Failed to resume video upload. error getting video metadata: {error}");
+
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
+                                        }
+                                    })
+                                    && let Ok(uploaded_video) = upload_video(
+                                        &app,
+                                        video_id,
+                                        file_path,
+                                        screenshot_path,
+                                        meta,
+                                        None,
+                                    )
+                                    .await
+                                    .map_err(|error| {
+                                        error!("Error completing resumed upload for video: {error}");
+
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
+                                        }
+                                    })
+                                    {
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Complete);
+                                            meta.sharing = Some(SharingMeta {
+                                                link: uploaded_video.link.clone(),
+                                                id: uploaded_video.id.clone(),
+                                            });
+                                            meta.save_for_project()
+                                                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                                                .ok();
+                                        }
+
+                                        let _ = app
+                                            .state::<ArcLock<ClipboardContext>>()
+                                            .write()
+                                            .await
+                                            .set_text(uploaded_video.link.clone());
+                                        NotificationType::ShareableLinkCopied.send(&app);
+                                    }
+                            });
+                        }
+                        UploadMeta::Failed { .. } | UploadMeta::Complete => {}
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
@@ -2477,9 +2686,15 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;
 
     match &meta.inner {
-        RecordingMetaInner::Studio(_) => {
-            let project_path = path.to_path_buf();
+        RecordingMetaInner::Studio(meta) => {
+            let status = meta.status();
+            if let StudioRecordingStatus::Failed { .. } = status {
+                return Err("Unable to open failed recording".to_string());
+            } else if let StudioRecordingStatus::InProgress = status {
+                return Err("Recording in progress".to_string());
+            }
 
+            let project_path = path.to_path_buf();
             tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
         }
         RecordingMetaInner::Instant(_) => {

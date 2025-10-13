@@ -1,0 +1,238 @@
+use cidre::{arc, ns, sc};
+use core_graphics::{display::CGDirectDisplayID, window::CGWindowID};
+use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{OnceLock, RwLock},
+    time::Instant,
+};
+use tokio::sync::{Mutex, Notify};
+use tracing::{debug, info, trace};
+
+#[derive(Default)]
+struct CacheState {
+    cache: RwLock<Option<ShareableContentCache>>,
+    warmup: Mutex<Option<WarmupTask>>,
+}
+
+type WarmupResult = Result<(), arc::R<ns::Error>>;
+
+#[derive(Clone)]
+struct WarmupTask {
+    notify: Arc<Notify>,
+    result: Arc<Mutex<Option<WarmupResult>>>,
+}
+
+static STATE: OnceLock<CacheState> = OnceLock::new();
+
+fn state() -> &'static CacheState {
+    STATE.get_or_init(CacheState::default)
+}
+
+pub async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
+    if state().cache.read().unwrap().is_some() {
+        trace!("ScreenCaptureKit shareable content already warmed");
+        return Ok(());
+    }
+
+    let warmup = {
+        let mut guard = state().warmup.lock().await;
+        if let Some(task) = guard.clone() {
+            trace!("Awaiting in-flight ScreenCaptureKit warmup");
+            task
+        } else {
+            let task = WarmupTask {
+                notify: Arc::new(Notify::new()),
+                result: Arc::new(Mutex::new(None)),
+            };
+            *guard = Some(task.clone());
+            tokio::spawn(run_warmup(task.clone()));
+            task
+        }
+    };
+
+    warmup.notify.notified().await;
+    warmup
+        .result
+        .lock()
+        .await
+        .clone()
+        .expect("ScreenCaptureKit warmup task missing result")
+}
+
+pub async fn get_shareable_content()
+-> Result<Option<arc::R<sc::ShareableContent>>, arc::R<ns::Error>> {
+    let lookup_start = Instant::now();
+
+    if let Some(content) = state()
+        .cache
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|v| v.content.retained())
+    {
+        trace!(
+            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
+            "Resolved ScreenCaptureKit from warmed cache"
+        );
+        return Ok(Some(content));
+    }
+
+    prewarm_shareable_content().await?;
+
+    let content = state().cache.read().unwrap();
+    trace!(
+        elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
+        cache_hit = content.is_some(),
+        "Resolved ScreenCaptureKit after cache populate"
+    );
+    Ok(content.as_ref().map(|v| v.content.retained()))
+}
+
+async fn run_warmup(task: WarmupTask) {
+    let result = async {
+        let warm_start = Instant::now();
+        debug!("Populating ScreenCaptureKit shareable content cache");
+
+        let content = sc::ShareableContent::current().await?;
+        let cache = ShareableContentCache::new(content);
+        let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
+
+        let mut guard = state().cache.write().unwrap();
+        let replaced = guard.is_some();
+        *guard = Some(cache);
+
+        info!(
+            elapsed_ms,
+            replaced, "ScreenCaptureKit shareable content cache populated"
+        );
+        Ok::<(), arc::R<ns::Error>>(())
+    }
+    .await;
+
+    {
+        let mut res_guard = task.result.lock().await;
+        *res_guard = Some(result);
+    }
+
+    task.notify.notify_waiters();
+
+    let mut guard = state().warmup.lock().await;
+    if let Some(current) = guard.as_ref()
+        && Arc::ptr_eq(&current.notify, &task.notify)
+    {
+        *guard = None;
+    }
+}
+
+#[derive(Debug)]
+struct ShareableContentCache {
+    #[allow(dead_code)]
+    content: arc::R<sc::ShareableContent>,
+    displays: HashMap<CGDirectDisplayID, arc::R<sc::Display>>,
+    windows: HashMap<CGWindowID, arc::R<sc::Window>>,
+}
+
+unsafe impl Send for ShareableContentCache {}
+unsafe impl Sync for ShareableContentCache {}
+
+impl ShareableContentCache {
+    fn new(content: arc::R<sc::ShareableContent>) -> Self {
+        let displays = content
+            .displays()
+            .iter()
+            .map(|display| (display.display_id().0, display.retained()))
+            .collect();
+
+        let windows = content
+            .windows()
+            .iter()
+            .map(|window| (window.id(), window.retained()))
+            .collect();
+
+        Self {
+            content,
+            displays,
+            windows,
+        }
+    }
+
+    fn display(&self, id: CGDirectDisplayID) -> Option<arc::R<sc::Display>> {
+        self.displays.get(&id).cloned()
+    }
+
+    fn window(&self, id: CGWindowID) -> Option<arc::R<sc::Window>> {
+        self.windows.get(&id).cloned()
+    }
+}
+
+pub(crate) struct ScreenCapturePrewarmer {
+    state: Mutex<PrewarmState>,
+}
+
+impl Default for ScreenCapturePrewarmer {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(PrewarmState::Idle),
+        }
+    }
+}
+
+impl ScreenCapturePrewarmer {
+    pub async fn request(&self, force: bool) {
+        let should_start = {
+            let mut state = self.state.lock().await;
+
+            if force {
+                *state = PrewarmState::Idle;
+            }
+
+            match *state {
+                PrewarmState::Idle => {
+                    *state = PrewarmState::Warming;
+                    true
+                }
+                PrewarmState::Warming => {
+                    trace!("ScreenCaptureKit prewarm already in progress");
+                    false
+                }
+                PrewarmState::Warmed => {
+                    if force {
+                        *state = PrewarmState::Warming;
+                        true
+                    } else {
+                        trace!("ScreenCaptureKit cache already warmed");
+                        false
+                    }
+                }
+            }
+        };
+
+        if !should_start {
+            return;
+        }
+
+        let warm_start = std::time::Instant::now();
+        let result = crate::platform::prewarm_shareable_content().await;
+
+        let mut state = self.state.lock().await;
+        match result {
+            Ok(()) => {
+                let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
+                *state = PrewarmState::Warmed;
+                trace!(elapsed_ms, "ScreenCaptureKit cache warmed");
+            }
+            Err(error) => {
+                *state = PrewarmState::Idle;
+                tracing::warn!(error = %error, "ScreenCaptureKit prewarm failed");
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PrewarmState {
+    Idle,
+    Warming,
+    Warmed,
+}

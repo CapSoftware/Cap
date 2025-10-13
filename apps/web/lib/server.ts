@@ -7,25 +7,35 @@ import {
 	HttpAuthMiddlewareLive,
 	OrganisationsPolicy,
 	S3Buckets,
+	Spaces,
 	SpacesPolicy,
 	Videos,
 	VideosPolicy,
+	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,
 	type HttpApi,
 	HttpApiBuilder,
+	HttpApiClient,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
+import { RpcClient } from "@effect/rpc";
+import {
+	Cause,
+	Config,
+	Effect,
+	Exit,
+	Layer,
+	ManagedRuntime,
+	Option,
+} from "effect";
 import { cookies } from "next/headers";
-import { allowedOrigins } from "@/utils/cors";
-import { getTracingConfig } from "./tracing";
 
-export const TracingLayer = NodeSdk.layer(getTracingConfig);
+import { allowedOrigins } from "@/utils/cors";
+import { layerTracer } from "./tracing";
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
@@ -40,6 +50,24 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
+const WorkflowRpcLive = Layer.scoped(
+	Workflows.RpcClient,
+	Effect.gen(function* () {
+		const url = Option.getOrElse(
+			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
+			() => "http://127.0.0.1:42169",
+		);
+
+		return yield* RpcClient.make(Workflows.RpcGroup).pipe(
+			Effect.provide(
+				RpcClient.layerProtocolHttp({ url }).pipe(
+					Layer.provide(Workflows.RpcSerialization),
+				),
+			),
+		);
+	}),
+);
+
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
@@ -47,10 +75,11 @@ export const Dependencies = Layer.mergeAll(
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
+	Spaces.Default,
+	WorkflowRpcLive,
+	layerTracer,
 ).pipe(
-	Layer.provideMerge(
-		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),
-	),
+	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
 );
 
 // purposefully not exposed
@@ -98,12 +127,12 @@ export const apiToHandler = (
 	api.pipe(
 		HttpMiddleware.withSpanNameGenerator((req) => `${req.method} ${req.url}`),
 		Layer.provideMerge(HttpAuthMiddlewareLive),
-		Layer.provideMerge(Dependencies),
 		Layer.merge(HttpServer.layerContext),
 		Layer.provide(cors),
 		Layer.provide(
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
+		Layer.provideMerge(Dependencies),
 		HttpApiBuilder.toWebHandler,
 		(v) => (req: Request) => v.handler(req),
 	);

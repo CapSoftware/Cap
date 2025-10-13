@@ -6,6 +6,7 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
+import { Organisation } from "@cap/web-domain";
 import { and, eq, ne, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { NextRequest } from "next/server";
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
 		);
 
 	if (!organization) {
-		const organizationId = nanoId();
+		const organizationId = Organisation.OrganisationId.make(nanoId());
 
 		await db()
 			.insert(organizations)

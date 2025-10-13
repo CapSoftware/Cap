@@ -44,7 +44,7 @@ const MobileTab = () => {
 		}
 	});
 	return (
-		<div className="flex sticky bottom-0 z-50 flex-1 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
+		<div className="flex sticky bottom-0 z-50 flex-1 gap-5 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
 			<AnimatePresence>
 				{open && <OrgsMenu setOpen={setOpen} menuRef={menuRef} />}
 			</AnimatePresence>

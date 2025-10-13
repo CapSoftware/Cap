@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import {
 	faCheckCircle,
 	faExclamationCircle,
@@ -32,7 +33,9 @@ export function CustomDomain() {
 
 	const removeDomainMutation = useMutation({
 		mutationFn: (organizationId: string) =>
-			removeOrganizationDomain(organizationId),
+			removeOrganizationDomain(
+				Organisation.OrganisationId.make(organizationId),
+			),
 		onSuccess: () => {
 			setIsVerified(false);
 			toast.success("Custom domain removed");

@@ -1,6 +1,6 @@
 import { cx } from "cva";
 import { createMemo, For, Match, Switch } from "solid-js";
-import { Motion } from "solid-motionone";
+import { Transition } from "solid-transition-group";
 import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
@@ -134,23 +134,30 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 								return (
 									<For each={items() as CaptureDisplayWithThumbnail[]}>
 										{(item, index) => (
-											<Motion.div
-												initial={{ scale: 0.95, opacity: 0 }}
-												animate={{ scale: 1, opacity: 1 }}
-												exit={{ scale: 0.95 }}
-												transition={{ duration: 0.2, delay: index() * 0.1 }}
+											<Transition
+												appear
+												enterActiveClass="transition duration-200"
+												enterClass="scale-95 opacity-0"
+												enterToClass="scale-100 opacity-100"
+												exitActiveClass="transition duration-200"
+												exitClass="scale-100"
+												exitToClass="scale-95"
 											>
-												<TargetCard
-													variant="display"
-													target={item}
-													onClick={() => displayProps.onSelect?.(item)}
-													disabled={displayProps.disabled}
-													onKeyDown={handleKeyDown}
-													class="w-full"
-													data-target-menu-card="true"
-													highlightQuery={displayProps.highlightQuery}
-												/>
-											</Motion.div>
+												<div
+													style={{ "transition-delay": `${index() * 100}ms` }}
+												>
+													<TargetCard
+														variant="display"
+														target={item}
+														onClick={() => displayProps.onSelect?.(item)}
+														disabled={displayProps.disabled}
+														onKeyDown={handleKeyDown}
+														class="w-full"
+														data-target-menu-card="true"
+														highlightQuery={displayProps.highlightQuery}
+													/>
+												</div>
+											</Transition>
 										)}
 									</For>
 								);
@@ -162,23 +169,30 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 								return (
 									<For each={items() as CaptureWindowWithThumbnail[]}>
 										{(item, index) => (
-											<Motion.div
-												initial={{ scale: 0.95, opacity: 0 }}
-												animate={{ scale: 1, opacity: 1 }}
-												exit={{ scale: 0.95 }}
-												transition={{ duration: 0.2, delay: index() * 0.1 }}
+											<Transition
+												appear
+												enterActiveClass="transition duration-200"
+												enterClass="scale-95 opacity-0"
+												enterToClass="scale-100 opacity-100"
+												exitActiveClass="transition duration-200"
+												exitClass="scale-100"
+												exitToClass="scale-95"
 											>
-												<TargetCard
-													variant="window"
-													target={item}
-													onClick={() => windowProps.onSelect?.(item)}
-													disabled={windowProps.disabled}
-													onKeyDown={handleKeyDown}
-													class="w-full"
-													data-target-menu-card="true"
-													highlightQuery={windowProps.highlightQuery}
-												/>
-											</Motion.div>
+												<div
+													style={{ "transition-delay": `${index() * 100}ms` }}
+												>
+													<TargetCard
+														variant="window"
+														target={item}
+														onClick={() => windowProps.onSelect?.(item)}
+														disabled={windowProps.disabled}
+														onKeyDown={handleKeyDown}
+														class="w-full"
+														data-target-menu-card="true"
+														highlightQuery={windowProps.highlightQuery}
+													/>
+												</div>
+											</Transition>
 										)}
 									</For>
 								);

@@ -3,13 +3,13 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Button } from "@cap/ui";
+import { Avatar, Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -29,7 +29,10 @@ export const ShareHeader = ({
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect;
+	data: typeof videos.$inferSelect & {
+		ownerName?: string | null;
+		ownerImage?: string | null;
+	};
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
@@ -70,7 +73,8 @@ export const ShareHeader = ({
 
 	const handleBlur = async () => {
 		setIsEditing(false);
-
+		const next = title.trim();
+		if (next === "" || next === data.name) return;
 		try {
 			await editTitle(data.id, title);
 			toast.success("Video title updated");
@@ -135,9 +139,6 @@ export const ShareHeader = ({
 	};
 
 	const renderSharedStatus = () => {
-		const baseClassName =
-			"text-sm text-gray-10 transition-colors duration-200 flex items-center";
-
 		if (isOwner) {
 			const hasSpaceSharing =
 				sharedOrganizations?.length > 0 || effectiveSharedSpaces?.length > 0;
@@ -145,27 +146,39 @@ export const ShareHeader = ({
 
 			if (!hasSpaceSharing && !isPublic) {
 				return (
-					<p
-						className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
 						Not shared{" "}
 						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-					</p>
+					</Button>
 				);
 			} else {
 				return (
-					<p
-						className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
 						Shared{" "}
 						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-					</p>
+					</Button>
 				);
 			}
 		} else {
-			return <p className={baseClassName}>Shared with you</p>;
+			return (
+				<Button
+					className="px-3 pointer-events-none w-fit"
+					size="xs"
+					variant="outline"
+				>
+					Shared with you
+				</Button>
+			);
 		}
 	};
 
@@ -199,8 +212,8 @@ export const ShareHeader = ({
 			<div className="mt-8">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
 					<div className="items-center md:flex md:justify-between md:space-x-6">
-						<div className="mb-3 md:mb-0">
-							<div className="flex items-center space-x-3 lg:min-w-[400px]">
+						<div className="space-y-3">
+							<div className="flex flex-col lg:min-w-[400px]">
 								{isEditing ? (
 									<input
 										value={title}
@@ -208,7 +221,7 @@ export const ShareHeader = ({
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
 										autoFocus
-										className="w-full text-xl font-semibold sm:text-2xl"
+										className="w-full text-xl sm:text-2xl"
 									/>
 								) : (
 									<h1
@@ -223,10 +236,29 @@ export const ShareHeader = ({
 									</h1>
 								)}
 							</div>
-							{user && renderSharedStatus()}
-							<p className="mt-1 text-sm text-gray-10">
-								{moment(data.createdAt).fromNow()}
-							</p>
+							<div className="flex gap-7 items-center">
+								<div className="flex gap-2 items-center">
+									{data.ownerImage ? (
+										<Image
+											src={data.ownerImage}
+											alt={data.ownerName || ""}
+											width={32}
+											unoptimized
+											height={32}
+											className="rounded-full"
+										/>
+									) : (
+										<Avatar name={data.ownerName} className="size-8" />
+									)}
+									<div className="flex flex-col text-left">
+										<p className="text-sm text-gray-12">{data.ownerName}</p>
+										<p className="text-xs text-gray-10">
+											{moment(data.createdAt).fromNow()}
+										</p>
+									</div>
+								</div>
+								{user && renderSharedStatus()}
+							</div>
 						</div>
 					</div>
 					{user !== null && (

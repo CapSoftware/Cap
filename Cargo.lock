@@ -513,6 +513,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,6 +1029,7 @@ dependencies = [
  "cap-recording",
  "cap-rendering",
  "cap-utils",
+ "cidre 0.11.0",
  "clap",
  "ffmpeg-next",
  "flume",
@@ -1017,6 +1040,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "cap-api"
+version = "0.0.0"
+dependencies = [
+ "reqwest",
 ]
 
 [[package]]
@@ -1143,9 +1173,11 @@ name = "cap-desktop"
 version = "0.3.72"
 dependencies = [
  "anyhow",
+ "async-stream",
  "axum",
  "base64 0.22.1",
  "bytemuck",
+ "bytes",
  "cap-audio",
  "cap-camera",
  "cap-editor",
@@ -1178,7 +1210,6 @@ dependencies = [
  "lazy_static",
  "log",
  "md5",
- "mp4",
  "nix 0.29.0",
  "objc",
  "objc2-app-kit",
@@ -1418,6 +1449,7 @@ dependencies = [
 name = "cap-recording"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cap-audio",
  "cap-camera",
  "cap-camera-ffmpeg",
@@ -7493,6 +7525,7 @@ dependencies = [
  "objc",
  "serde",
  "specta",
+ "tokio",
  "tracing",
  "windows 0.60.0",
 ]

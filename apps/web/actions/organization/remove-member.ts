@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -13,7 +14,7 @@ import { revalidatePath } from "next/cache";
  */
 export async function removeOrganizationMember(
 	memberId: string,
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");

@@ -2,10 +2,12 @@ use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_timestamp::Timestamps;
+use futures::{FutureExt, future::Shared};
 use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+#[derive(Clone)]
 pub struct Cursor {
     pub file_name: String,
     pub id: u32,
@@ -15,6 +17,7 @@ pub struct Cursor {
 
 pub type Cursors = HashMap<u64, Cursor>;
 
+#[derive(Clone)]
 pub struct CursorActorResponse {
     // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
@@ -24,14 +27,13 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    stop: DropGuard,
-    rx: oneshot::Receiver<CursorActorResponse>,
+    stop: Option<DropGuard>,
+    pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
 }
 
 impl CursorActor {
-    pub async fn stop(self) -> CursorActorResponse {
-        drop(self.stop);
-        self.rx.await.unwrap()
+    pub fn stop(&mut self) {
+        drop(self.stop.take());
     }
 }
 
@@ -180,8 +182,8 @@ pub fn spawn_cursor_recorder(
     });
 
     CursorActor {
-        stop: stop_token.drop_guard(),
-        rx,
+        stop: Some(stop_token.drop_guard()),
+        rx: rx.shared(),
     }
 }
 

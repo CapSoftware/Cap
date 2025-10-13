@@ -172,20 +172,6 @@ app.post(
 						),
 					);
 
-			if (videoIdFromKey) {
-				try {
-					await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-						},
-						body: JSON.stringify({ videoId: videoIdFromKey }),
-					});
-				} catch (revalidateError) {
-					console.error("Failed to revalidate page:", revalidateError);
-				}
-			}
-
 			if (method === "post") return c.json({ presignedPostData: data! });
 			else return c.json({ presignedPutData: data! });
 		} catch (s3Error) {

@@ -10,6 +10,7 @@ import { UploadingProvider } from "./caps/UploadingContext";
 import {
 	getDashboardData,
 	type Organization,
+	type OrganizationSettings,
 	type Spaces,
 	type UserPreferences,
 } from "./dashboard-data";
@@ -32,18 +33,24 @@ export default async function DashboardLayout({
 	}
 
 	let organizationSelect: Organization[] = [];
+	let userCapsCount: number | null = null;
+	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
 	let userPreferences: UserPreferences;
 	try {
 		const dashboardData = await getDashboardData(user);
 		organizationSelect = dashboardData.organizationSelect;
+		userCapsCount = dashboardData.userCapsCount;
+		organizationSettings = dashboardData.organizationSettings;
 		userPreferences = dashboardData.userPreferences?.preferences || null;
 		spacesData = dashboardData.spacesData;
 		anyNewNotifications = dashboardData.anyNewNotifications;
 	} catch (error) {
 		console.error("Failed to load dashboard data", error);
 		organizationSelect = [];
+		userCapsCount = null;
+		organizationSettings = null;
 		spacesData = [];
 		anyNewNotifications = false;
 		userPreferences = null;
@@ -70,6 +77,8 @@ export default async function DashboardLayout({
 	return (
 		<UploadingProvider>
 			<DashboardContexts
+				organizationSettings={organizationSettings}
+				userCapsCount={userCapsCount}
 				organizationData={organizationSelect}
 				activeOrganization={activeOrganization || null}
 				spacesData={spacesData}

@@ -216,7 +216,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 												width: previewIconSize,
 												height: previewIconSize,
 											}}
-											className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-md"
+											className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
 										>
 											{previewUrl && (
 												<Image

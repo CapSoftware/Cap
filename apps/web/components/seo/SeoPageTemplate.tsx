@@ -223,7 +223,7 @@ export const SeoPageTemplate = ({
 						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 							{content.featuresTitle}
 						</h2>
-						<p className="text-xl leading-relaxed text-gray-600">
+						<p className="text-xl leading-relaxed text-gray-10">
 							{renderHTML(content.featuresDescription)}
 						</p>
 					</div>
@@ -241,7 +241,7 @@ export const SeoPageTemplate = ({
 								<h3 className="mb-4 text-xl font-semibold text-gray-12">
 									{feature.title}
 								</h3>
-								<p className="leading-relaxed text-gray-600">
+								<p className="leading-relaxed text-gray-10">
 									{renderHTML(feature.description)}
 								</p>
 							</div>

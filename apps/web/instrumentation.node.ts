@@ -15,7 +15,6 @@ import path from "path";
 
 export async function register() {
 	console.log("Waiting 5 seconds to run migrations");
-
 	// Function to trigger migrations with retry logic
 	const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
 		try {
@@ -36,10 +35,8 @@ export async function register() {
 			}
 		}
 	};
-
 	// Add a timeout to trigger migrations after 5 seconds on server start
 	setTimeout(() => triggerMigrations(), 5000);
-
 	setTimeout(() => createS3Bucket(), 5000);
 }
 

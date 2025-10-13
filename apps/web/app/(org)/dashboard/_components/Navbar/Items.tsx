@@ -50,12 +50,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
 	const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-	const { user, sidebarCollapsed } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const manageNavigation = [
 		{
 			name: "My Caps",
 			href: `/dashboard/caps`,
+			extraText: userCapsCount,
 			icon: <CapIcon />,
 			subNav: [],
 		},
@@ -66,16 +67,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
-			? [
-					{
-						name: "Admin Dev",
-						href: "/dashboard/admin",
-						icon: <CogIcon />,
-						subNav: [],
-					},
-				]
-			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -104,7 +95,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					position="right"
 					content={activeOrg?.organization.name ?? "No organization found"}
 				>
-					<PopoverTrigger asChild>
+					<PopoverTrigger suppressHydrationWarning asChild>
 						<motion.div
 							transition={{
 								type: "easeInOut",
@@ -356,6 +347,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									sidebarCollapsed={sidebarCollapsed}
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
+									extraText={item.extraText}
 								/>
 							</div>
 						))}
@@ -364,7 +356,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && (
+						{!sidebarCollapsed && !userIsSubscribed && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}
@@ -445,6 +437,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
+	extraText,
 }: {
 	name: string;
 	href: string;
@@ -456,6 +449,7 @@ const NavItem = ({
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
 	isPathActive: (path: string) => boolean;
+	extraText: number | null | undefined;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -497,6 +491,11 @@ const NavItem = ({
 				>
 					{name}
 				</p>
+				{extraText && !sidebarCollapsed && (
+					<p className="ml-auto text-xs font-medium text-gray-11">
+						{extraText}
+					</p>
+				)}
 			</Link>
 		</Tooltip>
 	);

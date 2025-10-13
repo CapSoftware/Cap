@@ -1,3 +1,12 @@
+use crate::{
+    media::{MFSetAttributeRatio, MFSetAttributeSize},
+    mft::EncoderDevice,
+    video::{NewVideoProcessorError, VideoProcessor},
+};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
@@ -8,9 +17,9 @@ use windows::{
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
         },
         Media::MediaFoundation::{
-            IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
-            IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE,
-            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE,
+            self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
+            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
+            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE,
             MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
             MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
@@ -24,12 +33,6 @@ use windows::{
         },
     },
     core::{Error, Interface},
-};
-
-use crate::{
-    media::{MFSetAttributeRatio, MFSetAttributeSize},
-    mft::EncoderDevice,
-    video::{NewVideoProcessorError, VideoProcessor},
 };
 
 pub struct VideoEncoderOutputSample {
@@ -379,21 +382,12 @@ impl H264Encoder {
         &self.output_type
     }
 
-    pub fn finish(&self) -> windows::core::Result<()> {
-        unsafe {
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-        }
-        Ok(())
-    }
-
-    pub fn start(&self) -> windows::core::Result<()> {
+    pub fn run(
+        &mut self,
+        should_stop: Arc<AtomicBool>,
+        mut get_frame: impl FnMut() -> windows::core::Result<Option<(ID3D11Texture2D, TimeSpan)>>,
+        mut on_sample: impl FnMut(IMFSample) -> windows::core::Result<()>,
+    ) -> windows::core::Result<()> {
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -401,70 +395,66 @@ impl H264Encoder {
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+            let mut should_exit = false;
+            while !should_exit {
+                let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
+
+                let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
+                match event_type {
+                    MediaFoundation::METransformNeedInput => {
+                        should_exit = true;
+                        if !should_stop.load(Ordering::SeqCst) {
+                            if let Some((texture, timestamp)) = get_frame()? {
+                                self.video_processor.process_texture(&texture)?;
+                                let input_buffer = {
+                                    MFCreateDXGISurfaceBuffer(
+                                        &ID3D11Texture2D::IID,
+                                        self.video_processor.output_texture(),
+                                        0,
+                                        false,
+                                    )?
+                                };
+                                let mf_sample = MFCreateSample()?;
+                                mf_sample.AddBuffer(&input_buffer)?;
+                                mf_sample.SetSampleTime(timestamp.Duration)?;
+                                self.transform
+                                    .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
+                                should_exit = false;
+                            }
+                        }
+                    }
+                    MediaFoundation::METransformHaveOutput => {
+                        let mut status = 0;
+                        let output_buffer = MFT_OUTPUT_DATA_BUFFER {
+                            dwStreamID: self.output_stream_id,
+                            ..Default::default()
+                        };
+
+                        let sample = {
+                            let mut output_buffers = [output_buffer];
+                            self.transform
+                                .ProcessOutput(0, &mut output_buffers, &mut status)?;
+                            output_buffers[0].pSample.as_ref().unwrap().clone()
+                        };
+
+                        on_sample(sample)?;
+                    }
+                    _ => {
+                        panic!("Unknown media event type: {}", event_type.0);
+                    }
+                }
+            }
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0)?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
         }
 
         Ok(())
-    }
-
-    pub fn get_event(&self) -> windows::core::Result<MF_EVENT_TYPE> {
-        let event = unsafe {
-            self.event_generator
-                .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?
-        };
-
-        Ok(MF_EVENT_TYPE(unsafe { event.GetType()? } as i32))
-    }
-
-    pub fn handle_needs_input(
-        &mut self,
-        texture: &ID3D11Texture2D,
-        timestamp: TimeSpan,
-    ) -> Result<(), HandleNeedsInputError> {
-        self.video_processor
-            .process_texture(texture)
-            .map_err(HandleNeedsInputError::ProcessTexture)?;
-
-        let first_time = self.first_time.get_or_insert(timestamp);
-
-        let input_buffer = unsafe {
-            MFCreateDXGISurfaceBuffer(
-                &ID3D11Texture2D::IID,
-                self.video_processor.output_texture(),
-                0,
-                false,
-            )
-            .map_err(HandleNeedsInputError::CreateSurfaceBuffer)?
-        };
-        let mf_sample = unsafe { MFCreateSample().map_err(HandleNeedsInputError::CreateSample)? };
-        unsafe {
-            mf_sample
-                .AddBuffer(&input_buffer)
-                .map_err(HandleNeedsInputError::AddBuffer)?;
-            mf_sample
-                .SetSampleTime(timestamp.Duration - first_time.Duration)
-                .map_err(HandleNeedsInputError::SetSampleTime)?;
-            self.transform
-                .ProcessInput(self.input_stream_id, &mf_sample, 0)
-                .map_err(HandleNeedsInputError::ProcessInput)?;
-        };
-        Ok(())
-    }
-
-    pub fn handle_has_output(&mut self) -> windows::core::Result<Option<IMFSample>> {
-        let mut status = 0;
-        let output_buffer = MFT_OUTPUT_DATA_BUFFER {
-            dwStreamID: self.output_stream_id,
-            ..Default::default()
-        };
-
-        let sample = unsafe {
-            let mut output_buffers = [output_buffer];
-            self.transform
-                .ProcessOutput(0, &mut output_buffers, &mut status)?;
-            output_buffers[0].pSample.as_ref().cloned()
-        };
-
-        Ok(sample)
     }
 }
 

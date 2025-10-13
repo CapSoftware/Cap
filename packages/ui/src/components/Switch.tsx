@@ -14,7 +14,7 @@ const Switch = React.forwardRef<
 			"w-11 h-6 p-[0.125rem]",
 			"bg-gray-5 data-[state=checked]:bg-blue-500",
 			"focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500",
-			"disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-gray-200",
+			"disabled:cursor-not-allowed disabled:opacity-40 disabled:bg-gray-4",
 			className,
 		)}
 		{...props}

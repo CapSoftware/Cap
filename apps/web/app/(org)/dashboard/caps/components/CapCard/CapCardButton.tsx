@@ -1,6 +1,9 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import clsx from "clsx";
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
+import React from "react";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardButtonProps {
@@ -8,7 +11,7 @@ interface CapCardButtonProps {
 	onClick?: (e: MouseEvent) => void;
 	disabled?: boolean;
 	className: string;
-	icon: () => ReactNode;
+	icon: React.JSX.Element;
 	asChild?: boolean;
 }
 
@@ -23,7 +26,7 @@ export const CapCardButton = ({
 	return (
 		<Tooltip key={tooltipContent} content={tooltipContent}>
 			<Button
-				onClick={(e) => onClick?.(e)}
+				onClick={onClick}
 				disabled={disabled}
 				asChild={asChild}
 				className={clsx(
@@ -34,7 +37,9 @@ export const CapCardButton = ({
 				size="sm"
 				aria-label={tooltipContent}
 			>
-				{icon()}
+				{React.cloneElement(icon, {
+					className: clsx(icon.props.className, "size-3.5"),
+				})}
 			</Button>
 		</Tooltip>
 	);

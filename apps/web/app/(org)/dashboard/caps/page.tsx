@@ -96,9 +96,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage(props: {
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
+export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
 
@@ -106,15 +104,22 @@ export default async function CapsPage(props: {
 		redirect("/login");
 	}
 
-	const userId = user.id;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
+
+	const userId = user.id;
 	const offset = (page - 1) * limit;
 
 	const totalCountResult = await db()
 		.select({ count: count() })
 		.from(videos)
-		.where(eq(videos.ownerId, userId));
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(organizations.id, user.activeOrganizationId),
+			),
+		);
 
 	const totalCount = totalCountResult[0]?.count || 0;
 
@@ -127,20 +132,6 @@ export default async function CapsPage(props: {
 		.from(organizations)
 		.where(eq(organizations.id, user.activeOrganizationId))
 		.limit(1);
-
-	let customDomain: string | null = null;
-	let domainVerified = false;
-
-	if (
-		organizationData.length > 0 &&
-		organizationData[0] &&
-		organizationData[0].customDomain
-	) {
-		customDomain = organizationData[0].customDomain;
-		if (organizationData[0].domainVerified !== null) {
-			domainVerified = true;
-		}
-	}
 
 	const videoData = await db()
 		.select({
@@ -176,20 +167,27 @@ export default async function CapsPage(props: {
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),
+			settings: videos.settings,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
-		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(videos.orgId, user.activeOrganizationId),
+				isNull(videos.folderId),
+			),
+		)
 		.groupBy(
 			videos.id,
 			videos.ownerId,
 			videos.name,
 			videos.createdAt,
 			videos.metadata,
+			videos.orgId,
 			users.name,
 		)
 		.orderBy(
@@ -215,6 +213,7 @@ export default async function CapsPage(props: {
 		.where(
 			and(
 				eq(folders.organizationId, user.activeOrganizationId),
+				eq(folders.createdById, user.id),
 				isNull(folders.parentId),
 				isNull(folders.spaceId),
 			),
@@ -231,6 +230,7 @@ export default async function CapsPage(props: {
 			...videoWithoutEffectiveDate,
 			id: Video.VideoId.make(video.id),
 			foldersData,
+			settings: video.settings,
 			sharedOrganizations: Array.isArray(video.sharedOrganizations)
 				? video.sharedOrganizations.filter(
 						(organization) => organization.id !== null,
@@ -253,8 +253,6 @@ export default async function CapsPage(props: {
 		<Caps
 			data={processedVideoData}
 			folders={foldersData}
-			customDomain={customDomain}
-			domainVerified={domainVerified}
 			count={totalCount}
 			dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 		/>

@@ -5,13 +5,17 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import type { Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
 
-export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
+export async function uploadSpaceIcon(
+	formData: FormData,
+	spaceId: Space.SpaceId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user) {

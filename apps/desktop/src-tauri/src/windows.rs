@@ -16,11 +16,12 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tauri_specta::Event;
 use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
-    App, ArcLock, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
     general_settings::{AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
@@ -167,7 +168,7 @@ impl CapWindowId {
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
-            Self::Camera => (460.0, 920.0),
+            Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (900.0, 500.0),
             _ => return None,
@@ -272,6 +273,20 @@ impl ShowCapWindow {
                 if new_recording_flow {
                     #[cfg(target_os = "macos")]
                     crate::platform::set_window_level(window.as_ref().window(), 50);
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let prewarmer =
+                            app_handle.state::<crate::platform::ScreenCapturePrewarmer>();
+                        prewarmer.request(false).await;
+                    });
+
+                    if let Err(error) = (RequestScreenCapturePrewarm { force: false }).emit(app) {
+                        warn!(%error, "Failed to emit ScreenCaptureKit prewarm event");
+                    }
                 }
 
                 window
