@@ -476,18 +476,20 @@ pub async fn start_recording(
                     recording_dir: recording_dir.clone(),
                 };
 
-                let window_exclusions = general_settings
-                    .as_ref()
-                    .map_or_else(general_settings::default_excluded_windows, |settings| {
-                        settings.excluded_windows.clone()
-                    });
+                #[cfg(target_os = "macos")]
+                let excluded_windows = {
+                    let window_exclusions = general_settings
+                        .as_ref()
+                        .map_or_else(general_settings::default_excluded_windows, |settings| {
+                            settings.excluded_windows.clone()
+                        });
 
-                let excluded_windows =
-                    crate::window_exclusion::resolve_window_ids(&window_exclusions);
+                    crate::window_exclusion::resolve_window_ids(&window_exclusions)
+                };
 
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
-                        let mut builder = studio_recording::Actor::builder(
+                        let builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
@@ -496,8 +498,10 @@ pub async fn start_recording(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        )
-                        .with_excluded_windows(excluded_windows.clone());
+                        );
+
+                        #[cfg(target_os = "macos")]
+                        let mut builder = builder.with_excluded_windows(excluded_windows.clone());
 
                         if let Some(camera_feed) = camera_feed {
                             builder = builder.with_camera_feed(camera_feed);
@@ -537,8 +541,10 @@ pub async fn start_recording(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio)
-                        .with_excluded_windows(excluded_windows.clone());
+                        .with_system_audio(inputs.capture_system_audio);
+
+                        #[cfg(target_os = "macos")]
+                        let mut builder = builder.with_excluded_windows(excluded_windows.clone());
 
                         if let Some(mic_feed) = mic_feed {
                             builder = builder.with_mic_feed(mic_feed);
