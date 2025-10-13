@@ -300,8 +300,6 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		CAP_AWS_BUCKET: bucket.bucket,
 		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
-		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
-		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
 		AXIOM_API_TOKEN,
 		AXIOM_DOMAIN: "api.axiom.co",
 		AXIOM_DATASET,
