@@ -37,6 +37,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
+use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
@@ -245,6 +246,13 @@ pub enum RecordingEvent {
     Failed { error: String },
 }
 
+#[derive(Serialize, Type)]
+pub enum RecordingAction {
+    Started,
+    InvalidAuthentication,
+    UpgradeRequired,
+}
+
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -252,7 +260,7 @@ pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
-) -> Result<(), String> {
+) -> Result<RecordingAction, String> {
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
     }
@@ -294,7 +302,7 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    let s3_config = create_or_get_video(
+                    let s3_config = match create_or_get_video(
                         &app,
                         false,
                         None,
@@ -305,10 +313,19 @@ pub async fn start_recording(
                         None,
                     )
                     .await
-                    .map_err(|err| {
-                        error!("Error creating instant mode video: {err}");
-                        err
-                    })?;
+                    {
+                        Ok(meta) => meta,
+                        Err(AuthedApiError::InvalidAuthentication) => {
+                            return Ok(RecordingAction::InvalidAuthentication);
+                        }
+                        Err(AuthedApiError::UpgradeRequired) => {
+                            return Ok(RecordingAction::UpgradeRequired);
+                        }
+                        Err(err) => {
+                            error!("Error creating instant mode video: {err}");
+                            return Err(err.to_string());
+                        }
+                    };
 
                     let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
                     info!("Pre-created shareable link: {}", link);
@@ -618,7 +635,7 @@ pub async fn start_recording(
 
     AppSounds::StartRecording.play();
 
-    Ok(())
+    Ok(RecordingAction::Started)
 }
 
 #[tauri::command]
@@ -663,7 +680,10 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
 #[tauri::command]
 #[specta::specta]
-pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+pub async fn restart_recording(
+    app: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<RecordingAction, String> {
     let Some(recording) = state.write().await.clear_current_recording() else {
         return Err("No recording in progress".to_string());
     };
@@ -877,7 +897,7 @@ async fn handle_recording_finish(
                         .handle
                         .await
                         .map_err(|e| e.to_string())
-                        .and_then(|r| r)
+                        .and_then(|r| r.map_err(|v| v.to_string()))
                     {
                         Ok(()) => {
                             info!(
@@ -935,7 +955,9 @@ async fn handle_recording_finish(
                             error!("Error in upload_video: {error}");
 
                             if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
-                                meta.upload = Some(UploadMeta::Failed { error });
+                                meta.upload = Some(UploadMeta::Failed {
+                                    error: error.to_string(),
+                                });
                                 meta.save_for_project()
                                     .map_err(|e| format!("Failed to save recording meta: {e}"))
                                     .ok();
