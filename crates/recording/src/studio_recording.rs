@@ -14,6 +14,7 @@ use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
+use scap_targets::WindowId;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -344,7 +345,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
-    excluded_windows: Vec<screen_capture::WindowExclusion>,
+    excluded_windows: Vec<WindowId>,
 }
 
 impl ActorBuilder {
@@ -380,10 +381,7 @@ impl ActorBuilder {
         self
     }
 
-    pub fn with_excluded_windows(
-        mut self,
-        excluded_windows: Vec<screen_capture::WindowExclusion>,
-    ) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }

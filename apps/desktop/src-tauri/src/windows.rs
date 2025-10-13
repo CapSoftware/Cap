@@ -26,8 +26,8 @@ use crate::{
     permissions,
     recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
+    window_exclusion::WindowExclusion,
 };
-use cap_recording::sources::screen_capture::WindowExclusion;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);

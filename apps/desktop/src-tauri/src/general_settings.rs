@@ -1,4 +1,4 @@
-use cap_recording::sources::screen_capture::WindowExclusion;
+use crate::window_exclusion::WindowExclusion;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;

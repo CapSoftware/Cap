@@ -459,10 +459,14 @@ pub async fn start_recording(
                     recording_dir: recording_dir.clone(),
                 };
 
-                let excluded_windows = general_settings
+                let window_exclusions = general_settings
                     .as_ref()
-                    .map(|settings| settings.excluded_windows.clone())
-                    .unwrap_or_else(general_settings::default_excluded_windows);
+                    .map_or_else(general_settings::default_excluded_windows, |settings| {
+                        settings.excluded_windows.clone()
+                    });
+
+                let excluded_windows =
+                    crate::window_exclusion::resolve_window_ids(&window_exclusions);
 
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
@@ -707,7 +711,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         }
     };
 
-    if let Some((recording, recording_dir, video_id)) = recording_data {
+    if let Some((_, recording_dir, video_id)) = recording_data {
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 

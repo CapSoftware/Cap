@@ -350,7 +350,9 @@ impl WindowImpl {
     pub fn bundle_identifier(&self) -> Option<String> {
         let pid = self.owner_pid()?;
 
-        unsafe {
+        use objc::rc::autoreleasepool;
+
+        autoreleasepool(|| unsafe {
             use cocoa::base::id;
             use cocoa::foundation::NSString;
             use objc::{class, msg_send, sel, sel_impl};
@@ -359,27 +361,20 @@ impl WindowImpl {
                 class!(NSRunningApplication),
                 runningApplicationWithProcessIdentifier: pid
             ];
-
-            if app.is_null() {
-                return None;
-            }
+            let app = (!app.is_null()).then_some(app)?;
 
             let bundle_identifier: id = msg_send![app, bundleIdentifier];
-            if bundle_identifier.is_null() {
-                return None;
-            }
+            let bundle_identifier = (!bundle_identifier.is_null()).then_some(bundle_identifier)?;
 
             let cstr = NSString::UTF8String(bundle_identifier);
-            if cstr.is_null() {
-                return None;
-            }
+            let cstr = (!cstr.is_null()).then_some(cstr)?;
 
             Some(
                 std::ffi::CStr::from_ptr(cstr)
                     .to_string_lossy()
                     .into_owned(),
             )
-        }
+        })
     }
 
     pub fn name(&self) -> Option<String> {

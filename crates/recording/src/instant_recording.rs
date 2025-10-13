@@ -3,12 +3,13 @@ use crate::{
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
-    sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget, WindowExclusion},
+    sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
+use scap_targets::WindowId;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -220,7 +221,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    excluded_windows: Vec<WindowExclusion>,
+    excluded_windows: Vec<WindowId>,
 }
 
 impl ActorBuilder {
@@ -244,7 +245,7 @@ impl ActorBuilder {
         self
     }
 
-    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowExclusion>) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }

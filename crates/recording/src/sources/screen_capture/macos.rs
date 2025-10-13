@@ -9,12 +9,9 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cidre::*;
 use futures::{FutureExt, channel::mpsc, future::BoxFuture};
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        atomic::{self, AtomicBool},
-    },
+use std::sync::{
+    Arc,
+    atomic::{self, AtomicBool},
 };
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -67,7 +64,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
-        let (mut video_tx, video_rx) = flume::bounded(4);
+        let (video_tx, video_rx) = flume::bounded(4);
         let (mut audio_tx, audio_rx) = if self.system_audio {
             let (tx, rx) = mpsc::channel(32);
             (Some(tx), Some(rx))
@@ -83,25 +80,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         } else {
             let mut collected = Vec::new();
 
-            for window in Window::list() {
-                let owner_name = window.owner_name();
-                let window_title = window.name();
-                let bundle_identifier = window.bundle_identifier();
+            for window_id in &self.excluded_windows {
+                let Some(window) = Window::from_id(window_id) else {
+                    continue;
+                };
 
-                if self.excluded_windows.iter().any(|entry| {
-                    entry.matches(
-                        bundle_identifier.as_deref(),
-                        owner_name.as_deref(),
-                        window_title.as_deref(),
-                    )
-                }) {
-                    if let Some(sc_window) = window
-                        .raw_handle()
-                        .as_sc(self.shareable_content.clone())
-                        .await
-                    {
-                        collected.push(sc_window);
-                    }
+                if let Some(sc_window) = window
+                    .raw_handle()
+                    .as_sc(self.shareable_content.clone())
+                    .await
+                {
+                    collected.push(sc_window);
                 }
             }
 

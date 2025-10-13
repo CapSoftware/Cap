@@ -25,6 +25,7 @@ mod tray;
 mod upload;
 mod upload_legacy;
 mod web_api;
+mod window_exclusion;
 mod windows;
 
 use audio::AppSounds;
@@ -2017,7 +2018,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<recording_settings::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>()
-        .typ::<cap_recording::sources::screen_capture::WindowExclusion>();
+        .typ::<crate::window_exclusion::WindowExclusion>();
 
     #[cfg(debug_assertions)]
     specta_builder

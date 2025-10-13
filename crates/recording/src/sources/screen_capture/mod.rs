@@ -48,66 +48,6 @@ pub struct CaptureArea {
     pub bounds: LogicalBounds,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowExclusion {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundle_identifier: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub window_title: Option<String>,
-}
-
-impl WindowExclusion {
-    pub fn matches(
-        &self,
-        bundle_identifier: Option<&str>,
-        owner_name: Option<&str>,
-        window_title: Option<&str>,
-    ) -> bool {
-        if let Some(identifier) = self.bundle_identifier.as_deref() {
-            if bundle_identifier
-                .map(|candidate| candidate == identifier)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-
-        if let Some(expected_owner) = self.owner_name.as_deref() {
-            let owner_matches = owner_name
-                .map(|candidate| candidate == expected_owner)
-                .unwrap_or(false);
-
-            if self.window_title.is_some() {
-                return owner_matches
-                    && self
-                        .window_title
-                        .as_deref()
-                        .map(|expected_title| {
-                            window_title
-                                .map(|candidate| candidate == expected_title)
-                                .unwrap_or(false)
-                        })
-                        .unwrap_or(false);
-            }
-
-            if owner_matches {
-                return true;
-            }
-        }
-
-        if let Some(expected_title) = self.window_title.as_deref() {
-            return window_title
-                .map(|candidate| candidate == expected_title)
-                .unwrap_or(false);
-        }
-
-        false
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
@@ -259,7 +199,7 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     #[cfg(target_os = "macos")]
     shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-    pub excluded_windows: Vec<WindowExclusion>,
+    pub excluded_windows: Vec<WindowId>,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
@@ -338,7 +278,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-        excluded_windows: Vec<WindowExclusion>,
+        excluded_windows: Vec<WindowId>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
