@@ -243,6 +243,9 @@ export const POST = async (req: Request) => {
 				// Check if this is an onboarding purchase
 				const isOnboarding = session.metadata?.isOnboarding === "true";
 
+				console.log("Session metadata:", session.metadata);
+				console.log("Is onboarding:", isOnboarding);
+
 				const updateData: {
 					stripeSubscriptionId: string;
 					stripeSubscriptionStatus: string;
@@ -253,26 +256,25 @@ export const POST = async (req: Request) => {
 						organizationSetup: boolean;
 						customDomain: boolean;
 						inviteTeam: boolean;
-					};
+					} | null;
+					onboarding_completed_at?: Date;
 				} = {
 					stripeSubscriptionId: session.subscription as string,
 					stripeSubscriptionStatus: subscription.status,
 					stripeCustomerId: customer.id,
 					inviteQuota: inviteQuota,
+					onboarding_completed_at: isOnboarding ? new Date() : undefined,
+					onboardingSteps: isOnboarding
+						? {
+								welcome: true,
+								organizationSetup: true,
+								customDomain: true,
+								inviteTeam: true,
+							}
+						: null,
 				};
 
-				// If this is an onboarding purchase, mark all onboarding steps as complete
-				if (isOnboarding) {
-					updateData.onboardingSteps = {
-						welcome: true,
-						organizationSetup: true,
-						customDomain: true,
-						inviteTeam: true,
-					};
-					console.log(
-						"Onboarding purchase detected, marking all steps complete",
-					);
-				}
+				console.log("Update data:", updateData);
 
 				await db().update(users).set(updateData).where(eq(users.id, dbUser.id));
 
