@@ -141,69 +141,22 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
         .and_then(|configs| {
             let mut configs = configs.collect::<Vec<_>>();
 
-            // Log all configs for debugging
-            if let Some(ref name) = device_name_for_logging {
-                info!("Device '{}' available configs:", name);
-                for config in &configs {
-                    info!("  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
-                        config.sample_format(),
-                        config.min_sample_rate().0,
-                        config.max_sample_rate().0,
-                        config.sample_format().sample_size()
-                    );
-                }
-            }
-
             configs.sort_by(|a, b| {
                 b.sample_format()
                     .sample_size()
                     .cmp(&a.sample_format().sample_size())
-                    .then(a.max_sample_rate().cmp(&b.max_sample_rate()))
+                    .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
 
-            let selected = configs
+            configs
                 .into_iter()
                 .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
-                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some());
-
-            if let Some(ref config) = selected {
-                if let Ok(device_name) = device.name() {
-                    info!("Selected config for '{}': Format={:?}, Min={}, Max={}",
-                        device_name,
-                        config.sample_format(),
-                        config.min_sample_rate().0,
-                        config.max_sample_rate().0
-                    );
-                }
-            }
-
-            selected
+                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
         });
-
-    if result.is_some() {
-        if let Some(ref name) = device_name_for_logging {
-            info!("✓ Device '{}' is usable", name);
-        }
-    } else {
-        if let Some(ref name) = device_name_for_logging {
-            warn!("✗ Device '{}' rejected - no suitable config found", name);
-        }
-    }
 
     result.and_then(|config| {
         let final_config = config.with_sample_rate(cpal::SampleRate(48000));
-        device
-            .name()
-            .ok()
-            .map(|name| {
-                info!("Final config for '{}': sample_rate={}, channels={}, format={:?}",
-                    name,
-                    final_config.sample_rate().0,
-                    final_config.channels(),
-                    final_config.sample_format()
-                );
-                (name, device, final_config)
-            })
+        device.name().ok().map(|name| (name, device, final_config))
     })
 }
 
@@ -342,7 +295,22 @@ impl Message<SetInput> for MicrophoneFeed {
             let config = config.clone();
             let device_name_for_log = device.name().ok();
             move || {
-                info!("🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}",
+                // Log all configs for debugging
+                if let Some(ref name) = device_name_for_log {
+                    info!("Device '{}' available configs:", name);
+                    for config in device.supported_input_configs().into_iter().flatten() {
+                        info!(
+                            "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
+                            config.sample_format(),
+                            config.min_sample_rate().0,
+                            config.max_sample_rate().0,
+                            config.sample_format().sample_size()
+                        );
+                    }
+                }
+
+                info!(
+                    "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}",
                     device_name_for_log,
                     config.sample_rate().0,
                     config.channels(),
@@ -357,7 +325,8 @@ impl Message<SetInput> for MicrophoneFeed {
                         let mut callback_count = 0u64;
                         move |data, info| {
                             if callback_count == 0 {
-                                info!("🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                info!(
+                                    "🎤 First audio callback - data size: {} bytes, format: {:?}",
                                     data.bytes().len(),
                                     data.sample_format()
                                 );
