@@ -50,7 +50,7 @@ export default function OrganizationSetupPage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/onboarding/custom-domain");
-			}, 500);
+			}, 200);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {

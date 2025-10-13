@@ -45,7 +45,7 @@ export default function InviteTeamPage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/dashboard/caps");
-			}, 500);
+			}, 200);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
