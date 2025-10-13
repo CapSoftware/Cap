@@ -16,7 +16,7 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 
 		yield* Activity.make({
 			name: "VerifyURLValid",
-			error: Schema.Union(Loom.VideoURLInvalidError, Loom.ExternalLoomError),
+			error: Schema.Union(Loom.VideoInvalidError, Loom.ExternalLoomError),
 			execute: http
 				.get(payload.loom.video.downloadUrl, {
 					headers: { range: "bytes=0-0" },
@@ -29,12 +29,12 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 							cause,
 						): Effect.Effect<
 							never,
-							Loom.VideoURLInvalidError | Loom.ExternalLoomError
+							Loom.VideoInvalidError | Loom.ExternalLoomError
 						> => {
 							if (cause.response.status < 500)
 								return Effect.fail(
-									new Loom.VideoURLInvalidError({
-										status: cause.response.status,
+									new Loom.VideoInvalidError({
+										cause: "NotFound",
 									}),
 								);
 
@@ -46,7 +46,7 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 					Effect.retry({
 						schedule: Schedule.exponential("200 millis"),
 						times: 3,
-						while: (e) => e._tag !== "VideoURLInvalidError",
+						while: (e) => e._tag !== "VideoInvalidError",
 					}),
 					Effect.catchTag("RequestError", Effect.die),
 				),
@@ -103,7 +103,12 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 
 		yield* Activity.make({
 			name: "DownloadVideo",
-			error: Schema.Union(S3Error, DatabaseError, Loom.ExternalLoomError),
+			error: Schema.Union(
+				S3Error,
+				DatabaseError,
+				Loom.VideoInvalidError,
+				Loom.ExternalLoomError,
+			),
 			execute: Effect.gen(function* () {
 				const [s3Bucket] = yield* s3Buckets.getBucketAccess(customBucketId);
 
@@ -113,9 +118,15 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 					.pipe(
 						Effect.catchAll((cause) => new Loom.ExternalLoomError({ cause })),
 					);
-				const contentLength = Headers.get(resp.headers, "content-length").pipe(
+				const contentLength = yield* Headers.get(
+					resp.headers,
+					"content-length",
+				).pipe(
 					Option.map((v) => Number(v)),
-					Option.getOrUndefined,
+					Effect.catchTag(
+						"NoSuchElementException",
+						() => new Loom.VideoInvalidError({ cause: "InvalidContentLength" }),
+					),
 				);
 				yield* Effect.log(`Downloading ${contentLength} bytes`);
 
@@ -123,8 +134,17 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 
 				const key = source.getFileKey();
 
-				yield* s3Bucket
-					.putObject(
+				yield* Effect.gen(function* () {
+					// TODO: Connect this with upload progress
+					yield* Effect.repeat(
+						Effect.gen(function* () {
+							const bytes = yield* Effect.succeed(downloadedBytes);
+							yield* Effect.log(`Downloaded ${bytes}/${contentLength} bytes`);
+						}),
+						Schedule.forever.pipe(Schedule.delayed(() => "2 seconds")),
+					).pipe(Effect.delay("100 millis"), Effect.forkScoped);
+
+					yield* s3Bucket.putObject(
 						key,
 						resp.stream.pipe(
 							Stream.tap((bytes) => {
@@ -133,21 +153,8 @@ export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
 							}),
 						),
 						{ contentLength },
-					)
-					.pipe(
-						Effect.race(
-							// TODO: Connect this with upload progress
-							Effect.repeat(
-								Effect.gen(function* () {
-									const bytes = yield* Effect.succeed(downloadedBytes);
-									yield* Effect.log(
-										`Downloaded ${bytes}/${contentLength} bytes`,
-									);
-								}),
-								Schedule.forever.pipe(Schedule.delayed(() => "2 seconds")),
-							).pipe(Effect.delay("100 millis")),
-						),
 					);
+				}).pipe(Effect.scoped);
 
 				yield* Effect.log(
 					`Uploaded video for user '${payload.cap.userId}' at key '${key}'`,
