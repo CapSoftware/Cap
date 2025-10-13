@@ -1432,10 +1432,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cap-multi-recorder"
-version = "0.1.0"
-
-[[package]]
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
