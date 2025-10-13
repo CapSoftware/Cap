@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+			success_url: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}&onboarding=${isOnboarding}`,
 			cancel_url: `${serverEnv().WEB_URL}/pricing`,
 			allow_promotion_codes: true,
 			metadata: {

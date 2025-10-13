@@ -20,7 +20,7 @@ export default function CustomDomainPage() {
 			router.refresh();
 			setTimeout(() => {
 				router.push("/onboarding/invite-team");
-			}, 200);
+			}, 100);
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
