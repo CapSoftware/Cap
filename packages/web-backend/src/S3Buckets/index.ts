@@ -1,5 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
+import { fromInstanceMetadata, fromSSO } from "@aws-sdk/credential-providers";
 import { decrypt } from "@cap/database/crypto";
 import type { S3Bucket, User } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
@@ -24,24 +25,33 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				Config.option,
 			),
 			region: yield* Config.string("CAP_AWS_REGION"),
-			credentials: Option.getOrUndefined(
-				yield* Config.option(
-					Config.all([
-						Config.string("CAP_AWS_ACCESS_KEY"),
-						Config.string("CAP_AWS_SECRET_KEY"),
-					]).pipe(
-						Config.map(([accessKeyId, secretAccessKey]) => ({
-							accessKeyId,
-							secretAccessKey,
-						})),
-						Config.orElse(() =>
-							Config.string("VERCEL_AWS_ROLE_ARN").pipe(
-								Config.map((arn) => awsCredentialsProvider({ roleArn: arn })),
-							),
+			credentials: yield* Config.option(
+				Config.all([
+					Config.string("CAP_AWS_ACCESS_KEY"),
+					Config.string("CAP_AWS_SECRET_KEY"),
+				]).pipe(
+					Config.map(([accessKeyId, secretAccessKey]) => ({
+						accessKeyId,
+						secretAccessKey,
+					})),
+					Config.orElse(() =>
+						Config.string("VERCEL_AWS_ROLE_ARN").pipe(
+							Config.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+						),
+					),
+				),
+			).pipe(
+				Effect.flatMap(
+					Effect.catchTag("NoSuchElementException", () =>
+						Effect.succeed(
+							process.env.NODE_ENV === "development"
+								? fromSSO({ profile: process.env.AWS_DEFAULT_PROFILE })
+								: fromInstanceMetadata(),
 						),
 					),
 				),
 			),
+
 			forcePathStyle:
 				Option.getOrNull(
 					yield* Config.boolean("S3_PATH_STYLE").pipe(Config.option),
@@ -57,6 +67,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				region: defaultConfigs.region,
 				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
+				requestStreamBufferSize: 16 * 1024,
 			});
 
 		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {

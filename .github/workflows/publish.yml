@@ -185,8 +185,6 @@ jobs:
           echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}' >> .env
           echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Build app

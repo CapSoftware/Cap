@@ -128,12 +128,6 @@ async function main() {
 							defaultValue: allEnvs.CAP_AWS_BUCKET,
 							placeholder: allEnvs.CAP_AWS_BUCKET,
 						}),
-					CAP_AWS_REGION: () =>
-						text({
-							message: "CAP_AWS_REGION",
-							defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
-							placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
-						}),
 					CAP_AWS_ENDPOINT: () =>
 						text({
 							message: "CAP_AWS_ENDPOINT",
@@ -160,8 +154,6 @@ async function main() {
 		}
 
 		envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
-		envs.NEXT_PUBLIC_CAP_AWS_BUCKET = envs.CAP_AWS_BUCKET;
-		envs.NEXT_PUBLIC_CAP_AWS_REGION = envs.CAP_AWS_REGION;
 	}
 
 	if (hasDesktop) {
