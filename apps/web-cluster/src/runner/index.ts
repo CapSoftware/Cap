@@ -61,13 +61,19 @@ const RpcsLive = RpcServer.layer(Workflows.RpcGroup).pipe(
 			Effect.gen(function* () {
 				const { authSecret } = yield* RpcAuthSecret;
 
-				return Workflows.SecretAuthMiddleware.of((options) => {
-					const authHeader = Headers.get(options.headers, "authorization");
-					if (Option.isNone(authHeader) || authHeader.value !== authSecret)
-						return new Workflows.InvalidRpcAuth();
+				return Workflows.SecretAuthMiddleware.of(
+					Effect.fn(function* (options) {
+						const authHeader = Headers.get(options.headers, "authorization");
+						if (Option.isNone(authHeader) || authHeader.value !== authSecret) {
+							if (Option.isNone(authHeader))
+								yield* Effect.log("No auth header provided");
 
-					return options.next;
-				});
+							return yield* new Workflows.InvalidRpcAuth();
+						}
+
+						return yield* options.next;
+					}),
+				);
 			}),
 		),
 	),
