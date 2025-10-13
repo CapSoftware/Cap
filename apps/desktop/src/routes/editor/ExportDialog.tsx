@@ -2,16 +2,13 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { makePersisted } from "@solid-primitives/storage";
-import {
-	createMutation,
-	createQuery,
-	keepPreviousData,
-} from "@tanstack/solid-query";
+import { createMutation, keepPreviousData } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	For,
@@ -37,7 +34,6 @@ import {
 	type FramesRendered,
 	type UploadProgress,
 } from "~/utils/tauri";
-import { apiClient, protectedHeaders } from "~/utils/web-api";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
@@ -123,17 +119,8 @@ export function ExportDialog() {
 
 	const auth = authStore.createQuery();
 
-	const organizations = createQuery(() => ({
-	  queryKey: ["organizations"],
-	  queryFn: async () => {
-	    const response = await apiClient.desktop.getOrganizations({
-	      headers: await protectedHeaders(),
-	    });
-	    if (response.status === 200) return response.body;
-	    return [];
-	  },
-	  enabled: () => !!authStore.get(),
-	}));
+	// Organizations are cached in auth store - much more efficient
+	const organizations = createMemo(() => auth.data?.organizations ?? []);
 
 	const [settings, setSettings] = makePersisted(
 		createStore<Settings>({
@@ -151,13 +138,9 @@ export function ExportDialog() {
 
 	// Auto-select first organization if none selected and user is authenticated
 	createEffect(() => {
-		if (
-			!settings.organizationId &&
-			organizations.data &&
-			organizations.data.length > 0 &&
-			auth.data
-		) {
-			setSettings("organizationId", organizations.data[0].id);
+		const orgs = organizations();
+		if (!settings.organizationId && orgs.length > 0 && auth.data) {
+			setSettings("organizationId", orgs[0].id);
 		}
 	});
 
@@ -550,8 +533,7 @@ export function ExportDialog() {
 								when={
 									settings.exportTo === "link" &&
 									auth.data &&
-									organizations.data &&
-									organizations.data.length > 1
+									organizations().length > 1
 								}
 							>
 								<div class="flex flex-col gap-3 p-4 rounded-lg bg-gray-2 border animate-in fade-in slide-in-from-top duration-200">
@@ -560,11 +542,11 @@ export function ExportDialog() {
 										Organization
 									</label>
 									<KSelect<{ id: string; name: string; ownerId: string }>
-										options={organizations.data ?? []}
+										options={organizations()}
 										optionValue="id"
 										optionTextValue="name"
 										placeholder="Select organization"
-										value={organizations.data?.find(
+										value={organizations().find(
 											(org) => org.id === settings.organizationId,
 										)}
 										onChange={(option) =>

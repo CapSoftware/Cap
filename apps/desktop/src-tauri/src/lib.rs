@@ -1633,6 +1633,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
+        organizations: auth.organizations,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
@@ -1888,6 +1889,13 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn refresh_organizations(app: AppHandle) -> Result<(), String> {
+    info!("Manually refreshing organizations");
+    AuthStore::update_auth_plan(&app).await
+}
+
 pub type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
@@ -1971,6 +1979,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             list_fails,
             set_fail,
             update_auth_plan,
+            refresh_organizations,
             set_window_transparent,
             get_editor_meta,
             set_pretty_name,
@@ -2175,6 +2184,19 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         ..Default::default()
                     }));
                 });
+
+                // Fetch organizations if missing (for existing users)
+                if auth.organizations.is_empty() {
+                    info!("User is logged in but organizations not cached, fetching...");
+                    let app_clone = app.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = AuthStore::update_auth_plan(&app_clone).await {
+                            error!("Failed to fetch organizations on startup: {}", e);
+                        } else {
+                            info!("Organizations fetched successfully on startup");
+                        }
+                    });
+                }
             }
 
             tokio::spawn({

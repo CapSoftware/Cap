@@ -181,23 +181,13 @@ function Inner() {
 	// Auto-select first organization if none is selected
 	const auth = authStore.createQuery();
 	createEffect(() => {
-		// Log to terminal via Tauri
-		invoke("log_message", {
-			level: "info",
-			message: `Auto-selection check: organizationId=${rawOptions.organizationId}, organizationsLength=${organizations.data?.length}, authData=${!!auth.data}`,
-		}).catch(console.error);
-
-		if (
-			!rawOptions.organizationId &&
-			organizations.data &&
-			organizations.data.length > 0 &&
-			auth.data
-		) {
+		const orgs = organizations();
+		if (!rawOptions.organizationId && orgs && orgs.length > 0 && auth.data) {
 			invoke("log_message", {
 				level: "info",
-				message: `Auto-selecting organization: ${organizations.data[0].id}`,
+				message: `Auto-selecting organization: ${orgs[0].id}`,
 			}).catch(console.error);
-			setOptions("organizationId", organizations.data[0].id);
+			setOptions("organizationId", orgs[0].id);
 		}
 	});
 
@@ -772,7 +762,7 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
-	organizations?: ReturnType<typeof createOrganizationsQuery>;
+	organizations: () => Array<{ id: string; name: string; ownerId: string }>;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -904,8 +894,7 @@ function RecordingControls(props: {
 					when={
 						rawOptions.mode === "instant" &&
 						auth.data &&
-						props.organizations?.data &&
-						props.organizations.data.length > 0
+						props.organizations().length > 1
 					}
 				>
 					<div class="bg-gray-2 rounded-lg p-3 border border-gray-4 animate-in fade-in slide-in-from-top duration-300">
@@ -915,18 +904,20 @@ function RecordingControls(props: {
 								Organization
 							</label>
 							<KSelect<{ id: string; name: string; ownerId: string }>
-								options={props.organizations?.data ?? []}
+								options={props.organizations()}
 								optionValue="id"
 								optionTextValue="name"
 								placeholder="Select organization"
-								value={props.organizations?.data?.find(
-									(org: { id: string; name: string; ownerId: string }) =>
-										org.id === rawOptions.organizationId,
-								)}
+								value={props
+									.organizations()
+									.find(
+										(org: { id: string; name: string; ownerId: string }) =>
+											org.id === rawOptions.organizationId,
+									)}
 								onChange={(option) =>
 									setOptions("organizationId", option?.id ?? null)
 								}
-								disabled={props.organizations?.data?.length === 1}
+								disabled={props.organizations().length === 1}
 								itemComponent={(props) => (
 									<MenuItem<typeof KSelect.Item>
 										as={KSelect.Item}

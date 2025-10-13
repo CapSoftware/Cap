@@ -194,6 +194,9 @@ async setFail(name: string, value: boolean) : Promise<void> {
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
 },
+async refreshOrganizations() : Promise<null> {
+    return await TAURI_INVOKE("refresh_organizations");
+},
 async setWindowTransparent(value: boolean) : Promise<void> {
     await TAURI_INVOKE("set_window_transparent", { value });
 },
@@ -352,7 +355,8 @@ export type AudioMeta = { path: string;
  */
 start_time?: number | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
-export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; intercom_hash: string | null }
+export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; intercom_hash: string | null; organizations?: Organization[] }
+export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null; border?: BorderConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
@@ -430,6 +434,7 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnEscapePress = null
+export type Organization = { id: string; name: string; ownerId: string }
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"

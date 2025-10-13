@@ -6,7 +6,6 @@ import {
 	useMutation,
 	useQuery,
 } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -244,22 +243,11 @@ export function createCustomDomainQuery() {
 }
 
 export function createOrganizationsQuery() {
-	return useQuery(() => ({
-		queryKey: ["organizations"],
-		queryFn: async () => {
-			const response = await apiClient.desktop.getOrganizations({
-				headers: await protectedHeaders(),
-			});
+	// Organizations are now cached in the auth store
+	// This is much more efficient than fetching them repeatedly
+	const auth = authStore.createQuery();
 
-			if (response.status === 200) {
-				return response.body;
-			}
-
-			return [];
-		},
-		enabled: () => {
-			const authData = authStore.get();
-			return !!authData;
-		},
-	}));
+	return createMemo(() => {
+		return auth.data?.organizations ?? [];
+	});
 }
