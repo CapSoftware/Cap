@@ -1,0 +1,10 @@
+[package]
+name = "cap-multi-recorder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cap-recording = { path = "../../crates/recording" }
+
+[lints]
+workspace = true
