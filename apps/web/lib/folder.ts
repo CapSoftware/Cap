@@ -22,7 +22,7 @@ export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
 
-	const [folder] = yield* db.execute((db) =>
+	const [folder] = yield* db.use((db) =>
 		db
 			.select()
 			.from(folders)
@@ -69,7 +69,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	const db = yield* Database;
 
 	// Fetch space-level sharing
-	const spaceSharing = yield* db.execute((db) =>
+	const spaceSharing = yield* db.use((db) =>
 		db
 			.select({
 				videoId: spaceVideos.videoId,
@@ -90,7 +90,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	);
 
 	// Fetch organization-level sharing
-	const orgSharing = yield* db.execute((db) =>
+	const orgSharing = yield* db.use((db) =>
 		db
 			.select({
 				videoId: sharedVideos.videoId,
@@ -164,7 +164,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 	if (!folderId) throw new Error("Folder ID is required");
 	const db = yield* Database;
 
-	const videoData = yield* db.execute((db) =>
+	const videoData = yield* db.use((db) =>
 		db
 			.select({
 				id: videos.id,
@@ -287,7 +287,7 @@ export const getChildFolders = Effect.fn(function* (
 	const user = yield* CurrentUser;
 	if (!user.activeOrganizationId) throw new Error("No active organization");
 
-	const childFolders = yield* db.execute((db) =>
+	const childFolders = yield* db.use((db) =>
 		db
 			.select({
 				id: folders.id,

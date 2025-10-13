@@ -296,8 +296,8 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 	});
 
 	const commonEnvironment = {
-		CAP_AWS_REGION: $output(bucket).region,
-		CAP_AWS_BUCKET: $output(bucket).bucket,
+		CAP_AWS_REGION: bucket.region,
+		CAP_AWS_BUCKET: bucket.bucket,
 		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
 		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,

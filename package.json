@@ -28,7 +28,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.2.0",
 		"@clack/prompts": "^0.10.0",
-		"@effect/language-service": "^0.34.0",
+		"@effect/language-service": "^0.44.0",
 		"dotenv-cli": "latest",
 		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",

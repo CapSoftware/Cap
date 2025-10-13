@@ -1,7 +1,7 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
 import { HttpApiSchema } from "@effect/platform";
-import { type Brand, Context, Data, Effect, type Option, Schema } from "effect";
+import { Context, Data, Effect, type Option, Schema } from "effect";
 import type { NonEmptyReadonlyArray } from "effect/Array";
 import { CurrentUser } from "./Authentication.ts";
 

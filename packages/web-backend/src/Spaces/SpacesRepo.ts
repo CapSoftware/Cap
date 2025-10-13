@@ -12,7 +12,7 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 		return {
 			membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
 				db
-					.execute((db) =>
+					.use((db) =>
 						db
 							.select({ membershipId: Db.spaceMembers.id })
 							.from(Db.spaceMembers)
@@ -34,7 +34,7 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 				spaceId: Space.SpaceIdOrOrganisationId,
 			) =>
 				db
-					.execute((db) =>
+					.use((db) =>
 						db
 							.select({
 								membershipId: Db.spaceMembers.id,
@@ -52,7 +52,7 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 
 			getById: (spaceId: Space.SpaceIdOrOrganisationId) =>
 				db
-					.execute((db) =>
+					.use((db) =>
 						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
 					)
 					.pipe(Effect.map(Array.get(0))),

@@ -126,35 +126,38 @@ impl MicrophoneFeed {
 }
 
 fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
-    device
+    let device_name_for_logging = device.name().ok();
+
+    let result = device
         .supported_input_configs()
         .map_err(|error| {
             error!(
-                "Error getting supported input configs for device: {}",
-                error
+                "Error getting supported input configs for device {:?}: {}",
+                device_name_for_logging, error
             );
             error
         })
         .ok()
         .and_then(|configs| {
             let mut configs = configs.collect::<Vec<_>>();
+
             configs.sort_by(|a, b| {
                 b.sample_format()
                     .sample_size()
                     .cmp(&a.sample_format().sample_size())
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
+
             configs
                 .into_iter()
-                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000)
+                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
                 .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
-        })
-        .and_then(|config| {
-            device
-                .name()
-                .ok()
-                .map(|name| (name, device, config.with_max_sample_rate()))
-        })
+        });
+
+    result.and_then(|config| {
+        let final_config = config.with_sample_rate(cpal::SampleRate(48000));
+        device.name().ok().map(|name| (name, device, final_config))
+    })
 }
 
 #[derive(Reply)]
@@ -290,13 +293,46 @@ impl Message<SetInput> for MicrophoneFeed {
 
         std::thread::spawn({
             let config = config.clone();
+            let device_name_for_log = device.name().ok();
             move || {
+                // Log all configs for debugging
+                if let Some(ref name) = device_name_for_log {
+                    info!("Device '{}' available configs:", name);
+                    for config in device.supported_input_configs().into_iter().flatten() {
+                        info!(
+                            "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
+                            config.sample_format(),
+                            config.min_sample_rate().0,
+                            config.max_sample_rate().0,
+                            config.sample_format().sample_size()
+                        );
+                    }
+                }
+
+                info!(
+                    "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}",
+                    device_name_for_log,
+                    config.sample_rate().0,
+                    config.channels(),
+                    sample_format
+                );
+
                 let stream = match device.build_input_stream_raw(
                     &config.into(),
                     sample_format,
                     {
                         let actor_ref = actor_ref.clone();
+                        let mut callback_count = 0u64;
                         move |data, info| {
+                            if callback_count == 0 {
+                                info!(
+                                    "🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                    data.bytes().len(),
+                                    data.sample_format()
+                                );
+                            }
+                            callback_count += 1;
+
                             let _ = actor_ref
                                 .tell(MicrophoneSamples {
                                     data: data.bytes().to_vec(),
