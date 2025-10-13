@@ -35,14 +35,12 @@ pub async fn upload_multipart_initiate(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_initiate/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_initiate/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_initiate/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_initiate/response: {err}").into())
         .map(|data| data.upload_id)
 }
 
@@ -79,14 +77,12 @@ pub async fn upload_multipart_presign_part(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_presign_part/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_presign_part/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}").into())
         .map(|data| data.presigned_url)
 }
 
@@ -153,14 +149,12 @@ pub async fn upload_multipart_complete(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_complete/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_complete/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_complete/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_complete/response: {err}").into())
         .map(|data| data.location)
 }
 
@@ -210,12 +204,12 @@ pub async fn upload_signed(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/upload_signed/{status}: {error_body}"));
+        return Err(format!("api/upload_signed/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_signed/response: {err}"))
+        .map_err(|err| format!("api/upload_signed/response: {err}").into())
         .map(|data| data.presigned_put_data.url)
 }
 
@@ -243,7 +237,7 @@ pub async fn desktop_video_progress(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/desktop_video_progress/{status}: {error_body}"));
+        return Err(format!("api/desktop_video_progress/{status}: {error_body}").into());
     }
 
     Ok(())

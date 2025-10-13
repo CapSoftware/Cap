@@ -7,6 +7,7 @@ import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
+import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -35,6 +36,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { handleRecordingResult } from "~/utils/recording";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -811,17 +813,14 @@ function RecordingControls(props: {
 							return;
 						}
 
-						commands
-							.startRecording({
+						handleRecordingResult(
+							commands.startRecording({
 								capture_target: props.target,
 								mode: rawOptions.mode,
 								capture_system_audio: rawOptions.captureSystemAudio,
-							})
-							.catch((err) => {
-								console.log(err);
-								alert("CRINGE");
-								throw err;
-							});
+							}),
+							setOptions,
+						);
 					}}
 				>
 					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">

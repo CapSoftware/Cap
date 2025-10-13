@@ -238,16 +238,14 @@ function Page() {
 					}
 				})();
 
-				try {
-					await commands.startRecording({
+				await handleRecordingResult(
+					commands.startRecording({
 						capture_target,
 						mode: payload.mode,
 						capture_system_audio: rawOptions.captureSystemAudio,
-					});
-				} catch (err) {
-					alert("CRINGE");
-					throw err;
-				}
+					}),
+					setOptions,
+				);
 			} else await commands.stopRecording();
 		},
 	}));
@@ -600,6 +598,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./OptionsContext";
+import { handleRecordingResult } from "~/utils/recording";
 
 let hasChecked = false;
 function createUpdateCheck() {

@@ -1,4 +1,6 @@
 use reqwest::StatusCode;
+use serde::Serialize;
+use specta::Type;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
 use thiserror::Error;

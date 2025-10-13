@@ -86,7 +86,7 @@ use tauri_specta::Event;
 use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace, warn};
-use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
+use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
@@ -1167,7 +1167,9 @@ async fn upload_exported_video(
 
             NotificationType::UploadFailed.send(&app);
 
-            meta.upload = Some(UploadMeta::Failed { error: e.to_string() });
+            meta.upload = Some(UploadMeta::Failed {
+                error: e.to_string(),
+            });
             meta.save_for_project()
                 .map_err(|e| error!("Failed to save recording meta: {e}"))
                 .ok();
@@ -2549,7 +2551,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                         error!("Error completing resumed upload for video: {error}");
 
                                         if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
-                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.upload = Some(UploadMeta::Failed { error: error.to_string() });
                                             meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
                                         }
                                     })
