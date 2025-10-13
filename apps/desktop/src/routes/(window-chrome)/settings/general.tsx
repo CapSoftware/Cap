@@ -9,25 +9,33 @@ import "@total-typescript/ts-reset/filter-boolean";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import { createEffect, createMemo, createResource, For, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	Show,
+} from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
-import IconLucidePlus from "~icons/lucide/plus";
-import IconLucideX from "~icons/lucide/x";
 import {
 	type AppTheme,
-	type CaptureWindowWithThumbnail,
+	type CaptureWindow,
 	commands,
+	events,
 	type GeneralSettingsStore,
-	type WindowExclusion,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
+	type WindowExclusion,
 } from "~/utils/tauri";
+import IconLucidePlus from "~icons/lucide/plus";
+import IconLucideX from "~icons/lucide/x";
 import { Setting, ToggleSetting } from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
@@ -45,7 +53,7 @@ const getExclusionSecondaryLabel = (entry: WindowExclusion) => {
 	return entry.bundleIdentifier ?? null;
 };
 
-const getWindowOptionLabel = (window: CaptureWindowWithThumbnail) => {
+const getWindowOptionLabel = (window: CaptureWindow) => {
 	const parts = [window.owner_name];
 	if (window.name && window.name !== window.owner_name) {
 		parts.push(window.name);
@@ -59,9 +67,15 @@ type LegacyWindowExclusion = {
 	window_title?: string | null;
 };
 
-const coerceWindowExclusion = (entry: WindowExclusion | LegacyWindowExclusion): WindowExclusion => {
+const coerceWindowExclusion = (
+	entry: WindowExclusion | LegacyWindowExclusion,
+): WindowExclusion => {
 	if (entry && typeof entry === "object") {
-		if ("bundleIdentifier" in entry || "ownerName" in entry || "windowTitle" in entry) {
+		if (
+			"bundleIdentifier" in entry ||
+			"ownerName" in entry ||
+			"windowTitle" in entry
+		) {
 			const current = entry as WindowExclusion;
 			return {
 				bundleIdentifier: current.bundleIdentifier ?? null,
@@ -97,7 +111,7 @@ const normalizeWindowExclusions = (
 		return {
 			bundleIdentifier,
 			ownerName,
-			windowTitle: hasBundleIdentifier ? null : coerced.windowTitle ?? null,
+			windowTitle: hasBundleIdentifier ? null : (coerced.windowTitle ?? null),
 		} satisfies WindowExclusion;
 	});
 
@@ -124,9 +138,9 @@ const deriveInitialSettings = (
 		excluded_windows?: LegacyWindowExclusion[];
 	};
 
-	const rawExcludedWindows = (
-		store.excludedWindows ?? excluded_windows ?? []
-	) as (WindowExclusion | LegacyWindowExclusion)[];
+	const rawExcludedWindows = (store.excludedWindows ??
+		excluded_windows ??
+		[]) as (WindowExclusion | LegacyWindowExclusion)[];
 
 	return {
 		...defaults,
@@ -137,7 +151,7 @@ const deriveInitialSettings = (
 
 export default function GeneralSettings() {
 	const [store] = createResource(generalSettingsStore.get, {
-		initialValue: null,
+		initialValue: undefined,
 	});
 
 	return (
@@ -231,9 +245,16 @@ function Inner(props: {
 		setSettings(reconcile(deriveInitialSettings(props.initialStore)));
 	});
 
-	const [windows] = createResource(commands.listWindowsWithThumbnails, {
-		initialValue: [] as CaptureWindowWithThumbnail[],
-	});
+	const [windows, { refetch: refetchWindows }] = createResource(
+		async () => {
+			// Fetch windows with a small delay to avoid blocking initial render
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			return commands.listCaptureWindows();
+		},
+		{
+			initialValue: [] as CaptureWindow[],
+		},
+	);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -251,7 +272,10 @@ function Inner(props: {
 		() => props.isStoreLoading || windows.loading,
 	);
 
-	const matchesExclusion = (exclusion: WindowExclusion, window: CaptureWindowWithThumbnail) => {
+	const matchesExclusion = (
+		exclusion: WindowExclusion,
+		window: CaptureWindow,
+	) => {
 		const bundleMatch = exclusion.bundleIdentifier
 			? window.bundle_identifier === exclusion.bundleIdentifier
 			: false;
@@ -276,7 +300,7 @@ function Inner(props: {
 		return false;
 	};
 
-	const isManagedWindowsApp = (window: CaptureWindowWithThumbnail) => {
+	const isManagedWindowsApp = (window: CaptureWindow) => {
 		const bundle = window.bundle_identifier?.toLowerCase() ?? "";
 		if (bundle.includes("so.cap.desktop")) {
 			return true;
@@ -284,18 +308,30 @@ function Inner(props: {
 		return window.owner_name.toLowerCase().includes("cap");
 	};
 
+	const isWindowAvailable = (window: CaptureWindow) => {
+		if (excludedWindows().some((entry) => matchesExclusion(entry, window))) {
+			return false;
+		}
+		if (ostype === "windows") {
+			return isManagedWindowsApp(window);
+		}
+		return true;
+	};
+
 	const availableWindows = createMemo(() => {
 		const data = windows() ?? [];
-		return data.filter((window) => {
-			if (excludedWindows().some((entry) => matchesExclusion(entry, window))) {
-				return false;
-			}
-			if (ostype === "windows") {
-				return isManagedWindowsApp(window);
-			}
-			return true;
-		});
+		return data.filter(isWindowAvailable);
 	});
+
+	const refreshAvailableWindows = async (): Promise<CaptureWindow[]> => {
+		try {
+			const refreshed = (await refetchWindows()) ?? windows() ?? [];
+			return refreshed.filter(isWindowAvailable);
+		} catch (error) {
+			console.error("Failed to refresh available windows", error);
+			return availableWindows();
+		}
+	};
 
 	const applyExcludedWindows = async (next: WindowExclusion[]) => {
 		const normalized = normalizeWindowExclusions(next);
@@ -303,6 +339,9 @@ function Inner(props: {
 		try {
 			await generalSettingsStore.set({ excludedWindows: normalized });
 			await commands.refreshWindowContentProtection();
+			if (ostype === "macos") {
+				await events.requestScreenCapturePrewarm.emit({ force: true });
+			}
 		} catch (error) {
 			console.error("Failed to update excluded windows", error);
 		}
@@ -314,7 +353,7 @@ function Inner(props: {
 		await applyExcludedWindows(current);
 	};
 
-	const handleAddWindow = async (window: CaptureWindowWithThumbnail) => {
+	const handleAddWindow = async (window: CaptureWindow) => {
 		const windowTitle = window.bundle_identifier ? null : window.name;
 
 		const next = [
@@ -682,13 +721,14 @@ function Inner(props: {
 									</For>
 								</div>
 							</div>
-							</Show>
+						</Show>
 					)}
 				</For>
 
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
 					availableWindows={availableWindows()}
+					onRequestAvailableWindows={refreshAvailableWindows}
 					onRemove={handleRemoveExclusion}
 					onAdd={handleAddWindow}
 					onReset={handleResetExclusions}
@@ -757,33 +797,68 @@ function ServerURLSetting(props: {
 
 function ExcludedWindowsCard(props: {
 	excludedWindows: WindowExclusion[];
-	availableWindows: CaptureWindowWithThumbnail[];
+	availableWindows: CaptureWindow[];
+	onRequestAvailableWindows: () => Promise<CaptureWindow[]>;
 	onRemove: (index: number) => Promise<void>;
-	onAdd: (window: CaptureWindowWithThumbnail) => Promise<void>;
+	onAdd: (window: CaptureWindow) => Promise<void>;
 	onReset: () => Promise<void>;
 	isLoading: boolean;
 	isWindows: boolean;
 }) {
 	const hasExclusions = () => props.excludedWindows.length > 0;
-	const canAdd = () => props.availableWindows.length > 0 && !props.isLoading;
+	const canAdd = () => !props.isLoading;
 
-	const handleAddClick = async () => {
+	const handleAddClick = async (event: MouseEvent) => {
+		event.preventDefault();
+		event.stopPropagation();
+
 		if (!canAdd()) return;
 
-		const items = await Promise.all(
-			props.availableWindows.map((window) =>
-				MenuItem.new({
-					text: getWindowOptionLabel(window),
-					action: () => {
-						void props.onAdd(window);
-					},
-				}),
-			),
-		);
+		// Use available windows if we have them, otherwise fetch
+		let windows = props.availableWindows;
 
-		const menu = await Menu.new({ items });
-		await menu.popup();
-		await menu.close();
+		// Only refresh if we don't have any windows cached
+		if (!windows.length) {
+			try {
+				windows = await props.onRequestAvailableWindows();
+			} catch (error) {
+				console.error("Failed to fetch windows:", error);
+				return;
+			}
+		}
+
+		if (!windows.length) {
+			console.log("No available windows to exclude");
+			return;
+		}
+
+		try {
+			const items = await Promise.all(
+				windows.map((window) =>
+					MenuItem.new({
+						text: getWindowOptionLabel(window),
+						action: () => {
+							void props.onAdd(window);
+						},
+					}),
+				),
+			);
+
+			const menu = await Menu.new({ items });
+
+			// Save scroll position before popup
+			const scrollPos = window.scrollY;
+
+			await menu.popup();
+			await menu.close();
+
+			// Restore scroll position after menu closes
+			requestAnimationFrame(() => {
+				window.scrollTo(0, scrollPos);
+			});
+		} catch (error) {
+			console.error("Error showing window menu:", error);
+		}
 	};
 
 	return (
@@ -796,13 +871,15 @@ function ExcludedWindowsCard(props: {
 					</p>
 					<Show when={props.isWindows}>
 						<p class="text-xs text-gray-9">
-							Only Cap windows can be excluded on Windows.
+							<span class="font-medium text-gray-11">Note:</span> Only Cap
+							related windows can be excluded on Windows due to technical
+							limitations.
 						</p>
 					</Show>
 				</div>
 				<div class="flex gap-2">
 					<Button
-						variant="ghost"
+						variant="gray"
 						size="sm"
 						disabled={props.isLoading}
 						onClick={() => {
@@ -810,13 +887,13 @@ function ExcludedWindowsCard(props: {
 							void props.onReset();
 						}}
 					>
-						Default
+						Set to Default
 					</Button>
 					<Button
 						variant="dark"
 						size="sm"
 						disabled={!canAdd()}
-						onClick={() => void handleAddClick()}
+						onClick={(e) => void handleAddClick(e)}
 						class="flex items-center gap-2"
 					>
 						<IconLucidePlus class="size-4" />
@@ -824,10 +901,7 @@ function ExcludedWindowsCard(props: {
 					</Button>
 				</div>
 			</div>
-			<Show
-				when={!props.isLoading}
-				fallback={<ExcludedWindowsSkeleton />}
-			>
+			<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
 				<Show
 					when={hasExclusions()}
 					fallback={

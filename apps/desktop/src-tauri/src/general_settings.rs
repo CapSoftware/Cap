@@ -42,15 +42,9 @@ impl MainWindowRecordingStartBehaviour {
 
 const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap",
-    "Cap Setup",
     "Cap Settings",
-    "Cap Editor",
-    "Cap Mode Selection",
-    "Cap Camera",
-    "Cap Recordings Overlay",
     "Cap In Progress Recording",
-    "Cap Window Capture Occluder",
-    "Cap Capture Area",
+    "Cap Camera",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {
