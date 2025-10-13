@@ -2,7 +2,7 @@
 
 import { Button, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { startTransition, useState } from "react";
 import { toast } from "sonner";
 import { Base } from "../components/Base";
 
@@ -33,16 +33,14 @@ export default function YourNamePage() {
 		try {
 			setLoading(true);
 			await welcomeRequest();
-			router.refresh();
-			setTimeout(() => {
+			startTransition(() => {
 				router.push("/onboarding/organization-setup");
-			}, 200);
+				router.refresh();
+			});
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setTimeout(() => {
-				setLoading(false);
-			}, 200);
+			setLoading(false);
 		}
 	};
 

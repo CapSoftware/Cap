@@ -9,7 +9,7 @@ import {
 import { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import type { NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { uploadOrganizationIcon } from "@/actions/organization/upload-organization-icon";
 
 export async function POST(request: NextRequest) {
@@ -20,40 +20,43 @@ export async function POST(request: NextRequest) {
 
 	if (!user) {
 		console.error("User not found");
-		return Response.json({ error: true }, { status: 401 });
+		return NextResponse.json({ error: true }, { status: 401 });
 	}
 
 	const organizationId = Organisation.OrganisationId.make(nanoId());
 
-	await db().insert(organizations).values({
-		id: organizationId,
-		ownerId: user.id,
-		name: organizationName,
-	});
+	try {
+		await db().insert(organizations).values({
+			id: organizationId,
+			ownerId: user.id,
+			name: organizationName,
+		});
 
-	if (organizationIcon) {
-		await uploadOrganizationIcon(formData, organizationId);
+		if (organizationIcon) {
+			await uploadOrganizationIcon(formData, organizationId);
+		}
+
+		await db().insert(organizationMembers).values({
+			id: nanoId(),
+			userId: user.id,
+			role: "owner",
+			organizationId,
+		});
+		await db()
+			.update(users)
+			.set({
+				activeOrganizationId: organizationId,
+				onboardingSteps: {
+					welcome: true,
+					organizationSetup: true,
+				},
+			})
+			.where(eq(users.id, user.id));
+
+		revalidatePath("/onboarding", "layout");
+		return NextResponse.json({ success: true }, { status: 200 });
+	} catch (error) {
+		console.error("Failed to update user onboarding steps", error);
+		return NextResponse.json({ error: true }, { status: 500 });
 	}
-
-	await db().insert(organizationMembers).values({
-		id: nanoId(),
-		userId: user.id,
-		role: "owner",
-		organizationId,
-	});
-
-	await db()
-		.update(users)
-		.set({
-			activeOrganizationId: organizationId,
-			onboardingSteps: {
-				welcome: true,
-				organizationSetup: true,
-			},
-		})
-		.where(eq(users.id, user.id));
-
-	revalidatePath("/onboarding", "layout");
-
-	return Response.json({ success: true }, { status: 200 });
 }

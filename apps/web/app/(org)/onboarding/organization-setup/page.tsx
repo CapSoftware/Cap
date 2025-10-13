@@ -5,7 +5,7 @@ import { faImage } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Base } from "../components/Base";
 
@@ -47,16 +47,14 @@ export default function OrganizationSetupPage() {
 		try {
 			setIsLoading(true);
 			await orgSetupRequest();
-			router.refresh();
-			setTimeout(() => {
+			startTransition(() => {
 				router.push("/onboarding/custom-domain");
-			}, 200);
+				router.refresh();
+			});
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setTimeout(() => {
-				setIsLoading(false);
-			}, 200);
+			setIsLoading(false);
 		}
 	};
 

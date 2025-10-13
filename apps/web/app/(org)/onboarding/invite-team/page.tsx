@@ -7,7 +7,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { startTransition, useId, useState } from "react";
 import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { Base } from "../components/Base";
@@ -42,16 +42,14 @@ export default function InviteTeamPage() {
 			await fetch("/api/settings/onboarding/invite-your-team", {
 				method: "POST",
 			});
-			router.refresh();
-			setTimeout(() => {
-				router.push("/dashboard/caps");
-			}, 200);
+			startTransition(() => {
+				router.push("/onboarding/custom-domain");
+				router.refresh();
+			});
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setTimeout(() => {
-				setLoading(false);
-			}, 200);
+			setLoading(false);
 		}
 	};
 

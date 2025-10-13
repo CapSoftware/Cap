@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { Base } from "../components/Base";
@@ -17,16 +17,14 @@ export default function CustomDomainPage() {
 			await fetch("/api/settings/onboarding/custom-domain", {
 				method: "POST",
 			});
-			router.refresh();
-			setTimeout(() => {
+			startTransition(() => {
 				router.push("/onboarding/invite-team");
-			}, 200);
+				router.refresh();
+			});
 		} catch {
 			toast.error("An error occurred, please try again");
 		} finally {
-			setTimeout(() => {
-				setLoading(false);
-			}, 200);
+			setLoading(false);
 		}
 	};
 

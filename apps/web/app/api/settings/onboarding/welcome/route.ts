@@ -3,7 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import type { NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
 
 	if (!user) {
 		console.error("User not found");
-		return Response.json({ error: true }, { status: 401 });
+		return NextResponse.json({ error: true }, { status: 401 });
 	}
 
 	await db()
@@ -26,11 +26,5 @@ export async function POST(request: NextRequest) {
 		.where(eq(users.id, user.id));
 
 	revalidatePath("/onboarding", "layout");
-
-	return Response.json(
-		{
-			success: true,
-		},
-		{ status: 200 },
-	);
+	return NextResponse.json({ success: true }, { status: 200 });
 }
