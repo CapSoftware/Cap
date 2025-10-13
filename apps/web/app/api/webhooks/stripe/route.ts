@@ -5,6 +5,7 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
@@ -274,6 +275,10 @@ export const POST = async (req: Request) => {
 				}
 
 				await db().update(users).set(updateData).where(eq(users.id, dbUser.id));
+
+				revalidatePath("/dashboard");
+				revalidatePath("/onboarding", "layout");
+				revalidatePath("/");
 
 				console.log("Successfully updated user in database");
 

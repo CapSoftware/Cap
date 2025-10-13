@@ -43,7 +43,7 @@ export default function InviteTeamPage() {
 				method: "POST",
 			});
 			startTransition(() => {
-				router.push("/onboarding/custom-domain");
+				router.push("/dashboard/caps");
 				router.refresh();
 			});
 		} catch {
