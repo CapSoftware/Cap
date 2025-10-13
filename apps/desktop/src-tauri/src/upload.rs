@@ -94,7 +94,7 @@ pub async fn upload_video(
     let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
     let video_fut = async {
-        let parts = progress(
+        let stream = progress(
             app.clone(),
             video_id.clone(),
             multipart_uploader(
@@ -103,9 +103,23 @@ pub async fn upload_video(
                 upload_id.clone(),
                 from_pending_file_to_chunks(file_path.clone(), None),
             ),
-        )
-        .try_collect::<Vec<_>>()
-        .await?;
+        );
+
+        let stream = if let Some(channel) = channel {
+            tauri_channel_progress(channel, stream).boxed()
+        } else {
+            stream.boxed()
+        };
+
+        let mut parts = stream.try_collect::<Vec<_>>().await?;
+
+        // Deduplicate parts - keep the last occurrence of each part number
+        let mut deduplicated_parts = HashMap::new();
+        for part in parts {
+            deduplicated_parts.insert(part.part_number, part);
+        }
+        parts = deduplicated_parts.into_values().collect::<Vec<_>>();
+        parts.sort_by_key(|part| part.part_number);
 
         let metadata = build_video_meta(&file_path)
             .map_err(|e| error!("Failed to get video metadata: {e}"))
@@ -541,7 +555,7 @@ pub fn from_pending_file_to_chunks(
                 }
             } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
                 // Recording is done and no new data - re-emit first chunk with corrected MP4 header
-                if let Some(first_size) = first_chunk_size {
+                if let Some(first_size) = first_chunk_size && realtime_upload_done.is_some() {
                     file.seek(std::io::SeekFrom::Start(0)).await?;
 
                     let chunk_size = first_size as usize;
@@ -606,7 +620,7 @@ fn multipart_uploader(
         let mut prev_part_number = None;
         while let Some(item) = stream.next().await {
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-            debug!("Uploading chunk {part_number} for video {video_id:?}");
+            debug!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
             prev_part_number = Some(part_number);
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
@@ -820,7 +834,7 @@ fn progress<T: UploadedChunk, E>(
 }
 
 /// Track the upload progress into a Tauri channel
-fn tauri_progress<T: UploadedChunk, E>(
+fn tauri_channel_progress<T: UploadedChunk, E>(
     channel: Channel<UploadProgress>,
     stream: impl Stream<Item = Result<T, E>>,
 ) -> impl Stream<Item = Result<T, E>> {
