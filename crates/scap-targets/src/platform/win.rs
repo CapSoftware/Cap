@@ -482,6 +482,45 @@ impl WindowImpl {
         }
     }
 
+    pub fn bundle_identifier(&self) -> Option<String> {
+        // On Windows, use the executable name as the bundle identifier
+        // This is similar to the macOS bundle identifier concept
+        unsafe {
+            let mut process_id = 0u32;
+            GetWindowThreadProcessId(self.0, Some(&mut process_id));
+
+            if process_id == 0 {
+                return None;
+            }
+
+            let process_handle =
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
+
+            let mut buffer = [0u16; 1024];
+            let mut buffer_size = buffer.len() as u32;
+
+            let result = QueryFullProcessImageNameW(
+                process_handle,
+                PROCESS_NAME_FORMAT::default(),
+                PWSTR(buffer.as_mut_ptr()),
+                &mut buffer_size,
+            );
+
+            let _ = CloseHandle(process_handle);
+
+            if result.is_ok() && buffer_size > 0 {
+                let path_str = String::from_utf16_lossy(&buffer[..buffer_size as usize]);
+
+                // Return the executable name (without extension) as the bundle identifier
+                std::path::Path::new(&path_str)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        }
+    }
+
     fn get_file_description(&self, file_path: &str) -> Option<String> {
         unsafe {
             let wide_path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
