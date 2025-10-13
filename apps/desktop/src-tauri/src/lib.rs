@@ -2006,6 +2006,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
+            upload::UploadDebugEvent,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

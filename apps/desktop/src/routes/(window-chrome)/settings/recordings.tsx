@@ -13,7 +13,6 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -379,6 +378,7 @@ function RecordingItem(props: {
 					<IconCapTrash class="size-4" />
 				</TooltipIconButton>
 			</div>
+			<StatsForNerds />
 		</li>
 	);
 }
@@ -409,4 +409,12 @@ function TooltipIconButton(
 			</Tooltip.Portal>
 		</Tooltip>
 	);
+}
+
+function StatsForNerds() {
+	createTauriEventListener(events.uploadDebugEvent, (e) => {
+		console.log(e);
+	});
+
+	return <h1>Hello World</h1>;
 }

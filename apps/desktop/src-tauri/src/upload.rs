@@ -34,7 +34,7 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
-    time,
+    time::{self, Instant},
 };
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
@@ -593,6 +593,25 @@ fn retryable_client(host: String) -> reqwest::ClientBuilder {
     )
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct UploadDebugEvent {
+    pub video_id: String,
+    pub upload_id: String,
+    pub state: UploadDebugEventState,
+}
+
+#[derive(Serialize, Type, Debug, Clone)]
+pub enum UploadDebugEventState {
+    Pending,
+    Uploading {
+        part_number: u32,
+        chunk_size: String,
+        total_size: String,
+        duration: String,
+    },
+    Done,
+}
+
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
@@ -603,6 +622,16 @@ fn multipart_uploader(
     stream: impl Stream<Item = io::Result<Chunk>>,
 ) -> impl Stream<Item = Result<UploadedPart, String>> {
     debug!("Initializing multipart uploader for video {video_id:?}");
+
+    let start = Instant::now();
+
+    UploadDebugEvent {
+        video_id: video_id.clone(),
+        upload_id: upload_id.clone(),
+        state: UploadDebugEventState::Pending,
+    }
+    .emit(&app)
+    .ok();
 
     try_stream! {
         let mut stream = pin!(stream);
@@ -638,6 +667,19 @@ fn multipart_uploader(
                 false => Ok(()),
             }?;
 
+            UploadDebugEvent {
+                video_id: video_id.clone(),
+                upload_id: upload_id.clone(),
+                state: UploadDebugEventState::Uploading {
+                    part_number,
+                    chunk_size: size.to_string(),
+                    total_size: total_size.to_string(),
+                    duration: format!("{:?}", start.elapsed()),
+                },
+            }
+            .emit(&app)
+            .ok();
+
             yield UploadedPart {
                 etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
                 part_number,
@@ -645,6 +687,15 @@ fn multipart_uploader(
                 total_size
             };
         }
+
+        debug!("Completed multipart upload for {video_id:?} in {:?}", start.elapsed());
+        UploadDebugEvent {
+            video_id: video_id.clone(),
+            upload_id: upload_id.clone(),
+            state: UploadDebugEventState::Done,
+        }
+        .emit(&app)
+        .ok();
     }
 }
 
