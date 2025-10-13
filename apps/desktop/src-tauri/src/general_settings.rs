@@ -235,17 +235,6 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(self));
         store.save().map_err(|e| e.to_string())
     }
-
-    pub fn is_window_excluded(
-        &self,
-        bundle_identifier: Option<&str>,
-        owner_name: Option<&str>,
-        window_title: Option<&str>,
-    ) -> bool {
-        self.excluded_windows
-            .iter()
-            .any(|entry| entry.matches(bundle_identifier, owner_name, window_title))
-    }
 }
 
 pub fn init(app: &AppHandle) {
