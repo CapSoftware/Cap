@@ -1,5 +1,7 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import type { Input, Output } from "@pulumi/pulumi";
+
 const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
 const GITHUB_APP_ID = "1196731";
@@ -30,6 +32,7 @@ export default $config({
 				aws: {},
 				planetscale: true,
 				awsx: "2.21.1",
+				random: true,
 			},
 		};
 	},
@@ -152,6 +155,10 @@ export default $config({
 			[
 				...vercelVariables,
 				{ key: "REMOTE_WORKFLOW_URL", value: workflowCluster.api.url },
+				{
+					key: "REMOTE_WORKFLOW_SECRET",
+					value: secrets.WORKFLOW_RPC_SECRET.result,
+				},
 				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
 			].map(
 				(v) =>
@@ -179,6 +186,9 @@ function Secrets() {
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
 		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		WORKFLOW_RPC_SECRET: new random.RandomString("WORKFLOW_RPC_SECRET", {
+			length: 48,
+		}),
 	};
 }
 
@@ -286,8 +296,8 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 	});
 
 	const commonEnvironment = {
-		CAP_AWS_REGION: bucket.region,
-		CAP_AWS_BUCKET: bucket.bucket,
+		CAP_AWS_REGION: $output(bucket).region,
+		CAP_AWS_BUCKET: $output(bucket).bucket,
 		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
 		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
@@ -295,6 +305,7 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		AXIOM_API_TOKEN,
 		AXIOM_DOMAIN: "api.axiom.co",
 		AXIOM_DATASET,
+		AUTH_SECRET: secrets.WORKFLOW_RPC_SECRET.result,
 	};
 
 	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
@@ -409,6 +420,12 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 				ghcrCredentialsTransform.taskDefinition(args);
 			},
 		},
+		permissions: [
+			{
+				actions: ["s3:*"],
+				resources: [bucket.arn, $interpolate`${bucket.arn}/*`],
+			},
+		],
 	});
 
 	const api = new sst.aws.ApiGatewayV2("MyApi", {
