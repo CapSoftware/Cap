@@ -12,8 +12,8 @@ export default function YourNamePage() {
 	const [lastName, setLastName] = useState("");
 	const router = useRouter();
 
-	const onboardingRequest = async () => {
-		const response = await fetch("/api/settings/onboarding", {
+	const welcomeRequest = async () => {
+		const response = await fetch("/api/settings/onboarding/welcome", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -32,10 +32,13 @@ export default function YourNamePage() {
 		e.preventDefault();
 		try {
 			setLoading(true);
-			// await onboardingRequest();
-			router.push("/onboarding/organization-setup");
+			await welcomeRequest();
+			router.refresh();
+			setTimeout(() => {
+				router.push("/onboarding/organization-setup");
+			}, 500);
 		} catch {
-			toast.error("Failed to complete onboarding");
+			toast.error("An error occurred, please try again");
 		} finally {
 			setLoading(false);
 		}
@@ -51,6 +54,7 @@ export default function YourNamePage() {
 				<div className="space-y-3">
 					<Input
 						value={firstName}
+						disabled={loading}
 						onChange={(e) => setFirstName(e.target.value)}
 						type="text"
 						placeholder="First name"
@@ -59,6 +63,7 @@ export default function YourNamePage() {
 					/>
 					<Input
 						value={lastName}
+						disabled={loading}
 						onChange={(e) => setLastName(e.target.value)}
 						type="text"
 						placeholder="Last name: optional"
@@ -67,6 +72,7 @@ export default function YourNamePage() {
 				</div>
 				<div className="w-full h-px bg-gray-4" />
 				<Button
+					spinner={loading}
 					disabled={!firstName || loading}
 					type="submit"
 					variant="dark"

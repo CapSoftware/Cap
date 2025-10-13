@@ -2,9 +2,32 @@
 
 import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { toast } from "sonner";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { Base } from "../components/Base";
 export default function CustomDomainPage() {
+	const [loading, setLoading] = useState(false);
 	const router = useRouter();
+	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
+		try {
+			setLoading(true);
+			await fetch("/api/settings/onboarding/custom-domain", {
+				method: "POST",
+			});
+			router.refresh();
+			setTimeout(() => {
+				router.push("/onboarding/invite-team");
+			}, 500);
+		} catch {
+			toast.error("An error occurred, please try again");
+		} finally {
+			setLoading(false);
+		}
+	};
+
 	return (
 		<Base
 			title="Custom Domain"
@@ -20,18 +43,29 @@ export default function CustomDomainPage() {
 			}
 			descriptionClassName="max-w-[400px]"
 		>
-			<Button className="w-full" variant="blue">
+			<Button
+				onClick={() => setShowUpgradeModal(true)}
+				className="w-full"
+				variant="blue"
+			>
 				Upgrade to Pro
 			</Button>
 			<div className="w-full h-px bg-gray-4" />
 			<Button
-				type="submit"
+				type="button"
 				variant="dark"
+				spinner={loading}
+				disabled={loading}
 				className="mx-auto w-full"
-				onClick={() => router.push("/onboarding/invite-team")}
+				onClick={handleSubmit}
 			>
 				Skip
 			</Button>
+
+			<UpgradeModal
+				open={showUpgradeModal}
+				onOpenChange={setShowUpgradeModal}
+			/>
 		</Base>
 	);
 }

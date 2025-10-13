@@ -29,7 +29,7 @@ export default async function DashboardLayout({
 	}
 
 	if (!user.name || user.name.length === 0) {
-		redirect("/onboarding");
+		redirect("/onboarding/welcome");
 	}
 
 	let organizationSelect: Organization[] = [];

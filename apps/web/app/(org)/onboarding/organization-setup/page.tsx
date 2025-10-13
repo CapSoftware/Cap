@@ -6,11 +6,14 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { Base } from "../components/Base";
 
 export default function OrganizationSetupPage() {
+	const [organizationName, setOrganizationName] = useState("");
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [isLoading, setIsLoading] = useState(false);
 	const router = useRouter();
 
 	const handleFileChange = () => {
@@ -20,9 +23,39 @@ export default function OrganizationSetupPage() {
 		}
 	};
 
-	const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+	const orgSetupRequest = async () => {
+		const formData = new FormData();
+		formData.append("organizationName", organizationName);
+		if (selectedFile) {
+			formData.append("icon", selectedFile);
+		}
+
+		const response = await fetch("/api/settings/onboarding/org-setup", {
+			method: "POST",
+			body: formData,
+		});
+
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		return response.json();
+	};
+
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		router.push("/onboarding/custom-domain");
+		try {
+			setIsLoading(true);
+			await orgSetupRequest();
+			router.refresh();
+			setTimeout(() => {
+				router.push("/onboarding/custom-domain");
+			}, 500);
+		} catch {
+			toast.error("An error occurred, please try again");
+		} finally {
+			setIsLoading(false);
+		}
 	};
 
 	return (
@@ -34,6 +67,9 @@ export default function OrganizationSetupPage() {
 				<div className="space-y-3">
 					<Input
 						type="text"
+						disabled={isLoading}
+						value={organizationName}
+						onChange={(e) => setOrganizationName(e.target.value)}
 						placeholder="Organization Name"
 						name="organizationName"
 						required
@@ -70,6 +106,7 @@ export default function OrganizationSetupPage() {
 								<Button
 									type="button"
 									variant="gray"
+									disabled={isLoading}
 									size="xs"
 									onClick={() => fileInputRef.current?.click()}
 								>
@@ -83,7 +120,13 @@ export default function OrganizationSetupPage() {
 					</div>
 				</div>
 				<div className="w-full h-px bg-gray-4" />
-				<Button type="submit" variant="dark" className="mx-auto w-full">
+				<Button
+					type="submit"
+					variant="dark"
+					className="mx-auto w-full"
+					spinner={isLoading}
+					disabled={isLoading}
+				>
 					Create Organization
 				</Button>
 			</form>

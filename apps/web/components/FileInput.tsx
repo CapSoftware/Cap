@@ -241,7 +241,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 								onClick={handleRemove}
 							>
 								<FontAwesomeIcon
-									className="size-2.5 text-gray-12 group-hover:text-gray-1"
+									className="size-2.5 transition-colors text-gray-12 group-hover:text-gray-10"
 									icon={faTrash}
 								/>
 							</Button>

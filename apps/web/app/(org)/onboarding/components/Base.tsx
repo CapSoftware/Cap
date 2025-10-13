@@ -11,7 +11,7 @@ export const Base = ({
 	title,
 	description,
 	descriptionClassName,
-	hideBackButton = false,
+	hideBackButton = true,
 }: {
 	children: React.ReactNode;
 	title: string;

@@ -221,7 +221,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 															? "pointer-events-none"
 															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 													)}
-													key={`${organization.organization.name}-organization`}
+													key={`${organization.organization.name}-organization-${organization.organization.id}`}
 													onSelect={async () => {
 														await updateActiveOrganization(
 															organization.organization.id,

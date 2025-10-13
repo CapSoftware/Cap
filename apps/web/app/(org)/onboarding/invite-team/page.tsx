@@ -1,11 +1,14 @@
 "use client";
 
 import { Button, Switch } from "@cap/ui";
+import { getProPlanId } from "@cap/utils";
 import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
+import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
+import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { Base } from "../components/Base";
 
@@ -13,7 +16,9 @@ export default function InviteTeamPage() {
 	const billingCycleId = useId();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
-
+	const router = useRouter();
+	const [loading, setLoading] = useState(false);
+	const [proLoading, setProLoading] = useState(false);
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
 		homepageCopy.pricing.pro.pricing.monthly;
@@ -29,6 +34,51 @@ export default function InviteTeamPage() {
 
 	const incrementUsers = () => setUsers((n) => n + 1);
 	const decrementUsers = () => setUsers((n) => (n > 1 ? n - 1 : 1));
+
+	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
+		try {
+			setLoading(true);
+			await fetch("/api/settings/onboarding/invite-your-team", {
+				method: "POST",
+			});
+			router.refresh();
+			setTimeout(() => {
+				router.push("/dashboard/caps");
+			}, 500);
+		} catch {
+			toast.error("An error occurred, please try again");
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	const planCheckout = async (planId?: string) => {
+		setProLoading(true);
+
+		if (!planId) {
+			planId = getProPlanId(isAnnually ? "yearly" : "monthly");
+		}
+
+		const response = await fetch(`/api/settings/billing/subscribe`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ priceId: planId, quantity: users }),
+		});
+		const data = await response.json();
+
+		if (data.subscription === true) {
+			toast.success("You are already on the Cap Pro plan");
+		}
+
+		if (data.url) {
+			window.location.href = data.url;
+		}
+
+		setProLoading(false);
+	};
 
 	return (
 		<Base
@@ -96,7 +146,7 @@ export default function InviteTeamPage() {
 			</div>
 
 			<div className="space-y-3">
-				<div className="flex flex-wrap gap-5 justify-center items-center p-5 w-full bg-white rounded-xl border border-gray-4 xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between">
+				<div className="flex flex-wrap gap-5 justify-center items-center p-5 w-full rounded-xl border bg-gray-3 border-gray-4 xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between">
 					<div className="flex gap-2 items-center">
 						<p className="text-sm text-gray-12">Per user</p>
 						<div className="flex items-center">
@@ -151,12 +201,24 @@ export default function InviteTeamPage() {
 						</span>
 					</div>
 				</div>
-				<Button className="w-full" variant="blue">
+				<Button
+					className="w-full"
+					variant="blue"
+					spinner={proLoading}
+					disabled={proLoading}
+					onClick={() => planCheckout()}
+				>
 					Get Started
 				</Button>
 			</div>
 			<div className="w-full h-px bg-gray-4" />
-			<Button type="submit" variant="dark" className="mx-auto w-full">
+			<Button
+				variant="dark"
+				className="mx-auto w-full"
+				onClick={handleSubmit}
+				spinner={loading}
+				disabled={loading}
+			>
 				Skip
 			</Button>
 		</Base>
