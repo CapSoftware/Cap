@@ -1,5 +1,5 @@
-use std::{ffi::OsString, mem, os::windows::ffi::OsStringExt, path::PathBuf, str::FromStr};
-use tracing::error;
+use std::{ffi::OsString, mem, os::windows::ffi::OsStringExt, panic, path::PathBuf, str::FromStr};
+use tracing::{error, warn};
 use windows::{
     Graphics::Capture::GraphicsCaptureItem,
     Win32::{
@@ -258,7 +258,26 @@ impl DisplayImpl {
 
     pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-        unsafe { interop.CreateForMonitor(self.0) }
+        
+        // Wrap the unsafe FFI call in catch_unwind to handle C++ exceptions that may cross the FFI boundary.
+        // On Windows 10 build 18363 (the minimum supported version), the Graphics Capture API can throw
+        // C++ exceptions instead of returning proper error codes, which would otherwise crash the application.
+        let monitor = self.0;
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| unsafe {
+            interop.CreateForMonitor(monitor)
+        })) {
+            Ok(result) => result,
+            Err(panic_info) => {
+                // Log the panic to help diagnose issues on older Windows versions
+                warn!(
+                    "Graphics Capture API panicked when creating capture item for monitor. \
+                     This may indicate a permissions issue or incompatibility with Windows 10 build 18363. \
+                     Panic info: {:?}",
+                    panic_info
+                );
+                Err(windows::core::Error::from_win32())
+            }
+        }
     }
 }
 
@@ -1148,7 +1167,26 @@ impl WindowImpl {
 
     pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-        unsafe { interop.CreateForWindow(self.0) }
+        
+        // Wrap the unsafe FFI call in catch_unwind to handle C++ exceptions that may cross the FFI boundary.
+        // On Windows 10 build 18363 (the minimum supported version), the Graphics Capture API can throw
+        // C++ exceptions instead of returning proper error codes, which would otherwise crash the application.
+        let window = self.0;
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| unsafe {
+            interop.CreateForWindow(window)
+        })) {
+            Ok(result) => result,
+            Err(panic_info) => {
+                // Log the panic to help diagnose issues on older Windows versions
+                warn!(
+                    "Graphics Capture API panicked when creating capture item for window. \
+                     This may indicate a permissions issue or incompatibility with Windows 10 build 18363. \
+                     Panic info: {:?}",
+                    panic_info
+                );
+                Err(windows::core::Error::from_win32())
+            }
+        }
     }
 }
 

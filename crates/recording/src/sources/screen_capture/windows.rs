@@ -186,7 +186,14 @@ impl output_pipeline::VideoSource for VideoSource {
                             item
                         }
                         Err(e) => {
-                            error!("Failed to create GraphicsCaptureItem on capture thread: {}", e);
+                            error!(
+                                "Failed to create GraphicsCaptureItem on capture thread: {}. \
+                                 If you're running Windows 10 build 18363 (version 1903), this may be due to \
+                                 a permissions issue or a known compatibility issue with the Graphics Capture API. \
+                                 Please ensure the application has screen capture permissions, or try updating to \
+                                 a newer version of Windows 10 or Windows 11.",
+                                e
+                            );
                             let _ = error_tx.send(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
                             return;
                         }
