@@ -4,14 +4,13 @@
 /* deno-fmt-ignore-file */
 
 declare module "sst" {
-  export interface Resource {
-    "DATABASE_URL": {
-      "type": "sst.sst.Secret"
-      "value": string
-    }
-  }
+	export interface Resource {
+		DATABASE_URL: {
+			type: "sst.sst.Secret";
+			value: string;
+		};
+	}
 }
 /// <reference path="sst-env.d.ts" />
 
-import "sst"
-export {}
+import "sst";
