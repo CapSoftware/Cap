@@ -6,6 +6,7 @@ import {
 	useMutation,
 	useQuery,
 } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -23,7 +24,7 @@ import {
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
-import { orgCustomDomainClient, protectedHeaders } from "./web-api";
+import { apiClient, orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
 	queryKey: ["capture", "windows"] as const,
@@ -121,6 +122,7 @@ export function createOptionsQuery() {
 		captureSystemAudio?: boolean;
 		targetMode?: "display" | "window" | "area" | null;
 		cameraID?: DeviceOrModelID | null;
+		organizationId?: string | null;
 		/** @deprecated */
 		cameraLabel: string | null;
 	}>({
@@ -128,6 +130,7 @@ export function createOptionsQuery() {
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",
+		organizationId: null,
 	});
 
 	createEventListener(window, "storage", (e) => {
@@ -141,6 +144,7 @@ export function createOptionsQuery() {
 			cameraId: _state.cameraID,
 			mode: _state.mode,
 			systemAudio: _state.captureSystemAudio,
+			organizationId: _state.organizationId,
 		});
 	});
 
@@ -236,5 +240,26 @@ export function createCustomDomainQuery() {
 		},
 		refetchOnMount: true,
 		refetchOnWindowFocus: true,
+	}));
+}
+
+export function createOrganizationsQuery() {
+	return useQuery(() => ({
+		queryKey: ["organizations"],
+		queryFn: async () => {
+			const response = await apiClient.desktop.getOrganizations({
+				headers: await protectedHeaders(),
+			});
+
+			if (response.status === 200) {
+				return response.body;
+			}
+
+			return [];
+		},
+		enabled: () => {
+			const authData = authStore.get();
+			return !!authData;
+		},
 	}));
 }

@@ -1,10 +1,12 @@
 import { Button } from "@cap/ui-solid";
+import { Select as KSelect } from "@kobalte/core/select";
 import {
 	createEventListener,
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
 import * as dialog from "@tauri-apps/plugin-dialog";
@@ -20,11 +22,12 @@ import {
 	Show,
 	Suspense,
 	Switch,
+	type ValidComponent,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery } from "~/utils/queries";
+import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
@@ -37,6 +40,12 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import {
+	MenuItem,
+	MenuItemList,
+	PopperContent,
+	topSlideAnimateClasses,
+} from "./editor/ui";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -54,6 +63,7 @@ function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
+	const organizations = createOrganizationsQuery();
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
@@ -168,6 +178,29 @@ function Inner() {
 	// Eg. on Windows Ctrl+P would open the print dialog without this
 	createEventListener(document, "keydown", (e) => e.preventDefault());
 
+	// Auto-select first organization if none is selected
+	const auth = authStore.createQuery();
+	createEffect(() => {
+		// Log to terminal via Tauri
+		invoke("log_message", {
+			level: "info",
+			message: `Auto-selection check: organizationId=${rawOptions.organizationId}, organizationsLength=${organizations.data?.length}, authData=${!!auth.data}`,
+		}).catch(console.error);
+
+		if (
+			!rawOptions.organizationId &&
+			organizations.data &&
+			organizations.data.length > 0 &&
+			auth.data
+		) {
+			invoke("log_message", {
+				level: "info",
+				message: `Auto-selecting organization: ${organizations.data[0].id}`,
+			}).catch(console.error);
+			setOptions("organizationId", organizations.data[0].id);
+		}
+	});
+
 	return (
 		<Switch>
 			<Match when={rawOptions.targetMode === "display"}>
@@ -210,6 +243,7 @@ function Inner() {
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: params.displayId! }}
+							organizations={organizations}
 						/>
 						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
@@ -265,6 +299,7 @@ function Inner() {
 										variant: "window",
 										id: windowUnderCursor.id,
 									}}
+									organizations={organizations}
 								/>
 
 								<Button
@@ -713,6 +748,7 @@ function Inner() {
 													screen: params.displayId!,
 													bounds,
 												}}
+												organizations={organizations}
 											/>
 											<ShowCapFreeWarning
 												isInstantMode={rawOptions.mode === "instant"}
@@ -736,6 +772,7 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	organizations?: ReturnType<typeof createOrganizationsQuery>;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -797,27 +834,29 @@ function RecordingControls(props: {
 
 	return (
 		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
-				<div
-					onClick={() => setOptions("targetMode", null)}
-					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-				</div>
-				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
-					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
-							emit("start-sign-in");
-							return;
-						}
+			<div class="flex flex-col gap-2.5 p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+				<div class="flex gap-2.5 items-center">
+					<div
+						onClick={() => setOptions("targetMode", null)}
+						class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+					>
+						<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+					</div>
+					<div
+						data-inactive={rawOptions.mode === "instant" && !auth.data}
+						class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+						onClick={() => {
+							if (rawOptions.mode === "instant" && !auth.data) {
+								emit("start-sign-in");
+								return;
+							}
 
 						handleRecordingResult(
 							commands.startRecording({
 								capture_target: props.target,
 								mode: rawOptions.mode,
 								capture_system_audio: rawOptions.captureSystemAudio,
+								organization_id: rawOptions.organizationId ?? null,
 							}),
 							setOptions,
 						);
@@ -839,26 +878,114 @@ function RecordingControls(props: {
 								{`${capitalize(rawOptions.mode)} Mode`}
 							</span>
 						</div>
+						<div
+							class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
+							onClick={(e) => {
+								e.stopPropagation();
+								menuModes().then((menu) => menu.popup());
+							}}
+						>
+							<IconCapCaretDown class="focus:rotate-90" />
+						</div>
 					</div>
 					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
 						onClick={(e) => {
 							e.stopPropagation();
-							menuModes().then((menu) => menu.popup());
+							preRecordingMenu().then((menu) => menu.popup());
 						}}
+						class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
 					>
-						<IconCapCaretDown class="focus:rotate-90" />
+						<IconCapGear class="will-change-transform size-5" />
 					</div>
 				</div>
-				<div
-					onClick={(e) => {
-						e.stopPropagation();
-						preRecordingMenu().then((menu) => menu.popup());
-					}}
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+
+				{/* Organization selector - appears when instant mode is selected and user has organizations */}
+				<Show
+					when={
+						rawOptions.mode === "instant" &&
+						auth.data &&
+						props.organizations?.data &&
+						props.organizations.data.length > 0
+					}
 				>
-					<IconCapGear class="will-change-transform size-5" />
-				</div>
+					<div class="bg-gray-2 rounded-lg p-3 border border-gray-4 animate-in fade-in slide-in-from-top duration-300">
+						<div class="flex flex-col gap-2">
+							<label class="flex items-center justify-center gap-2 text-xs text-gray-11">
+								<IconLucideBuilding2 class="size-3" />
+								Organization
+							</label>
+							<KSelect<{ id: string; name: string; ownerId: string }>
+								options={props.organizations?.data ?? []}
+								optionValue="id"
+								optionTextValue="name"
+								placeholder="Select organization"
+								value={props.organizations?.data?.find(
+									(org: { id: string; name: string; ownerId: string }) =>
+										org.id === rawOptions.organizationId,
+								)}
+								onChange={(option) =>
+									setOptions("organizationId", option?.id ?? null)
+								}
+								disabled={props.organizations?.data?.length === 1}
+								itemComponent={(props) => (
+									<MenuItem<typeof KSelect.Item>
+										as={KSelect.Item}
+										item={props.item}
+									>
+										<div class="flex items-center gap-2 w-full">
+											<KSelect.ItemLabel class="flex-1 text-xs">
+												{props.item.rawValue.name}
+											</KSelect.ItemLabel>
+											{/* Show ownership indicator */}
+											<Show
+												when={
+													props.item.rawValue.ownerId === auth.data?.user_id
+												}
+											>
+												<span class="text-xs text-blue-10 bg-blue-3 px-1.5 py-0.5 rounded">
+													Owner
+												</span>
+											</Show>
+										</div>
+									</MenuItem>
+								)}
+							>
+								<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-2 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
+									<KSelect.Value<{
+										id: string;
+										name: string;
+										ownerId: string;
+									}> class="flex-1 text-xs text-left truncate text-gray-12">
+										{(state) => (
+											<span>
+												{state.selectedOption()?.name ?? "Select organization"}
+											</span>
+										)}
+									</KSelect.Value>
+									<KSelect.Icon<ValidComponent>
+										as={(props: ComponentProps<"svg">) => (
+											<IconCapChevronDown
+												{...props}
+												class="size-3 shrink-0 transform transition-transform ui-expanded:rotate-180 text-gray-10"
+											/>
+										)}
+									/>
+								</KSelect.Trigger>
+								<KSelect.Portal>
+									<PopperContent<typeof KSelect.Content>
+										as={KSelect.Content}
+										class={cx(topSlideAnimateClasses, "z-50")}
+									>
+										<MenuItemList<typeof KSelect.Listbox>
+											class="max-h-32 custom-scroll"
+											as={KSelect.Listbox}
+										/>
+									</PopperContent>
+								</KSelect.Portal>
+							</KSelect>
+						</div>
+					</div>
+				</Show>
 			</div>
 			<div
 				onClick={() => props.setToggleModeSelect?.(true)}
@@ -909,10 +1036,4 @@ function ResizeHandle(
 			style={{ ...props.style, transform: "translate(-50%, -50%)" }}
 		/>
 	);
-}
-
-function getDisplayId(displayId: string | undefined) {
-	const id = Number(displayId);
-	if (Number.isNaN(id)) return 0;
-	return id;
 }

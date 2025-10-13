@@ -65,6 +65,7 @@ declare global {
   const IconLucideAppWindowMac: typeof import('~icons/lucide/app-window-mac.jsx')['default']
   const IconLucideBell: typeof import('~icons/lucide/bell.jsx')['default']
   const IconLucideBug: typeof import('~icons/lucide/bug.jsx')['default']
+  const IconLucideBuilding2: typeof import('~icons/lucide/building2.jsx')['default']
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx')['default']
   const IconLucideClock: typeof import('~icons/lucide/clock.jsx')['default']
   const IconLucideDatabase: typeof import('~icons/lucide/database.jsx')['default']
