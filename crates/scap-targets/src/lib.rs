@@ -139,6 +139,10 @@ impl Window {
         self.0.app_icon()
     }
 
+    pub fn bundle_identifier(&self) -> Option<String> {
+        self.0.bundle_identifier()
+    }
+
     pub fn raw_handle(&self) -> &WindowImpl {
         &self.0
     }

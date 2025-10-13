@@ -1,9 +1,9 @@
 use crate::{
     RecordingBaseInputs,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
-    feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
+    feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
-    sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
+    sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget, WindowExclusion},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
@@ -220,6 +220,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    excluded_windows: Vec<WindowExclusion>,
 }
 
 impl ActorBuilder {
@@ -229,6 +230,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
+            excluded_windows: Vec::new(),
         }
     }
 
@@ -239,6 +241,11 @@ impl ActorBuilder {
 
     pub fn with_mic_feed(mut self, mic_feed: Arc<MicrophoneFeedLock>) -> Self {
         self.mic_feed = Some(mic_feed);
+        self
+    }
+
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowExclusion>) -> Self {
+        self.excluded_windows = excluded_windows;
         self
     }
 
@@ -255,6 +262,7 @@ impl ActorBuilder {
                 camera_feed: None,
                 #[cfg(target_os = "macos")]
                 shareable_content,
+                excluded_windows: self.excluded_windows,
             },
         )
         .await
@@ -290,6 +298,7 @@ pub async fn spawn_instant_recording_actor(
         d3d_device,
         #[cfg(target_os = "macos")]
         inputs.shareable_content.retained(),
+        &inputs.excluded_windows,
     )
     .await?;
 

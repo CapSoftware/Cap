@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptureTarget};
+use crate::{
+    feeds::camera::CameraFeedLock,
+    sources::screen_capture::{ScreenCaptureTarget, WindowExclusion},
+};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +51,7 @@ pub struct RecordingBaseInputs {
     pub camera_feed: Option<Arc<CameraFeedLock>>,
     #[cfg(target_os = "macos")]
     pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    pub excluded_windows: Vec<WindowExclusion>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

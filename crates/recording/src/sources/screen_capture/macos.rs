@@ -9,9 +9,12 @@ use crate::{
 use anyhow::{Context, anyhow};
 use cidre::*;
 use futures::{FutureExt, channel::mpsc, future::BoxFuture};
-use std::sync::{
-    Arc,
-    atomic::{self, AtomicBool},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{self, AtomicBool},
+    },
 };
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -75,9 +78,42 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
+        let excluded_sc_windows = if self.excluded_windows.is_empty() {
+            Vec::new()
+        } else {
+            let mut collected = Vec::new();
+
+            for window in Window::list() {
+                let owner_name = window.owner_name();
+                let window_title = window.name();
+                let bundle_identifier = window.bundle_identifier();
+
+                if self.excluded_windows.iter().any(|entry| {
+                    entry.matches(
+                        bundle_identifier.as_deref(),
+                        owner_name.as_deref(),
+                        window_title.as_deref(),
+                    )
+                }) {
+                    if let Some(sc_window) = window
+                        .raw_handle()
+                        .as_sc(self.shareable_content.clone())
+                        .await
+                    {
+                        collected.push(sc_window);
+                    }
+                }
+            }
+
+            collected
+        };
+
         let content_filter = display
             .raw_handle()
-            .as_content_filter(self.shareable_content.clone())
+            .as_content_filter_excluding_windows(
+                self.shareable_content.clone(),
+                excluded_sc_windows,
+            )
             .await
             .ok_or_else(|| SourceError::AsContentFilter)?;
 

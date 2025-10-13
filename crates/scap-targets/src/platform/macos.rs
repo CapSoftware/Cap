@@ -20,7 +20,6 @@ use core_graphics::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
-use tracing::trace;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -345,6 +344,41 @@ impl WindowImpl {
             window_dict
                 .find(key.as_concrete_TypeRef())
                 .and_then(|v| CFNumber::from_void(*v).to_i32())
+        }
+    }
+
+    pub fn bundle_identifier(&self) -> Option<String> {
+        let pid = self.owner_pid()?;
+
+        unsafe {
+            use cocoa::base::id;
+            use cocoa::foundation::NSString;
+            use objc::{class, msg_send, sel, sel_impl};
+
+            let app: id = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+
+            if app.is_null() {
+                return None;
+            }
+
+            let bundle_identifier: id = msg_send![app, bundleIdentifier];
+            if bundle_identifier.is_null() {
+                return None;
+            }
+
+            let cstr = NSString::UTF8String(bundle_identifier);
+            if cstr.is_null() {
+                return None;
+            }
+
+            Some(
+                std::ffi::CStr::from_ptr(cstr)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         }
     }
 

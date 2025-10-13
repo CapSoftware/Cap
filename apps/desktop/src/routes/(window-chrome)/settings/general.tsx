@@ -6,33 +6,145 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import { createResource, For, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createEffect, createMemo, createResource, For, Show } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
+import IconLucidePlus from "~icons/lucide/plus";
+import IconLucideX from "~icons/lucide/x";
 import {
 	type AppTheme,
+	type CaptureWindowWithThumbnail,
 	commands,
 	type GeneralSettingsStore,
+	type WindowExclusion,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
 } from "~/utils/tauri";
 import { Setting, ToggleSetting } from "./Setting";
 
+const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
+	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
+
+const getExclusionSecondaryLabel = (entry: WindowExclusion) => {
+	if (entry.ownerName && entry.windowTitle) {
+		return entry.windowTitle;
+	}
+
+	if (entry.bundleIdentifier && (entry.ownerName || entry.windowTitle)) {
+		return entry.bundleIdentifier;
+	}
+
+	return entry.bundleIdentifier ?? null;
+};
+
+const getWindowOptionLabel = (window: CaptureWindowWithThumbnail) => {
+	const parts = [window.owner_name];
+	if (window.name && window.name !== window.owner_name) {
+		parts.push(window.name);
+	}
+	return parts.join(" • ");
+};
+
+type LegacyWindowExclusion = {
+	bundle_identifier?: string | null;
+	owner_name?: string | null;
+	window_title?: string | null;
+};
+
+const coerceWindowExclusion = (entry: WindowExclusion | LegacyWindowExclusion): WindowExclusion => {
+	if (entry && typeof entry === "object") {
+		if ("bundleIdentifier" in entry || "ownerName" in entry || "windowTitle" in entry) {
+			const current = entry as WindowExclusion;
+			return {
+				bundleIdentifier: current.bundleIdentifier ?? null,
+				ownerName: current.ownerName ?? null,
+				windowTitle: current.windowTitle ?? null,
+			};
+		}
+
+		const legacy = entry as LegacyWindowExclusion;
+		return {
+			bundleIdentifier: legacy.bundle_identifier ?? null,
+			ownerName: legacy.owner_name ?? null,
+			windowTitle: legacy.window_title ?? null,
+		};
+	}
+
+	return {
+		bundleIdentifier: null,
+		ownerName: null,
+		windowTitle: null,
+	};
+};
+
+const normalizeWindowExclusions = (
+	entries: (WindowExclusion | LegacyWindowExclusion)[],
+): WindowExclusion[] =>
+	entries.map((entry) => {
+		const coerced = coerceWindowExclusion(entry);
+		const bundleIdentifier = coerced.bundleIdentifier ?? null;
+		const ownerName = coerced.ownerName ?? null;
+		const hasBundleIdentifier =
+			typeof bundleIdentifier === "string" && bundleIdentifier.length > 0;
+		return {
+			bundleIdentifier,
+			ownerName,
+			windowTitle: hasBundleIdentifier ? null : coerced.windowTitle ?? null,
+		} satisfies WindowExclusion;
+	});
+
+const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
+	uploadIndividualFiles: false,
+	hideDockIcon: false,
+	autoCreateShareableLink: false,
+	enableNotifications: true,
+	enableNativeCameraPreview: false,
+	enableNewRecordingFlow: false,
+	autoZoomOnClicks: false,
+	custom_cursor_capture2: true,
+	enableNewUploader: false,
+	excludedWindows: normalizeWindowExclusions([]),
+});
+
+const deriveInitialSettings = (
+	store: GeneralSettingsStore | null,
+): GeneralSettingsStore => {
+	const defaults = createDefaultGeneralSettings();
+	if (!store) return defaults;
+
+	const { excluded_windows, ...rest } = store as GeneralSettingsStore & {
+		excluded_windows?: LegacyWindowExclusion[];
+	};
+
+	const rawExcludedWindows = (
+		store.excludedWindows ?? excluded_windows ?? []
+	) as (WindowExclusion | LegacyWindowExclusion)[];
+
+	return {
+		...defaults,
+		...rest,
+		excludedWindows: normalizeWindowExclusions(rawExcludedWindows),
+	};
+};
+
 export default function GeneralSettings() {
-	const [store] = createResource(() => generalSettingsStore.get());
+	const [store] = createResource(generalSettingsStore.get, {
+		initialValue: null,
+	});
 
 	return (
-		<Show when={store.state === "ready" && ([store()] as const)}>
-			{(store) => <Inner initialStore={store()[0] ?? null} />}
-		</Show>
+		<Inner
+			initialStore={(store() as GeneralSettingsStore | undefined) ?? null}
+			isStoreLoading={store.loading}
+		/>
 	);
 }
 
@@ -107,20 +219,21 @@ function AppearanceSection(props: {
 	);
 }
 
-function Inner(props: { initialStore: GeneralSettingsStore | null }) {
+function Inner(props: {
+	initialStore: GeneralSettingsStore | null;
+	isStoreLoading: boolean;
+}) {
 	const [settings, setSettings] = createStore<GeneralSettingsStore>(
-		props.initialStore ?? {
-			uploadIndividualFiles: false,
-			hideDockIcon: false,
-			autoCreateShareableLink: false,
-			enableNotifications: true,
-			enableNativeCameraPreview: false,
-			enableNewRecordingFlow: false,
-			autoZoomOnClicks: false,
-			custom_cursor_capture2: true,
-			enableNewUploader: false,
-		},
+		deriveInitialSettings(props.initialStore),
 	);
+
+	createEffect(() => {
+		setSettings(reconcile(deriveInitialSettings(props.initialStore)));
+	});
+
+	const [windows] = createResource(commands.listWindowsWithThumbnails, {
+		initialValue: [] as CaptureWindowWithThumbnail[],
+	});
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -133,6 +246,92 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	const ostype: OsType = type();
+	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const isExcludedWindowsLoading = createMemo(
+		() => props.isStoreLoading || windows.loading,
+	);
+
+	const matchesExclusion = (exclusion: WindowExclusion, window: CaptureWindowWithThumbnail) => {
+		const bundleMatch = exclusion.bundleIdentifier
+			? window.bundle_identifier === exclusion.bundleIdentifier
+			: false;
+		if (bundleMatch) return true;
+
+		const ownerMatch = exclusion.ownerName
+			? window.owner_name === exclusion.ownerName
+			: false;
+
+		if (exclusion.ownerName && exclusion.windowTitle) {
+			return ownerMatch && window.name === exclusion.windowTitle;
+		}
+
+		if (ownerMatch && exclusion.ownerName) {
+			return true;
+		}
+
+		if (exclusion.windowTitle) {
+			return window.name === exclusion.windowTitle;
+		}
+
+		return false;
+	};
+
+	const isManagedWindowsApp = (window: CaptureWindowWithThumbnail) => {
+		const bundle = window.bundle_identifier?.toLowerCase() ?? "";
+		if (bundle.includes("so.cap.desktop")) {
+			return true;
+		}
+		return window.owner_name.toLowerCase().includes("cap");
+	};
+
+	const availableWindows = createMemo(() => {
+		const data = windows() ?? [];
+		return data.filter((window) => {
+			if (excludedWindows().some((entry) => matchesExclusion(entry, window))) {
+				return false;
+			}
+			if (ostype === "windows") {
+				return isManagedWindowsApp(window);
+			}
+			return true;
+		});
+	});
+
+	const applyExcludedWindows = async (next: WindowExclusion[]) => {
+		const normalized = normalizeWindowExclusions(next);
+		setSettings("excludedWindows", normalized);
+		try {
+			await generalSettingsStore.set({ excludedWindows: normalized });
+			await commands.refreshWindowContentProtection();
+		} catch (error) {
+			console.error("Failed to update excluded windows", error);
+		}
+	};
+
+	const handleRemoveExclusion = async (index: number) => {
+		const current = [...excludedWindows()];
+		current.splice(index, 1);
+		await applyExcludedWindows(current);
+	};
+
+	const handleAddWindow = async (window: CaptureWindowWithThumbnail) => {
+		const windowTitle = window.bundle_identifier ? null : window.name;
+
+		const next = [
+			...excludedWindows(),
+			{
+				bundleIdentifier: window.bundle_identifier ?? null,
+				ownerName: window.owner_name ?? null,
+				windowTitle,
+			},
+		];
+		await applyExcludedWindows(next);
+	};
+
+	const handleResetExclusions = async () => {
+		const defaults = await commands.getDefaultExcludedWindows();
+		await applyExcludedWindows(defaults);
+	};
 
 	type ToggleSettingItem = {
 		label: string;
@@ -483,9 +682,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									</For>
 								</div>
 							</div>
-						</Show>
+							</Show>
 					)}
 				</For>
+
+				<ExcludedWindowsCard
+					excludedWindows={excludedWindows()}
+					availableWindows={availableWindows()}
+					onRemove={handleRemoveExclusion}
+					onAdd={handleAddWindow}
+					onReset={handleResetExclusions}
+					isLoading={isExcludedWindowsLoading()}
+					isWindows={ostype === "windows"}
+				/>
 
 				<ServerURLSetting
 					value={settings.serverUrl ?? "https://cap.so"}
@@ -542,6 +751,141 @@ function ServerURLSetting(props: {
 					</div>
 				</Setting>
 			</div>
+		</div>
+	);
+}
+
+function ExcludedWindowsCard(props: {
+	excludedWindows: WindowExclusion[];
+	availableWindows: CaptureWindowWithThumbnail[];
+	onRemove: (index: number) => Promise<void>;
+	onAdd: (window: CaptureWindowWithThumbnail) => Promise<void>;
+	onReset: () => Promise<void>;
+	isLoading: boolean;
+	isWindows: boolean;
+}) {
+	const hasExclusions = () => props.excludedWindows.length > 0;
+	const canAdd = () => props.availableWindows.length > 0 && !props.isLoading;
+
+	const handleAddClick = async () => {
+		if (!canAdd()) return;
+
+		const items = await Promise.all(
+			props.availableWindows.map((window) =>
+				MenuItem.new({
+					text: getWindowOptionLabel(window),
+					action: () => {
+						void props.onAdd(window);
+					},
+				}),
+			),
+		);
+
+		const menu = await Menu.new({ items });
+		await menu.popup();
+		await menu.close();
+	};
+
+	return (
+		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+				<div class="flex flex-col gap-1">
+					<p class="text-sm text-gray-12">Excluded Windows</p>
+					<p class="text-xs text-gray-10">
+						Choose which windows Cap hides from your recordings.
+					</p>
+					<Show when={props.isWindows}>
+						<p class="text-xs text-gray-9">
+							Only Cap windows can be excluded on Windows.
+						</p>
+					</Show>
+				</div>
+				<div class="flex gap-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={props.isLoading}
+						onClick={() => {
+							if (props.isLoading) return;
+							void props.onReset();
+						}}
+					>
+						Default
+					</Button>
+					<Button
+						variant="dark"
+						size="sm"
+						disabled={!canAdd()}
+						onClick={() => void handleAddClick()}
+						class="flex items-center gap-2"
+					>
+						<IconLucidePlus class="size-4" />
+						Add
+					</Button>
+				</div>
+			</div>
+			<Show
+				when={!props.isLoading}
+				fallback={<ExcludedWindowsSkeleton />}
+			>
+				<Show
+					when={hasExclusions()}
+					fallback={
+						<p class="text-xs text-gray-10">
+							No windows are currently excluded.
+						</p>
+					}
+				>
+					<div class="flex flex-wrap gap-2">
+						<For each={props.excludedWindows}>
+							{(entry, index) => (
+								<div class="group flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5">
+									<div class="flex flex-col leading-tight">
+										<span class="text-sm text-gray-12">
+											{getExclusionPrimaryLabel(entry)}
+										</span>
+										<Show when={getExclusionSecondaryLabel(entry)}>
+											{(label) => (
+												<span class="text-[0.65rem] text-gray-9">
+													{label()}
+												</span>
+											)}
+										</Show>
+									</div>
+									<button
+										type="button"
+										class="flex items-center justify-center rounded-full bg-gray-4/70 text-gray-11 transition-colors hover:bg-gray-5 hover:text-gray-12 size-6"
+										onClick={() => void props.onRemove(index())}
+										aria-label="Remove excluded window"
+									>
+										<IconLucideX class="size-3" />
+									</button>
+								</div>
+							)}
+						</For>
+					</div>
+				</Show>
+			</Show>
+		</div>
+	);
+}
+
+function ExcludedWindowsSkeleton() {
+	const chipWidths = ["w-32", "w-28", "w-36"] as const;
+
+	return (
+		<div class="flex flex-wrap gap-2" aria-hidden="true">
+			<For each={chipWidths}>
+				{(width) => (
+					<div class="flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5 animate-pulse">
+						<div class="flex flex-col gap-1 leading-tight">
+							<div class={cx("h-3 rounded bg-gray-4", width)} />
+							<div class="h-2 w-16 rounded bg-gray-4" />
+						</div>
+						<div class="size-6 rounded-full bg-gray-4" />
+					</div>
+				)}
+			</For>
 		</div>
 	);
 }

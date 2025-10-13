@@ -1914,6 +1914,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::list_capture_displays,
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
+            windows::refresh_window_content_protection,
+            general_settings::get_default_excluded_windows,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -2014,7 +2016,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<recording_settings::RecordingSettingsStore>()
-        .typ::<cap_flags::Flags>();
+        .typ::<cap_flags::Flags>()
+        .typ::<cap_recording::sources::screen_capture::WindowExclusion>();
 
     #[cfg(debug_assertions)]
     specta_builder

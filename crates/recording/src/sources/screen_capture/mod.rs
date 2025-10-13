@@ -32,6 +32,7 @@ pub struct CaptureWindow {
     pub name: String,
     pub bounds: LogicalBounds,
     pub refresh_rate: u32,
+    pub bundle_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -45,6 +46,66 @@ pub struct CaptureDisplay {
 pub struct CaptureArea {
     pub screen: CaptureDisplay,
     pub bounds: LogicalBounds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowExclusion {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_title: Option<String>,
+}
+
+impl WindowExclusion {
+    pub fn matches(
+        &self,
+        bundle_identifier: Option<&str>,
+        owner_name: Option<&str>,
+        window_title: Option<&str>,
+    ) -> bool {
+        if let Some(identifier) = self.bundle_identifier.as_deref() {
+            if bundle_identifier
+                .map(|candidate| candidate == identifier)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+
+        if let Some(expected_owner) = self.owner_name.as_deref() {
+            let owner_matches = owner_name
+                .map(|candidate| candidate == expected_owner)
+                .unwrap_or(false);
+
+            if self.window_title.is_some() {
+                return owner_matches
+                    && self
+                        .window_title
+                        .as_deref()
+                        .map(|expected_title| {
+                            window_title
+                                .map(|candidate| candidate == expected_title)
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+            }
+
+            if owner_matches {
+                return true;
+            }
+        }
+
+        if let Some(expected_title) = self.window_title.as_deref() {
+            return window_title
+                .map(|candidate| candidate == expected_title)
+                .unwrap_or(false);
+        }
+
+        false
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -198,6 +259,7 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     #[cfg(target_os = "macos")]
     shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    pub excluded_windows: Vec<WindowExclusion>,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
@@ -234,6 +296,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
             d3d_device: self.d3d_device.clone(),
             #[cfg(target_os = "macos")]
             shareable_content: self.shareable_content.clone(),
+            excluded_windows: self.excluded_windows.clone(),
         }
     }
 }
@@ -275,6 +338,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        excluded_windows: Vec<WindowExclusion>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -401,6 +465,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             d3d_device,
             #[cfg(target_os = "macos")]
             shareable_content: shareable_content.retained(),
+            excluded_windows,
         })
     }
 
@@ -464,13 +529,22 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
                 }
             }
 
+            let owner_name = v.owner_name()?;
+
+            #[cfg(target_os = "macos")]
+            let bundle_identifier = v.raw_handle().bundle_identifier();
+
+            #[cfg(not(target_os = "macos"))]
+            let bundle_identifier = None;
+
             Some((
                 CaptureWindow {
                     id: v.id(),
                     name,
-                    owner_name: v.owner_name()?,
+                    owner_name,
                     bounds: v.display_relative_logical_bounds()?,
                     refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
+                    bundle_identifier,
                 },
                 v,
             ))

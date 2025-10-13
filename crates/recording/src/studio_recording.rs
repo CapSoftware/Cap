@@ -4,18 +4,14 @@ use crate::{
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
-    output_pipeline::{
-        AudioFrame, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
-    },
+    output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{
-    FutureExt, StreamExt, channel::mpsc, future::OptionFuture, stream::FuturesUnordered,
-};
+use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
 use std::{
@@ -348,6 +344,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    excluded_windows: Vec<screen_capture::WindowExclusion>,
 }
 
 impl ActorBuilder {
@@ -359,6 +356,7 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
+            excluded_windows: Vec::new(),
         }
     }
 
@@ -382,6 +380,14 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_excluded_windows(
+        mut self,
+        excluded_windows: Vec<screen_capture::WindowExclusion>,
+    ) -> Self {
+        self.excluded_windows = excluded_windows;
+        self
+    }
+
     pub async fn build(
         self,
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
@@ -395,6 +401,7 @@ impl ActorBuilder {
                 camera_feed: self.camera_feed,
                 #[cfg(target_os = "macos")]
                 shareable_content,
+                excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
         )
@@ -693,6 +700,7 @@ async fn create_segment_pipeline(
         d3d_device,
         #[cfg(target_os = "macos")]
         base_inputs.shareable_content,
+        &base_inputs.excluded_windows,
     )
     .await
     .unwrap();

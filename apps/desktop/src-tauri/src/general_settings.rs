@@ -1,3 +1,4 @@
+use cap_recording::sources::screen_capture::WindowExclusion;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -37,6 +38,30 @@ impl MainWindowRecordingStartBehaviour {
             Self::Minimise => window.minimize(),
         }
     }
+}
+
+const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
+    "Cap",
+    "Cap Setup",
+    "Cap Settings",
+    "Cap Editor",
+    "Cap Mode Selection",
+    "Cap Camera",
+    "Cap Recordings Overlay",
+    "Cap In Progress Recording",
+    "Cap Window Capture Occluder",
+    "Cap Capture Area",
+];
+
+pub fn default_excluded_windows() -> Vec<WindowExclusion> {
+    DEFAULT_EXCLUDED_WINDOW_TITLES
+        .iter()
+        .map(|title| WindowExclusion {
+            bundle_identifier: None,
+            owner_name: None,
+            window_title: Some((*title).to_string()),
+        })
+        .collect()
 }
 
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
@@ -99,6 +124,8 @@ pub struct GeneralSettingsStore {
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_enable_new_uploader", skip_serializing_if = "no")]
     pub enable_new_uploader: bool,
+    #[serde(default = "default_excluded_windows")]
+    pub excluded_windows: Vec<WindowExclusion>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -162,6 +189,7 @@ impl Default for GeneralSettingsStore {
             enable_new_recording_flow: default_enable_new_recording_flow(),
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             enable_new_uploader: default_enable_new_uploader(),
+            excluded_windows: default_excluded_windows(),
         }
     }
 }
@@ -213,6 +241,17 @@ impl GeneralSettingsStore {
         store.set("general_settings", json!(self));
         store.save().map_err(|e| e.to_string())
     }
+
+    pub fn is_window_excluded(
+        &self,
+        bundle_identifier: Option<&str>,
+        owner_name: Option<&str>,
+        window_title: Option<&str>,
+    ) -> bool {
+        self.excluded_windows
+            .iter()
+            .any(|entry| entry.matches(bundle_identifier, owner_name, window_title))
+    }
 }
 
 pub fn init(app: &AppHandle) {
@@ -230,4 +269,10 @@ pub fn init(app: &AppHandle) {
     store.save(app).unwrap();
 
     println!("GeneralSettingsState managed");
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
+    default_excluded_windows()
 }

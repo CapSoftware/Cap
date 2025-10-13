@@ -44,7 +44,9 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
+    general_settings::{
+        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
+    },
     open_external_link,
     presets::PresetsStore,
     thumbnails::*,
@@ -457,6 +459,11 @@ pub async fn start_recording(
                     recording_dir: recording_dir.clone(),
                 };
 
+                let excluded_windows = general_settings
+                    .as_ref()
+                    .map(|settings| settings.excluded_windows.clone())
+                    .unwrap_or_else(general_settings::default_excluded_windows);
+
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
@@ -468,7 +475,8 @@ pub async fn start_recording(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        );
+                        )
+                        .with_excluded_windows(excluded_windows.clone());
 
                         if let Some(camera_feed) = camera_feed {
                             builder = builder.with_camera_feed(camera_feed);
@@ -508,7 +516,8 @@ pub async fn start_recording(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio);
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_excluded_windows(excluded_windows.clone());
 
                         if let Some(mic_feed) = mic_feed {
                             builder = builder.with_mic_feed(mic_feed);

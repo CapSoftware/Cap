@@ -22,11 +22,12 @@ use tracing::{debug, error, warn};
 
 use crate::{
     App, ArcLock, RequestScreenCapturePrewarm, fake_window,
-    general_settings::{AppTheme, GeneralSettingsStore},
+    general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
 };
+use cap_recording::sources::screen_capture::WindowExclusion;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -250,6 +251,9 @@ impl ShowCapWindow {
                     .map(|s| s.enable_new_recording_flow)
                     .unwrap_or_default();
 
+                let title = CapWindowId::Main.title();
+                let should_protect = should_protect_window(app, &title);
+
                 let window = self
                     .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
                     .resizable(false)
@@ -258,7 +262,7 @@ impl ShowCapWindow {
                     .minimizable(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(false)
+                    .content_protected(should_protect)
                     .center()
                     .initialization_script(format!(
                         "
@@ -296,6 +300,12 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
+                let title = CapWindowId::TargetSelectOverlay {
+                    display_id: display_id.clone(),
+                }
+                .title();
+                let should_protect = should_protect_window(app, &title);
+
                 let mut window_builder = self
                     .window_builder(
                         app,
@@ -305,7 +315,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .content_protected(true)
+                    .content_protected(should_protect)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
@@ -516,6 +526,12 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
+                let title = CapWindowId::WindowCaptureOccluder {
+                    screen_id: screen_id.clone(),
+                }
+                .title();
+                let should_protect = should_protect_window(app, &title);
+
                 #[cfg(target_os = "macos")]
                 let position = display.raw_handle().logical_position();
 
@@ -532,7 +548,7 @@ impl ShowCapWindow {
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(true)
+                    .content_protected(should_protect)
                     .skip_taskbar(true)
                     .inner_size(bounds.width(), bounds.height())
                     .position(position.x(), position.y())
@@ -550,13 +566,16 @@ impl ShowCapWindow {
                 window
             }
             Self::CaptureArea { screen_id } => {
+                let title = CapWindowId::CaptureArea.title();
+                let should_protect = should_protect_window(app, &title);
+
                 let mut window_builder = self
                     .window_builder(app, "/capture-area")
                     .maximized(false)
                     .fullscreen(false)
                     .shadow(false)
                     .always_on_top(true)
-                    .content_protected(true)
+                    .content_protected(should_protect)
                     .skip_taskbar(true)
                     .closable(true)
                     .decorations(false)
@@ -604,6 +623,9 @@ impl ShowCapWindow {
                 let width = 250.0;
                 let height = 40.0;
 
+                let title = CapWindowId::InProgressRecording.title();
+                let should_protect = should_protect_window(app, &title);
+
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -613,7 +635,7 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(true)
+                    .content_protected(should_protect)
                     .inner_size(width, height)
                     .position(
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
@@ -634,6 +656,9 @@ impl ShowCapWindow {
                 window
             }
             Self::RecordingsOverlay => {
+                let title = CapWindowId::RecordingsOverlay.title();
+                let should_protect = should_protect_window(app, &title);
+
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .maximized(false)
@@ -643,7 +668,7 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .accept_first_mouse(true)
-                    .content_protected(true)
+                    .content_protected(should_protect)
                     .inner_size(
                         (monitor.size().width as f64) / monitor.scale_factor(),
                         (monitor.size().height as f64) / monitor.scale_factor(),
@@ -838,6 +863,34 @@ fn position_traffic_lights_impl(
             );
         })
         .ok();
+}
+
+fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
+    let matches = |list: &[WindowExclusion]| {
+        list.iter()
+            .any(|entry| entry.matches(None, None, Some(window_title)))
+    };
+
+    GeneralSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|settings| matches(&settings.excluded_windows))
+        .unwrap_or_else(|| matches(&general_settings::default_excluded_windows()))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
+    for (label, window) in app.webview_windows() {
+        if let Ok(id) = CapWindowId::from_str(&label) {
+            let title = id.title();
+            window
+                .set_content_protected(should_protect_window(&app, &title))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 // Credits: tauri-plugin-window-state

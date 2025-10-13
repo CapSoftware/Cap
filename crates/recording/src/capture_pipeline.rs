@@ -3,7 +3,7 @@ use crate::{
     output_pipeline::*,
     sources,
     sources::screen_capture::{
-        self, ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget,
+        self, ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget, WindowExclusion,
     },
 };
 use cap_timestamp::Timestamps;
@@ -134,6 +134,7 @@ pub async fn create_screen_capture(
     system_audio: bool,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    excluded_windows: &[WindowExclusion],
 ) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
     Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         capture_target,
@@ -145,6 +146,7 @@ pub async fn create_screen_capture(
         d3d_device,
         #[cfg(target_os = "macos")]
         shareable_content,
+        excluded_windows.to_vec(),
     )
     .await?)
 }
