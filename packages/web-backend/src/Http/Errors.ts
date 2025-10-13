@@ -10,7 +10,7 @@ export const handleDomainError = <A, E, R>(e: Effect.Effect<A, E, R>) =>
 		),
 		Effect.catchIf(
 			(e) => Schema.is(S3Error)(e),
-			() => new Http.InternalServerError({ cause: "database" }),
+			() => new Http.InternalServerError({ cause: "s3" }),
 		),
 		Effect.catchIf(
 			(e) => Schema.is(InvalidRpcAuth)(e),
