@@ -489,7 +489,7 @@ pub async fn start_recording(
 
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
-                        let builder = studio_recording::Actor::builder(
+                        let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
@@ -501,7 +501,9 @@ pub async fn start_recording(
                         );
 
                         #[cfg(target_os = "macos")]
-                        let mut builder = builder.with_excluded_windows(excluded_windows.clone());
+                        {
+                            builder = builder.with_excluded_windows(excluded_windows.clone());
+                        }
 
                         if let Some(camera_feed) = camera_feed {
                             builder = builder.with_camera_feed(camera_feed);
@@ -544,7 +546,9 @@ pub async fn start_recording(
                         .with_system_audio(inputs.capture_system_audio);
 
                         #[cfg(target_os = "macos")]
-                        let mut builder = builder.with_excluded_windows(excluded_windows.clone());
+                        {
+                            builder = builder.with_excluded_windows(excluded_windows.clone());
+                        }
 
                         if let Some(mic_feed) = mic_feed {
                             builder = builder.with_mic_feed(mic_feed);
