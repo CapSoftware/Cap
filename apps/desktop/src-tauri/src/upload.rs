@@ -91,30 +91,19 @@ pub async fn upload_video(
 
     info!("Uploading video {video_id}...");
 
-    let (stream, total_size) = file_reader_stream(file_path).await?;
-    let stream = progress(
+    let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+
+    let video_fut = progress(
         app.clone(),
         video_id.clone(),
-        stream.map(move |v| v.map(move |v| (total_size, v))),
-    );
-
-    let stream = if let Some(channel) = channel {
-        tauri_progress(channel, stream).boxed()
-    } else {
-        stream.boxed()
-    };
-
-    let video_fut = singlepart_uploader(
-        app.clone(),
-        PresignedS3PutRequest {
-            video_id: video_id.clone(),
-            subpath: "result.mp4".to_string(),
-            method: PresignedS3PutRequestMethod::Put,
-            meta: Some(meta),
-        },
-        total_size,
-        stream.and_then(|(_, c)| async move { Ok(c) }),
-    );
+        multipart_uploader(
+            app.clone(),
+            video_id.clone(),
+            upload_id.clone(),
+            from_pending_file_to_chunks(file_path.clone(), None),
+        ),
+    )
+    .try_collect::<Vec<_>>();
 
     // TODO: We don't report progress on image upload
     let bytes = compress_image(screenshot_path).await?;
