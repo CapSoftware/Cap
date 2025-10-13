@@ -63,11 +63,8 @@ pub async fn upload_video(
     screenshot_path: PathBuf,
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
-<<<<<<< HEAD
-) -> Result<UploadedVideo, AuthedApiError> {
+) -> Result<UploadedItem, AuthedApiError> {
     println!("Uploading video {video_id}...");
-=======
-) -> Result<UploadedItem, String> {
     let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
         .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
         .ok()
