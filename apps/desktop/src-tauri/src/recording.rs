@@ -45,7 +45,9 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
+    general_settings::{
+        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
+    },
     open_external_link,
     presets::PresetsStore,
     thumbnails::*,
@@ -474,6 +476,17 @@ pub async fn start_recording(
                     recording_dir: recording_dir.clone(),
                 };
 
+                #[cfg(target_os = "macos")]
+                let excluded_windows = {
+                    let window_exclusions = general_settings
+                        .as_ref()
+                        .map_or_else(general_settings::default_excluded_windows, |settings| {
+                            settings.excluded_windows.clone()
+                        });
+
+                    crate::window_exclusion::resolve_window_ids(&window_exclusions)
+                };
+
                 let actor = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
@@ -486,6 +499,11 @@ pub async fn start_recording(
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
                         );
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            builder = builder.with_excluded_windows(excluded_windows.clone());
+                        }
 
                         if let Some(camera_feed) = camera_feed {
                             builder = builder.with_camera_feed(camera_feed);
@@ -526,6 +544,11 @@ pub async fn start_recording(
                             inputs.capture_target.clone(),
                         )
                         .with_system_audio(inputs.capture_system_audio);
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            builder = builder.with_excluded_windows(excluded_windows.clone());
+                        }
 
                         if let Some(mic_feed) = mic_feed {
                             builder = builder.with_mic_feed(mic_feed);
@@ -576,7 +599,7 @@ pub async fn start_recording(
             )
             .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-            if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+            if let Some(window) = CapWindowId::RecordingControls.get(&app) {
                 dialog = dialog.parent(&window);
             }
 
@@ -618,7 +641,7 @@ pub async fn start_recording(
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-                    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                    if let Some(window) = CapWindowId::RecordingControls.get(&app) {
                         dialog = dialog.parent(&window);
                     }
 
@@ -718,7 +741,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         }
     };
 
-    if let Some((recording, recording_dir, video_id)) = recording_data {
+    if let Some((_, recording_dir, video_id)) = recording_data {
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
@@ -741,7 +764,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .flatten()
             .unwrap_or_default();
 
-        if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+        if let Some(window) = CapWindowId::RecordingControls.get(&app) {
             let _ = window.close();
         }
 
@@ -805,7 +828,7 @@ async fn handle_recording_end(
 
     let _ = app.recording_logging_handle.reload(None);
 
-    if let Some(window) = CapWindowId::InProgressRecording.get(&handle) {
+    if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
         let _ = window.close();
     }
 

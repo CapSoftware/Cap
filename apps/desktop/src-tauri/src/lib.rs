@@ -25,6 +25,7 @@ mod tray;
 mod upload;
 mod upload_legacy;
 mod web_api;
+mod window_exclusion;
 mod windows;
 
 use audio::AppSounds;
@@ -1918,6 +1919,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::list_capture_displays,
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
+            windows::refresh_window_content_protection,
+            general_settings::get_default_excluded_windows,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -2017,7 +2020,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<recording_settings::RecordingSettingsStore>()
-        .typ::<cap_flags::Flags>();
+        .typ::<cap_flags::Flags>()
+        .typ::<crate::window_exclusion::WindowExclusion>();
 
     #[cfg(debug_assertions)]
     specta_builder
@@ -2117,7 +2121,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
-                    CapWindowId::InProgressRecording.label().as_str(),
+                    CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
                 ])
                 .map_label(|label| match label {

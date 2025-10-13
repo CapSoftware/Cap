@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use cap_timestamp::Timestamps;
+use scap_targets::WindowId;
 use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
@@ -134,6 +135,7 @@ pub async fn create_screen_capture(
     system_audio: bool,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
 ) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
     Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         capture_target,
@@ -145,6 +147,8 @@ pub async fn create_screen_capture(
         d3d_device,
         #[cfg(target_os = "macos")]
         shareable_content,
+        #[cfg(target_os = "macos")]
+        excluded_windows,
     )
     .await?)
 }
