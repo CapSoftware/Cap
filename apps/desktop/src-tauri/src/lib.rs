@@ -28,7 +28,7 @@ mod web_api;
 mod windows;
 
 use audio::AppSounds;
-use auth::{AuthStore, AuthenticationInvalid, Plan};
+use auth::{AuthStore, Plan};
 use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
@@ -2000,7 +2000,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,
-            AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
             captions::DownloadProgress,
             recording::RecordingEvent,

@@ -37,6 +37,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
+use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
@@ -252,7 +253,7 @@ pub async fn start_recording(
     app: AppHandle,
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
-) -> Result<(), String> {
+) -> Result<(), AuthedApiError> {
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
     }

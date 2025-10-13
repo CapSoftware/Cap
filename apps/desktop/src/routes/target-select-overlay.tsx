@@ -811,11 +811,17 @@ function RecordingControls(props: {
 							return;
 						}
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
+						commands
+							.startRecording({
+								capture_target: props.target,
+								mode: rawOptions.mode,
+								capture_system_audio: rawOptions.captureSystemAudio,
+							})
+							.catch((err) => {
+								console.log(err);
+								alert("CRINGE");
+								throw err;
+							});
 					}}
 				>
 					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">

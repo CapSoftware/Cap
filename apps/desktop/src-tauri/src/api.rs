@@ -5,9 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::AppHandle;
 
-use crate::web_api::ManagerExt;
+use crate::web_api::{AuthedApiError, ManagerExt};
 
-pub async fn upload_multipart_initiate(app: &AppHandle, video_id: &str) -> Result<String, String> {
+pub async fn upload_multipart_initiate(
+    app: &AppHandle,
+    video_id: &str,
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Response {
@@ -49,7 +52,7 @@ pub async fn upload_multipart_presign_part(
     upload_id: &str,
     part_number: u32,
     md5_sum: &str,
-) -> Result<String, String> {
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Response {
@@ -114,7 +117,7 @@ pub async fn upload_multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AuthedApiError> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct MultipartCompleteRequest<'a> {
@@ -179,7 +182,10 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
-pub async fn upload_signed(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
+pub async fn upload_signed(
+    app: &AppHandle,
+    body: PresignedS3PutRequest,
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     struct Data {
         url: String,
@@ -218,7 +224,7 @@ pub async fn desktop_video_progress(
     video_id: &str,
     uploaded: u64,
     total: u64,
-) -> Result<(), String> {
+) -> Result<(), AuthedApiError> {
     let resp = app
         .authed_api_request("/api/desktop/video/progress", |client, url| {
             client.post(url).json(&json!({

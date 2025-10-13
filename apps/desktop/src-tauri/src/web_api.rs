@@ -6,7 +6,7 @@ use tracing::{error, warn};
 
 use crate::{
     ArcLock,
-    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
+    auth::{AuthSecret, AuthStore},
 };
 
 #[derive(Error, Debug)]
@@ -83,7 +83,6 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
         else {
             warn!("Not logged in");
-            AuthenticationInvalid.emit(self).ok();
             return Err(AuthedApiError::InvalidAuthentication);
         };
 
@@ -92,7 +91,6 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
-            AuthenticationInvalid.emit(self).ok();
             return Err(AuthedApiError::InvalidAuthentication);
         }
 

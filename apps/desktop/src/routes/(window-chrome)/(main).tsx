@@ -238,11 +238,16 @@ function Page() {
 					}
 				})();
 
-				await commands.startRecording({
-					capture_target,
-					mode: payload.mode,
-					capture_system_audio: rawOptions.captureSystemAudio,
-				});
+				try {
+					await commands.startRecording({
+						capture_target,
+						mode: payload.mode,
+						capture_system_audio: rawOptions.captureSystemAudio,
+					});
+				} catch (err) {
+					alert("CRINGE");
+					throw err;
+				}
 			} else await commands.stopRecording();
 		},
 	}));

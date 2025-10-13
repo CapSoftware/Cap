@@ -87,7 +87,6 @@ pub async fn upload_video(
             id: v.id,
         });
     }
->>>>>>> main
 
     info!("Uploading video {video_id}...");
 
