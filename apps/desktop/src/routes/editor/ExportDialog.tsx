@@ -2,7 +2,11 @@ import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { makePersisted } from "@solid-primitives/storage";
-import { createMutation, keepPreviousData } from "@tanstack/solid-query";
+import {
+	createMutation,
+	createQuery,
+	keepPreviousData,
+} from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
@@ -433,12 +437,12 @@ export function ExportDialog() {
 								{(est) => (
 									<div
 										class={cx(
-											"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none",
+											"flex overflow-hidden z-40 justify-between items-center max-w-full text-[11px] font-medium transition-all pointer-events-none",
 										)}
 									>
-										<p class="flex gap-4 items-center">
+										<p class="flex gap-3 items-center">
 											<span class="flex items-center text-gray-12">
-												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconCapCamera class="w-3 h-3 mr-1 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().duration_seconds,
@@ -462,15 +466,15 @@ export function ExportDialog() {
 												})()}
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideMonitor class="w-3 h-3 mr-1 text-gray-12" />
 												{settings.resolution.width}×{settings.resolution.height}
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideHardDrive class="w-3 h-3 mr-1 text-gray-12" />
 												{est().estimated_size_mb.toFixed(2)} MB
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideClock class="w-3 h-3 mr-1 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().estimated_time_seconds,
@@ -500,10 +504,10 @@ export function ExportDialog() {
 						</div>
 					}
 				>
-					<div class="flex flex-col gap-4 px-2 min-w-[650px]">
+					<div class="flex flex-col gap-3 px-2 min-w-[550px]">
 						{/* Export to */}
-						<div class="flex flex-col gap-3">
-							<h3 class="text-gray-12 font-medium">Export to</h3>
+						<div class="flex flex-col gap-2">
+							<h3 class="text-gray-12 font-medium text-sm">Export to</h3>
 							<KTabs
 								value={settings.exportTo}
 								onChange={(v: string) => {
@@ -515,7 +519,7 @@ export function ExportDialog() {
 										{(option) => (
 											<KTabs.Trigger
 												value={option.value}
-												class="z-10 flex flex-1 gap-2 items-center justify-center py-2.5 px-3 text-gray-11 text-nowrap transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+												class="z-10 flex flex-1 gap-1.5 items-center justify-center py-2 px-2.5 text-gray-11 text-nowrap text-sm transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
 											>
 												{option.icon}
 												{option.label}
@@ -536,9 +540,9 @@ export function ExportDialog() {
 									organizations().length > 1
 								}
 							>
-								<div class="flex flex-col gap-3 p-4 rounded-lg bg-gray-2 border animate-in fade-in slide-in-from-top duration-200">
-									<label class="flex items-center gap-2 text-sm text-gray-11">
-										<IconLucideBuilding2 class="size-4" />
+								<div class="flex flex-col gap-2 p-3 rounded-lg bg-gray-2 border animate-in fade-in slide-in-from-top duration-200">
+									<label class="flex items-center gap-1.5 text-xs text-gray-11 font-medium">
+										<IconLucideBuilding2 class="size-3.5" />
 										Organization
 									</label>
 									<KSelect<{ id: string; name: string; ownerId: string }>
@@ -575,12 +579,12 @@ export function ExportDialog() {
 											</MenuItem>
 										)}
 									>
-										<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 py-2.5 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
+										<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-2 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
 											<KSelect.Value<{
 												id: string;
 												name: string;
 												ownerId: string;
-											}> class="flex-1 text-sm text-left truncate text-gray-12">
+											}> class="flex-1 text-xs text-left truncate text-gray-12">
 												{(state) => (
 													<span>
 														{state.selectedOption()?.name ??
@@ -617,13 +621,13 @@ export function ExportDialog() {
 						<div class="w-full border-t border-gray-5" />
 
 						{/* Output Settings Group */}
-						<div class="flex flex-col gap-4">
-							<h3 class="text-gray-12 font-medium">Output Settings</h3>
+						<div class="flex flex-col gap-2.5">
+							<h3 class="text-gray-12 font-medium text-sm">Output Settings</h3>
 
 							{/* Format & Frame Rate Row */}
-							<div class="flex gap-3">
-								<div class="flex flex-col gap-2 flex-1">
-									<h4 class="text-xs text-gray-11 font-medium uppercase tracking-wide">
+							<div class="flex gap-2.5">
+								<div class="flex flex-col gap-1.5 flex-1">
+									<h4 class="text-[11px] text-gray-11 font-medium uppercase tracking-wide">
 										Format
 									</h4>
 									<KTabs
@@ -666,7 +670,7 @@ export function ExportDialog() {
 												{(option) => (
 													<KTabs.Trigger
 														value={option.value}
-														class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+														class="z-10 flex-1 py-2 text-sm text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
 													>
 														{option.label}
 													</KTabs.Trigger>
@@ -679,8 +683,8 @@ export function ExportDialog() {
 									</KTabs>
 								</div>
 
-								<div class="flex flex-col gap-2 flex-1">
-									<h4 class="text-xs text-gray-11 font-medium uppercase tracking-wide">
+								<div class="flex flex-col gap-1.5 flex-1">
+									<h4 class="text-[11px] text-gray-11 font-medium uppercase tracking-wide">
 										Frame Rate
 									</h4>
 									<KSelect<{ label: string; value: number }>
@@ -713,7 +717,7 @@ export function ExportDialog() {
 											</MenuItem>
 										)}
 									>
-										<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 py-3 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
+										<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-2 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
 											<KSelect.Value<
 												(typeof FPS_OPTIONS)[number]
 											> class="flex-1 text-xs text-left truncate tabular-nums text-gray-12">
@@ -746,8 +750,8 @@ export function ExportDialog() {
 							</div>
 
 							{/* Resolution Row */}
-							<div class="flex flex-col gap-2">
-								<h4 class="text-xs text-gray-11 font-medium uppercase tracking-wide">
+							<div class="flex flex-col gap-1.5">
+								<h4 class="text-[11px] text-gray-11 font-medium uppercase tracking-wide">
 									Resolution
 								</h4>
 								<KTabs
@@ -783,7 +787,7 @@ export function ExportDialog() {
 											{(option) => (
 												<KTabs.Trigger
 													value={option.value}
-													class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+													class="z-10 flex-1 py-2 text-sm text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
 												>
 													{option.label}
 												</KTabs.Trigger>
@@ -797,8 +801,8 @@ export function ExportDialog() {
 							</div>
 
 							{/* Quality Row */}
-							<div class="flex flex-col gap-2">
-								<h4 class="text-xs text-gray-11 font-medium uppercase tracking-wide">
+							<div class="flex flex-col gap-1.5">
+								<h4 class="text-[11px] text-gray-11 font-medium uppercase tracking-wide">
 									Quality
 								</h4>
 								<KTabs
@@ -812,7 +816,7 @@ export function ExportDialog() {
 											{(option) => (
 												<KTabs.Trigger
 													value={option.value}
-													class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+													class="z-10 flex-1 py-2 text-sm text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
 												>
 													{option.label}
 												</KTabs.Trigger>
