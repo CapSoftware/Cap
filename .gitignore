@@ -47,7 +47,3 @@ tauri.windows.conf.json
 # Cursor
 .cursor
 .env*.local
-
-# Audio bug fix working files
-docs/memory-bank/
-claude-audio-fix.md
