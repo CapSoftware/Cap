@@ -608,9 +608,19 @@ fn multipart_uploader(
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
 
-        let mut optimistic_presigned_url =
-            (1, api::upload_multipart_presign_part(&app, &video_id, &upload_id, 1)
-                .await?);
+        let mut optimistic_presigned_url_task: Option<tokio::task::JoinHandle<Result<String, String>>> = Some(
+            tokio::spawn({
+                let app = app.clone();
+                let video_id = video_id.clone();
+                let upload_id = upload_id.clone();
+
+                async move {
+                    api::upload_multipart_presign_part(&app, &video_id, &upload_id, 1)
+                        .await
+                }
+            })
+        );
+        let mut expected_part_number = 1u32;
 
         while let Some(item) = stream.next().await {
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
@@ -619,14 +629,27 @@ fn multipart_uploader(
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
 
-            // The optimistically generated `upload_multipart_presign_part` could be wrong.
-            // In that case throw it out and generate a new correct one.
-            if optimistic_presigned_url.0 != part_number {
-                warn!("Throwing out optimistic presigned URL for part {part_number} as part {part_number} was requested!");
-                optimistic_presigned_url = (part_number, api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
-                    .await?);
-            }
-            let (part_number, presigned_url) = optimistic_presigned_url;
+            let presigned_url = if expected_part_number == part_number {
+                // The optimistic presigned URL matches, wait for it
+                if let Some(task) = optimistic_presigned_url_task.take() {
+                    task.await
+                        .map_err(|e| format!("uploader/part/{part_number}/task_join: {e:?}"))?
+                        .map_err(|e| format!("uploader/part/{part_number}/presign: {e}"))?
+                } else {
+                    // Fallback if no task available
+                    api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
+                        .await?
+                }
+            } else {
+                // The optimistic presigned URL doesn't match, abort it and generate a new correct one
+                if let Some(task) = optimistic_presigned_url_task.take() {
+                    task.abort();
+                }
+                debug!("Throwing out optimistic presigned URL for part {expected_part_number} as part {part_number} was requested!");
+                expected_part_number = part_number;
+                api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
+                    .await?
+            };
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
@@ -655,11 +678,24 @@ fn multipart_uploader(
                 total_size
             };
 
-            // We generate the presigned URL ahead of time.
+            // We generate the presigned URL ahead of time for the next expected part.
             // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, we aren't just doing nothing.
-            optimistic_presigned_url =
-                (part_number + 1, api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number + 1)
-                    .await?);
+            expected_part_number = part_number + 1;
+            optimistic_presigned_url_task = Some(tokio::spawn({
+                let app = app.clone();
+                let video_id = video_id.clone();
+                let upload_id = upload_id.clone();
+
+                async move {
+                    api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number)
+                        .await
+                }
+            }));
+        }
+
+        // Clean up any remaining optimistic task
+        if let Some(task) = optimistic_presigned_url_task.take() {
+            task.abort();
         }
     }
 }
