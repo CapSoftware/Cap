@@ -48,6 +48,7 @@ pub struct RecordingBaseInputs {
     pub camera_feed: Option<Arc<CameraFeedLock>>,
     #[cfg(target_os = "macos")]
     pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    #[cfg(target_os = "macos")]
     pub excluded_windows: Vec<WindowId>,
 }
 

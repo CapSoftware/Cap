@@ -44,7 +44,7 @@ pub enum CapWindowId {
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
     Camera,
-    InProgressRecording,
+    RecordingControls,
     Upgrade,
     ModeSelect,
     Debug,
@@ -60,7 +60,8 @@ impl FromStr for CapWindowId {
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "capture-area" => Self::CaptureArea,
-            "in-progress-recording" => Self::InProgressRecording,
+            // legacy identifier
+            "in-progress-recording" => Self::RecordingControls,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
@@ -102,7 +103,7 @@ impl std::fmt::Display for CapWindowId {
             Self::TargetSelectOverlay { display_id } => {
                 write!(f, "target-select-overlay-{display_id}")
             }
-            Self::InProgressRecording => write!(f, "in-progress-recording"),
+            Self::RecordingControls => write!(f, "in-progress-recording"), // legacy identifier
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
             Self::ModeSelect => write!(f, "mode-select"),
@@ -123,7 +124,7 @@ impl CapWindowId {
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
             Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::InProgressRecording => "Cap In Progress Recording".to_string(),
+            Self::RecordingControls => "Cap Recording Controls".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
@@ -153,7 +154,7 @@ impl CapWindowId {
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
-            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+            Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
@@ -623,7 +624,7 @@ impl ShowCapWindow {
                 let width = 250.0;
                 let height = 40.0;
 
-                let title = CapWindowId::InProgressRecording.title();
+                let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let window = self
@@ -783,7 +784,7 @@ impl ShowCapWindow {
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
             ShowCapWindow::Camera => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
         }

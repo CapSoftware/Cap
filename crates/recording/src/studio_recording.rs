@@ -345,6 +345,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    #[cfg(target_os = "macos")]
     excluded_windows: Vec<WindowId>,
 }
 
@@ -357,6 +358,7 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
+            #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
     }
@@ -381,6 +383,7 @@ impl ActorBuilder {
         self
     }
 
+    #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
@@ -399,6 +402,7 @@ impl ActorBuilder {
                 camera_feed: self.camera_feed,
                 #[cfg(target_os = "macos")]
                 shareable_content,
+                #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
@@ -698,7 +702,8 @@ async fn create_segment_pipeline(
         d3d_device,
         #[cfg(target_os = "macos")]
         base_inputs.shareable_content,
-        &base_inputs.excluded_windows,
+        #[cfg(target_os = "macos")]
+        base_inputs.excluded_windows,
     )
     .await
     .unwrap();

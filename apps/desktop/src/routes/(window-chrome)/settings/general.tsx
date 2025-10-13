@@ -61,60 +61,6 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
-type LegacyWindowExclusion = {
-	bundle_identifier?: string | null;
-	owner_name?: string | null;
-	window_title?: string | null;
-};
-
-const coerceWindowExclusion = (
-	entry: WindowExclusion | LegacyWindowExclusion,
-): WindowExclusion => {
-	if (entry && typeof entry === "object") {
-		if (
-			"bundleIdentifier" in entry ||
-			"ownerName" in entry ||
-			"windowTitle" in entry
-		) {
-			const current = entry as WindowExclusion;
-			return {
-				bundleIdentifier: current.bundleIdentifier ?? null,
-				ownerName: current.ownerName ?? null,
-				windowTitle: current.windowTitle ?? null,
-			};
-		}
-
-		const legacy = entry as LegacyWindowExclusion;
-		return {
-			bundleIdentifier: legacy.bundle_identifier ?? null,
-			ownerName: legacy.owner_name ?? null,
-			windowTitle: legacy.window_title ?? null,
-		};
-	}
-
-	return {
-		bundleIdentifier: null,
-		ownerName: null,
-		windowTitle: null,
-	};
-};
-
-const normalizeWindowExclusions = (
-	entries: (WindowExclusion | LegacyWindowExclusion)[],
-): WindowExclusion[] =>
-	entries.map((entry) => {
-		const coerced = coerceWindowExclusion(entry);
-		const bundleIdentifier = coerced.bundleIdentifier ?? null;
-		const ownerName = coerced.ownerName ?? null;
-		const hasBundleIdentifier =
-			typeof bundleIdentifier === "string" && bundleIdentifier.length > 0;
-		return {
-			bundleIdentifier,
-			ownerName,
-			windowTitle: hasBundleIdentifier ? null : (coerced.windowTitle ?? null),
-		} satisfies WindowExclusion;
-	});
-
 const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	uploadIndividualFiles: false,
 	hideDockIcon: false,
@@ -125,7 +71,7 @@ const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	enableNewUploader: false,
-	excludedWindows: normalizeWindowExclusions([]),
+	excludedWindows: [],
 });
 
 const deriveInitialSettings = (
@@ -134,31 +80,19 @@ const deriveInitialSettings = (
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
-	const { excluded_windows, ...rest } = store as GeneralSettingsStore & {
-		excluded_windows?: LegacyWindowExclusion[];
-	};
-
-	const rawExcludedWindows = (store.excludedWindows ??
-		excluded_windows ??
-		[]) as (WindowExclusion | LegacyWindowExclusion)[];
-
 	return {
 		...defaults,
-		...rest,
-		excludedWindows: normalizeWindowExclusions(rawExcludedWindows),
+		...store,
 	};
 };
 
 export default function GeneralSettings() {
-	const [store] = createResource(generalSettingsStore.get, {
-		initialValue: undefined,
-	});
+	const [store] = createResource(() => generalSettingsStore.get());
 
 	return (
-		<Inner
-			initialStore={(store() as GeneralSettingsStore | undefined) ?? null}
-			isStoreLoading={store.loading}
-		/>
+		<Show when={store.state === "ready" && ([store()] as const)}>
+			{(store) => <Inner initialStore={store()[0] ?? null} />}
+		</Show>
 	);
 }
 
@@ -233,10 +167,7 @@ function AppearanceSection(props: {
 	);
 }
 
-function Inner(props: {
-	initialStore: GeneralSettingsStore | null;
-	isStoreLoading: boolean;
-}) {
+function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	const [settings, setSettings] = createStore<GeneralSettingsStore>(
 		deriveInitialSettings(props.initialStore),
 	);
@@ -268,9 +199,6 @@ function Inner(props: {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
-	const isExcludedWindowsLoading = createMemo(
-		() => props.isStoreLoading || windows.loading,
-	);
 
 	const matchesExclusion = (
 		exclusion: WindowExclusion,
@@ -333,11 +261,10 @@ function Inner(props: {
 		}
 	};
 
-	const applyExcludedWindows = async (next: WindowExclusion[]) => {
-		const normalized = normalizeWindowExclusions(next);
-		setSettings("excludedWindows", normalized);
+	const applyExcludedWindows = async (windows: WindowExclusion[]) => {
+		setSettings("excludedWindows", windows);
 		try {
-			await generalSettingsStore.set({ excludedWindows: normalized });
+			await generalSettingsStore.set({ excludedWindows: windows });
 			await commands.refreshWindowContentProtection();
 			if (ostype === "macos") {
 				await events.requestScreenCapturePrewarm.emit({ force: true });
@@ -732,7 +659,7 @@ function Inner(props: {
 					onRemove={handleRemoveExclusion}
 					onAdd={handleAddWindow}
 					onReset={handleResetExclusions}
-					isLoading={isExcludedWindowsLoading()}
+					isLoading={windows.loading}
 					isWindows={ostype === "windows"}
 				/>
 
@@ -887,7 +814,7 @@ function ExcludedWindowsCard(props: {
 							void props.onReset();
 						}}
 					>
-						Set to Default
+						Reset to Default
 					</Button>
 					<Button
 						variant="dark"

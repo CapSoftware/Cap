@@ -221,6 +221,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    #[cfg(target_os = "macos")]
     excluded_windows: Vec<WindowId>,
 }
 
@@ -231,6 +232,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
+            #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
     }
@@ -245,6 +247,7 @@ impl ActorBuilder {
         self
     }
 
+    #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
@@ -263,6 +266,7 @@ impl ActorBuilder {
                 camera_feed: None,
                 #[cfg(target_os = "macos")]
                 shareable_content,
+                #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
         )
@@ -299,7 +303,8 @@ pub async fn spawn_instant_recording_actor(
         d3d_device,
         #[cfg(target_os = "macos")]
         inputs.shareable_content.retained(),
-        &inputs.excluded_windows,
+        #[cfg(target_os = "macos")]
+        inputs.excluded_windows,
     )
     .await?;
 

@@ -43,7 +43,7 @@ impl MainWindowRecordingStartBehaviour {
 const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
     "Cap",
     "Cap Settings",
-    "Cap In Progress Recording",
+    "Cap Recording Controls",
     "Cap Camera",
 ];
 

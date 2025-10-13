@@ -589,7 +589,7 @@ pub async fn start_recording(
             )
             .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-            if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+            if let Some(window) = CapWindowId::RecordingControls.get(&app) {
                 dialog = dialog.parent(&window);
             }
 
@@ -631,7 +631,7 @@ pub async fn start_recording(
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-                    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                    if let Some(window) = CapWindowId::RecordingControls.get(&app) {
                         dialog = dialog.parent(&window);
                     }
 
@@ -754,7 +754,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .flatten()
             .unwrap_or_default();
 
-        if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+        if let Some(window) = CapWindowId::RecordingControls.get(&app) {
             let _ = window.close();
         }
 
@@ -818,7 +818,7 @@ async fn handle_recording_end(
 
     let _ = app.recording_logging_handle.reload(None);
 
-    if let Some(window) = CapWindowId::InProgressRecording.get(&handle) {
+    if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
         let _ = window.close();
     }
 
