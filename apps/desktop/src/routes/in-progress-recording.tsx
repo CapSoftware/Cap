@@ -21,7 +21,6 @@ import {
 } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
 import { commands, events } from "~/utils/tauri";
-import { useRecordingOptions } from "./(window-chrome)/OptionsContext";
 
 type State =
 	| { variant: "countdown"; from: number; current: number }
@@ -50,7 +49,6 @@ export default function () {
 	const [start, setStart] = createSignal(Date.now());
 	const [time, setTime] = createSignal(Date.now());
 	const currentRecording = createCurrentRecordingQuery();
-	const { setOptions } = useRecordingOptions();
 	const optionsQuery = createOptionsQuery();
 	const auth = authStore.createQuery();
 
@@ -131,7 +129,7 @@ export default function () {
 
 			if (!shouldRestart) return;
 
-			await handleRecordingResult(commands.restartRecording(), setOptions);
+			await handleRecordingResult(commands.restartRecording(), undefined);
 
 			setState({ variant: "recording" });
 			setTime(Date.now());

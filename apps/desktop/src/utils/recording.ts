@@ -1,26 +1,26 @@
 import { emit } from "@tauri-apps/api/event";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import type { SetStoreFunction } from "solid-js/store";
 import type { createOptionsQuery } from "./queries";
-import {
-	commands,
-	type RecordingAction,
-	type StartRecordingInputs,
-} from "./tauri";
-
-const buttons = {
-	yes: "Login",
-	no: "Switch to Studio mode",
-	cancel: "Cancel",
-};
+import { commands, type RecordingAction } from "./tauri";
 
 export function handleRecordingResult(
 	result: Promise<RecordingAction>,
-	setOptions: ReturnType<typeof createOptionsQuery>["setOptions"],
+	setOptions: ReturnType<typeof createOptionsQuery>["setOptions"] | undefined,
 ) {
 	return result
 		.then(async (result) => {
 			if (result === "InvalidAuthentication") {
+				const buttons = setOptions
+					? {
+							yes: "Login",
+							no: "Switch to Studio mode",
+							cancel: "Cancel",
+						}
+					: {
+							ok: "Login",
+							cancel: "Cancel",
+						};
+
 				const result = await dialog.message(
 					"You must be authenticated to start an instant mode recording. Login or switch to Studio mode.",
 					{
@@ -29,8 +29,10 @@ export function handleRecordingResult(
 					},
 				);
 
-				if (result === buttons.yes) emit("start-sign-in");
-				else if (result === buttons.no) setOptions({ mode: "studio" });
+				if (result === buttons.yes || result === buttons.ok)
+					emit("start-sign-in");
+				else if (result === buttons.no && setOptions)
+					setOptions({ mode: "studio" });
 			} else if (result === "UpgradeRequired") commands.showWindow("Upgrade");
 			else
 				await dialog.message(`Error: ${result}`, {
