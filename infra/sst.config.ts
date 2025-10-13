@@ -154,10 +154,10 @@ export default $config({
 		if ($app.stage === "staging" || $app.stage === "production") {
 			[
 				...vercelVariables,
-				{ key: "REMOTE_WORKFLOW_URL", value: workflowCluster.api.url },
+				{ key: "WORKFLOWS_RPC_URL", value: workflowCluster.api.url },
 				{
-					key: "REMOTE_WORKFLOW_SECRET",
-					value: secrets.WORKFLOW_RPC_SECRET.result,
+					key: "WORKFLOWS_RPC_SECRET",
+					value: secrets.WORKFLOWS_RPC_SECRET.result,
 				},
 				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
 			].map(
@@ -186,7 +186,7 @@ function Secrets() {
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
 		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
-		WORKFLOW_RPC_SECRET: new random.RandomString("WORKFLOW_RPC_SECRET", {
+		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
 			length: 48,
 		}),
 	};
@@ -303,7 +303,7 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		AXIOM_API_TOKEN,
 		AXIOM_DOMAIN: "api.axiom.co",
 		AXIOM_DATASET,
-		AUTH_SECRET: secrets.WORKFLOW_RPC_SECRET.result,
+		WORKFLOWS_RPC_SECRET: secrets.WORKFLOWS_RPC_SECRET.result,
 	};
 
 	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(

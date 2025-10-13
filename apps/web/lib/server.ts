@@ -56,7 +56,7 @@ class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
 	"WorkflowRpcSecret",
 	{
 		effect: Effect.map(
-			Config.redacted(Config.string("REMOTE_WORKFLOW_SECRET")),
+			Config.redacted(Config.string("WORKFLOWS_RPC_SECRET")),
 			(v) => ({ authSecret: v }),
 		),
 	},
@@ -66,7 +66,7 @@ const WorkflowRpcLive = Layer.scoped(
 	Workflows.RpcClient,
 	Effect.gen(function* () {
 		const url = Option.getOrElse(
-			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
+			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
 			() => "http://127.0.0.1:42169",
 		);
 

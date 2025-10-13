@@ -1,6 +1,6 @@
 import { DatabaseError, Http, S3Error } from "@cap/web-domain";
 import { Effect, Schema } from "effect";
-import { InvalidRpcAuth } from "../Workflows";
+import { InvalidRpcAuth } from "../Workflows.ts";
 
 export const handleDomainError = <A, E, R>(e: Effect.Effect<A, E, R>) =>
 	e.pipe(

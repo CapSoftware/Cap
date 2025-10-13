@@ -26,7 +26,9 @@ import { DatabaseLive, ShardDatabaseLive } from "../shared/database.ts";
 import { HealthServerLive } from "./health-server.ts";
 
 class RpcAuthSecret extends Effect.Service<RpcAuthSecret>()("RpcAuthSecret", {
-	effect: Effect.map(Config.string("AUTH_SECRET"), (v) => ({ authSecret: v })),
+	effect: Effect.map(Config.string("WORKFLOWS_RPC_SECRET"), (v) => ({
+		authSecret: v,
+	})),
 }) {}
 
 const ClusterWorkflowLive = Layer.unwrapEffect(
