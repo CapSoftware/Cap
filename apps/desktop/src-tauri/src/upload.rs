@@ -93,17 +93,28 @@ pub async fn upload_video(
 
     let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
-    let video_fut = progress(
-        app.clone(),
-        video_id.clone(),
-        multipart_uploader(
+    let video_fut = async {
+        let parts = progress(
             app.clone(),
             video_id.clone(),
-            upload_id.clone(),
-            from_pending_file_to_chunks(file_path.clone(), None),
-        ),
-    )
-    .try_collect::<Vec<_>>();
+            multipart_uploader(
+                app.clone(),
+                video_id.clone(),
+                upload_id.clone(),
+                from_pending_file_to_chunks(file_path.clone(), None),
+            ),
+        )
+        .try_collect::<Vec<_>>()
+        .await?;
+
+        let metadata = build_video_meta(&file_path)
+            .map_err(|e| error!("Failed to get video metadata: {e}"))
+            .ok();
+
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+
+        Ok(())
+    };
 
     // TODO: We don't report progress on image upload
     let bytes = compress_image(screenshot_path).await?;
