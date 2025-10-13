@@ -485,8 +485,8 @@ pub async fn start_recording(
                             )
                             .await
                             .map_err(|e| {
-                                error!("Failed to spawn studio recording actor: {e}");
-                                e.to_string()
+                                error!("Failed to spawn studio recording actor: {e:#}");
+                                format!("{e:#}")
                             })?;
 
                         InProgressRecording::Studio { handle, common }
