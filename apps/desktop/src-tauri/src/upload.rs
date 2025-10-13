@@ -5,7 +5,7 @@ use crate::{
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     general_settings::GeneralSettingsStore,
     upload_legacy,
-    web_api::ManagerExt,
+    web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
 use axum::http::Uri;
@@ -17,6 +17,7 @@ use flume::Receiver;
 use futures::{Stream, StreamExt, TryStreamExt, stream};
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
+use sentry::types::Auth;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
@@ -63,7 +64,8 @@ pub async fn upload_video(
     screenshot_path: PathBuf,
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
-) -> Result<UploadedItem, String> {
+) -> Result<UploadedItem, AuthedApiError> {
+    println!("Uploading video {video_id}...");
     let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
         .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
         .ok()
@@ -128,7 +130,7 @@ pub async fn upload_video(
         stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
     );
 
-    let (video_result, thumbnail_result): (Result<_, String>, Result<_, String>) =
+    let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
 
     let _ = (video_result?, thumbnail_result?);
@@ -153,7 +155,10 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
-pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedItem, String> {
+pub async fn upload_image(
+    app: &AppHandle,
+    file_path: PathBuf,
+) -> Result<UploadedItem, AuthedApiError> {
     let is_new_uploader_enabled = GeneralSettingsStore::get(app)
         .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
         .ok()
@@ -166,7 +171,8 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
             .map(|v| UploadedItem {
                 link: v.link,
                 id: v.id,
-            });
+            })
+            .map_err(Into::into);
     }
 
     let file_name = file_path
@@ -203,7 +209,7 @@ pub async fn create_or_get_video(
     video_id: Option<String>,
     name: Option<String>,
     meta: Option<S3VideoMeta>,
-) -> Result<S3UploadMeta, String> {
+) -> Result<S3UploadMeta, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
@@ -227,12 +233,7 @@ pub async fn create_or_get_video(
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
+        .await?;
 
     if response.status() != StatusCode::OK {
         #[derive(Deserialize, Clone, Debug)]
@@ -242,13 +243,8 @@ pub async fn create_or_get_video(
 
         if let Ok(error) = response.json::<CreateErrorResponse>().await {
             if error.error == "upgrade_required" {
-                return Err(
-                    "You must upgrade to Cap Pro to upload recordings over 5 minutes in length"
-                        .into(),
-                );
+                return Err(AuthedApiError::UpgradeRequired);
             }
-
-            return Err(format!("server error: {}", error.error));
         }
 
         return Err("Unknown error uploading video".into());
@@ -322,7 +318,7 @@ pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 }
 
 pub struct InstantMultipartUpload {
-    pub handle: tokio::task::JoinHandle<Result<(), String>>,
+    pub handle: tokio::task::JoinHandle<Result<(), AuthedApiError>>,
 }
 
 impl InstantMultipartUpload {
@@ -352,7 +348,7 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthedApiError> {
         let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
             .map_err(|err| {
                 error!("Error checking status of new uploader flow from settings: {err}")
@@ -369,7 +365,8 @@ impl InstantMultipartUpload {
                 pre_created_video,
                 realtime_video_done,
             )
-            .await;
+            .await
+            .map_err(Into::into);
         }
 
         let video_id = pre_created_video.id.clone();
@@ -601,7 +598,7 @@ fn multipart_uploader(
     video_id: String,
     upload_id: String,
     stream: impl Stream<Item = io::Result<Chunk>>,
-) -> impl Stream<Item = Result<UploadedPart, String>> {
+) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> {
     debug!("Initializing multipart uploader for video {video_id:?}");
 
     try_stream! {
@@ -654,7 +651,7 @@ pub async fn singlepart_uploader(
     request: PresignedS3PutRequest,
     total_size: u64,
     stream: impl Stream<Item = io::Result<Bytes>> + Send + 'static,
-) -> Result<(), String> {
+) -> Result<(), AuthedApiError> {
     let presigned_url = api::upload_signed(&app, request).await?;
 
     let url = Uri::from_str(&presigned_url)
