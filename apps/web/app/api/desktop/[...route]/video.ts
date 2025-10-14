@@ -348,7 +348,7 @@ app.post(
 					{ status: 404 },
 				);
 
-			const result = await db()
+			const [result] = await db()
 				.update(videoUploads)
 				.set({
 					uploaded,
@@ -362,7 +362,7 @@ app.post(
 					),
 				);
 
-			if (result.rowsAffected === 0)
+			if (result.affectedRows === 0)
 				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
