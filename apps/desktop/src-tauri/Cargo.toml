@@ -133,3 +133,9 @@ windows-sys = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+# [target.'cfg(debug_assertions)'.dependencies]
+tracing-opentelemetry = "0.32.0"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }

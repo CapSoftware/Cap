@@ -77,6 +77,29 @@ fn main() {
         (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
     ));
 
+    // #[cfg(debug_assertions)]
+    let (registry, _tracer) = {
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_otlp::WithExportConfig;
+        use tracing_subscriber::Layer;
+
+        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_http()
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        opentelemetry::global::set_tracer_provider(tracer.clone());
+        (
+            registry.with(tracing_opentelemetry::layer().with_tracer(tracer.tracer("cap-desktop"))),
+            tracer,
+        )
+    };
+
     registry
         .with(layer)
         .with(
@@ -104,5 +127,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle));
+        .block_on(cap_desktop_lib::run(handle.boxed()));
 }
