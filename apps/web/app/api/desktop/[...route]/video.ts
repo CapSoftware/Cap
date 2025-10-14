@@ -365,10 +365,10 @@ app.post(
 					updatedAt,
 				});
 
-			if (uploaded === total)
-				await db()
-					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, videoId));
+			// if (uploaded === total)
+			// 	await db()
+			// 		.delete(videoUploads)
+			// 		.where(eq(videoUploads.videoId, videoId));
 
 			return c.json(true);
 		} catch (error) {

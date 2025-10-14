@@ -616,7 +616,7 @@ fn retryable_client(host: String) -> reqwest::ClientBuilder {
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
-#[instrument(skip(app, stream))]
+#[instrument(skip(app, stream, upload_id))]
 fn multipart_uploader(
     app: AppHandle,
     video_id: String,
