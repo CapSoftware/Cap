@@ -107,7 +107,7 @@ export function CapVideoPlayer({
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadProgressPending = uploadProgress?.status === "fetching";
 
-	const resolvedSrc = useQuery({
+	const resolvedSrc = useQuery<{ url: string; supportsCrossOrigin: boolean }>({
 		queryKey: ["resolvedSrc", videoSrc],
 		queryFn:
 			isUploadProgressPending || isUploading
@@ -156,7 +156,10 @@ export function CapVideoPlayer({
 							const fallbackUrl = videoSrc.includes("?")
 								? `${videoSrc}&_t=${timestamp}`
 								: `${videoSrc}?_t=${timestamp}`;
-							return { fallbackUrl, supportsCrossOrigin: enableCrossOrigin };
+							return {
+								url: fallbackUrl,
+								supportsCrossOrigin: enableCrossOrigin,
+							};
 						}
 					},
 	});
@@ -284,7 +287,7 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !resolvedSrc.isLoading) return;
+		if (!video || resolvedSrc.isLoading) return;
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
