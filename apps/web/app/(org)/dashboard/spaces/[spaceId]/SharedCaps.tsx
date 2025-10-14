@@ -8,7 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { useVideosAnalyticsQuery } from "@/lib/Requests/AnalyticsRequest";
+import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
 import Folder, { type FolderDataType } from "../../caps/components/Folder";
@@ -95,7 +95,7 @@ export const SharedCaps = ({
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const analyticsQuery = useVideosAnalyticsQuery(
+	const analyticsQuery = AnalyticsRequest.useQuery(
 		data.map((video) => video.id),
 		dubApiKeyEnabled,
 	);
