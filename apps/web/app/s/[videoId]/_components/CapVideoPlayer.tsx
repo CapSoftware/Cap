@@ -162,6 +162,7 @@ export function CapVideoPlayer({
 							};
 						}
 					},
+		refetchOnWindowFocus: false,
 	});
 
 	const reloadVideo = useCallback(async () => {
@@ -287,7 +288,7 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || resolvedSrc.isLoading) return;
+		if (!video || resolvedSrc.data?.url) return;
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
@@ -457,7 +458,7 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [hasPlayedOnce, videoSrc, resolvedSrc.isLoading]);
+	}, [hasPlayedOnce, resolvedSrc.data?.url]);
 
 	const generateVideoFrameThumbnail = useCallback((time: number): string => {
 		const video = videoRef.current;
@@ -534,7 +535,7 @@ export function CapVideoPlayer({
 					)}
 				</div>
 			</div>
-			{resolvedSrc.isSuccess && (
+			{resolvedSrc.data && (
 				<MediaPlayerVideo
 					src={resolvedSrc.data.url}
 					ref={videoRef}
