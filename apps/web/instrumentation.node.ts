@@ -14,6 +14,8 @@ import { migrate } from "drizzle-orm/mysql2/migrator";
 import path from "path";
 
 export async function register() {
+	if (process.env.NEXT_PUBLIC_IS_CAP) return;
+
 	console.log("Waiting 5 seconds to run migrations");
 	// Function to trigger migrations with retry logic
 	const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
