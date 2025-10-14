@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::AppHandle;
-use tracing::instrument;
+use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
@@ -46,7 +46,7 @@ pub async fn upload_multipart_initiate(
         .map(|data| data.upload_id)
 }
 
-#[instrument]
+#[instrument(skip(upload_id))]
 pub async fn upload_multipart_presign_part(
     app: &AppHandle,
     video_id: &str,
@@ -110,7 +110,7 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
-#[instrument]
+#[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
     video_id: &str,
@@ -132,6 +132,8 @@ pub async fn upload_multipart_complete(
     pub struct Response {
         location: Option<String>,
     }
+
+    trace!("Completing multipart upload");
 
     let resp = app
         .authed_api_request("/api/upload/multipart/complete", |c, url| {

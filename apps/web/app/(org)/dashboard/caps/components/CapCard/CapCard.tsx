@@ -549,7 +549,9 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
-						{imageStatus !== "success" && uploadProgress ? (
+						{imageStatus !== "success" &&
+						uploadProgress &&
+						uploadProgress?.status !== "fetching" ? (
 							<div className="relative inset-0 z-20 w-full h-full">
 								<div className="overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video z-5">
 									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">

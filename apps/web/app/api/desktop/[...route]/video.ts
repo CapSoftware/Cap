@@ -209,12 +209,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.ownerId, user.id));
 
-				if (
-					videoCount &&
-					videoCount[0] &&
-					videoCount[0].count === 1 &&
-					user.email
-				) {
+				if (videoCount?.[0] && videoCount[0].count === 1 && user.email) {
 					console.log(
 						"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay",
 					);
@@ -370,10 +365,10 @@ app.post(
 					updatedAt,
 				});
 
-			if (uploaded === total)
-				await db()
-					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, videoId));
+			// if (uploaded === total)
+			// 	await db()
+			// 		.delete(videoUploads)
+			// 		.where(eq(videoUploads.videoId, videoId));
 
 			return c.json(true);
 		} catch (error) {
