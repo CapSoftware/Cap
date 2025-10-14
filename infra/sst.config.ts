@@ -79,7 +79,6 @@ export default $config({
 				{ key: "NEXTAUTH_URL", value: webUrl },
 			);
 
-
 		// vercelEnvVar("VercelCloudfrontEnv", {
 		// 	key: "CAP_CLOUDFRONT_DISTRIBUTION_ID",
 		// 	value: cloudfrontDistribution.id,
@@ -94,7 +93,7 @@ export default $config({
 				aud,
 				url,
 				provider:
-					$app.stage === "production"
+					$app.stage === "production" || $app.stage === "staging"
 						? aws.iam.getOpenIdConnectProviderOutput({ url: `https://${url}` })
 						: new aws.iam.OpenIdConnectProvider(
 								"VercelAWSOIDC",
@@ -171,7 +170,7 @@ export default $config({
 					key: "WORKFLOWS_RPC_URL",
 					value: workflowCluster.api.url,
 				},
-				{
+				workflowCluster && {
 					key: "WORKFLOWS_RPC_SECRET",
 					value: secrets.WORKFLOWS_RPC_SECRET.result,
 				},
