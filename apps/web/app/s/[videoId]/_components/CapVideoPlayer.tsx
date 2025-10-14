@@ -148,7 +148,7 @@ export function CapVideoPlayer({
 				return { fallbackUrl, supportsCrossOrigin: enableCrossOrigin };
 			}
 		},
-		enabled: !isUploading,
+		enabled: !isUploading && uploadProgressRaw?.status !== "fetching",
 	});
 
 	const reloadVideo = useCallback(async () => {
