@@ -1,11 +1,10 @@
 import { instrumentDrizzleClient } from "@kubiks/otel-drizzle";
-import { Client, type Config } from "@planetscale/database";
 import { sql } from "drizzle-orm";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/mysql2";
 
 function createDrizzle() {
-	return drizzle(process.env.DATABASE_URL_MYSQL);
+	return drizzle(process.env.DATABASE_URL_MYSQL!);
 }
 
 let _cached: ReturnType<typeof createDrizzle> | undefined;
