@@ -14,6 +14,7 @@ import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { useUploadingStatus } from "../../../caps/UploadingContext";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
@@ -108,7 +109,7 @@ export default function FolderVideosSection({
 		});
 	};
 
-	const analyticsQuery = AnalyticsRequest.useQuery(
+	const analyticsQuery = useVideosAnalyticsQuery(
 		initialVideos.map((video) => video.id),
 		dubApiKeyEnabled,
 	);

@@ -25,6 +25,7 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -73,7 +74,7 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const analyticsQuery = AnalyticsRequest.useQuery(
+	const analyticsQuery = useVideosAnalyticsQuery(
 		data.map((video) => video.id),
 		dubApiKeyEnabled,
 	);

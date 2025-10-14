@@ -23,6 +23,7 @@ import {
 } from "./components/OrganizationIndicator";
 import { SharedCapCard } from "./components/SharedCapCard";
 import type { SpaceMemberData } from "./page";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 
 type SharedVideoData = {
 	id: Video.VideoId;
@@ -95,7 +96,7 @@ export const SharedCaps = ({
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const analyticsQuery = AnalyticsRequest.useQuery(
+	const analyticsQuery = useVideosAnalyticsQuery(
 		data.map((video) => video.id),
 		dubApiKeyEnabled,
 	);
