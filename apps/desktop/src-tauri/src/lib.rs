@@ -25,10 +25,11 @@ mod tray;
 mod upload;
 mod upload_legacy;
 mod web_api;
+mod window_exclusion;
 mod windows;
 
 use audio::AppSounds;
-use auth::{AuthStore, AuthenticationInvalid, Plan};
+use auth::{AuthStore, Plan};
 use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
@@ -87,6 +88,7 @@ use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace, warn};
 use upload::{create_or_get_video, upload_image, upload_video};
+use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
@@ -1084,7 +1086,7 @@ async fn upload_exported_video(
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 
-    let s3_config = async {
+    let s3_config = match async {
         let video_id = match mode {
             UploadMode::Initial { pre_created_video } => {
                 if let Some(pre_created) = pre_created_video {
@@ -1094,7 +1096,7 @@ async fn upload_exported_video(
             }
             UploadMode::Reupload => {
                 let Some(sharing) = meta.sharing.clone() else {
-                    return Err("No sharing metadata found".to_string());
+                    return Err("No sharing metadata found".into());
                 };
 
                 Some(sharing.id)
@@ -1110,7 +1112,13 @@ async fn upload_exported_video(
         )
         .await
     }
-    .await?;
+    .await
+    {
+        Ok(data) => data,
+        Err(AuthedApiError::InvalidAuthentication) => return Ok(UploadResult::NotAuthenticated),
+        Err(AuthedApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+        Err(err) => return Err(err.to_string()),
+    };
 
     let screenshot_path = meta.project_path.join("screenshots/display.jpg");
     meta.upload = Some(UploadMeta::SinglePartUpload {
@@ -1154,17 +1162,20 @@ async fn upload_exported_video(
             NotificationType::ShareableLinkCopied.send(&app);
             Ok(UploadResult::Success(uploaded_video.link))
         }
+        Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
         Err(e) => {
             error!("Failed to upload video: {e}");
 
             NotificationType::UploadFailed.send(&app);
 
-            meta.upload = Some(UploadMeta::Failed { error: e.clone() });
+            meta.upload = Some(UploadMeta::Failed {
+                error: e.to_string(),
+            });
             meta.save_for_project()
                 .map_err(|e| error!("Failed to save recording meta: {e}"))
                 .ok();
 
-            Err(e)
+            Err(e.to_string().into())
         }
     }
 }
@@ -1597,16 +1608,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         .await
         .map_err(|e| {
             println!("Failed to fetch plan: {e}");
-            format!("Failed to fetch plan: {e}")
+            e.to_string()
         })?;
 
     println!("Plan fetch response status: {}", response.status());
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        println!("Unauthorized response, clearing auth store");
-        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-        return Ok(false);
-    }
-
     let plan_data = response.json::<serde_json::Value>().await.map_err(|e| {
         println!("Failed to parse plan response: {e}");
         format!("Failed to parse plan response: {e}")
@@ -1914,6 +1919,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::list_capture_displays,
             recording::list_displays_with_thumbnails,
             recording::list_windows_with_thumbnails,
+            windows::refresh_window_content_protection,
+            general_settings::get_default_excluded_windows,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -1998,7 +2005,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,
-            AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
             captions::DownloadProgress,
             recording::RecordingEvent,
@@ -2014,7 +2020,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<recording_settings::RecordingSettingsStore>()
-        .typ::<cap_flags::Flags>();
+        .typ::<cap_flags::Flags>()
+        .typ::<crate::window_exclusion::WindowExclusion>();
 
     #[cfg(debug_assertions)]
     specta_builder
@@ -2114,7 +2121,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
-                    CapWindowId::InProgressRecording.label().as_str(),
+                    CapWindowId::RecordingControls.label().as_str(),
                     CapWindowId::Upgrade.label().as_str(),
                 ])
                 .map_label(|label| match label {
@@ -2548,7 +2555,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                         error!("Error completing resumed upload for video: {error}");
 
                                         if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
-                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.upload = Some(UploadMeta::Failed { error: error.to_string() });
                                             meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
                                         }
                                     })

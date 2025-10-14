@@ -5,9 +5,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::AppHandle;
 
-use crate::web_api::ManagerExt;
+use crate::web_api::{AuthedApiError, ManagerExt};
 
-pub async fn upload_multipart_initiate(app: &AppHandle, video_id: &str) -> Result<String, String> {
+pub async fn upload_multipart_initiate(
+    app: &AppHandle,
+    video_id: &str,
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Response {
@@ -32,14 +35,12 @@ pub async fn upload_multipart_initiate(app: &AppHandle, video_id: &str) -> Resul
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_initiate/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_initiate/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_initiate/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_initiate/response: {err}").into())
         .map(|data| data.upload_id)
 }
 
@@ -48,7 +49,7 @@ pub async fn upload_multipart_presign_part(
     video_id: &str,
     upload_id: &str,
     part_number: u32,
-) -> Result<String, String> {
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct Response {
@@ -74,14 +75,12 @@ pub async fn upload_multipart_presign_part(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_presign_part/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_presign_part/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_presign_part/response: {err}").into())
         .map(|data| data.presigned_url)
 }
 
@@ -112,7 +111,7 @@ pub async fn upload_multipart_complete(
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, AuthedApiError> {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct MultipartCompleteRequest<'a> {
@@ -148,14 +147,12 @@ pub async fn upload_multipart_complete(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "api/upload_multipart_complete/{status}: {error_body}"
-        ));
+        return Err(format!("api/upload_multipart_complete/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_multipart_complete/response: {err}"))
+        .map_err(|err| format!("api/upload_multipart_complete/response: {err}").into())
         .map(|data| data.location)
 }
 
@@ -177,7 +174,10 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
-pub async fn upload_signed(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
+pub async fn upload_signed(
+    app: &AppHandle,
+    body: PresignedS3PutRequest,
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     struct Data {
         url: String,
@@ -202,12 +202,12 @@ pub async fn upload_signed(app: &AppHandle, body: PresignedS3PutRequest) -> Resu
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/upload_signed/{status}: {error_body}"));
+        return Err(format!("api/upload_signed/{status}: {error_body}").into());
     }
 
     resp.json::<Response>()
         .await
-        .map_err(|err| format!("api/upload_signed/response: {err}"))
+        .map_err(|err| format!("api/upload_signed/response: {err}").into())
         .map(|data| data.presigned_put_data.url)
 }
 
@@ -216,7 +216,7 @@ pub async fn desktop_video_progress(
     video_id: &str,
     uploaded: u64,
     total: u64,
-) -> Result<(), String> {
+) -> Result<(), AuthedApiError> {
     let resp = app
         .authed_api_request("/api/desktop/video/progress", |client, url| {
             client.post(url).json(&json!({
@@ -235,7 +235,7 @@ pub async fn desktop_video_progress(
             .text()
             .await
             .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!("api/desktop_video_progress/{status}: {error_body}"));
+        return Err(format!("api/desktop_video_progress/{status}: {error_body}").into());
     }
 
     Ok(())

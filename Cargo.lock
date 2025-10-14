@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.72"
+version = "0.3.73"
 dependencies = [
  "anyhow",
  "async-stream",
