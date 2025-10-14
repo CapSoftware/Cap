@@ -619,7 +619,7 @@ fn multipart_uploader(
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
 
-        let mut optimistic_presigned_url_task: Option<tokio::task::JoinHandle<Result<String, String>>> = Some(
+        let mut optimistic_presigned_url_task: Option<tokio::task::JoinHandle<Result<String, AuthedApiError>>> = Some(
             tokio::spawn({
                 let app = app.clone();
                 let video_id = video_id.clone();
