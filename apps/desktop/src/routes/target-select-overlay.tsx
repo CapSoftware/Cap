@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { Select as KSelect } from "@kobalte/core/select";
 import {
 	createEventListener,
 	createEventListenerMap,
@@ -9,7 +8,6 @@ import { createQuery } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -22,17 +20,16 @@ import {
 	Show,
 	Suspense,
 	Switch,
-	type ValidComponent,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
-import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
 	events,
+	Organization,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
@@ -40,12 +37,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import {
-	MenuItem,
-	MenuItemList,
-	PopperContent,
-	topSlideAnimateClasses,
-} from "./editor/ui";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -180,6 +171,12 @@ function Inner() {
 
 	// Auto-select first organization if none is selected
 	const auth = authStore.createQuery();
+
+	invoke("log_message", {
+		level: "info",
+		message: `Organizations: ${JSON.stringify(auth)}`,
+	}).catch(console.error);
+
 	createEffect(() => {
 		const orgs = organizations();
 		if (!rawOptions.organizationId && orgs && orgs.length > 0 && auth.data) {
@@ -190,6 +187,11 @@ function Inner() {
 			setOptions("organizationId", orgs[0].id);
 		}
 	});
+
+	invoke("log_message", {
+		level: "info",
+		message: `Target select overlay mounted`,
+	}).catch(console.error);
 
 	return (
 		<Switch>
@@ -232,8 +234,8 @@ function Inner() {
 
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
-							target={{ variant: "display", id: params.displayId! }}
-							organizations={organizations}
+							target={{ variant: "display", id: params.displayId ?? "" }}
+							organizations={organizations()}
 						/>
 						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
@@ -289,7 +291,7 @@ function Inner() {
 										variant: "window",
 										id: windowUnderCursor.id,
 									}}
-									organizations={organizations}
+									organizations={organizations()}
 								/>
 
 								<Button
@@ -735,10 +737,10 @@ function Inner() {
 											<RecordingControls
 												target={{
 													variant: "area",
-													screen: params.displayId!,
+													screen: params.displayId ?? "",
 													bounds,
 												}}
-												organizations={organizations}
+												organizations={organizations()}
 											/>
 											<ShowCapFreeWarning
 												isInstantMode={rawOptions.mode === "instant"}
@@ -759,10 +761,64 @@ function Inner() {
 	);
 }
 
+function CustomSelect(props: {
+	value: string;
+	onChange: (value: string) => void;
+	options: Array<{ value: string; label: string }>;
+	disabled?: boolean;
+}) {
+	const [isOpen, setIsOpen] = createSignal(false);
+
+	return (
+		<div class="relative">
+			<button
+				type="button"
+				onClick={() => !props.disabled && setIsOpen(!isOpen())}
+				disabled={props.disabled}
+				class="flex flex-row gap-2 items-center justify-between px-2.5 py-2 w-full rounded-lg transition-colors bg-white border text-xs text-gray-12 hover:bg-gray-1 disabled:opacity-50 disabled:cursor-not-allowed"
+			>
+				<span class="truncate">
+					{props.options.find((opt) => opt.value === props.value)?.label ||
+						"Select organization"}
+				</span>
+				<IconCapCaretDown
+					class={cx(
+						"size-3 transition-transform flex-shrink-0 text-gray-11",
+						isOpen() && "rotate-180",
+					)}
+				/>
+			</button>
+
+			<Show when={isOpen()}>
+				{/* Backdrop to close dropdown when clicking outside */}
+				<div class="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
+				{/* Dropdown menu */}
+				<div class="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
+					{props.options.map((option) => (
+						<button
+							type="button"
+							class={cx(
+								"w-full text-left px-2.5 py-2 text-xs hover:bg-gray-2 transition-colors",
+								props.value === option.value && "bg-gray-3 font-medium",
+							)}
+							onClick={() => {
+								props.onChange(option.value);
+								setIsOpen(false);
+							}}
+						>
+							{option.label}
+						</button>
+					))}
+				</div>
+			</Show>
+		</div>
+	);
+}
+
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
-	organizations: () => Array<{ id: string; name: string; ownerId: string }>;
+	organizations: Array<Organization>;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -841,32 +897,34 @@ function RecordingControls(props: {
 								return;
 							}
 
-						handleRecordingResult(
+							invoke("log_message", {
+								level: "info",
+								message: `Starting recording with: target=${JSON.stringify(props.target)}, mode=${rawOptions.mode}, systemAudio=${rawOptions.captureSystemAudio}, organizationId=${rawOptions.organizationId ?? null}`,
+							}).catch(console.error);
 							commands.startRecording({
 								capture_target: props.target,
 								mode: rawOptions.mode,
 								capture_system_audio: rawOptions.captureSystemAudio,
 								organization_id: rawOptions.organizationId ?? null,
-							}),
-							setOptions,
-						);
-					}}
-				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
-						{rawOptions.mode === "studio" ? (
-							<IconCapFilmCut class="size-4" />
-						) : (
-							<IconCapInstant class="size-4" />
-						)}
-						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
-									? "Sign In To Use"
-									: "Start Recording"}
-							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
-							</span>
+							});
+						}}
+					>
+						<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
+							{rawOptions.mode === "studio" ? (
+								<IconCapFilmCut class="size-4" />
+							) : (
+								<IconCapInstant class="size-4" />
+							)}
+							<div class="flex flex-col mr-2 ml-3">
+								<span class="text-sm font-medium text-white text-nowrap">
+									{rawOptions.mode === "instant" && !auth.data
+										? "Sign In To Use"
+										: "Start Recording"}
+								</span>
+								<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
+									{`${capitalize(rawOptions.mode)} Mode`}
+								</span>
+							</div>
 						</div>
 						<div
 							class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
@@ -888,13 +946,12 @@ function RecordingControls(props: {
 						<IconCapGear class="will-change-transform size-5" />
 					</div>
 				</div>
-
 				{/* Organization selector - appears when instant mode is selected and user has organizations */}
 				<Show
 					when={
 						rawOptions.mode === "instant" &&
 						auth.data &&
-						props.organizations().length > 1
+						props.organizations.length > 1
 					}
 				>
 					<div class="bg-gray-2 rounded-lg p-3 border border-gray-4 animate-in fade-in slide-in-from-top duration-300">
@@ -903,77 +960,17 @@ function RecordingControls(props: {
 								<IconLucideBuilding2 class="size-3" />
 								Organization
 							</label>
-							<KSelect<{ id: string; name: string; ownerId: string }>
-								options={props.organizations()}
-								optionValue="id"
-								optionTextValue="name"
-								placeholder="Select organization"
-								value={props
-									.organizations()
-									.find(
-										(org: { id: string; name: string; ownerId: string }) =>
-											org.id === rawOptions.organizationId,
-									)}
-								onChange={(option) =>
-									setOptions("organizationId", option?.id ?? null)
+							<CustomSelect
+								value={rawOptions.organizationId ?? ""}
+								onChange={(value) =>
+									setOptions("organizationId", value || null)
 								}
-								disabled={props.organizations().length === 1}
-								itemComponent={(props) => (
-									<MenuItem<typeof KSelect.Item>
-										as={KSelect.Item}
-										item={props.item}
-									>
-										<div class="flex items-center gap-2 w-full">
-											<KSelect.ItemLabel class="flex-1 text-xs">
-												{props.item.rawValue.name}
-											</KSelect.ItemLabel>
-											{/* Show ownership indicator */}
-											<Show
-												when={
-													props.item.rawValue.ownerId === auth.data?.user_id
-												}
-											>
-												<span class="text-xs text-blue-10 bg-blue-3 px-1.5 py-0.5 rounded">
-													Owner
-												</span>
-											</Show>
-										</div>
-									</MenuItem>
-								)}
-							>
-								<KSelect.Trigger class="flex flex-row gap-2 items-center px-2.5 py-2 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
-									<KSelect.Value<{
-										id: string;
-										name: string;
-										ownerId: string;
-									}> class="flex-1 text-xs text-left truncate text-gray-12">
-										{(state) => (
-											<span>
-												{state.selectedOption()?.name ?? "Select organization"}
-											</span>
-										)}
-									</KSelect.Value>
-									<KSelect.Icon<ValidComponent>
-										as={(props: ComponentProps<"svg">) => (
-											<IconCapChevronDown
-												{...props}
-												class="size-3 shrink-0 transform transition-transform ui-expanded:rotate-180 text-gray-10"
-											/>
-										)}
-									/>
-								</KSelect.Trigger>
-								<KSelect.Portal>
-									<PopperContent<typeof KSelect.Content>
-										as={KSelect.Content}
-										class={cx(topSlideAnimateClasses, "z-50")}
-									>
-										<MenuItemList<typeof KSelect.Listbox>
-											class="max-h-32 custom-scroll"
-											as={KSelect.Listbox}
-										/>
-									</PopperContent>
-								</KSelect.Portal>
-							</KSelect>
+								options={props.organizations.map((org) => ({
+									value: org.id,
+									label: `${org.name}${org.ownerId === auth.data?.user_id ? " (Owner)" : ""}`,
+								}))}
+								disabled={props.organizations.length === 1}
+							/>
 						</div>
 					</div>
 				</Show>

@@ -30,6 +30,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { exportVideo } from "~/utils/export";
+import { createOrganizationsQuery } from "~/utils/queries";
 import {
 	commands,
 	type ExportCompression,
@@ -122,9 +123,7 @@ export function ExportDialog() {
 	} = useEditorContext();
 
 	const auth = authStore.createQuery();
-
-	// Organizations are cached in auth store - much more efficient
-	const organizations = createMemo(() => auth.data?.organizations ?? []);
+	const organizations = createOrganizationsQuery();
 
 	const [settings, setSettings] = makePersisted(
 		createStore<Settings>({

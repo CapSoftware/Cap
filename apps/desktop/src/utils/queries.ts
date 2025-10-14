@@ -243,11 +243,14 @@ export function createCustomDomainQuery() {
 }
 
 export function createOrganizationsQuery() {
-	// Organizations are now cached in the auth store
-	// This is much more efficient than fetching them repeatedly
-	const auth = authStore.createQuery();
+  const auth = authStore.createQuery();
+  
+  // Refresh organizations if they're missing
+  createEffect(() => {
+    if (auth.data?.user_id && (!auth.data?.organizations || auth.data.organizations.length === 0)) {
+      commands.refreshOrganizations().catch(console.error);
+    }
+  });
 
-	return createMemo(() => {
-		return auth.data?.organizations ?? [];
-	});
+  return createMemo(() => auth.data?.organizations ?? []);
 }
