@@ -115,9 +115,10 @@ export const POST = async (req: Request) => {
 	console.log("Webhook received");
 	const buf = await req.text();
 	const sig = req.headers.get("Stripe-Signature") as string;
-	const webhookSecret = serverEnv().VERCEL_ENV === "production"
-		? serverEnv().STRIPE_WEBHOOK_SECRET_LIVE
-		: serverEnv().STRIPE_WEBHOOK_SECRET_TEST;
+	const webhookSecret =
+		serverEnv().VERCEL_ENV === "production"
+			? serverEnv().STRIPE_WEBHOOK_SECRET_LIVE
+			: serverEnv().STRIPE_WEBHOOK_SECRET_TEST;
 	let event: Stripe.Event;
 
 	try {
