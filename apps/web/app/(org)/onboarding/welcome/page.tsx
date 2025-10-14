@@ -66,7 +66,7 @@ export default function YourNamePage() {
 						disabled={loading}
 						onChange={(e) => setLastName(e.target.value)}
 						type="text"
-						placeholder="Last name: optional"
+						placeholder="Last name (optional)"
 						name="lastName"
 					/>
 				</div>

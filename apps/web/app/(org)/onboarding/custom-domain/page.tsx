@@ -34,9 +34,10 @@ export default function CustomDomainPage() {
 			description={
 				<div>
 					<p className="w-full text-base max-w-[340px] text-gray-10">
-						Pro users can setup a custom domain to access their caps i.e{" "}
+						Pro users can setup a custom domain to access their shareable Cap
+						links i.e{" "}
 						<span className="font-medium text-blue-500">
-							caps.yourdomain.com
+							cap.yourdomain.com
 						</span>
 					</p>
 				</div>
