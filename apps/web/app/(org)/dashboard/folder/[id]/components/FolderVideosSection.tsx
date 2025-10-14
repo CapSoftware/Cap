@@ -1,14 +1,14 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation } from "@/lib/EffectRuntime";
-import { useVideosAnalyticsQuery } from "@/lib/Requests/AnalyticsRequest";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
