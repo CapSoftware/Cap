@@ -1,4 +1,4 @@
-import { db } from "@cap/database";
+// import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
@@ -66,51 +66,51 @@ export async function middleware(request: NextRequest) {
 	try {
 		// We're on a custom domain at this point
 		// Only allow /s/ routes for custom domains
-		if (!path.startsWith("/s/")) {
-			const url = new URL(request.url);
-			url.hostname = webUrl;
-			return NextResponse.redirect(url);
-		}
+		// if (!path.startsWith("/s/")) {
+		const url = new URL(request.url);
+		url.hostname = webUrl;
+		return NextResponse.redirect(url);
+		// }
 
-		// Check if we have a cached verification
-		const verifiedDomain = request.cookies.get("verified_domain");
-		if (verifiedDomain?.value === hostname) return NextResponse.next();
+		// // Check if we have a cached verification
+		// const verifiedDomain = request.cookies.get("verified_domain");
+		// if (verifiedDomain?.value === hostname) return NextResponse.next();
 
-		// Query the space with this custom domain
-		const [organization] = await db()
-			.select()
-			.from(organizations)
-			.where(eq(organizations.customDomain, hostname));
+		// // Query the space with this custom domain
+		// const [organization] = await db()
+		// 	.select()
+		// 	.from(organizations)
+		// 	.where(eq(organizations.customDomain, hostname));
 
-		if (!organization || !organization.domainVerified) {
-			// If no verified custom domain found, redirect to main domain
-			const url = new URL(request.url);
-			url.hostname = webUrl;
-			return NextResponse.redirect(url);
-		}
+		// if (!organization || !organization.domainVerified) {
+		// 	// If no verified custom domain found, redirect to main domain
+		// 	const url = new URL(request.url);
+		// 	url.hostname = webUrl;
+		// 	return NextResponse.redirect(url);
+		// }
 
-		// Set verification cookie for non-API routes too
-		const response = NextResponse.next();
-		response.cookies.set("verified_domain", hostname, {
-			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
-			sameSite: "strict",
-			maxAge: 3600, // Cache for 1 hour
-		});
+		// // Set verification cookie for non-API routes too
+		// const response = NextResponse.next();
+		// response.cookies.set("verified_domain", hostname, {
+		// 	httpOnly: true,
+		// 	secure: process.env.NODE_ENV === "production",
+		// 	sameSite: "strict",
+		// 	maxAge: 3600, // Cache for 1 hour
+		// });
 
-		// Get the pathname and referrer
-		const { pathname } = request.nextUrl;
-		const referrer = request.headers.get("referer") || "";
+		// // Get the pathname and referrer
+		// const { pathname } = request.nextUrl;
+		// const referrer = request.headers.get("referer") || "";
 
-		// Parse user agent with the userAgent utility
-		const ua = userAgent(request);
+		// // Parse user agent with the userAgent utility
+		// const ua = userAgent(request);
 
-		// Add custom headers to check in generateMetadata
-		response.headers.set("x-pathname", pathname);
-		response.headers.set("x-referrer", referrer);
-		response.headers.set("x-user-agent", JSON.stringify(ua));
+		// // Add custom headers to check in generateMetadata
+		// response.headers.set("x-pathname", pathname);
+		// response.headers.set("x-referrer", referrer);
+		// response.headers.set("x-user-agent", JSON.stringify(ua));
 
-		return response;
+		// return response;
 	} catch (error) {
 		console.error("Error in middleware:", error);
 		return notFound();
