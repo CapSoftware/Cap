@@ -37,7 +37,7 @@ use tokio::{
     time::{self, Instant},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{Span, debug, error, info, info_span, instrument};
+use tracing::{Span, debug, error, info, instrument, trace};
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -57,7 +57,7 @@ pub struct UploadProgressEvent {
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 
-#[instrument(skip(channel))]
+#[instrument(skip(app, channel))]
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -170,7 +170,7 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
-#[instrument]
+#[instrument(skip(app))]
 pub async fn upload_image(
     app: &AppHandle,
     file_path: PathBuf,
@@ -219,7 +219,7 @@ pub async fn upload_image(
     })
 }
 
-#[instrument]
+#[instrument(skip(app))]
 pub async fn create_or_get_video(
     app: &AppHandle,
     is_screenshot: bool,
@@ -616,7 +616,7 @@ fn retryable_client(host: String) -> reqwest::ClientBuilder {
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
-#[instrument(skip(stream))]
+#[instrument(skip(app, stream))]
 fn multipart_uploader(
     app: AppHandle,
     video_id: String,
@@ -632,7 +632,7 @@ fn multipart_uploader(
 
         while let Some(item) = stream.next().await {
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-            debug!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
+            trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
             prev_part_number = Some(part_number);
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
@@ -641,8 +641,7 @@ fn multipart_uploader(
                 api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
                     .await?;
 
-            // async move {
-            debug!("Uploading part {part_number}");
+            trace!("Uploading part {part_number}");
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
@@ -664,7 +663,7 @@ fn multipart_uploader(
                 false => Ok(()),
             }?;
 
-            debug!("Completed upload of part {part_number}");
+            trace!("Completed upload of part {part_number}");
 
             yield UploadedPart {
                 etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
@@ -672,9 +671,6 @@ fn multipart_uploader(
                 size,
                 total_size
             };
-            // }
-            // .instrument(tracing::info_span!("s3_upload_part"))
-            // .await
         }
 
         debug!("Completed multipart upload for {video_id:?} in {:?}", start.elapsed());
@@ -683,7 +679,7 @@ fn multipart_uploader(
 }
 
 /// Takes an incoming stream of bytes and streams them to an S3 object.
-#[instrument(skip(stream))]
+#[instrument(skip(app, stream))]
 pub async fn singlepart_uploader(
     app: AppHandle,
     request: PresignedS3PutRequest,
