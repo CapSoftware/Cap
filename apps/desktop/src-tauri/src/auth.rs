@@ -14,6 +14,16 @@ pub struct AuthStore {
     pub user_id: Option<String>,
     pub plan: Option<Plan>,
     pub intercom_hash: Option<String>,
+    #[serde(default)]
+    pub organizations: Vec<Organization>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "ownerId")]
+    pub owner_id: String,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -96,6 +106,31 @@ impl AuthStore {
             manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
         auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
+
+        // Fetch organizations
+        println!("Fetching organizations for user");
+        match app
+            .authed_api_request("/api/desktop/organizations", |client, url| client.get(url))
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<Vec<Organization>>().await {
+                    Ok(orgs) => {
+                        println!("Fetched {} organizations", orgs.len());
+                        auth.organizations = orgs;
+                    }
+                    Err(e) => {
+                        println!("Failed to parse organizations: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Failed to fetch organizations: {e}");
+            }
+            Ok(response) => {
+                println!("Failed to fetch organizations: status {}", response.status());
+            }
+        }
 
         Self::set(app, Some(auth))?;
 

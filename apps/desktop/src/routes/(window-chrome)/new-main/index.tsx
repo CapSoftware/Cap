@@ -435,6 +435,11 @@ function Page() {
 			currentWindow.setSize(new LogicalSize(size.width, size.height));
 		});
 
+		// Refresh organizations when main window loads
+		try {
+			await commands.refreshOrganizations();
+		} catch {}
+
 		onCleanup(async () => {
 			(await unlistenFocus)?.();
 			(await unlistenResize)?.();

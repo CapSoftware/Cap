@@ -86,7 +86,7 @@ use tauri_specta::Event;
 #[cfg(target_os = "macos")]
 use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
-use tracing::{error, trace, warn};
+use tracing::{error, info, trace, warn};
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
@@ -1063,6 +1063,7 @@ async fn upload_exported_video(
     path: PathBuf,
     mode: UploadMode,
     channel: Channel<UploadProgress>,
+    organization_id: Option<String>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1109,6 +1110,7 @@ async fn upload_exported_video(
             video_id,
             Some(meta.pretty_name.clone()),
             Some(metadata.clone()),
+            organization_id,
         )
         .await
     }
@@ -1631,6 +1633,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
+        organizations: auth.organizations,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
@@ -1886,6 +1889,13 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn refresh_organizations(app: AppHandle) -> Result<(), String> {
+    info!("Manually refreshing organizations");
+    AuthStore::update_auth_plan(&app).await
+}
+
 pub type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
@@ -1962,12 +1972,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             windows::position_traffic_lights,
             windows::set_theme,
             global_message_dialog,
+            log_message,
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
             list_fails,
             set_fail,
             update_auth_plan,
+            refresh_organizations,
             set_window_transparent,
             get_editor_meta,
             set_pretty_name,
@@ -2062,8 +2074,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
     #[allow(unused_mut)]
-    let mut builder =
-        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace!("Single instance invoked with args {args:?}");
 
             // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
@@ -2172,6 +2184,19 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         ..Default::default()
                     }));
                 });
+
+                // Fetch organizations if missing (for existing users)
+                if auth.organizations.is_empty() {
+                    info!("User is logged in but organizations not cached, fetching...");
+                    let app_clone = app.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = AuthStore::update_auth_plan(&app_clone).await {
+                            error!("Failed to fetch organizations on startup: {}", e);
+                        } else {
+                            info!("Organizations fetched successfully on startup");
+                        }
+                    });
+                }
             }
 
             tokio::spawn({
@@ -2274,6 +2299,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }),
                         capture_system_audio: settings.system_audio,
                         mode: event.mode,
+                        organization_id: settings.organization_id,
                     },
                 )
                 .await;
@@ -2649,6 +2675,17 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 #[specta::specta]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
+}
+
+#[tauri::command]
+#[specta::specta]
+fn log_message(level: String, message: String) {
+    match level.as_str() {
+        "info" => info!("{}", message),
+        "warn" => warn!("{}", message),
+        "error" => error!("{}", message),
+        _ => trace!("{}", message),
+    }
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
+import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { makePersisted } from "@solid-primitives/storage";
 import {
 	createMutation,
@@ -11,6 +12,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	For,
@@ -28,6 +30,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { exportVideo } from "~/utils/export";
+import { createOrganizationsQuery } from "~/utils/queries";
 import {
 	commands,
 	type ExportCompression,
@@ -77,17 +80,17 @@ export const EXPORT_TO_OPTIONS = [
 	{
 		label: "File",
 		value: "file",
-		icon: <IconCapFile class="text-gray-12 size-3.5" />,
+		icon: <IconCapFile class="size-3.5" />,
 	},
 	{
 		label: "Clipboard",
 		value: "clipboard",
-		icon: <IconCapCopy class="text-gray-12 size-3.5" />,
+		icon: <IconCapCopy class="size-3.5" />,
 	},
 	{
 		label: "Shareable link",
 		value: "link",
-		icon: <IconCapLink class="text-gray-12 size-3.5" />,
+		icon: <IconCapLink class="size-3.5" />,
 	},
 ] as const;
 
@@ -106,6 +109,7 @@ interface Settings {
 	exportTo: ExportToOption;
 	resolution: { label: string; value: string; width: number; height: number };
 	compression: ExportCompression;
+	organizationId?: string | null;
 }
 export function ExportDialog() {
 	const {
@@ -119,6 +123,7 @@ export function ExportDialog() {
 	} = useEditorContext();
 
 	const auth = authStore.createQuery();
+	const organizations = createOrganizationsQuery();
 
 	const [settings, setSettings] = makePersisted(
 		createStore<Settings>({
@@ -127,11 +132,20 @@ export function ExportDialog() {
 			exportTo: "file",
 			resolution: { label: "720p", value: "720p", width: 1280, height: 720 },
 			compression: "Minimal",
+			organizationId: null,
 		}),
 		{ name: "export_settings" },
 	);
 
 	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
+
+	// Auto-select first organization if none selected and user is authenticated
+	createEffect(() => {
+		const orgs = organizations();
+		if (!settings.organizationId && orgs.length > 0 && auth.data) {
+			setSettings("organizationId", orgs[0].id);
+		}
+	});
 
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
@@ -350,6 +364,7 @@ export function ExportDialog() {
 						projectPath,
 						"Reupload",
 						uploadChannel,
+						settings.organizationId ?? null,
 					)
 				: await commands.uploadExportedVideo(
 						projectPath,
@@ -357,6 +372,7 @@ export function ExportDialog() {
 							Initial: { pre_created_video: null },
 						},
 						uploadChannel,
+						settings.organizationId ?? null,
 					);
 
 			if (result === "NotAuthenticated")
@@ -402,7 +418,7 @@ export function ExportDialog() {
 						) : (
 							<Button
 								class="flex gap-1.5 items-center"
-								variant="dark"
+								variant="blue"
 								onClick={() => {
 									if (settings.exportTo === "file") save.mutate();
 									else if (settings.exportTo === "link") upload.mutate();
@@ -420,12 +436,12 @@ export function ExportDialog() {
 								{(est) => (
 									<div
 										class={cx(
-											"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none",
+											"flex overflow-hidden z-40 justify-between items-center max-w-full text-[11px] font-medium transition-all pointer-events-none",
 										)}
 									>
-										<p class="flex gap-4 items-center">
+										<p class="flex gap-3 items-center">
 											<span class="flex items-center text-gray-12">
-												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconCapCamera class="w-3 h-3 mr-1 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().duration_seconds,
@@ -449,15 +465,15 @@ export function ExportDialog() {
 												})()}
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideMonitor class="w-3 h-3 mr-1 text-gray-12" />
 												{settings.resolution.width}×{settings.resolution.height}
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideHardDrive class="w-3 h-3 mr-1 text-gray-12" />
 												{est().estimated_size_mb.toFixed(2)} MB
 											</span>
 											<span class="flex items-center text-gray-12">
-												<IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
+												<IconLucideClock class="w-3 h-3 mr-1 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().estimated_time_seconds,
@@ -487,175 +503,255 @@ export function ExportDialog() {
 						</div>
 					}
 				>
-					<div class="flex flex-wrap gap-3">
+					<div class="flex flex-col gap-2.5 px-2 min-w-[500px]">
 						{/* Export to */}
-						<div class="flex-1 p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
-							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Export to</h3>
-								<div class="flex gap-2">
+						<div class="flex flex-col gap-1.5">
+							<KTabs
+								value={settings.exportTo}
+								onChange={(v: string) => {
+									setSettings("exportTo", v as ExportToOption);
+								}}
+							>
+								<KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
 									<For each={EXPORT_TO_OPTIONS}>
 										{(option) => (
-											<Button
-												onClick={() => setSettings("exportTo", option.value)}
-												data-selected={settings.exportTo === option.value}
-												class="flex flex-1 gap-2 items-center text-nowrap"
-												variant="gray"
+											<KTabs.Trigger
+												value={option.value}
+												class="z-10 flex flex-1 gap-1.5 items-center justify-center py-2 px-2 text-gray-11 text-nowrap text-xs transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
 											>
 												{option.icon}
 												{option.label}
-											</Button>
+											</KTabs.Trigger>
 										)}
 									</For>
-								</div>
-							</div>
-						</div>
-						{/* Format */}
-						<div class="p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
-							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Format</h3>
-								<div class="flex flex-row gap-2">
-									<For each={FORMAT_OPTIONS}>
-										{(option) => (
-											<Button
-												variant="gray"
-												onClick={() => {
-													setSettings(
-														produce((newSettings) => {
-															newSettings.format = option.value as ExportFormat;
+									<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+										<div class="flex-1 bg-gray-12" />
+									</KTabs.Indicator>
+								</KTabs.List>
+							</KTabs>
 
-															if (
-																option.value === "Gif" &&
-																!(
-																	settings.resolution.value === "720p" ||
-																	settings.resolution.value === "1080p"
-																)
-															)
-																newSettings.resolution = {
-																	...RESOLUTION_OPTIONS._720p,
-																};
-
-															if (
-																option.value === "Gif" &&
-																GIF_FPS_OPTIONS.every(
-																	(v) => v.value === settings.fps,
-																)
-															)
-																newSettings.fps = 15;
-
-															if (
-																option.value === "Mp4" &&
-																FPS_OPTIONS.every(
-																	(v) => v.value !== settings.fps,
-																)
-															)
-																newSettings.fps = 30;
-														}),
-													);
-												}}
-												autofocus={false}
-												data-selected={settings.format === option.value}
+							{/* Organization selector - appears inline when shareable link is selected */}
+							<Show
+								when={
+									settings.exportTo === "link" &&
+									auth.data &&
+									organizations().length > 1
+								}
+							>
+								<div class="flex flex-col gap-1.5 p-2 rounded-lg bg-gray-2 border animate-in fade-in slide-in-from-top duration-200">
+									<label class="flex items-center gap-1 text-[10px] text-gray-11 font-medium uppercase tracking-wide">
+										<IconLucideBuilding2 class="size-3" />
+										Organization
+									</label>
+									<KSelect<{ id: string; name: string; ownerId: string }>
+										options={organizations()}
+										optionValue="id"
+										optionTextValue="name"
+										placeholder="Select organization"
+										value={organizations().find(
+											(org) => org.id === settings.organizationId,
+										)}
+										onChange={(option) =>
+											setSettings("organizationId", option?.id ?? null)
+										}
+										itemComponent={(props) => (
+											<MenuItem<typeof KSelect.Item>
+												as={KSelect.Item}
+												item={props.item}
 											>
-												{option.label}
-											</Button>
+												<div class="flex items-center gap-2 w-full">
+													<KSelect.ItemLabel class="flex-1">
+														{props.item.rawValue.name}
+													</KSelect.ItemLabel>
+													{/* Show ownership indicator */}
+													<Show
+														when={
+															props.item.rawValue.ownerId === auth.data?.user_id
+														}
+													>
+														<span class="text-xs text-blue-10 bg-blue-3 px-1.5 py-0.5 rounded">
+															Owner
+														</span>
+													</Show>
+												</div>
+											</MenuItem>
 										)}
-									</For>
-								</div>
-							</div>
-						</div>
-						{/* Frame rate */}
-						<div class="overflow-hidden relative p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
-							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Frame rate</h3>
-								<KSelect<{ label: string; value: number }>
-									options={
-										settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
-									}
-									optionValue="value"
-									optionTextValue="label"
-									placeholder="Select FPS"
-									value={(settings.format === "Gif"
-										? GIF_FPS_OPTIONS
-										: FPS_OPTIONS
-									).find((opt) => opt.value === settings.fps)}
-									onChange={(option) => {
-										const value =
-											option?.value ?? (settings.format === "Gif" ? 10 : 30);
-										trackEvent("export_fps_changed", {
-											fps: value,
-										});
-										setSettings("fps", value);
-									}}
-									itemComponent={(props) => (
-										<MenuItem<typeof KSelect.Item>
-											as={KSelect.Item}
-											item={props.item}
-										>
-											<KSelect.ItemLabel class="flex-1">
-												{props.item.rawValue.label}
-											</KSelect.ItemLabel>
-										</MenuItem>
-									)}
-								>
-									<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 rounded-xl transition-colors dark:bg-gray-3 bg-gray-4 disabled:text-gray-11">
-										<KSelect.Value<
-											(typeof FPS_OPTIONS)[number]
-										> class="flex-1 text-sm text-left truncate tabular-nums text-[--gray-500]">
-											{(state) => <span>{state.selectedOption()?.label}</span>}
-										</KSelect.Value>
-										<KSelect.Icon<ValidComponent>
-											as={(props) => (
-												<IconCapChevronDown
-													{...props}
-													class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
-												/>
-											)}
-										/>
-									</KSelect.Trigger>
-									<KSelect.Portal>
-										<PopperContent<typeof KSelect.Content>
-											as={KSelect.Content}
-											class={cx(topSlideAnimateClasses, "z-50")}
-										>
-											<MenuItemList<typeof KSelect.Listbox>
-												class="max-h-32 custom-scroll"
-												as={KSelect.Listbox}
+									>
+										<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 py-2 w-full rounded-lg transition-colors bg-white border disabled:text-gray-11">
+											<KSelect.Value<{
+												id: string;
+												name: string;
+												ownerId: string;
+											}> class="flex-1 text-[11px] text-left truncate text-gray-12">
+												{(state) => (
+													<span>
+														{state.selectedOption()?.name ??
+															"Select organization"}
+													</span>
+												)}
+											</KSelect.Value>
+											<KSelect.Icon<ValidComponent>
+												as={(props) => (
+													<IconCapChevronDown
+														{...props}
+														class="size-3 shrink-0 transform transition-transform ui-expanded:rotate-180 text-gray-10"
+													/>
+												)}
 											/>
-										</PopperContent>
-									</KSelect.Portal>
-								</KSelect>
-							</div>
-						</div>
-						{/* Compression */}
-						<div class="p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
-							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Compression</h3>
-								<div class="flex gap-2">
-									<For each={COMPRESSION_OPTIONS}>
-										{(option) => (
-											<Button
-												onClick={() => {
-													setSettings(
-														"compression",
-														option.value as ExportCompression,
-													);
-												}}
-												variant="gray"
-												data-selected={settings.compression === option.value}
+										</KSelect.Trigger>
+										<KSelect.Portal>
+											<PopperContent<typeof KSelect.Content>
+												as={KSelect.Content}
+												class={cx(topSlideAnimateClasses, "z-50")}
 											>
-												{option.label}
-											</Button>
+												<MenuItemList<typeof KSelect.Listbox>
+													class="max-h-32 custom-scroll"
+													as={KSelect.Listbox}
+												/>
+											</PopperContent>
+										</KSelect.Portal>
+									</KSelect>
+								</div>
+							</Show>
+						</div>
+
+						{/* Divider */}
+						<div class="w-full border-t border-gray-5" />
+
+						{/* Output Settings - Horizontal layout */}
+						<div class="flex flex-col gap-2.5">
+							<h3 class="text-xs text-gray-12 font-medium">Output Settings</h3>
+
+							{/* Format Row */}
+							<div class="flex items-center gap-4 flex-grow w-full">
+								<label class="text-[11px] text-gray-11 font-medium uppercase tracking-wide w-[70px] shrink-0">
+									Format
+								</label>
+								<div class="flex gap-2.5 flex-1 flex-grow items-center">
+									<KTabs
+										value={settings.format}
+										class="flex-grow"
+										onChange={(v: string) => {
+											setSettings(
+												produce((newSettings) => {
+													newSettings.format = v as ExportFormat;
+
+													if (
+														v === "Gif" &&
+														!(
+															settings.resolution.value === "720p" ||
+															settings.resolution.value === "1080p"
+														)
+													)
+														newSettings.resolution = {
+															...RESOLUTION_OPTIONS._720p,
+														};
+
+													if (
+														v === "Gif" &&
+														GIF_FPS_OPTIONS.every(
+															(v) => v.value === settings.fps,
+														)
+													)
+														newSettings.fps = 15;
+
+													if (
+														v === "Mp4" &&
+														FPS_OPTIONS.every((v) => v.value !== settings.fps)
+													)
+														newSettings.fps = 30;
+												}),
+											);
+										}}
+									>
+										<KTabs.List class="flex flex-row items-center rounded-lg relative border flex-1">
+											<For each={FORMAT_OPTIONS}>
+												{(option) => (
+													<KTabs.Trigger
+														value={option.value}
+														class="z-10 flex-1 py-2 px-2 text-xs text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+													>
+														{option.label}
+													</KTabs.Trigger>
+												)}
+											</For>
+											<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-lg overflow-hidden">
+												<div class="flex-1 bg-gray-12" />
+											</KTabs.Indicator>
+										</KTabs.List>
+									</KTabs>
+									<KSelect<{ label: string; value: number }>
+										options={
+											settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
+										}
+										optionValue="value"
+										optionTextValue="label"
+										placeholder="Select FPS"
+										value={(settings.format === "Gif"
+											? GIF_FPS_OPTIONS
+											: FPS_OPTIONS
+										).find((opt) => opt.value === settings.fps)}
+										onChange={(option) => {
+											const value =
+												option?.value ?? (settings.format === "Gif" ? 10 : 30);
+											trackEvent("export_fps_changed", {
+												fps: value,
+											});
+											setSettings("fps", value);
+										}}
+										itemComponent={(props) => (
+											<MenuItem<typeof KSelect.Item>
+												as={KSelect.Item}
+												item={props.item}
+											>
+												<KSelect.ItemLabel class="flex-1">
+													{props.item.rawValue.label}
+												</KSelect.ItemLabel>
+											</MenuItem>
 										)}
-									</For>
+									>
+										<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 py-2 w-32 rounded-lg transition-colors bg-white border disabled:text-gray-11">
+											<KSelect.Value<
+												(typeof FPS_OPTIONS)[number]
+											> class="flex-1 text-xs text-left truncate tabular-nums text-gray-12">
+												{(state) => (
+													<span>{state.selectedOption()?.label}</span>
+												)}
+											</KSelect.Value>
+											<KSelect.Icon<ValidComponent>
+												as={(props) => (
+													<IconCapChevronDown
+														{...props}
+														class="size-3.5 shrink-0 transform transition-transform ui-expanded:rotate-180 text-gray-10"
+													/>
+												)}
+											/>
+										</KSelect.Trigger>
+										<KSelect.Portal>
+											<PopperContent<typeof KSelect.Content>
+												as={KSelect.Content}
+												class={cx(topSlideAnimateClasses, "z-50")}
+											>
+												<MenuItemList<typeof KSelect.Listbox>
+													class="max-h-32 custom-scroll"
+													as={KSelect.Listbox}
+												/>
+											</PopperContent>
+										</KSelect.Portal>
+									</KSelect>
 								</div>
 							</div>
-						</div>
-						{/* Resolution */}
-						<div class="flex-1 p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
-							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Resolution</h3>
-								<div class="flex gap-2">
-									<For
-										each={
+
+							{/* Resolution Row */}
+							<div class="flex items-center gap-4">
+								<label class="text-[11px] text-gray-11 font-medium uppercase tracking-wide w-[70px] shrink-0">
+									Resolution
+								</label>
+								<KTabs
+									value={settings.resolution.value}
+									class="flex-grow"
+									onChange={(v: string) => {
+										const option = (
 											settings.format === "Gif"
 												? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
 												: [
@@ -663,22 +759,69 @@ export function ExportDialog() {
 														RESOLUTION_OPTIONS._1080p,
 														RESOLUTION_OPTIONS._4k,
 													]
-										}
-									>
-										{(option) => (
-											<Button
-												data-selected={
-													settings.resolution.value === option.value
-												}
-												class="flex-1"
-												variant="gray"
-												onClick={() => setSettings("resolution", option)}
-											>
-												{option.label}
-											</Button>
-										)}
-									</For>
-								</div>
+										).find((opt) => opt.value === v);
+										if (option) setSettings("resolution", option);
+									}}
+								>
+									<KTabs.List class="flex flex-row items-center rounded-lg relative border">
+										<For
+											each={
+												settings.format === "Gif"
+													? [
+															RESOLUTION_OPTIONS._720p,
+															RESOLUTION_OPTIONS._1080p,
+														]
+													: [
+															RESOLUTION_OPTIONS._720p,
+															RESOLUTION_OPTIONS._1080p,
+															RESOLUTION_OPTIONS._4k,
+														]
+											}
+										>
+											{(option) => (
+												<KTabs.Trigger
+													value={option.value}
+													class="z-10 px-6 py-2 text-xs text-gray-11 flex-grow transition-colors duration-100 outline-none ui-selected:text-gray-1 peer"
+												>
+													{option.label}
+												</KTabs.Trigger>
+											)}
+										</For>
+										<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-lg overflow-hidden">
+											<div class="flex-1 bg-gray-12" />
+										</KTabs.Indicator>
+									</KTabs.List>
+								</KTabs>
+							</div>
+
+							{/* Quality Row */}
+							<div class="flex items-center gap-4">
+								<label class="text-[11px] text-gray-11 font-medium uppercase tracking-wide w-[70px] shrink-0">
+									Quality
+								</label>
+								<KTabs
+									value={settings.compression}
+									class="flex-grow"
+									onChange={(v: string) => {
+										setSettings("compression", v as ExportCompression);
+									}}
+								>
+									<KTabs.List class="flex flex-row items-center rounded-lg relative border">
+										<For each={COMPRESSION_OPTIONS}>
+											{(option) => (
+												<KTabs.Trigger
+													value={option.value}
+													class="z-10 px-4 py-2 text-xs text-gray-11  flex-grow transition-colors duration-100 outline-none ui-selected:text-gray-1 peer whitespace-nowrap"
+												>
+													{option.label}
+												</KTabs.Trigger>
+											)}
+										</For>
+										<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-lg overflow-hidden">
+											<div class="flex-1 bg-gray-12" />
+										</KTabs.Indicator>
+									</KTabs.List>
+								</KTabs>
 							</div>
 						</div>
 					</div>

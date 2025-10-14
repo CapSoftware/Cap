@@ -216,7 +216,7 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id.clone()), None, meta).await?,
+        None => create_or_get_video(app, false, Some(video_id.clone()), None, meta, None).await?,
     };
 
     let presigned_put = presigned_s3_put(
@@ -331,7 +331,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = create_or_get_video(app, true, None, None, None).await?;
+    let s3_config = create_or_get_video(app, true, None, None, None, None).await?;
 
     let presigned_put = presigned_s3_put(
         app,
@@ -385,6 +385,7 @@ pub async fn create_or_get_video(
     video_id: Option<String>,
     name: Option<String>,
     meta: Option<S3VideoMeta>,
+    organization_id: Option<String>,
 ) -> Result<S3UploadMeta, String> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
@@ -405,6 +406,10 @@ pub async fn create_or_get_video(
         if let Some(fps) = meta.fps {
             s3_config_url.push_str(&format!("&fps={}", fps));
         }
+    }
+
+    if let Some(org_id) = organization_id {
+        s3_config_url.push_str(&format!("&orgId={}", org_id));
     }
 
     let response = app

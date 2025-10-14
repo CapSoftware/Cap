@@ -5,9 +5,9 @@ import {
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -24,12 +24,12 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery } from "~/utils/queries";
-import { handleRecordingResult } from "~/utils/recording";
+import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
 import {
 	commands,
 	type DisplayId,
 	events,
+	Organization,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
@@ -54,6 +54,7 @@ function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
+	const organizations = createOrganizationsQuery();
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
@@ -168,6 +169,30 @@ function Inner() {
 	// Eg. on Windows Ctrl+P would open the print dialog without this
 	createEventListener(document, "keydown", (e) => e.preventDefault());
 
+	// Auto-select first organization if none is selected
+	const auth = authStore.createQuery();
+
+	invoke("log_message", {
+		level: "info",
+		message: `Organizations: ${JSON.stringify(auth)}`,
+	}).catch(console.error);
+
+	createEffect(() => {
+		const orgs = organizations();
+		if (!rawOptions.organizationId && orgs && orgs.length > 0 && auth.data) {
+			invoke("log_message", {
+				level: "info",
+				message: `Auto-selecting organization: ${orgs[0].id}`,
+			}).catch(console.error);
+			setOptions("organizationId", orgs[0].id);
+		}
+	});
+
+	invoke("log_message", {
+		level: "info",
+		message: `Target select overlay mounted`,
+	}).catch(console.error);
+
 	return (
 		<Switch>
 			<Match when={rawOptions.targetMode === "display"}>
@@ -209,7 +234,8 @@ function Inner() {
 
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
-							target={{ variant: "display", id: params.displayId! }}
+							target={{ variant: "display", id: params.displayId ?? "" }}
+							organizations={organizations()}
 						/>
 						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
@@ -265,6 +291,7 @@ function Inner() {
 										variant: "window",
 										id: windowUnderCursor.id,
 									}}
+									organizations={organizations()}
 								/>
 
 								<Button
@@ -710,9 +737,10 @@ function Inner() {
 											<RecordingControls
 												target={{
 													variant: "area",
-													screen: params.displayId!,
+													screen: params.displayId ?? "",
 													bounds,
 												}}
+												organizations={organizations()}
 											/>
 											<ShowCapFreeWarning
 												isInstantMode={rawOptions.mode === "instant"}
@@ -733,9 +761,64 @@ function Inner() {
 	);
 }
 
+function CustomSelect(props: {
+	value: string;
+	onChange: (value: string) => void;
+	options: Array<{ value: string; label: string }>;
+	disabled?: boolean;
+}) {
+	const [isOpen, setIsOpen] = createSignal(false);
+
+	return (
+		<div class="relative">
+			<button
+				type="button"
+				onClick={() => !props.disabled && setIsOpen(!isOpen())}
+				disabled={props.disabled}
+				class="flex flex-row gap-2 items-center justify-between px-2.5 py-2 w-full rounded-lg transition-colors bg-white border text-xs text-gray-12 hover:bg-gray-1 disabled:opacity-50 disabled:cursor-not-allowed"
+			>
+				<span class="truncate">
+					{props.options.find((opt) => opt.value === props.value)?.label ||
+						"Select organization"}
+				</span>
+				<IconCapCaretDown
+					class={cx(
+						"size-3 transition-transform flex-shrink-0 text-gray-11",
+						isOpen() && "rotate-180",
+					)}
+				/>
+			</button>
+
+			<Show when={isOpen()}>
+				{/* Backdrop to close dropdown when clicking outside */}
+				<div class="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
+				{/* Dropdown menu */}
+				<div class="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
+					{props.options.map((option) => (
+						<button
+							type="button"
+							class={cx(
+								"w-full text-left px-2.5 py-2 text-xs hover:bg-gray-2 transition-colors",
+								props.value === option.value && "bg-gray-3 font-medium",
+							)}
+							onClick={() => {
+								props.onChange(option.value);
+								setIsOpen(false);
+							}}
+						>
+							{option.label}
+						</button>
+					))}
+				</div>
+			</Show>
+		</div>
+	);
+}
+
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	organizations: Array<Organization>;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -797,68 +880,100 @@ function RecordingControls(props: {
 
 	return (
 		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
-				<div
-					onClick={() => setOptions("targetMode", null)}
-					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-				</div>
-				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
-					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
-							emit("start-sign-in");
-							return;
-						}
+			<div class="flex flex-col gap-2.5 p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+				<div class="flex gap-2.5 items-center">
+					<div
+						onClick={() => setOptions("targetMode", null)}
+						class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+					>
+						<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+					</div>
+					<div
+						data-inactive={rawOptions.mode === "instant" && !auth.data}
+						class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+						onClick={() => {
+							if (rawOptions.mode === "instant" && !auth.data) {
+								emit("start-sign-in");
+								return;
+							}
 
-						handleRecordingResult(
+							invoke("log_message", {
+								level: "info",
+								message: `Starting recording with: target=${JSON.stringify(props.target)}, mode=${rawOptions.mode}, systemAudio=${rawOptions.captureSystemAudio}, organizationId=${rawOptions.organizationId ?? null}`,
+							}).catch(console.error);
 							commands.startRecording({
 								capture_target: props.target,
 								mode: rawOptions.mode,
 								capture_system_audio: rawOptions.captureSystemAudio,
-							}),
-							setOptions,
-						);
-					}}
-				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
-						{rawOptions.mode === "studio" ? (
-							<IconCapFilmCut class="size-4" />
-						) : (
-							<IconCapInstant class="size-4" />
-						)}
-						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
-									? "Sign In To Use"
-									: "Start Recording"}
-							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
-							</span>
+								organization_id: rawOptions.organizationId ?? null,
+							});
+						}}
+					>
+						<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
+							{rawOptions.mode === "studio" ? (
+								<IconCapFilmCut class="size-4" />
+							) : (
+								<IconCapInstant class="size-4" />
+							)}
+							<div class="flex flex-col mr-2 ml-3">
+								<span class="text-sm font-medium text-white text-nowrap">
+									{rawOptions.mode === "instant" && !auth.data
+										? "Sign In To Use"
+										: "Start Recording"}
+								</span>
+								<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
+									{`${capitalize(rawOptions.mode)} Mode`}
+								</span>
+							</div>
+						</div>
+						<div
+							class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
+							onClick={(e) => {
+								e.stopPropagation();
+								menuModes().then((menu) => menu.popup());
+							}}
+						>
+							<IconCapCaretDown class="focus:rotate-90" />
 						</div>
 					</div>
 					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
 						onClick={(e) => {
 							e.stopPropagation();
-							menuModes().then((menu) => menu.popup());
+							preRecordingMenu().then((menu) => menu.popup());
 						}}
+						class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
 					>
-						<IconCapCaretDown class="focus:rotate-90" />
+						<IconCapGear class="will-change-transform size-5" />
 					</div>
 				</div>
-				<div
-					onClick={(e) => {
-						e.stopPropagation();
-						preRecordingMenu().then((menu) => menu.popup());
-					}}
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+				{/* Organization selector - appears when instant mode is selected and user has organizations */}
+				<Show
+					when={
+						rawOptions.mode === "instant" &&
+						auth.data &&
+						props.organizations.length > 1
+					}
 				>
-					<IconCapGear class="will-change-transform size-5" />
-				</div>
+					<div class="bg-gray-2 rounded-lg p-3 border border-gray-4 animate-in fade-in slide-in-from-top duration-300">
+						<div class="flex flex-col gap-2">
+							<label class="flex items-center justify-center gap-2 text-xs text-gray-11">
+								<IconLucideBuilding2 class="size-3" />
+								Organization
+							</label>
+							<CustomSelect
+								value={rawOptions.organizationId ?? ""}
+								onChange={(value) =>
+									setOptions("organizationId", value || null)
+								}
+								options={props.organizations.map((org) => ({
+									value: org.id,
+									label: `${org.name}${org.ownerId === auth.data?.user_id ? " (Owner)" : ""}`,
+								}))}
+								disabled={props.organizations.length === 1}
+							/>
+						</div>
+					</div>
+				</Show>
 			</div>
 			<div
 				onClick={() => props.setToggleModeSelect?.(true)}
@@ -909,10 +1024,4 @@ function ResizeHandle(
 			style={{ ...props.style, transform: "translate(-50%, -50%)" }}
 		/>
 	);
-}
-
-function getDisplayId(displayId: string | undefined) {
-	const id = Number(displayId);
-	if (Number.isNaN(id)) return 0;
-	return id;
 }
