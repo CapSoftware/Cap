@@ -68,7 +68,7 @@ export default function InviteTeamPage() {
 			body: JSON.stringify({
 				priceId: planId,
 				quantity: users,
-				isOnboarding: true,
+				isOnBoarding: true,
 				currentOnboardingStep: "invite-team",
 			}),
 		});

@@ -232,6 +232,7 @@ export const POST = async (req: Request) => {
 					(total, item) => total + (item.quantity || 1),
 					0,
 				);
+				const isOnBoarding = session.metadata?.isOnBoarding === "true";
 
 				console.log("Updating user in database with:", {
 					subscriptionId: session.subscription,
@@ -239,12 +240,8 @@ export const POST = async (req: Request) => {
 					customerId: customer.id,
 					inviteQuota,
 				});
-
-				// Check if this is an onboarding purchase
-				const isOnboarding = session.metadata?.isOnboarding === "true";
-
 				console.log("Session metadata:", session.metadata);
-				console.log("Is onboarding:", isOnboarding);
+				console.log("Is onboarding:", isOnBoarding);
 
 				const updateData: {
 					stripeSubscriptionId: string;
@@ -263,16 +260,17 @@ export const POST = async (req: Request) => {
 					stripeSubscriptionStatus: subscription.status,
 					stripeCustomerId: customer.id,
 					inviteQuota: inviteQuota,
-					onboarding_completed_at: isOnboarding ? new Date() : undefined,
-					onboardingSteps: isOnboarding
-						? {
-								welcome: true,
-								organizationSetup: true,
-								customDomain: true,
-								inviteTeam: true,
-							}
-						: null,
+					onboarding_completed_at: isOnBoarding ? new Date() : undefined,
 				};
+
+				if (isOnBoarding) {
+					updateData.onboardingSteps = {
+						welcome: true,
+						organizationSetup: true,
+						customDomain: true,
+						inviteTeam: true,
+					};
+				}
 
 				console.log("Update data:", updateData);
 
@@ -301,6 +299,15 @@ export const POST = async (req: Request) => {
 							invite_quota: inviteQuota,
 							price_id: subscription.items.data[0]?.price.id,
 							quantity: inviteQuota,
+							is_onboarding:
+								typeof session.metadata === "object" &&
+								session.metadata !== null &&
+								"isOnBoarding" in session.metadata &&
+								typeof (session.metadata as Record<string, unknown>)
+									.isOnBoarding === "string"
+									? ((session.metadata as Record<string, unknown>)
+											.isOnBoarding as string)
+									: "false",
 							platform:
 								typeof session.metadata === "object" &&
 								session.metadata !== null &&

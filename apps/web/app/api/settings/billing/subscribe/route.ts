@@ -11,7 +11,7 @@ import type Stripe from "stripe";
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnboarding, currentOnboardingStep } =
+	const { priceId, quantity, isOnBoarding, currentOnboardingStep } =
 		await request.json();
 
 	if (!priceId) {
@@ -68,14 +68,14 @@ export async function POST(request: NextRequest) {
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
 			success_url: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-			cancel_url: isOnboarding
+			cancel_url: isOnBoarding
 				? `https://cap-web-git-onboarding-mc-ilroy.vercel.app/onboarding/${currentOnboardingStep}`
 				: `https://cap-web-git-onboarding-mc-ilroy.vercel.app/pricing`,
 			allow_promotion_codes: true,
 			metadata: {
 				platform: "web",
 				dubCustomerId: user.id,
-				isOnboarding: isOnboarding ? "true" : "false",
+				isOnBoarding: isOnBoarding ? "true" : "false",
 			},
 		});
 

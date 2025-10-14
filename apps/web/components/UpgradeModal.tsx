@@ -152,7 +152,7 @@ export const UpgradeModal = ({
 			body: JSON.stringify({
 				priceId: planId,
 				quantity: proQuantity,
-				isOnboarding: onboarding,
+				isOnBoarding: onboarding,
 				currentOnboardingStep: currentOnboardingStep,
 			}),
 		});
