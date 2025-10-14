@@ -949,7 +949,7 @@ async fn handle_recording_finish(
                             .map_err(|err|
                                 error!("Error compressing thumbnail for instant mode progressive upload: {err}")
                             ) {
-                                crate::upload::singlepart_uploader(
+                                let res = crate::upload::singlepart_uploader(
                                     app.clone(),
                                     crate::api::PresignedS3PutRequest {
                                         video_id: video_upload_info.id.clone(),
@@ -959,13 +959,19 @@ async fn handle_recording_finish(
                                     },
                                     bytes.len() as u64,
                                     stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-
                                 )
-                                .await
-                                .map_err(|err| {
-                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
-                                })
-                                .ok();
+                                .await;
+                                if let Err(err) = res {
+	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
+	                                return;
+                                }
+
+                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload {
+	                                if let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
+	                                	error!("Failed to remove recording files after upload: {err:?}");
+		                                return;
+	                                }
+                                }
                             }
                     } else if let Ok(meta) = build_video_meta(&output_path)
                         .map_err(|err| error!("Error getting video metadata: {}", err))
