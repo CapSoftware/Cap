@@ -110,7 +110,7 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
-#[instrument(skip(upload_id))]
+#[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
     video_id: &str,
