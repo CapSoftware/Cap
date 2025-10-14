@@ -3,9 +3,7 @@ import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
 import type { GeneralSettingsStore } from "~/utils/tauri";
-import { Setting, ToggleSetting } from "./Setting";
-import { UploadStatsForNerds } from "./UploadStatsForNerds";
-import { Button } from "@cap/ui-solid";
+import { ToggleSetting } from "./Setting";
 
 export default function ExperimentalSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -31,7 +29,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNewUploader: false,
 		},
 	);
-	const [isStatsModalOpen, setIsStatsModalOpen] = createSignal(false);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
@@ -113,19 +110,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								);
 							}}
 						/>
-						<Setting
-							label="Uploader stats for nerds"
-							description="Opens a panel which shows events from the uploader. This can help with debugging upload performance."
-						>
-							<Button onClick={() => setIsStatsModalOpen(true)}>
-								Stats for Nerds
-							</Button>
-
-							<UploadStatsForNerds
-								open={isStatsModalOpen()}
-								onOpenChange={setIsStatsModalOpen}
-							/>
-						</Setting>
 					</div>
 				</div>
 			</div>
