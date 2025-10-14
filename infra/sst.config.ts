@@ -49,7 +49,7 @@ export default $config({
 			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
 			{ key: "NEXT_PUBLIC_CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "DATABASE_URL_MYSQL", value: secrets.DATABASE_URL_MYSQL.value },
+			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
 
 		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {

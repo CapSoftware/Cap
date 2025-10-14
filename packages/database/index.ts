@@ -4,7 +4,13 @@ import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/mysql2";
 
 function createDrizzle() {
-	return drizzle(process.env.DATABASE_URL_MYSQL!);
+	const url = process.env.DATABASE_URL;
+	if (!url) throw new Error("DATABASE_URL not found");
+
+	if (!url.startsWith("mysql://"))
+		throw new Error("DATABASE_URL is not a MySQL URL");
+
+	return drizzle(url);
 }
 
 let _cached: ReturnType<typeof createDrizzle> | undefined;
