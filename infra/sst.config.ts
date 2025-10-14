@@ -74,6 +74,7 @@ export default $config({
 
 		if (webUrl)
 			vercelVariables.push(
+				{ key: "WEB_URL", value: webUrl },
 				{ key: "NEXT_PUBLIC_WEB_URL", value: webUrl },
 				{ key: "NEXTAUTH_URL", value: webUrl },
 			);
