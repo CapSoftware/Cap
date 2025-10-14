@@ -20,7 +20,6 @@ use core_graphics::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
-use tracing::trace;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -346,6 +345,36 @@ impl WindowImpl {
                 .find(key.as_concrete_TypeRef())
                 .and_then(|v| CFNumber::from_void(*v).to_i32())
         }
+    }
+
+    pub fn bundle_identifier(&self) -> Option<String> {
+        let pid = self.owner_pid()?;
+
+        use objc::rc::autoreleasepool;
+
+        autoreleasepool(|| unsafe {
+            use cocoa::base::id;
+            use cocoa::foundation::NSString;
+            use objc::{class, msg_send, sel, sel_impl};
+
+            let app: id = msg_send![
+                class!(NSRunningApplication),
+                runningApplicationWithProcessIdentifier: pid
+            ];
+            let app = (!app.is_null()).then_some(app)?;
+
+            let bundle_identifier: id = msg_send![app, bundleIdentifier];
+            let bundle_identifier = (!bundle_identifier.is_null()).then_some(bundle_identifier)?;
+
+            let cstr = NSString::UTF8String(bundle_identifier);
+            let cstr = (!cstr.is_null()).then_some(cstr)?;
+
+            Some(
+                std::ffi::CStr::from_ptr(cstr)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        })
     }
 
     pub fn name(&self) -> Option<String> {

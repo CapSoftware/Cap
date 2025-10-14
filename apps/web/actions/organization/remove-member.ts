@@ -51,7 +51,7 @@ export async function removeOrganizationMember(
 		throw new Error("Owner cannot remove themselves");
 	}
 
-	const result = await db()
+	const [result] = await db()
 		.delete(organizationMembers)
 		.where(
 			and(
@@ -60,9 +60,7 @@ export async function removeOrganizationMember(
 			),
 		);
 
-	if (result.rowsAffected === 0) {
-		throw new Error("Member not found");
-	}
+	if (result.affectedRows === 0) throw new Error("Member not found");
 
 	revalidatePath("/dashboard/settings/organization");
 	return { success: true };

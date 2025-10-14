@@ -300,7 +300,7 @@ app.post(
 
 					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
 					if (videoId) {
-						const result = await db()
+						const [result] = await db()
 							.update(videos)
 							.set({
 								duration: updateIfDefined(body.durationInSecs, videos.duration),
@@ -316,7 +316,7 @@ app.post(
 							);
 
 						// This proves authentication
-						if (result.rowsAffected > 0)
+						if (result.affectedRows > 0)
 							await db()
 								.delete(videoUploads)
 								.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
