@@ -138,7 +138,9 @@ impl DeepLinkAction {
                     mode,
                 };
 
-                crate::recording::start_recording(app.clone(), state, inputs).await
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await

@@ -146,9 +146,9 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
             Ok(())
         }
         HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
-        HotkeyAction::RestartRecording => {
-            recording::restart_recording(app.clone(), app.state()).await
-        }
+        HotkeyAction::RestartRecording => recording::restart_recording(app.clone(), app.state())
+            .await
+            .map(|_| ()),
         HotkeyAction::OpenRecordingPicker => {
             let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
             Ok(())

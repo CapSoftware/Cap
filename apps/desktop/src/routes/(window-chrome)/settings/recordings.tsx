@@ -21,7 +21,7 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import CapTooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
@@ -77,6 +77,7 @@ const recordingsQuery = queryOptions({
 		);
 		return recordings;
 	},
+	reconcile: (old, n) => reconcile(n)(old),
 	// This will ensure any changes to the upload status in the project meta are reflected.
 	refetchInterval: 2000,
 });
