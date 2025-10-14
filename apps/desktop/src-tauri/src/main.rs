@@ -86,6 +86,11 @@ fn main() {
                     .build()
                     .unwrap(),
             )
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("cap-desktop")
+                    .build(),
+            )
             .build();
 
         let layer = tracing_opentelemetry::layer()
