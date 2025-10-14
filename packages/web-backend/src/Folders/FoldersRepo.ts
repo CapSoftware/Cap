@@ -26,7 +26,7 @@ export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 			filters?: { organizationId?: Organisation.OrganisationId },
 		) =>
 			db
-				.execute((db) =>
+				.use((db) =>
 					db
 						.select()
 						.from(Db.folders)
@@ -41,13 +41,13 @@ export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 				.pipe(Effect.map(Array.get(0)));
 
 		const delete_ = (id: Folder.FolderId) =>
-			db.execute((db) => db.delete(Db.folders).where(Dz.eq(Db.folders.id, id)));
+			db.use((db) => db.delete(Db.folders).where(Dz.eq(Db.folders.id, id)));
 
 		const create = (data: CreateFolderInput) =>
 			Effect.gen(function* () {
 				const id = Folder.FolderId.make(nanoId());
 
-				yield* db.execute((db) =>
+				yield* db.use((db) =>
 					db.insert(Db.folders).values([
 						{
 							...data,
@@ -63,7 +63,7 @@ export class FoldersRepo extends Effect.Service<FoldersRepo>()("FoldersRepo", {
 
 		const update = (id: Folder.FolderId, data: Partial<CreateFolderInput>) =>
 			Effect.gen(function* () {
-				yield* db.execute((db) =>
+				yield* db.use((db) =>
 					db
 						.update(Db.folders)
 						.set({

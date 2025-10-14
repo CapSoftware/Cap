@@ -1,5 +1,5 @@
 "use client";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
@@ -21,8 +21,8 @@ export type FolderDataType = {
 	id: Folder.FolderId;
 	color: "normal" | "blue" | "red" | "yellow";
 	videoCount: number;
-	spaceId?: string | null;
-	parentId?: string | null;
+	spaceId?: Space.SpaceIdOrOrganisationId | null;
+	parentId: Folder.FolderId | null;
 };
 
 const FolderCard = ({

@@ -1,7 +1,7 @@
 {
 	"extends": "../config/base.tsconfig.json",
 	"exclude": ["node_modules", "dist"],
-	"include": ["src/**/*.ts", "src/**/*.tsx"],
+	"include": ["src/**/*.ts", "src/**/*.tsx", "scripts/*"],
 	"compilerOptions": {
 		"moduleResolution": "bundler",
 		"composite": true,

@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { Organisation, User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect } from "effect";
 
@@ -12,8 +12,8 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 			const db = yield* Database;
 
 			return {
-				membershipForVideo: (userId: string, videoId: Video.VideoId) =>
-					db.execute((db) =>
+				membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
+					db.use((db) =>
 						db
 							.select({ membershipId: Db.organizationMembers.id })
 							.from(Db.organizationMembers)
@@ -31,9 +31,9 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 								),
 							),
 					),
-				membership: (userId: string, orgId: string) =>
+				membership: (userId: User.UserId, orgId: Organisation.OrganisationId) =>
 					db
-						.execute((db) =>
+						.use((db) =>
 							db
 								.select({
 									membershipId: Db.organizationMembers.id,

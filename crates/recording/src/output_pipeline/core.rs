@@ -432,7 +432,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             })
             .await;
 
-        video_source.stop().await?;
+        video_source.stop().await.context("video_source_stop")?;
 
         muxer.lock().await.stop();
 

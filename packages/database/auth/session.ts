@@ -1,3 +1,4 @@
+import { User } from "@cap/web-domain";
 import { eq, type InferSelectModel } from "drizzle-orm";
 import { getServerSession } from "next-auth";
 import { cache } from "react";
@@ -20,7 +21,7 @@ export const getCurrentUser = cache(
 		const [currentUser] = await db()
 			.select()
 			.from(users)
-			.where(eq(users.id, session.user.id));
+			.where(eq(users.id, User.UserId.make(session.user.id)));
 
 		return currentUser ?? null;
 	},

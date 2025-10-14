@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Organisation } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +17,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { imageUrlQuery } from "@/components/VideoThumbnail";
+import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -100,7 +100,7 @@ export const UploadCapButton = ({
 async function legacyUploadCap(
 	file: File,
 	folderId: Folder.FolderId | undefined,
-	orgId: string,
+	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	queryClient: QueryClient,
 ) {
@@ -495,7 +495,9 @@ async function legacyUploadCap(
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
 						resolve();
-						queryClient.refetchQueries(imageUrlQuery(uploadId));
+						queryClient.refetchQueries({
+							queryKey: ThumbnailRequest.queryKey(uploadId),
+						});
 					} else {
 						reject(
 							new Error(`Screenshot upload failed with status ${xhr.status}`),

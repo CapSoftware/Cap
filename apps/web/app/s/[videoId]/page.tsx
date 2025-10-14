@@ -16,7 +16,12 @@ import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { provideOptionalAuth, Videos } from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import { Policy, type Video } from "@cap/web-domain";
+import {
+	Comment,
+	type Organisation,
+	Policy,
+	type Video,
+} from "@cap/web-domain";
 import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -32,6 +37,7 @@ import {
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
@@ -264,6 +270,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					ownerName: users.name,
+					ownerImage: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -354,9 +362,11 @@ async function AuthorizedContent({
 		InferSelectModel<typeof videos>,
 		"folderId" | "password" | "settings"
 	> & {
-		sharedOrganization: { organizationId: string } | null;
+		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
+		ownerName?: string | null;
+		ownerImage?: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -379,8 +389,12 @@ async function AuthorizedContent({
 	}
 
 	const userId = user?.id;
-	const commentId = searchParams.comment as string | undefined;
-	const replyId = searchParams.reply as string | undefined;
+	const commentId = optionFromTOrFirst(searchParams.comment).pipe(
+		Option.map(Comment.CommentId.make),
+	);
+	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
+		Option.map(Comment.CommentId.make),
+	);
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -456,6 +470,8 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
+				ownerName: users.name,
+				ownerImage: users.image,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -617,18 +633,21 @@ async function AuthorizedContent({
 		: Promise.resolve([]);
 
 	const commentsPromise = (async () => {
-		let toplLevelCommentId: string | undefined;
+		let toplLevelCommentId = Option.none<Comment.CommentId>();
 
-		if (replyId) {
+		if (Option.isSome(replyId)) {
 			const [parentComment] = await db()
 				.select({ parentCommentId: comments.parentCommentId })
 				.from(comments)
-				.where(eq(comments.id, replyId))
+				.where(eq(comments.id, replyId.value))
 				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId;
+			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
 		}
 
-		const commentToBringToTheTop = toplLevelCommentId ?? commentId;
+		const commentToBringToTheTop = Option.orElse(
+			toplLevelCommentId,
+			() => commentId,
+		);
 
 		const allComments = await db()
 			.select({
@@ -647,9 +666,11 @@ async function AuthorizedContent({
 			.leftJoin(users, eq(comments.authorId, users.id))
 			.where(eq(comments.videoId, videoId))
 			.orderBy(
-				commentToBringToTheTop
-					? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
-					: comments.createdAt,
+				Option.match(commentToBringToTheTop, {
+					onSome: (commentId) =>
+						sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
+					onNone: () => comments.createdAt,
+				}),
 			);
 
 		return allComments;

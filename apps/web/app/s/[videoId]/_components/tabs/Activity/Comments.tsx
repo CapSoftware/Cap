@@ -1,6 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import { Comment, User, type Video } from "@cap/web-domain";
 import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useSearchParams } from "next/navigation";
@@ -19,7 +19,7 @@ import {
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import type { CommentType } from "../../../Share";
-import Comment from "./Comment";
+import CommentComponent from "./Comment";
 import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
 
@@ -50,7 +50,9 @@ export const Comments = Object.assign(
 		const replyParams = useSearchParams().get("reply");
 
 		const { user } = props;
-		const [replyingTo, setReplyingTo] = useState<string | null>(null);
+		const [replyingTo, setReplyingTo] = useState<Comment.CommentId | null>(
+			null,
+		);
 
 		const commentsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -83,13 +85,13 @@ export const Comments = Object.assign(
 			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
-				id: `temp-${Date.now()}`,
-				authorId: user?.id || "anonymous",
+				id: Comment.CommentId.make(`temp-${Date.now()}`),
+				authorId: User.UserId.make(user?.id || "anonymous"),
 				authorName: user?.name || "Anonymous",
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "text",
 				timestamp: currentTime,
 				updatedAt: new Date(),
@@ -104,7 +106,7 @@ export const Comments = Object.assign(
 				const data = await newComment({
 					content,
 					videoId: props.videoId,
-					parentCommentId: "",
+					parentCommentId: Comment.CommentId.make(""),
 					type: "text",
 					timestamp: currentTime,
 				});
@@ -125,8 +127,8 @@ export const Comments = Object.assign(
 				: replyingTo;
 
 			const optimisticReply: CommentType = {
-				id: `temp-reply-${Date.now()}`,
-				authorId: user?.id || "anonymous",
+				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
+				authorId: User.UserId.make(user?.id || "anonymous"),
 				authorName: user?.name || "Anonymous",
 				content,
 				createdAt: new Date(),
@@ -171,8 +173,8 @@ export const Comments = Object.assign(
 		};
 
 		const handleDeleteComment = async (
-			commentId: string,
-			parentId?: string,
+			commentId: Comment.CommentId,
+			parentId: Comment.CommentId | null,
 		) => {
 			try {
 				await deleteComment({
@@ -208,7 +210,7 @@ export const Comments = Object.assign(
 				) : (
 					<div className="p-4 space-y-6">
 						{rootComments.map((comment) => (
-							<Comment
+							<CommentComponent
 								key={comment.id}
 								comment={comment}
 								replies={optimisticComments}

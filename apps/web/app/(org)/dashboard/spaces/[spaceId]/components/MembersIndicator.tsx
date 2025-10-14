@@ -13,6 +13,7 @@ import {
 	FormControl,
 	FormField,
 } from "@cap/ui";
+import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -30,7 +31,7 @@ type MembersIndicatorProps = {
 	memberCount: number;
 	members: SpaceMemberData[];
 	organizationMembers: SpaceMemberData[];
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 	canManageMembers: boolean;
 	onAddVideos?: () => void;
 };
@@ -58,7 +59,7 @@ export const MembersIndicator = ({
 		},
 	});
 
-	const handleSaveMembers = async (selectedUserIds: string[]) => {
+	const handleSaveMembers = async (selectedUserIds: User.UserId[]) => {
 		if (!canManageMembers) return;
 
 		// Compare selectedUserIds to current members' userIds (order-insensitive)
@@ -196,7 +197,11 @@ export const MembersIndicator = ({
 						{canManageMembers && (
 							<Button
 								onClick={() =>
-									handleSaveMembers(form.getValues("members") ?? [])
+									handleSaveMembers(
+										form
+											.getValues("members")
+											?.map((v) => User.UserId.make(v)) ?? [],
+									)
 								}
 								disabled={isLoading}
 								spinner={isLoading}

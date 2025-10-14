@@ -7,13 +7,14 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { eq, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function patchAccountSettings(
 	firstName?: string,
 	lastName?: string,
-	defaultOrgId?: string,
+	defaultOrgId?: Organisation.OrganisationId,
 ) {
 	const currentUser = await getCurrentUser();
 	if (!currentUser) throw new Error("Unauthorized");
@@ -21,7 +22,7 @@ export async function patchAccountSettings(
 	const updatePayload: Partial<{
 		name: string;
 		lastName: string;
-		defaultOrgId: string;
+		defaultOrgId: Organisation.OrganisationId;
 	}> = {};
 
 	if (firstName !== undefined) updatePayload.name = firstName;

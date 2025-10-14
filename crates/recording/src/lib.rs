@@ -13,7 +13,7 @@ pub use sources::screen_capture;
 
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;
-use scap_targets::bounds::LogicalBounds;
+use scap_targets::{WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -48,6 +48,8 @@ pub struct RecordingBaseInputs {
     pub camera_feed: Option<Arc<CameraFeedLock>>,
     #[cfg(target_os = "macos")]
     pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    #[cfg(target_os = "macos")]
+    pub excluded_windows: Vec<WindowId>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

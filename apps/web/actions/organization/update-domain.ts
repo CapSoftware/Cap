@@ -3,11 +3,15 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";
 
-export async function updateDomain(domain: string, organizationId: string) {
+export async function updateDomain(
+	domain: string,
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user) {

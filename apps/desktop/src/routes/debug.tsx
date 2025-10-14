@@ -26,7 +26,7 @@ export default function Debug() {
 						commands.showWindow({ InProgressRecording: { countdown: 3 } })
 					}
 				>
-					Show In Progress Recording Window
+					Show Recording Controls Window
 				</button>
 			</div>
 

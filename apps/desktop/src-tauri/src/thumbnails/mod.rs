@@ -33,6 +33,7 @@ pub struct CaptureWindowWithThumbnail {
     pub refresh_rate: u32,
     pub thumbnail: Option<String>,
     pub app_icon: Option<String>,
+    pub bundle_identifier: Option<String>,
 }
 
 pub fn normalize_thumbnail_dimensions(image: &image::RgbaImage) -> image::RgbaImage {
@@ -140,6 +141,7 @@ pub async fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithTh
             refresh_rate: capture_window.refresh_rate,
             thumbnail,
             app_icon,
+            bundle_identifier: capture_window.bundle_identifier,
         });
     }
 

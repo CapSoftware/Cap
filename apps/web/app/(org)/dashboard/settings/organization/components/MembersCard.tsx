@@ -54,7 +54,7 @@ export const MembersCard = ({
 		try {
 			await removeOrganizationInvite(
 				inviteId,
-				activeOrganization?.organization.id as string,
+				activeOrganization!.organization.id,
 			);
 			toast.success("Invite deleted successfully");
 			router.refresh();
@@ -90,7 +90,7 @@ export const MembersCard = ({
 		try {
 			await removeOrganizationMember(
 				pendingMember.id,
-				activeOrganization?.organization.id as string,
+				activeOrganization!.organization.id,
 			);
 			toast.success("Member removed successfully");
 			setConfirmOpen(false);
@@ -126,7 +126,7 @@ export const MembersCard = ({
 				title="Remove member"
 				description={
 					pendingMemberTest
-						? `Are you sure you want to remove ${pendingMemberTest.name} 
+						? `Are you sure you want to remove ${pendingMemberTest.name}
          from your organization? this action cannot be undone.`
 						: ""
 				}

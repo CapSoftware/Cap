@@ -1,6 +1,6 @@
+import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Context, Effect, Option, Schema } from "effect";
-
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
@@ -135,6 +135,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"VideoNotFoundError",
 	{},
+	HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
 export class VideoRpcs extends RpcGroup.make(
@@ -167,5 +168,39 @@ export class VideoRpcs extends RpcGroup.make(
 			PolicyDeniedError,
 			VerifyVideoPasswordError,
 		),
+	}),
+	Rpc.make("VideosGetThumbnails", {
+		payload: Schema.Array(VideoId).pipe(
+			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
+		),
+		success: Schema.Array(
+			Schema.Exit({
+				success: Schema.Option(Schema.String),
+				failure: Schema.Union(
+					NotFoundError,
+					PolicyDeniedError,
+					VerifyVideoPasswordError,
+				),
+				defect: Schema.Unknown,
+			}),
+		),
+		error: InternalError,
+	}),
+	Rpc.make("VideosGetAnalytics", {
+		payload: Schema.Array(VideoId).pipe(
+			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
+		),
+		success: Schema.Array(
+			Schema.Exit({
+				success: Schema.Struct({ count: Schema.Int }),
+				failure: Schema.Union(
+					NotFoundError,
+					PolicyDeniedError,
+					VerifyVideoPasswordError,
+				),
+				defect: Schema.Unknown,
+			}),
+		),
+		error: InternalError,
 	}),
 ) {}

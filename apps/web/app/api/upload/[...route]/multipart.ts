@@ -300,7 +300,7 @@ app.post(
 
 					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
 					if (videoId) {
-						const result = await db()
+						const [result] = await db()
 							.update(videos)
 							.set({
 								duration: updateIfDefined(body.durationInSecs, videos.duration),
@@ -316,27 +316,10 @@ app.post(
 							);
 
 						// This proves authentication
-						if (result.rowsAffected > 0)
+						if (result.affectedRows > 0)
 							await db()
 								.delete(videoUploads)
-								.where(eq(videoUploads.videoId, videoId));
-					}
-
-					if (videoIdFromFileKey) {
-						try {
-							await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-								method: "POST",
-								headers: {
-									"Content-Type": "application/json",
-								},
-								body: JSON.stringify({ videoId: videoIdFromFileKey }),
-							});
-							console.log(
-								`Revalidation triggered for videoId: ${videoIdFromFileKey}`,
-							);
-						} catch (revalidateError) {
-							console.error("Failed to revalidate page:", revalidateError);
-						}
+								.where(eq(videoUploads.videoId, Video.VideoId.make(videoId)));
 					}
 
 					return c.json({

@@ -1,27 +1,10 @@
-import { Client, type Config } from "@planetscale/database";
+import { instrumentDrizzleClient } from "@kubiks/otel-drizzle";
 import { sql } from "drizzle-orm";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
-import { drizzle } from "drizzle-orm/planetscale-serverless";
+import { drizzle } from "drizzle-orm/mysql2";
 
 function createDrizzle() {
-	const URL = process.env.DATABASE_URL!;
-
-	let fetchHandler: Promise<Config["fetch"]> | undefined;
-
-	if (URL.startsWith("mysql://")) {
-		fetchHandler = import("@mattrax/mysql-planetscale").then((m) =>
-			m.createFetchHandler(URL),
-		);
-	}
-
-	const connection = new Client({
-		url: URL,
-		fetch: async (input, init) => {
-			return await ((await fetchHandler) || fetch)(input, init);
-		},
-	});
-
-	return drizzle(connection);
+	return drizzle(process.env.DATABASE_URL_MYSQL!);
 }
 
 let _cached: ReturnType<typeof createDrizzle> | undefined;
@@ -29,6 +12,8 @@ let _cached: ReturnType<typeof createDrizzle> | undefined;
 export const db = () => {
 	if (!_cached) {
 		_cached = createDrizzle();
+
+		instrumentDrizzleClient(_cached);
 	}
 	return _cached;
 };

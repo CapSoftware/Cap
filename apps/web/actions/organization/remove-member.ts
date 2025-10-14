@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations } from "@cap/database/schema";
+import type { Organisation } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -13,7 +14,7 @@ import { revalidatePath } from "next/cache";
  */
 export async function removeOrganizationMember(
 	memberId: string,
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 	if (!user) throw new Error("Unauthorized");
@@ -50,7 +51,7 @@ export async function removeOrganizationMember(
 		throw new Error("Owner cannot remove themselves");
 	}
 
-	const result = await db()
+	const [result] = await db()
 		.delete(organizationMembers)
 		.where(
 			and(
@@ -59,9 +60,7 @@ export async function removeOrganizationMember(
 			),
 		);
 
-	if (result.rowsAffected === 0) {
-		throw new Error("Member not found");
-	}
+	if (result.affectedRows === 0) throw new Error("Member not found");
 
 	revalidatePath("/dashboard/settings/organization");
 	return { success: true };

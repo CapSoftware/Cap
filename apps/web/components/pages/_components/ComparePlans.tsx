@@ -297,7 +297,7 @@ export const ComparePlans = () => {
 	};
 	return (
 		<div className="mx-auto w-full max-w-[1400px]">
-			<h2 className="mb-6 text-center">Compare plans</h2>
+			<h2 className="mb-6 text-4xl text-center text-gray-12">Compare plans</h2>
 			<div className="overflow-x-auto w-full">
 				<div className="overflow-hidden rounded-xl border min-w-fit border-gray-5">
 					<table className="w-full text-left border-separate border-spacing-0 bg-gray-2">

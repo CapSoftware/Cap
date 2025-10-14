@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import type { Organisation } from "@cap/web-domain";
 import DOMPurify from "dompurify";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -15,7 +16,7 @@ import { runPromise } from "@/lib/server";
 
 export async function uploadOrganizationIcon(
 	formData: FormData,
-	organizationId: string,
+	organizationId: Organisation.OrganisationId,
 ) {
 	const user = await getCurrentUser();
 
