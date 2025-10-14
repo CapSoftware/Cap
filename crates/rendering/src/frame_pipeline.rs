@@ -109,24 +109,15 @@ pub async fn finish_encoder(
     queue.submit(std::iter::once(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        tx.send(result).ok();
+        let _ = tx.send(result);
     });
 
-    let mut poll_count = 0;
-    loop {
-        device.poll(wgpu::PollType::Poll)?;
-        if let Ok(result) = rx.try_recv() {
-            result?;
-            break;
-        }
-        poll_count += 1;
-        if poll_count > 100 {
-            tokio::time::sleep(std::time::Duration::from_micros(10)).await;
-            poll_count = 0;
-        }
-    }
+    device.poll(wgpu::PollType::Wait)?;
+
+    rx.await
+        .map_err(|_| RenderingError::BufferMapWaitingFailed)??;
 
     let data = buffer_slice.get_mapped_range();
     let data_vec = data.to_vec();
