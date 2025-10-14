@@ -2,7 +2,7 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { CurrentUser, Organisation } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Config, Effect, Option } from "effect";
+import { Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
@@ -13,16 +13,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 		effect: Effect.gen(function* () {
 			const db = yield* Database;
 			const s3Buckets = yield* S3Buckets;
-			const awsBucketUrl = yield* Config.option(
-				Config.string("CAP_AWS_BUCKET_URL"),
-			);
-			const awsEndpoint = yield* Config.option(
-				Config.string("CAP_AWS_ENDPOINT"),
-			);
-			const awsRegion = yield* Config.withDefault(
-				Config.string("CAP_AWS_REGION"),
-				"us-east-1",
-			);
 
 			return {
 				welcome: Effect.fn("Onboarding.welcome")(function* (data: {
@@ -31,7 +21,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 				}) {
 					const currentUser = yield* CurrentUser;
 
-					// Get full user from database
 					const [user] = yield* db.use((db) =>
 						db
 							.select()
@@ -65,7 +54,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 					}) {
 						const currentUser = yield* CurrentUser;
 
-						// Get full user from database
 						const [user] = yield* db.use((db) =>
 							db
 								.select()
@@ -75,7 +63,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 
 						const organizationId = Organisation.OrganisationId.make(nanoId());
 
-						// Create organization and add user as owner
 						yield* db.use((db) =>
 							db.transaction(async (tx) => {
 								await tx.insert(Db.organizations).values({
@@ -104,7 +91,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 							}),
 						);
 
-						// Upload organization icon if provided (errors are logged but don't fail onboarding)
 						if (data.organizationIcon) {
 							const organizationIcon = data.organizationIcon;
 							const uploadEffect = Effect.gen(function* () {
@@ -121,18 +107,8 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 								);
 
 								yield* bucket.putObject(fileKey, fileData, { contentType });
+								const iconUrl = yield* bucket.getSignedObjectUrl(fileKey);
 
-								// Construct the icon URL
-								let iconUrl: string;
-								if (Option.isSome(awsBucketUrl)) {
-									iconUrl = `${awsBucketUrl.value}/${fileKey}`;
-								} else if (Option.isSome(awsEndpoint)) {
-									iconUrl = `${awsEndpoint.value}/${bucket.bucketName}/${fileKey}`;
-								} else {
-									iconUrl = `https://${bucket.bucketName}.s3.${awsRegion}.amazonaws.com/${fileKey}`;
-								}
-
-								// Update organization with icon URL
 								yield* db.use((db) =>
 									db
 										.update(Db.organizations)
@@ -155,7 +131,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 				customDomain: Effect.fn("Onboarding.customDomain")(function* () {
 					const currentUser = yield* CurrentUser;
 
-					// Get full user from database
 					const [user] = yield* db.use((db) =>
 						db
 							.select()
@@ -179,7 +154,6 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 				inviteTeam: Effect.fn("Onboarding.inviteTeam")(function* () {
 					const currentUser = yield* CurrentUser;
 
-					// Get full user from database
 					const [user] = yield* db.use((db) =>
 						db
 							.select()
