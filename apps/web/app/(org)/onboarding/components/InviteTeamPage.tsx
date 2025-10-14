@@ -6,18 +6,20 @@ import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
+import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { startTransition, useId, useState } from "react";
 import { toast } from "sonner";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { homepageCopy } from "../../../../data/homepage-copy";
-import { Base } from "../components/Base";
+import { Base } from "./Base";
 
-export default function InviteTeamPage() {
+export function InviteTeamPage() {
 	const billingCycleId = useId();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
 	const router = useRouter();
-	const [loading, setLoading] = useState(false);
 	const [proLoading, setProLoading] = useState(false);
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
@@ -35,22 +37,30 @@ export default function InviteTeamPage() {
 	const incrementUsers = () => setUsers((n) => n + 1);
 	const decrementUsers = () => setUsers((n) => (n > 1 ? n - 1 : 1));
 
-	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
-		e.preventDefault();
-		try {
-			setLoading(true);
-			await fetch("/api/settings/onboarding/invite-your-team", {
-				method: "POST",
-			});
+	const inviteTeamMutation = useEffectMutation({
+		mutationFn: () =>
+			Effect.gen(function* () {
+				yield* withRpc((r) =>
+					r.UserCompleteOnboardingStep({
+						step: "inviteTeam",
+						data: undefined,
+					}),
+				);
+			}),
+		onSuccess: () => {
 			startTransition(() => {
 				router.push("/dashboard/caps");
 				router.refresh();
 			});
-		} catch {
+		},
+		onError: () => {
 			toast.error("An error occurred, please try again");
-		} finally {
-			setLoading(false);
-		}
+		},
+	});
+
+	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
+		inviteTeamMutation.mutate();
 	};
 
 	const planCheckout = async (planId?: string) => {
@@ -224,8 +234,8 @@ export default function InviteTeamPage() {
 				variant="dark"
 				className="mx-auto w-full"
 				onClick={handleSubmit}
-				spinner={loading}
-				disabled={loading}
+				spinner={inviteTeamMutation.isPending}
+				disabled={inviteTeamMutation.isPending}
 			>
 				Skip
 			</Button>

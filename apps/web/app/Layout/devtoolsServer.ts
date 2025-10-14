@@ -30,13 +30,10 @@ export async function restartOnboarding() {
 	await db()
 		.update(users)
 		.set({
-			onboardingSteps: {
-				welcome: false,
-				organizationSetup: false,
-				customDomain: false,
-				inviteTeam: false,
-				download: false,
-			},
+			onboardingSteps: null,
+			name: null,
+			lastName: null,
+			onboarding_completed_at: null,
 		})
 		.where(eq(users.id, user.id));
 }

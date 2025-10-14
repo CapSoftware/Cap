@@ -4,44 +4,37 @@ import { Button, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
-import { Base } from "../components/Base";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { Base } from "./Base";
 
-export default function YourNamePage() {
-	const [loading, setLoading] = useState(false);
+export function WelcomePage() {
 	const [firstName, setFirstName] = useState("");
 	const [lastName, setLastName] = useState("");
 	const router = useRouter();
 
-	const welcomeRequest = async () => {
-		const response = await fetch("/api/settings/onboarding/welcome", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ firstName, lastName }),
-		});
-
-		if (!response.ok) {
-			throw new Error(`HTTP error! status: ${response.status}`);
-		}
-
-		return response.json();
-	};
-
-	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-		e.preventDefault();
-		try {
-			setLoading(true);
-			await welcomeRequest();
+	const welcomeMutation = useEffectMutation({
+		mutationFn: (data: { firstName: string; lastName?: string }) =>
+			withRpc((r) =>
+				r.UserCompleteOnboardingStep({
+					step: "welcome",
+					data,
+				}),
+			),
+		onSuccess: () => {
 			startTransition(() => {
 				router.push("/onboarding/organization-setup");
 				router.refresh();
 			});
-		} catch {
+		},
+		onError: () => {
 			toast.error("An error occurred, please try again");
-		} finally {
-			setLoading(false);
-		}
+		},
+	});
+
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		welcomeMutation.mutate({ firstName, lastName });
 	};
 
 	return (
@@ -54,7 +47,7 @@ export default function YourNamePage() {
 				<div className="space-y-3">
 					<Input
 						value={firstName}
-						disabled={loading}
+						disabled={welcomeMutation.isPending}
 						onChange={(e) => setFirstName(e.target.value)}
 						type="text"
 						placeholder="First name"
@@ -63,7 +56,7 @@ export default function YourNamePage() {
 					/>
 					<Input
 						value={lastName}
-						disabled={loading}
+						disabled={welcomeMutation.isPending}
 						onChange={(e) => setLastName(e.target.value)}
 						type="text"
 						placeholder="Last name (optional)"
@@ -72,8 +65,8 @@ export default function YourNamePage() {
 				</div>
 				<div className="w-full h-px bg-gray-4" />
 				<Button
-					spinner={loading}
-					disabled={!firstName || loading}
+					spinner={welcomeMutation.isPending}
+					disabled={!firstName || welcomeMutation.isPending}
 					type="submit"
 					variant="dark"
 					className="mx-auto w-full"

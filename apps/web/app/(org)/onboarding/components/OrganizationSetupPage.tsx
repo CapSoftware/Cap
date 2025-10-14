@@ -3,17 +3,19 @@
 import { Button, Input } from "@cap/ui";
 import { faImage } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Effect } from "effect";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Base } from "../components/Base";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { Base } from "./Base";
 
-export default function OrganizationSetupPage() {
+export function OrganizationSetupPage() {
 	const [organizationName, setOrganizationName] = useState("");
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
-	const [isLoading, setIsLoading] = useState(false);
 	const router = useRouter();
 
 	const handleFileChange = () => {
@@ -23,40 +25,55 @@ export default function OrganizationSetupPage() {
 		}
 	};
 
-	const orgSetupRequest = async () => {
-		const formData = new FormData();
-		formData.append("organizationName", organizationName);
-		if (selectedFile) {
-			formData.append("icon", selectedFile);
-		}
+	const orgSetupMutation = useEffectMutation({
+		mutationFn: (data: { organizationName: string; icon?: File }) =>
+			Effect.gen(function* () {
+				let organizationIcon:
+					| {
+							data: Uint8Array;
+							contentType: string;
+							fileName: string;
+					  }
+					| undefined;
 
-		const response = await fetch("/api/settings/onboarding/org-setup", {
-			method: "POST",
-			body: formData,
-		});
+				if (data.icon) {
+					const icon = data.icon;
+					const arrayBuffer = yield* Effect.promise(() => icon.arrayBuffer());
+					organizationIcon = {
+						data: new Uint8Array(arrayBuffer),
+						contentType: icon.type,
+						fileName: icon.name,
+					};
+				}
 
-		if (!response.ok) {
-			throw new Error(`HTTP error! status: ${response.status}`);
-		}
-
-		return response.json();
-	};
-
-	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-		e.preventDefault();
-		try {
-			setIsLoading(true);
-			await orgSetupRequest();
+				yield* withRpc((r) =>
+					r.UserCompleteOnboardingStep({
+						step: "organizationSetup",
+						data: {
+							organizationName: data.organizationName,
+							organizationIcon,
+						},
+					}),
+				);
+			}),
+		onSuccess: () => {
 			startTransition(() => {
 				router.push("/onboarding/custom-domain");
 				router.refresh();
 			});
-		} catch (error) {
+		},
+		onError: (error) => {
 			console.error(error);
 			toast.error("An error occurred, please try again");
-		} finally {
-			setIsLoading(false);
-		}
+		},
+	});
+
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		orgSetupMutation.mutate({
+			organizationName,
+			icon: selectedFile || undefined,
+		});
 	};
 
 	return (
@@ -68,7 +85,7 @@ export default function OrganizationSetupPage() {
 				<div className="space-y-3">
 					<Input
 						type="text"
-						disabled={isLoading}
+						disabled={orgSetupMutation.isPending}
 						value={organizationName}
 						onChange={(e) => setOrganizationName(e.target.value)}
 						placeholder="Organization Name"
@@ -107,7 +124,7 @@ export default function OrganizationSetupPage() {
 								<Button
 									type="button"
 									variant="gray"
-									disabled={isLoading}
+									disabled={orgSetupMutation.isPending}
 									size="xs"
 									onClick={() => fileInputRef.current?.click()}
 								>
@@ -125,8 +142,8 @@ export default function OrganizationSetupPage() {
 					type="submit"
 					variant="dark"
 					className="mx-auto w-full"
-					spinner={isLoading}
-					disabled={isLoading}
+					spinner={orgSetupMutation.isPending}
+					disabled={orgSetupMutation.isPending}
 				>
 					Create Organization
 				</Button>

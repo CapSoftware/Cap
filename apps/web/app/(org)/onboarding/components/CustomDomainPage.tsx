@@ -1,31 +1,43 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { Base } from "../components/Base";
-export default function CustomDomainPage() {
-	const [loading, setLoading] = useState(false);
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { Base } from "./Base";
+
+export function CustomDomainPage() {
 	const router = useRouter();
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
-		e.preventDefault();
-		try {
-			setLoading(true);
-			await fetch("/api/settings/onboarding/custom-domain", {
-				method: "POST",
-			});
+
+	const customDomainMutation = useEffectMutation({
+		mutationFn: () =>
+			Effect.gen(function* () {
+				yield* withRpc((r) =>
+					r.UserCompleteOnboardingStep({
+						step: "customDomain",
+						data: undefined,
+					}),
+				);
+			}),
+		onSuccess: () => {
 			startTransition(() => {
 				router.push("/onboarding/invite-team");
 				router.refresh();
 			});
-		} catch {
+		},
+		onError: () => {
 			toast.error("An error occurred, please try again");
-		} finally {
-			setLoading(false);
-		}
+		},
+	});
+
+	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
+		customDomainMutation.mutate();
 	};
 
 	return (
@@ -47,7 +59,7 @@ export default function CustomDomainPage() {
 			<Button
 				onClick={() => setShowUpgradeModal(true)}
 				className="w-full"
-				disabled={loading}
+				disabled={customDomainMutation.isPending}
 				variant="blue"
 			>
 				Upgrade to Pro
@@ -56,8 +68,8 @@ export default function CustomDomainPage() {
 			<Button
 				type="button"
 				variant="dark"
-				spinner={loading}
-				disabled={loading}
+				spinner={customDomainMutation.isPending}
+				disabled={customDomainMutation.isPending}
 				className="mx-auto w-full"
 				onClick={handleSubmit}
 			>
