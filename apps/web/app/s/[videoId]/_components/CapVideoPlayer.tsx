@@ -4,7 +4,7 @@ import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useQuery } from "@tanstack/react-query";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
@@ -105,50 +105,60 @@ export function CapVideoPlayer({
 	// if the video comes back from S3, just ignore the upload progress.
 	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
+	const isUploadProgressPending = uploadProgress?.status === "fetching";
 
 	const resolvedSrc = useQuery({
 		queryKey: ["resolvedSrc", videoSrc],
-		queryFn: async () => {
-			try {
-				const timestamp = Date.now();
-				const urlWithTimestamp = videoSrc.includes("?")
-					? `${videoSrc}&_t=${timestamp}`
-					: `${videoSrc}?_t=${timestamp}`;
+		queryFn:
+			isUploadProgressPending || isUploading
+				? skipToken
+				: async () => {
+						try {
+							const timestamp = Date.now();
+							const urlWithTimestamp = videoSrc.includes("?")
+								? `${videoSrc}&_t=${timestamp}`
+								: `${videoSrc}?_t=${timestamp}`;
 
-				const response = await fetch(urlWithTimestamp, {
-					method: "GET",
-					headers: { range: "bytes=0-0" },
-				});
-				const finalUrl = response.redirected ? response.url : urlWithTimestamp;
+							const response = await fetch(urlWithTimestamp, {
+								method: "GET",
+								headers: { range: "bytes=0-0" },
+							});
+							const finalUrl = response.redirected
+								? response.url
+								: urlWithTimestamp;
 
-				// Check if the resolved URL is from a CORS-incompatible service
-				const isCloudflareR2 = finalUrl.includes(".r2.cloudflarestorage.com");
-				const isS3 =
-					finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
-				const isCorsIncompatible = isCloudflareR2 || isS3;
+							// Check if the resolved URL is from a CORS-incompatible service
+							const isCloudflareR2 = finalUrl.includes(
+								".r2.cloudflarestorage.com",
+							);
+							const isS3 =
+								finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
+							const isCorsIncompatible = isCloudflareR2 || isS3;
 
-				let supportsCrossOrigin = enableCrossOrigin;
+							let supportsCrossOrigin = enableCrossOrigin;
 
-				// Set CORS based on URL compatibility BEFORE video element is created
-				if (isCorsIncompatible) {
-					console.log(
-						"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
-						finalUrl,
-					);
-					supportsCrossOrigin = false;
-				}
+							// Set CORS based on URL compatibility BEFORE video element is created
+							if (isCorsIncompatible) {
+								console.log(
+									"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
+									finalUrl,
+								);
+								supportsCrossOrigin = false;
+							}
 
-				return { url: finalUrl, supportsCrossOrigin };
-			} catch (error) {
-				console.error("CapVideoPlayer: Error fetching new video URL:", error);
-				const timestamp = Date.now();
-				const fallbackUrl = videoSrc.includes("?")
-					? `${videoSrc}&_t=${timestamp}`
-					: `${videoSrc}?_t=${timestamp}`;
-				return { fallbackUrl, supportsCrossOrigin: enableCrossOrigin };
-			}
-		},
-		enabled: !isUploading && uploadProgressRaw?.status !== "fetching",
+							return { url: finalUrl, supportsCrossOrigin };
+						} catch (error) {
+							console.error(
+								"CapVideoPlayer: Error fetching new video URL:",
+								error,
+							);
+							const timestamp = Date.now();
+							const fallbackUrl = videoSrc.includes("?")
+								? `${videoSrc}&_t=${timestamp}`
+								: `${videoSrc}?_t=${timestamp}`;
+							return { fallbackUrl, supportsCrossOrigin: enableCrossOrigin };
+						}
+					},
 	});
 
 	const reloadVideo = useCallback(async () => {
