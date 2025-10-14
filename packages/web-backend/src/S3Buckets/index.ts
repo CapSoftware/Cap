@@ -1,5 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
+import { fromContainerMetadata, fromSSO } from "@aws-sdk/credential-providers";
 import { decrypt } from "@cap/database/crypto";
 import type { S3Bucket, User } from "@cap/web-domain";
 import { Config, Effect, Layer, Option } from "effect";
