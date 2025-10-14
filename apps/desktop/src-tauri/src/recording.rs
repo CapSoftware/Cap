@@ -665,7 +665,7 @@ pub async fn start_recording(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -678,7 +678,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(state))]
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -691,7 +691,7 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
@@ -708,7 +708,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app, state))]
 pub async fn restart_recording(
     app: AppHandle,
     state: MutableState<'_, App>,
@@ -730,7 +730,7 @@ pub async fn restart_recording(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app, state))]
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let recording_data = {
         let mut app_state = state.write().await;

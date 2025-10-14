@@ -42,7 +42,7 @@ pub struct DisplayInformation {
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(state))]
+#[instrument(skip(app, state))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
@@ -103,7 +103,7 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {

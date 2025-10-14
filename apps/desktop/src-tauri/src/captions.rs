@@ -716,11 +716,11 @@ pub async fn transcribe_audio(
 /// Function to save caption data to a file
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn save_captions(
+    app: AppHandle,
     video_id: String,
     captions: CaptionData,
-    app: AppHandle,
 ) -> Result<(), String> {
     tracing::info!("Saving captions for video_id: {}", video_id);
 
@@ -971,10 +971,10 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
 /// Function to load caption data from a file
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn load_captions(
-    video_id: String,
     app: AppHandle,
+    video_id: String,
 ) -> Result<Option<CaptionData>, String> {
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let captions_path = captions_dir.join("captions.json");
@@ -1049,7 +1049,7 @@ impl DownloadProgress {
 /// Helper function to download a Whisper model from Hugging Face Hub
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(window))]
 pub async fn download_whisper_model(
     window: Window,
     model_name: String,
@@ -1194,15 +1194,15 @@ fn format_srt_time(seconds: f64) -> String {
 /// Export captions to an SRT file
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub async fn export_captions_srt(
-    video_id: String,
     app: AppHandle,
+    video_id: String,
 ) -> Result<Option<PathBuf>, String> {
     tracing::info!("Starting SRT export for video_id: {}", video_id);
 
     // Load captions
-    let captions = match load_captions(video_id.clone(), app.clone()).await? {
+    let captions = match load_captions(app.clone(), video_id.clone()).await? {
         Some(c) => {
             tracing::info!("Found {} caption segments to export", c.segments.len());
             c

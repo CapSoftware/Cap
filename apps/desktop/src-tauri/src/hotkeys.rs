@@ -181,7 +181,7 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
 
 #[tauri::command(async)]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) -> Result<(), ()> {
     let global_shortcut = app.global_shortcut();
     let state = app.state::<HotkeysState>();

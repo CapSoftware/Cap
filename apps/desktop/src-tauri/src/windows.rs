@@ -816,7 +816,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(window))]
 pub fn set_theme(window: tauri::Window, theme: AppTheme) {
     let _ = window.set_theme(match theme {
         AppTheme::System => None,
@@ -833,7 +833,7 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(_window))]
 pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
     position_traffic_lights_impl(
@@ -883,7 +883,7 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label) {
@@ -966,6 +966,7 @@ impl MonitorExt for Display {
 
 #[specta::specta]
 #[tauri::command(async)]
+#[instrument(skip(_window))]
 pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     #[cfg(target_os = "macos")]
     {

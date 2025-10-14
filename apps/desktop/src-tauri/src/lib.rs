@@ -130,12 +130,6 @@ pub struct App {
     server_url: String,
 }
 
-impl fmt::Debug for App {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("App").finish()
-    }
-}
-
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum VideoType {
@@ -227,7 +221,7 @@ impl App {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let mic_feed = state.read().await.mic_feed.clone();
 
@@ -253,7 +247,7 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app_handle, state))]
 async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
@@ -397,7 +391,7 @@ struct CurrentRecording {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(state))]
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
@@ -585,7 +579,7 @@ async fn create_screenshot(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
     println!("Attempting to copy file from {src} to {dst}");
 
@@ -728,7 +722,7 @@ async fn copy_screenshot_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(_app))]
 async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
 
@@ -823,7 +817,7 @@ struct SerializedEditorInstance {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(window))]
 async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
     let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
         return Err("Invalid window".to_string());
@@ -875,7 +869,7 @@ async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> R
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(clipboard))]
+#[instrument(skip(app, clipboard))]
 async fn copy_video_to_clipboard(
     app: AppHandle,
     clipboard: MutableState<'_, ClipboardContext>,
@@ -973,7 +967,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 fn close_recordings_overlay_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -993,7 +987,7 @@ fn close_recordings_overlay_window(app: AppHandle) {
 
 #[tauri::command(async)]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(_app))]
 fn focus_captures_panel(_app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -1084,7 +1078,7 @@ pub enum UploadMode {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(channel))]
+#[instrument(skip(app, channel))]
 async fn upload_exported_video(
     app: AppHandle,
     path: PathBuf,
@@ -1209,7 +1203,7 @@ async fn upload_exported_video(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(clipboard))]
+#[instrument(skip(app, clipboard))]
 async fn upload_screenshot(
     app: AppHandle,
     clipboard: MutableState<'_, ClipboardContext>,
@@ -1259,7 +1253,7 @@ async fn upload_screenshot(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app, _state))]
 async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -1388,7 +1382,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn save_file_dialog(
     app: AppHandle,
     file_name: String,
@@ -1520,7 +1514,7 @@ fn get_recording_meta(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
     let recordings_dir = recordings_path(&app);
 
@@ -1567,7 +1561,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, String> {
     let screenshots_dir = screenshots_path(&app);
 
@@ -1611,7 +1605,7 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, Str
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     println!("Checking upgraded status and updating...");
 
@@ -1674,7 +1668,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app)
         && settings.disable_auto_open_links
@@ -1690,7 +1684,7 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(_app))]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -1713,7 +1707,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(_app))]
 async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     let bundle_id = "com.apple.Terminal";
@@ -1732,7 +1726,7 @@ async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn is_camera_window_open(app: AppHandle) -> bool {
     CapWindowId::Camera.get(&app).is_some()
 }
@@ -1788,7 +1782,7 @@ async fn get_system_audio_waveforms(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(editor_instance))]
+#[instrument(skip(app, editor_instance, window))]
 async fn editor_delete_project(
     app: tauri::AppHandle,
     editor_instance: WindowEditorInstance,
@@ -1811,7 +1805,7 @@ async fn editor_delete_project(
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
     let _ = window.show(&app).await;
     Ok(())
@@ -1891,7 +1885,7 @@ async fn check_notification_permissions(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
     app.write().await.server_url = server_url;
     Ok(())
@@ -1899,7 +1893,7 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn set_camera_preview_state(
     app: MutableState<'_, App>,
     state: CameraPreviewState,
@@ -1915,7 +1909,7 @@ async fn set_camera_preview_state(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, String> {
     let app = app.read().await.camera_feed.clone();
 
@@ -1930,7 +1924,7 @@ async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, 
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -2696,7 +2690,7 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument]
+#[instrument(skip(app))]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
 }

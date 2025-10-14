@@ -25,7 +25,7 @@ pub async fn set_fake_window_bounds(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(state))]
+#[instrument(skip(state, window))]
 pub async fn remove_fake_window(
     window: tauri::Window,
     name: String,
