@@ -7,8 +7,8 @@ import { Effect, Option } from "effect";
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 
-export class OnboardingService extends Effect.Service<OnboardingService>()(
-	"OnboardingService",
+export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
+	"UsersOnboarding",
 	{
 		effect: Effect.gen(function* () {
 			const db = yield* Database;
@@ -169,6 +169,26 @@ export class OnboardingService extends Effect.Service<OnboardingService>()(
 									...user.onboardingSteps,
 									inviteTeam: true,
 								},
+							})
+							.where(Dz.eq(Db.users.id, currentUser.id)),
+					);
+				}),
+
+				download: Effect.fn("Onboarding.download")(function* () {
+					const currentUser = yield* CurrentUser;
+
+					const [user] = yield* db.use((db) =>
+						db
+							.select()
+							.from(Db.users)
+							.where(Dz.eq(Db.users.id, currentUser.id)),
+					);
+
+					yield* db.use((db) =>
+						db
+							.update(Db.users)
+							.set({
+								onboardingSteps: { ...user.onboardingSteps, download: true },
 								onboarding_completed_at: new Date(),
 							})
 							.where(Dz.eq(Db.users.id, currentUser.id)),

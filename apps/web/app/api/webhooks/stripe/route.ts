@@ -241,44 +241,16 @@ export const POST = async (req: Request) => {
 					inviteQuota,
 				});
 				console.log("Session metadata:", session.metadata);
-				console.log("Is onboarding:", isOnBoarding);
+				console.log("Is onboarding:", isOnBoarding)
 
-				const updateData: {
-					stripeSubscriptionId: string;
-					stripeSubscriptionStatus: string;
-					stripeCustomerId: string;
-					inviteQuota: number;
-					onboardingSteps?: {
-						welcome: boolean;
-						organizationSetup: boolean;
-						customDomain: boolean;
-						inviteTeam: boolean;
-					} | null;
-					onboarding_completed_at?: Date;
-				} = {
+
+				await db().update(users).set({
 					stripeSubscriptionId: session.subscription as string,
 					stripeSubscriptionStatus: subscription.status,
 					stripeCustomerId: customer.id,
 					inviteQuota: inviteQuota,
 					onboarding_completed_at: isOnBoarding ? new Date() : undefined,
-				};
-
-				if (isOnBoarding) {
-					updateData.onboardingSteps = {
-						welcome: true,
-						organizationSetup: true,
-						customDomain: true,
-						inviteTeam: true,
-					};
-				}
-
-				console.log("Update data:", updateData);
-
-				await db().update(users).set(updateData).where(eq(users.id, dbUser.id));
-
-				revalidatePath("/dashboard");
-				revalidatePath("/onboarding", "layout");
-				revalidatePath("/");
+				}).where(eq(users.id, dbUser.id));
 
 				console.log("Successfully updated user in database");
 
@@ -329,178 +301,177 @@ export const POST = async (req: Request) => {
 				}
 			}
 
-			if (event.type === "customer.subscription.updated") {
-				console.log("Processing customer.subscription.updated event");
-				const subscription = event.data.object as Stripe.Subscription;
-				console.log("Subscription data:", {
-					id: subscription.id,
-					status: subscription.status,
-					customerId: subscription.customer,
-				});
+		if (event.type === "customer.subscription.updated") {
+			console.log("Processing customer.subscription.updated event");
+			const subscription = event.data.object as Stripe.Subscription;
+			console.log("Subscription data:", {
+				id: subscription.id,
+				status: subscription.status,
+				customerId: subscription.customer,
+			});
 
-				const customer = await stripe().customers.retrieve(
-					subscription.customer as string,
-				);
-				console.log("Retrieved customer:", {
-					id: customer.id,
-					email: "email" in customer ? customer.email : undefined,
-					metadata: "metadata" in customer ? customer.metadata : undefined,
-				});
+			const customer = await stripe().customers.retrieve(
+				subscription.customer as string,
+			);
+			console.log("Retrieved customer:", {
+				id: customer.id,
+				email: "email" in customer ? customer.email : undefined,
+				metadata: "metadata" in customer ? customer.metadata : undefined,
+			});
 
-				let foundUserId: User.UserId | undefined;
-				let customerEmail: string | null | undefined;
+			let foundUserId: User.UserId | undefined;
+			let customerEmail: string | null | undefined;
 
-				if ("metadata" in customer) {
-					foundUserId = customer.metadata.userId
-						? User.UserId.make(customer.metadata.userId)
-						: undefined;
-				}
-				if ("email" in customer) {
-					customerEmail = customer.email;
-				}
-
-				console.log("Starting user lookup with:", {
-					foundUserId,
-					customerEmail,
-				});
-
-				const dbUser = await findUserWithRetry(
-					customerEmail as string,
-					foundUserId,
-				);
-
-				if (!dbUser) {
-					console.log(
-						"No user found after all retries. Returning 202 to allow retry.",
-					);
-					return new Response("User not found, webhook will be retried", {
-						status: 202,
-					});
-				}
-
-				console.log("Successfully found user:", {
-					userId: dbUser.id,
-					email: dbUser.email,
-					name: dbUser.name,
-				});
-
-				const subscriptions = await stripe().subscriptions.list({
-					customer: customer.id,
-					status: "active",
-				});
-
-				console.log("Retrieved all active subscriptions:", {
-					count: subscriptions.data.length,
-				});
-
-				const inviteQuota = subscriptions.data.reduce((total, sub) => {
-					return (
-						total +
-						sub.items.data.reduce(
-							(subTotal, item) => subTotal + (item.quantity || 1),
-							0,
-						)
-					);
-				}, 0);
-
-				console.log("Updating user in database with:", {
-					subscriptionId: subscription.id,
-					status: subscription.status,
-					customerId: customer.id,
-					inviteQuota,
-				});
-
-				await db()
-					.update(users)
-					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
-						stripeCustomerId: customer.id,
-						inviteQuota: inviteQuota,
-					})
-					.where(eq(users.id, dbUser.id));
-
-				console.log(
-					"Successfully updated user in database with new invite quota:",
-					inviteQuota,
-				);
+			if ("metadata" in customer) {
+				foundUserId = customer.metadata.userId
+					? User.UserId.make(customer.metadata.userId)
+					: undefined;
+			}
+			if ("email" in customer) {
+				customerEmail = customer.email;
 			}
 
-			if (event.type === "customer.subscription.deleted") {
-				const subscription = event.data.object as Stripe.Subscription;
-				const customer = await stripe().customers.retrieve(
-					subscription.customer as string,
-				);
-				let foundUserId: User.UserId | undefined;
-				if ("metadata" in customer) {
-					foundUserId = customer.metadata.userId
-						? User.UserId.make(customer.metadata.userId)
-						: undefined;
-				}
-				if (!foundUserId) {
-					console.log("No user found in metadata, checking customer email");
-					if ("email" in customer && customer.email) {
-						const userByEmail = await db()
-							.select()
-							.from(users)
-							.where(eq(users.email, customer.email))
-							.limit(1);
+			console.log("Starting user lookup with:", {
+				foundUserId,
+				customerEmail,
+			});
 
-						if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
-							foundUserId = userByEmail[0].id;
-							console.log(`User found by email: ${foundUserId}`);
-							await stripe().customers.update(customer.id, {
-								metadata: { userId: foundUserId },
-							});
-						} else {
-							console.log("No user found by email");
-							return new Response("No user found", {
-								status: 400,
-							});
-						}
+			const dbUser = await findUserWithRetry(
+				customerEmail as string,
+				foundUserId,
+			);
+
+			if (!dbUser) {
+				console.log(
+					"No user found after all retries. Returning 202 to allow retry.",
+				);
+				return new Response("User not found, webhook will be retried", {
+					status: 202,
+				});
+			}
+
+			console.log("Successfully found user:", {
+				userId: dbUser.id,
+				email: dbUser.email,
+				name: dbUser.name,
+			});
+
+			const subscriptions = await stripe().subscriptions.list({
+				customer: customer.id,
+				status: "active",
+			});
+
+			console.log("Retrieved all active subscriptions:", {
+				count: subscriptions.data.length,
+			});
+
+			const inviteQuota = subscriptions.data.reduce((total, sub) => {
+				return (
+					total +
+					sub.items.data.reduce(
+						(subTotal, item) => subTotal + (item.quantity || 1),
+						0,
+					)
+				);
+			}, 0);
+
+			console.log("Updating user in database with:", {
+				subscriptionId: subscription.id,
+				status: subscription.status,
+				customerId: customer.id,
+				inviteQuota,
+			});
+
+			await db()
+				.update(users)
+				.set({
+					stripeSubscriptionId: subscription.id,
+					stripeSubscriptionStatus: subscription.status,
+					stripeCustomerId: customer.id,
+					inviteQuota: inviteQuota,
+				})
+				.where(eq(users.id, dbUser.id));
+
+			console.log(
+				"Successfully updated user in database with new invite quota:",
+				inviteQuota,
+			);
+		}
+
+		if (event.type === "customer.subscription.deleted") {
+			const subscription = event.data.object as Stripe.Subscription;
+			const customer = await stripe().customers.retrieve(
+				subscription.customer as string,
+			);
+			let foundUserId: User.UserId | undefined;
+			if ("metadata" in customer) {
+				foundUserId = customer.metadata.userId
+					? User.UserId.make(customer.metadata.userId)
+					: undefined;
+			}
+			if (!foundUserId) {
+				console.log("No user found in metadata, checking customer email");
+				if ("email" in customer && customer.email) {
+					const userByEmail = await db()
+						.select()
+						.from(users)
+						.where(eq(users.email, customer.email))
+						.limit(1);
+
+					if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
+						foundUserId = userByEmail[0].id;
+						console.log(`User found by email: ${foundUserId}`);
+						await stripe().customers.update(customer.id, {
+							metadata: { userId: foundUserId },
+						});
 					} else {
-						console.log("No email found for customer");
+						console.log("No user found by email");
 						return new Response("No user found", {
 							status: 400,
 						});
 					}
+				} else {
+					console.log("No email found for customer");
+					return new Response("No user found", {
+						status: 400,
+					});
 				}
-
-				const userResult = await db()
-					.select()
-					.from(users)
-					.where(eq(users.id, foundUserId));
-
-				if (!userResult || userResult.length === 0) {
-					console.log("No user found in database");
-					return new Response("No user found", { status: 400 });
-				}
-
-				await db()
-					.update(users)
-					.set({
-						stripeSubscriptionId: subscription.id,
-						stripeSubscriptionStatus: subscription.status,
-						inviteQuota: 1,
-					})
-					.where(eq(users.id, foundUserId));
-
-				console.log("User updated successfully", {
-					foundUserId,
-					inviteQuota: 1,
-				});
 			}
 
-			return NextResponse.json({ received: true });
-		} catch (error) {
-			console.error("❌ Webhook handler failed:", error);
-			return new Response(
-				'Webhook error: "Webhook handler failed. View logs."',
-				{ status: 400 },
-			);
-		}
-	}
+			const userResult = await db()
+				.select()
+				.from(users)
+				.where(eq(users.id, foundUserId));
 
-	console.log(`Unrecognised event: ${event.type}`);
-	return new Response(`Unrecognised event: ${event.type}`, { status: 400 });
+			if (!userResult || userResult.length === 0) {
+				console.log("No user found in database");
+				return new Response("No user found", { status: 400 });
+			}
+
+			await db()
+				.update(users)
+				.set({
+					stripeSubscriptionId: subscription.id,
+					stripeSubscriptionStatus: subscription.status,
+					inviteQuota: 1,
+				})
+				.where(eq(users.id, foundUserId));
+
+			console.log("User updated successfully", {
+				foundUserId,
+				inviteQuota: 1,
+			});
+		}
+
+		return NextResponse.json({ received: true });
+	}
+	catch (error)
+	console.error("❌ Webhook handler failed:", error);
+	return new Response('Webhook error: "Webhook handler failed. View logs."', {
+		status: 400,
+	});
 };
+
+console.log(`Unrecognised event: ${event.type}`);
+return new Response(`Unrecognised event: ${event.type}`, { status: 400 });
+}

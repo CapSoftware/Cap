@@ -11,8 +11,7 @@ import type Stripe from "stripe";
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding, currentOnboardingStep } =
-		await request.json();
+	const { priceId, quantity, isOnBoarding } = await request.json();
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -69,7 +68,7 @@ export async function POST(request: NextRequest) {
 			mode: "subscription",
 			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
 			cancel_url: isOnBoarding
-				? `${serverEnv().WEB_URL}/onboarding/${currentOnboardingStep}`
+				? `${serverEnv().WEB_URL}/onboarding`
 				: `${serverEnv().WEB_URL}/pricing`,
 			allow_promotion_codes: true,
 			metadata: {

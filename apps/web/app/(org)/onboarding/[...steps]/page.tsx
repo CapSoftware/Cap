@@ -1,4 +1,5 @@
 import { CustomDomainPage } from "../components/CustomDomainPage";
+import { DownloadPage } from "../components/Download";
 import { InviteTeamPage } from "../components/InviteTeamPage";
 import { OrganizationSetupPage } from "../components/OrganizationSetupPage";
 import { WelcomePage } from "../components/WelcomePage";
@@ -21,6 +22,8 @@ export default async function OnboardingStepPage({
 			return <CustomDomainPage />;
 		case "invite-team":
 			return <InviteTeamPage />;
+		case "download":
+			return <DownloadPage />;
 		default:
 			return null;
 	}

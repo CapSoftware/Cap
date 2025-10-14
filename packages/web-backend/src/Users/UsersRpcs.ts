@@ -1,12 +1,10 @@
 import { InternalError, User } from "@cap/web-domain";
 import { Effect, Layer } from "effect";
-
-import { OnboardingService } from "../Onboarding/index.ts";
+import { UsersOnboarding } from "./UsersOnboarding";
 
 export const UsersRpcsLive = User.UserRpcs.toLayer(
 	Effect.gen(function* () {
-		const onboarding = yield* OnboardingService;
-
+		const onboarding = yield* UsersOnboarding;
 		return {
 			UserCompleteOnboardingStep: (payload) =>
 				Effect.gen(function* () {
@@ -30,6 +28,10 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						case "inviteTeam":
 							yield* onboarding.inviteTeam();
 							return { step: "inviteTeam" as const, data: undefined };
+
+						case "download":
+							yield* onboarding.download();
+							return { step: "download" as const, data: undefined };
 					}
 				}).pipe(
 					Effect.catchTag(
@@ -39,4 +41,4 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 				),
 		};
 	}),
-).pipe(Layer.provide(OnboardingService.Default));
+).pipe(Layer.provide(UsersOnboarding.Default));

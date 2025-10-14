@@ -5,6 +5,7 @@ import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
 import NumberFlow from "@number-flow/react";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	BarChart3,
@@ -28,7 +29,7 @@ interface UpgradeModalProps {
 	open: boolean;
 	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
-	currentOnboardingStep?: "custom-domain" | "invite-team";
+	onCheckout?: (e: React.MouseEvent<HTMLButtonElement>) => Promise<void>;
 }
 
 const modalVariants = {
@@ -62,11 +63,10 @@ export const UpgradeModal = ({
 	open,
 	onOpenChange,
 	onboarding = false,
-	currentOnboardingStep = "custom-domain",
+	onCheckout,
 }: UpgradeModalProps) => {
 	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
 
-	const [proLoading, setProLoading] = useState(false);
 	const [isAnnual, setIsAnnual] = useState(true);
 	const [proQuantity, setProQuantity] = useState(1);
 	const { push } = useRouter();
@@ -139,8 +139,8 @@ export const UpgradeModal = ({
 		},
 	];
 
-	const planCheckout = async () => {
-		setProLoading(true);
+	const planCheckout = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
 
 		const planId = getProPlanId(isAnnual ? "yearly" : "monthly");
 
@@ -153,7 +153,6 @@ export const UpgradeModal = ({
 				priceId: planId,
 				quantity: proQuantity,
 				isOnBoarding: onboarding,
-				currentOnboardingStep: currentOnboardingStep,
 			}),
 		});
 		const data = await response.json();
@@ -170,12 +169,19 @@ export const UpgradeModal = ({
 			onOpenChange(false);
 		}
 
+		await onCheckout?.(e);
+
 		if (data.url) {
 			window.location.href = data.url;
 		}
-
-		setProLoading(false);
 	};
+
+	const proCheckoutMutation = useMutation({
+		mutationFn: planCheckout,
+		onError: () => {
+			toast.error("Something went wrong. Please try again.");
+		},
+	});
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -272,11 +278,13 @@ export const UpgradeModal = ({
 
 									<Button
 										variant="blue"
-										onClick={planCheckout}
+										onClick={(e) => proCheckoutMutation.mutate(e)}
 										className="mt-5 w-full max-w-sm h-14 text-lg"
-										disabled={proLoading}
+										disabled={proCheckoutMutation.isPending}
 									>
-										{proLoading ? "Loading..." : "Upgrade to Cap Pro"}
+										{proCheckoutMutation.isPending
+											? "Loading..."
+											: "Upgrade to Cap Pro"}
 									</Button>
 									<button
 										type="button"

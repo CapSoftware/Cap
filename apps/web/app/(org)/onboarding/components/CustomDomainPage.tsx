@@ -77,7 +77,7 @@ export function CustomDomainPage() {
 			</Button>
 
 			<UpgradeModal
-				currentOnboardingStep="custom-domain"
+				onCheckout={handleSubmit}
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}

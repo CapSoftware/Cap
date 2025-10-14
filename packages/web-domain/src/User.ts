@@ -37,6 +37,10 @@ export const OnboardingStepPayload = Schema.Union(
 		step: Schema.Literal("inviteTeam"),
 		data: Schema.Void,
 	}),
+	Schema.Struct({
+		step: Schema.Literal("download"),
+		data: Schema.Void,
+	}),
 );
 
 export const OnboardingStepResult = Schema.Union(
@@ -56,17 +60,17 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 	Schema.Struct({
 		step: Schema.Literal("inviteTeam"),
+	}),
+	Schema.Struct({
+		step: Schema.Literal("download"),
 		data: Schema.Void,
 	}),
 );
 
-export class UserCompleteOnboardingStep extends Rpc.make(
-	"UserCompleteOnboardingStep",
-	{
+export class UserRpcs extends RpcGroup.make(
+	Rpc.make("UserCompleteOnboardingStep", {
 		payload: OnboardingStepPayload,
 		success: OnboardingStepResult,
 		error: InternalError,
-	},
-).middleware(RpcAuthMiddleware) {}
-
-export class UserRpcs extends RpcGroup.make(UserCompleteOnboardingStep) {}
+	}).middleware(RpcAuthMiddleware),
+) {}

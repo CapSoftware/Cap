@@ -9,49 +9,38 @@ export default async function OnboardingStepLayout({
 	params: Promise<{ steps: string[] }>;
 }) {
 	const user = await getCurrentUser();
-	const steps = user?.onboardingSteps || {};
-	const currentStep = (await params).steps?.[0];
 
-	switch (currentStep) {
-		case "welcome":
-			if (steps.welcome) {
-				if (!steps.organizationSetup)
-					redirect("/onboarding/organization-setup");
-				if (!steps.customDomain) redirect("/onboarding/custom-domain");
-				if (!steps.inviteTeam) redirect("/onboarding/invite-team");
-				redirect("/dashboard/caps");
-			}
-			break;
+	if (!user) {
+		redirect("/login");
+	}
 
-		case "organization-setup":
-			if (!steps.welcome) redirect("/onboarding/welcome");
-			if (steps.organizationSetup) {
-				if (!steps.customDomain) redirect("/onboarding/custom-domain");
-				if (!steps.inviteTeam) redirect("/onboarding/invite-team");
-				redirect("/dashboard/caps");
-			}
-			break;
+	const steps = user.onboardingSteps || {};
+	const currentStep = (await params).steps?.[0] ?? "welcome";
 
-		case "custom-domain":
-			if (!steps.welcome) redirect("/onboarding/welcome");
-			if (!steps.organizationSetup) redirect("/onboarding/organization-setup");
+	const ordered = [
+		"welcome",
+		"organization-setup",
+		"custom-domain",
+		"invite-team",
+		"download",
+	] as const;
+	const isComplete = (s: (typeof ordered)[number]) =>
+		s === "welcome"
+			? Boolean(steps.welcome && user.name)
+			: s === "organization-setup"
+				? Boolean(steps.organizationSetup)
+				: s === "custom-domain"
+					? Boolean(steps.customDomain)
+					: s === "invite-team"
+						? Boolean(steps.inviteTeam)
+						: Boolean(steps.download);
 
-			if (steps.customDomain) {
-				if (!steps.inviteTeam) redirect("/onboarding/invite-team");
-				redirect("/dashboard/caps");
-			}
-			break;
+	if (isComplete("download")) redirect("/dashboard/caps");
 
-		case "invite-team":
-			if (!steps.welcome) redirect("/onboarding/welcome");
-			if (!steps.organizationSetup) redirect("/onboarding/organization-setup");
-			if (!steps.customDomain) redirect("/onboarding/custom-domain");
+	const firstIncomplete = ordered.find((s) => !isComplete(s)) ?? "download";
 
-			if (steps.inviteTeam) redirect("/dashboard/caps");
-			break;
-
-		default:
-			redirect("/onboarding/welcome");
+	if (currentStep !== firstIncomplete) {
+		redirect(`/onboarding/${firstIncomplete}`);
 	}
 
 	return children;

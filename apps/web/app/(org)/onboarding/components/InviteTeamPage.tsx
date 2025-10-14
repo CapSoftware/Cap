@@ -5,6 +5,7 @@ import { getProPlanId } from "@cap/utils";
 import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
@@ -20,7 +21,6 @@ export function InviteTeamPage() {
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
 	const router = useRouter();
-	const [proLoading, setProLoading] = useState(false);
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
 		homepageCopy.pricing.pro.pricing.monthly;
@@ -49,7 +49,7 @@ export function InviteTeamPage() {
 			}),
 		onSuccess: () => {
 			startTransition(() => {
-				router.push("/dashboard/caps");
+				router.push("/onboarding/download");
 				router.refresh();
 			});
 		},
@@ -63,12 +63,10 @@ export function InviteTeamPage() {
 		inviteTeamMutation.mutate();
 	};
 
-	const planCheckout = async (planId?: string) => {
+	const planCheckout = async (e: React.MouseEvent<HTMLButtonElement>) => {
+		e.preventDefault();
 		try {
-			setProLoading(true);
-			if (!planId) {
-				planId = getProPlanId(isAnnually ? "yearly" : "monthly");
-			}
+			const planId = getProPlanId(isAnnually ? "yearly" : "monthly");
 			const response = await fetch(`/api/settings/billing/subscribe`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -76,7 +74,6 @@ export function InviteTeamPage() {
 					priceId: planId,
 					quantity: users,
 					isOnBoarding: true,
-					currentOnboardingStep: "invite-team",
 				}),
 			});
 			if (!response.ok) {
@@ -88,15 +85,27 @@ export function InviteTeamPage() {
 				toast.success("You are already on the Cap Pro plan");
 				return;
 			}
+
+			await handleSubmit(e);
+
 			if (data.url) {
 				window.location.href = data.url;
 			}
-		} catch {
+		} catch (error) {
+			console.error("Plan checkout error:", error);
 			toast.error("Something went wrong. Please try again.");
 		} finally {
-			setProLoading(false);
+			planCheckoutMutation.mutate(e);
 		}
 	};
+
+	const planCheckoutMutation = useMutation({
+		mutationFn: (e: React.MouseEvent<HTMLButtonElement>) => planCheckout(e),
+		onError: (error) => {
+			console.error("Plan checkout error:", error);
+			toast.error("Something went wrong. Please try again.");
+		},
+	});
 
 	return (
 		<Base
@@ -222,9 +231,9 @@ export function InviteTeamPage() {
 				<Button
 					className="w-full"
 					variant="blue"
-					spinner={proLoading}
-					disabled={proLoading}
-					onClick={() => planCheckout()}
+					spinner={planCheckoutMutation.isPending}
+					disabled={planCheckoutMutation.isPending}
+					onClick={(e) => planCheckoutMutation.mutate(e)}
 				>
 					Get Started
 				</Button>
