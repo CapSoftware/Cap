@@ -51,7 +51,8 @@ export default $config({
 			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
 			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_HTTP.value },
+			{ key: "NEXT_PUBLIC_CAP_AWS_BUCKET", value: recordingsBucket.bucket },
+			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
 
 		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
@@ -180,7 +181,6 @@ export default $config({
 
 function Secrets() {
 	return {
-		DATABASE_URL_HTTP: new sst.Secret("DATABASE_URL_HTTP"),
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),

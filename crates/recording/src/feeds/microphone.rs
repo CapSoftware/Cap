@@ -106,8 +106,6 @@ impl MicrophoneFeed {
             host.default_input_device().and_then(get_usable_device)
         {
             device_map.insert(name, (device, config));
-        } else {
-            warn!("No default input device found or it's not usable");
         }
 
         match host.input_devices() {

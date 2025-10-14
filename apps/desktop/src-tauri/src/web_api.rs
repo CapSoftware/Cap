@@ -1,12 +1,43 @@
 use reqwest::StatusCode;
+use serde::Serialize;
+use specta::Type;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
-use tracing::error;
+use thiserror::Error;
+use tracing::{error, warn};
 
 use crate::{
     ArcLock,
-    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
+    auth::{AuthSecret, AuthStore},
 };
+
+#[derive(Error, Debug)]
+pub enum AuthedApiError {
+    #[error("User is not authenticated or credentials have expired!")]
+    InvalidAuthentication,
+    #[error("User needs to upgrade their account to use this feature!")]
+    UpgradeRequired,
+    #[error("AuthedApiError/AuthStore: {0}")]
+    AuthStore(String),
+    #[error("AuthedApiError/Request: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("AuthedApiError/Deserialization: {0}")]
+    Deserialization(#[from] serde_json::Error),
+    #[error("AuthedApiError/Other: {0}")]
+    Other(String),
+}
+
+impl From<&'static str> for AuthedApiError {
+    fn from(value: &'static str) -> Self {
+        AuthedApiError::Other(value.into())
+    }
+}
+
+impl From<String> for AuthedApiError {
+    fn from(value: String) -> Self {
+        AuthedApiError::Other(value)
+    }
+}
 
 async fn do_authed_request(
     auth: &AuthStore,
@@ -28,7 +59,7 @@ async fn do_authed_request(
         )
         .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"));
 
-    if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
+    if let Ok(s) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);
     }
 
@@ -40,7 +71,7 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
         &self,
         path: impl Into<String>,
         build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, String>;
+    ) -> Result<reqwest::Response, AuthedApiError>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
 }
@@ -50,26 +81,19 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         &self,
         path: impl Into<String>,
         build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, String> {
-        let Some(auth) = AuthStore::get(self.app_handle())? else {
-            println!("Not logged in");
-
-            AuthenticationInvalid.emit(self).ok();
-
-            return Err("Unauthorized".to_string());
+    ) -> Result<reqwest::Response, AuthedApiError> {
+        let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
+        else {
+            warn!("Not logged in");
+            return Err(AuthedApiError::InvalidAuthentication);
         };
 
         let url = self.make_app_url(path.into()).await;
-        let response = do_authed_request(&auth, build, url)
-            .await
-            .map_err(|e| e.to_string())?;
+        let response = do_authed_request(&auth, build, url).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
-
-            AuthenticationInvalid.emit(self).ok();
-
-            return Err("Unauthorized".to_string());
+            return Err(AuthedApiError::InvalidAuthentication);
         }
 
         Ok(response)

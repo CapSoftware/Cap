@@ -8,6 +8,7 @@ use tokio::sync::oneshot;
 #[cfg(target_os = "macos")]
 mod avassetreader;
 mod ffmpeg;
+mod frame_converter;
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 

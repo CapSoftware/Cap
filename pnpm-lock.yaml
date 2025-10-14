@@ -1003,6 +1003,9 @@ importers:
       effect:
         specifier: ^3.18.4
         version: 3.18.4
+      mysql2:
+        specifier: ^3.15.2
+        version: 3.15.2
       nanoid:
         specifier: ^5.0.4
         version: 5.1.5
@@ -11661,10 +11664,6 @@ packages:
   mux-embed@5.9.0:
     resolution: {integrity: sha512-wmunL3uoPhma/tWy8PrDPZkvJpXvSFBwbD3KkC4PG8Ztjfb1X3hRJwGUAQyRz7z99b/ovLm2UTTitrkvStjH4w==}
 
-  mysql2@3.14.1:
-    resolution: {integrity: sha512-7ytuPQJjQB8TNAYX/H2yhL+iQOnIBjAMam361R7UAL0lOVXWjtdrmoL9HYKqKoLp/8UUTRcvo1QPvK9KL7wA8w==}
-    engines: {node: '>= 8.0'}
-
   mysql2@3.15.2:
     resolution: {integrity: sha512-kFm5+jbwR5mC+lo+3Cy46eHiykWSpUtTLOH3GE+AR7GeLq8PgfJcvpMiyVWk9/O53DjQsqm6a3VOOfq7gYWFRg==}
     engines: {node: '>= 8.0'}
@@ -17981,7 +17980,7 @@ snapshots:
   '@mattrax/mysql-planetscale@0.0.3':
     dependencies:
       '@planetscale/database': 1.19.0
-      mysql2: 3.14.1
+      mysql2: 3.15.2
 
   '@mdx-js/esbuild@3.1.0(acorn@8.15.0)(esbuild@0.25.5)':
     dependencies:
@@ -27475,18 +27474,6 @@ snapshots:
   mustache@4.2.0: {}
 
   mux-embed@5.9.0: {}
-
-  mysql2@3.14.1:
-    dependencies:
-      aws-ssl-profiles: 1.1.2
-      denque: 2.1.0
-      generate-function: 2.3.1
-      iconv-lite: 0.6.3
-      long: 5.3.2
-      lru.min: 1.1.2
-      named-placeholders: 1.1.3
-      seq-queue: 0.0.5
-      sqlstring: 2.3.3
 
   mysql2@3.15.2:
     dependencies:
