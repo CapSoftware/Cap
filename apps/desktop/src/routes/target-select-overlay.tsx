@@ -7,6 +7,7 @@ import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
+import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -24,6 +25,7 @@ import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
@@ -811,11 +813,14 @@ function RecordingControls(props: {
 							return;
 						}
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
+						handleRecordingResult(
+							commands.startRecording({
+								capture_target: props.target,
+								mode: rawOptions.mode,
+								capture_system_audio: rawOptions.captureSystemAudio,
+							}),
+							setOptions,
+						);
 					}}
 				>
 					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">

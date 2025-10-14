@@ -64,7 +64,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
-        let (mut video_tx, video_rx) = flume::bounded(4);
+        let (video_tx, video_rx) = flume::bounded(4);
         let (mut audio_tx, audio_rx) = if self.system_audio {
             let (tx, rx) = mpsc::channel(32);
             (Some(tx), Some(rx))
@@ -75,9 +75,34 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         let display = Display::from_id(&self.config.display)
             .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
+        let excluded_sc_windows = if self.excluded_windows.is_empty() {
+            Vec::new()
+        } else {
+            let mut collected = Vec::new();
+
+            for window_id in &self.excluded_windows {
+                let Some(window) = Window::from_id(window_id) else {
+                    continue;
+                };
+
+                if let Some(sc_window) = window
+                    .raw_handle()
+                    .as_sc(self.shareable_content.clone())
+                    .await
+                {
+                    collected.push(sc_window);
+                }
+            }
+
+            collected
+        };
+
         let content_filter = display
             .raw_handle()
-            .as_content_filter(self.shareable_content.clone())
+            .as_content_filter_excluding_windows(
+                self.shareable_content.clone(),
+                excluded_sc_windows,
+            )
             .await
             .ok_or_else(|| SourceError::AsContentFilter)?;
 

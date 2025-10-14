@@ -105,6 +105,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 					<Image
 						ref={imageRef}
 						src={thumbnailUrl.data}
+						unoptimized
 						fill={true}
 						sizes="(max-width: 768px) 100vw, 33vw"
 						alt={alt}

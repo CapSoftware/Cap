@@ -31,7 +31,7 @@ export async function removeOrganizationInvite(
 		throw new Error("Only the owner can remove organization invites");
 	}
 
-	const result = await db()
+	const [result] = await db()
 		.delete(organizationInvites)
 		.where(
 			and(
@@ -40,9 +40,7 @@ export async function removeOrganizationInvite(
 			),
 		);
 
-	if (result.rowsAffected === 0) {
-		throw new Error("Invite not found");
-	}
+	if (result.affectedRows === 0) throw new Error("Invite not found");
 
 	revalidatePath("/dashboard/settings/organization");
 
