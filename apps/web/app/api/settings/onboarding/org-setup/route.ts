@@ -15,12 +15,17 @@ import { uploadOrganizationIcon } from "@/actions/organization/upload-organizati
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	const formData = await request.formData();
-	const organizationName = String(formData.get("organizationName") || "");
+	const organizationName = String(formData.get("organizationName"));
 	const organizationIcon = (formData.get("icon") as FormDataEntryValue) || null;
 
 	if (!user) {
 		console.error("User not found");
 		return NextResponse.json({ error: true }, { status: 401 });
+	}
+
+	if (!organizationName || organizationName.length === 0) {
+		console.error("Organization name is required");
+		return NextResponse.json({ error: true }, { status: 400 });
 	}
 
 	const organizationId = Organisation.OrganisationId.make(nanoId());
