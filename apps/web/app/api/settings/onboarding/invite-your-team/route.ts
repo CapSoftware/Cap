@@ -18,9 +18,7 @@ export async function POST() {
 			.update(users)
 			.set({
 				onboardingSteps: {
-					welcome: true,
-					organizationSetup: true,
-					customDomain: true,
+					...user.onboardingSteps,
 					inviteTeam: true,
 				},
 				onboarding_completed_at: new Date(),

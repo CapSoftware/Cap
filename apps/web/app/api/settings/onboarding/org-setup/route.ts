@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
 			.set({
 				activeOrganizationId: organizationId,
 				onboardingSteps: {
-					welcome: true,
+					...user.onboardingSteps,
 					organizationSetup: true,
 				},
 			})
