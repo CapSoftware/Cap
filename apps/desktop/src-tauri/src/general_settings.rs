@@ -4,7 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -256,6 +256,7 @@ pub fn init(app: &AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
     default_excluded_windows()
 }
