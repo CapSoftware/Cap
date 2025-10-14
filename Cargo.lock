@@ -1260,6 +1260,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-appender",
+ "tracing-futures",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
@@ -9963,6 +9964,18 @@ checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
 dependencies = [
  "once_cell",
  "valuable",
+]
+
+[[package]]
+name = "tracing-futures"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
+dependencies = [
+ "futures",
+ "futures-task",
+ "pin-project",
+ "tracing",
 ]
 
 [[package]]

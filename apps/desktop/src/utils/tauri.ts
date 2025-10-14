@@ -307,7 +307,6 @@ requestOpenSettings: RequestOpenSettings,
 requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestStartRecording: RequestStartRecording,
 targetUnderCursor: TargetUnderCursor,
-uploadDebugEvent: UploadDebugEvent,
 uploadProgressEvent: UploadProgressEvent
 }>({
 audioInputLevelChange: "audio-input-level-change",
@@ -330,7 +329,6 @@ requestOpenSettings: "request-open-settings",
 requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestStartRecording: "request-start-recording",
 targetUnderCursor: "target-under-cursor",
-uploadDebugEvent: "upload-debug-event",
 uploadProgressEvent: "upload-progress-event"
 })
 
@@ -472,8 +470,6 @@ export type StudioRecordingStatus = { status: "InProgress" } | { status: "Failed
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
-export type UploadDebugEvent = { video_id: string; upload_id: string; epoch: string; state: UploadDebugEventState }
-export type UploadDebugEventState = "Pending" | { Presigning: { part_number: number; chunk_size: string; total_size: string } } | { Uploading: { part_number: number; chunk_size: string; total_size: string } } | { PendingNextChunk: { prev_part_number: number } } | "Done"
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }

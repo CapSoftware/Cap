@@ -2,11 +2,13 @@ use scap_targets::bounds::LogicalBounds;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::{sync::RwLock, time::sleep};
+use tracing::instrument;
 
 pub struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, LogicalBounds>>>>);
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn set_fake_window_bounds(
     window: tauri::Window,
     name: String,
@@ -23,6 +25,7 @@ pub async fn set_fake_window_bounds(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn remove_fake_window(
     window: tauri::Window,
     name: String,
