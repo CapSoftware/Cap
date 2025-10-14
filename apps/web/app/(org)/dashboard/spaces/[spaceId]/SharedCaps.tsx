@@ -8,6 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
@@ -23,7 +24,6 @@ import {
 } from "./components/OrganizationIndicator";
 import { SharedCapCard } from "./components/SharedCapCard";
 import type { SpaceMemberData } from "./page";
-import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 
 type SharedVideoData = {
 	id: Video.VideoId;

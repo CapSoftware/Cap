@@ -10,6 +10,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../Contexts";
@@ -25,7 +26,6 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
-import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 
 export type VideoData = {
 	id: Video.VideoId;
