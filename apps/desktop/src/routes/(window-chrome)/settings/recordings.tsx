@@ -1,5 +1,4 @@
 import { ProgressCircle } from "@cap/ui-solid";
-import { Dialog } from "@kobalte/core/dialog";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -14,6 +13,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -30,7 +30,6 @@ import {
 	events,
 	type RecordingMetaWithMetadata,
 	type UploadProgress,
-	type UploadDebugEvent,
 } from "~/utils/tauri";
 
 type Recording = {
@@ -139,13 +138,11 @@ export default function Recordings() {
 
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
-			<div class="flex items-center justify-between">
-				<div class="flex flex-col">
-					<h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
-					<p class="text-sm text-gray-10">
-						Manage your recordings and perform actions.
-					</p>
-				</div>
+			<div class="flex flex-col">
+				<h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
+				<p class="text-sm text-gray-10">
+					Manage your recordings and perform actions.
+				</p>
 			</div>
 			<Show
 				when={recordings.data && recordings.data.length > 0}
@@ -320,10 +317,49 @@ function RecordingItem(props: {
 					</TooltipIconButton>
 				</Show>
 				<Show when={mode() === "instant"}>
-					<InstantModeActions
-						recording={props.recording}
-						uploadProgress={props.uploadProgress}
-					/>
+					{(_) => {
+						const reupload = createMutation(() => ({
+							mutationFn: () =>
+								commands.uploadExportedVideo(
+									props.recording.path,
+									"Reupload",
+									new Channel<UploadProgress>((progress) => {}),
+								),
+						}));
+
+						return (
+							<>
+								<Show
+									when={props.uploadProgress || reupload.isPending}
+									fallback={
+										<TooltipIconButton
+											tooltipText="Reupload"
+											onClick={() => reupload.mutate()}
+										>
+											<IconLucideRotateCcw class="size-4" />
+										</TooltipIconButton>
+									}
+								>
+									<ProgressCircle
+										variant="primary"
+										progress={props.uploadProgress || 0}
+										size="sm"
+									/>
+								</Show>
+
+								<Show when={props.recording.meta.sharing}>
+									{(sharing) => (
+										<TooltipIconButton
+											tooltipText="Open link"
+											onClick={() => shell.open(sharing().link)}
+										>
+											<IconCapLink class="size-4" />
+										</TooltipIconButton>
+									)}
+								</Show>
+							</>
+						);
+					}}
 				</Show>
 				<TooltipIconButton
 					tooltipText="Open recording bundle"
