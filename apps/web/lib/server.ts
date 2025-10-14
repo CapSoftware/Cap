@@ -2,6 +2,7 @@ import "server-only";
 
 import { decrypt } from "@cap/database/crypto";
 import {
+	AwsCredentials,
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
@@ -104,6 +105,7 @@ export const Dependencies = Layer.mergeAll(
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
 	Spaces.Default,
+	AwsCredentials.Default,
 	WorkflowRpcLive,
 	layerTracer,
 ).pipe(

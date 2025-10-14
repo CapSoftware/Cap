@@ -4,13 +4,22 @@
 /* deno-fmt-ignore-file */
 
 declare module "sst" {
-	export interface Resource {
-		DATABASE_URL: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
-	}
+  export interface Resource {
+    "CAP_AWS_ACCESS_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "CAP_AWS_SECRET_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "DATABASE_URL_MYSQL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+  }
 }
 /// <reference path="sst-env.d.ts" />
 
-import "sst";
+import "sst"
+export {}

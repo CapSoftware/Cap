@@ -45,13 +45,16 @@ export default $config({
 		const secrets = Secrets();
 		// const planetscale = Planetscale();
 
-		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
+		const recordingsBucket = new aws.s3.BucketV2(
+			"RecordingsBucket",
+			{},
+			{ retainOnDelete: true },
+		);
 
 		const vercelVariables = [
 			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
 			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "NEXT_PUBLIC_CAP_AWS_BUCKET", value: recordingsBucket.bucket },
 			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
 
@@ -70,7 +73,6 @@ export default $config({
 
 		if (webUrl) {
 			vercelVariables.push(
-				{ key: "WEB_URL", value: webUrl },
 				{ key: "NEXT_PUBLIC_WEB_URL", value: webUrl },
 				{ key: "NEXTAUTH_URL", value: webUrl },
 			);
@@ -89,16 +91,14 @@ export default $config({
 			return {
 				aud,
 				url,
-				provider: await aws.iam
-					.getOpenIdConnectProvider({ url: `https://${url}` })
-					.catch(
-						() =>
-							new aws.iam.OpenIdConnectProvider(
+				provider:
+					$app.stage === "production"
+						? aws.iam.getOpenIdConnectProviderOutput({ url: `https://${url}` })
+						: new aws.iam.OpenIdConnectProvider(
 								"VercelAWSOIDC",
 								{ url: `https://${url}`, clientIdLists: [aud] },
 								{ retainOnDelete: true },
 							),
-					),
 			};
 		})();
 
@@ -118,7 +118,7 @@ export default $config({
 							},
 							StringLike: {
 								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:staging`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${$app.stage}`,
 								],
 							},
 						},
@@ -149,12 +149,12 @@ export default $config({
 			],
 		});
 
-		const workflowCluster = await WorkflowCluster(recordingsBucket, secrets);
+		// const workflowCluster = await WorkflowCluster(recordingsBucket, secrets);
 
 		if ($app.stage === "staging" || $app.stage === "production") {
 			[
 				...vercelVariables,
-				{ key: "WORKFLOWS_RPC_URL", value: workflowCluster.api.url },
+				// { key: "WORKFLOWS_RPC_URL", value: workflowCluster.api.url },
 				{
 					key: "WORKFLOWS_RPC_SECRET",
 					value: secrets.WORKFLOWS_RPC_SECRET.result,
@@ -184,7 +184,7 @@ function Secrets() {
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
-		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		// GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
 		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
 			length: 48,
 		}),
