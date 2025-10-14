@@ -22,10 +22,10 @@ export class ExternalLoomError extends Schema.TaggedError<ExternalLoomError>()(
 	HttpApiSchema.annotations({ status: 500 }),
 ) {}
 
-export class VideoURLInvalidError extends Schema.TaggedError<VideoURLInvalidError>()(
-	"VideoURLInvalidError",
-	{ status: Schema.Number },
-	HttpApiSchema.annotations({ status: 404 }),
+export class VideoInvalidError extends Schema.TaggedError<VideoInvalidError>()(
+	"VideoInvalidError",
+	{ cause: Schema.Literal("NotFound", "InvalidContentLength") },
+	HttpApiSchema.annotations({ status: 400 }),
 ) {}
 
 export const ImportVideoLoomData = Schema.Struct({
@@ -60,7 +60,7 @@ export const ImportVideo = Workflow.make({
 		Video.NotFoundError,
 		S3Error,
 		ExternalLoomError,
-		VideoURLInvalidError,
+		VideoInvalidError,
 	),
 	idempotencyKey: (p) =>
 		`${p.cap.userId}-${p.loom.orgId}-${p.loom.video.id}-${p.attempt ?? 0}`,
@@ -76,7 +76,7 @@ export class LoomHttpApi extends HttpApiGroup.make("loom")
 				}),
 			)
 			.addSuccess(Schema.Struct({ videoId: Video.VideoId }))
-			.addError(VideoURLInvalidError)
+			.addError(VideoInvalidError)
 			.addError(InternalServerError)
 			.addError(PolicyDeniedError)
 			.addError(Video.NotFoundError)

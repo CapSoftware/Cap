@@ -4,6 +4,7 @@ import { ClusterWorkflowEngine, RunnerAddress } from "@effect/cluster";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,
+	Headers,
 	HttpApiBuilder,
 	HttpMiddleware,
 	HttpRouter,
@@ -23,6 +24,12 @@ import { Config, Effect, Layer, Option } from "effect";
 import { ContainerMetadata } from "../cluster/container-metadata.ts";
 import { DatabaseLive, ShardDatabaseLive } from "../shared/database.ts";
 import { HealthServerLive } from "./health-server.ts";
+
+class RpcAuthSecret extends Effect.Service<RpcAuthSecret>()("RpcAuthSecret", {
+	effect: Effect.map(Config.string("WORKFLOWS_RPC_SECRET"), (v) => ({
+		authSecret: v,
+	})),
+}) {}
 
 const ClusterWorkflowLive = Layer.unwrapEffect(
 	Effect.gen(function* () {
@@ -48,6 +55,28 @@ const RpcsLive = RpcServer.layer(Workflows.RpcGroup).pipe(
 	Layer.provide(Workflows.WorkflowsLayer),
 	Layer.provide(ClusterWorkflowLive),
 	Layer.provide(RpcServer.layerProtocolHttp({ path: "/" })),
+	Layer.provide(
+		Layer.effect(
+			Workflows.SecretAuthMiddleware,
+			Effect.gen(function* () {
+				const { authSecret } = yield* RpcAuthSecret;
+
+				return Workflows.SecretAuthMiddleware.of(
+					Effect.fn(function* (options) {
+						const authHeader = Headers.get(options.headers, "authorization");
+						if (Option.isNone(authHeader) || authHeader.value !== authSecret) {
+							if (Option.isNone(authHeader))
+								yield* Effect.log("No auth header provided");
+
+							return yield* new Workflows.InvalidRpcAuth();
+						}
+
+						return yield* options.next;
+					}),
+				);
+			}),
+		),
+	),
 	Layer.provide(Workflows.RpcSerialization),
 );
 
@@ -92,6 +121,7 @@ HttpRouter.Default.serve().pipe(
 	Layer.provide(FetchHttpClient.layer),
 	Layer.provide(DatabaseLive),
 	Layer.provide(TracingLayer),
+	Layer.provide(RpcAuthSecret.Default),
 	Layer.launch,
 	NodeRuntime.runMain,
 );

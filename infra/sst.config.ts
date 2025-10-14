@@ -1,5 +1,7 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import type { Input, Output } from "@pulumi/pulumi";
+
 const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
 const GITHUB_APP_ID = "1196731";
@@ -30,6 +32,7 @@ export default $config({
 				aws: {},
 				planetscale: true,
 				awsx: "2.21.1",
+				random: true,
 			},
 		};
 	},
@@ -151,7 +154,11 @@ export default $config({
 		if ($app.stage === "staging" || $app.stage === "production") {
 			[
 				...vercelVariables,
-				{ key: "REMOTE_WORKFLOW_URL", value: workflowCluster.api.url },
+				{ key: "WORKFLOWS_RPC_URL", value: workflowCluster.api.url },
+				{
+					key: "WORKFLOWS_RPC_SECRET",
+					value: secrets.WORKFLOWS_RPC_SECRET.result,
+				},
 				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
 			].map(
 				(v) =>
@@ -178,6 +185,9 @@ function Secrets() {
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
 		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
+			length: 48,
+		}),
 	};
 }
 
@@ -289,11 +299,10 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		CAP_AWS_BUCKET: bucket.bucket,
 		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
-		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
-		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
 		AXIOM_API_TOKEN,
 		AXIOM_DOMAIN: "api.axiom.co",
 		AXIOM_DATASET,
+		WORKFLOWS_RPC_SECRET: secrets.WORKFLOWS_RPC_SECRET.result,
 	};
 
 	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
@@ -408,6 +417,12 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 				ghcrCredentialsTransform.taskDefinition(args);
 			},
 		},
+		permissions: [
+			{
+				actions: ["s3:*"],
+				resources: [bucket.arn, $interpolate`${bucket.arn}/*`],
+			},
+		],
 	});
 
 	const api = new sst.aws.ApiGatewayV2("MyApi", {

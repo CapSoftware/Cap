@@ -128,7 +128,7 @@ impl TaskPool {
                     let res = future.await;
                     match &res {
                         Ok(_) => info!("Task finished successfully"),
-                        Err(err) => error!("Task failed: {}", err),
+                        Err(err) => error!("Task failed: {:#}", err),
                     }
                     res
                 }
