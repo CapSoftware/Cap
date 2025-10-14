@@ -63,20 +63,21 @@ export default $config({
 		// 	status: "Enabled",
 		// });
 
-		// const cloudfrontDistribution = aws.cloudfront.getDistributionOutput({
-		// 	id: "E36XSZEM0VIIYB",
-		// });
+		const cloudfrontDistribution =
+			$app.stage === "production"
+				? aws.cloudfront.getDistributionOutput({ id: "E36XSZEM0VIIYB" })
+				: null;
 
 		const vercelUser = new aws.iam.User("VercelUser", { forceDestroy: false });
 
 		const vercelProject = vercel.getProjectOutput({ name: "cap-web" });
 
-		if (webUrl) {
+		if (webUrl)
 			vercelVariables.push(
 				{ key: "NEXT_PUBLIC_WEB_URL", value: webUrl },
 				{ key: "NEXTAUTH_URL", value: webUrl },
 			);
-		}
+
 
 		// vercelEnvVar("VercelCloudfrontEnv", {
 		// 	key: "CAP_CLOUDFRONT_DISTRIBUTION_ID",
@@ -128,40 +129,57 @@ export default $config({
 			inlinePolicies: [
 				{
 					name: "VercelAWSAccessPolicy",
-					policy: recordingsBucket.arn.apply((arn) =>
+					policy: $resolve([
+						recordingsBucket.arn,
+						cloudfrontDistribution?.arn,
+					] as const).apply(([bucketArn, cloudfrontArn]) =>
 						JSON.stringify({
 							Version: "2012-10-17",
 							Statement: [
 								{
 									Effect: "Allow",
 									Action: ["s3:*"],
-									Resource: `${arn}/*`,
+									Resource: `${bucketArn}/*`,
 								},
 								{
 									Effect: "Allow",
 									Action: ["s3:*"],
-									Resource: `${arn}`,
+									Resource: bucketArn,
 								},
-							],
+								cloudfrontArn && {
+									Effect: "Allow",
+									Action: ["cloudfront:CreateInvalidation"],
+									Resource: cloudfrontArn,
+								},
+							].filter(Boolean),
 						}),
 					),
 				},
 			],
 		});
 
-		// const workflowCluster = await WorkflowCluster(recordingsBucket, secrets);
+		const workflowCluster =
+			$app.stage === "staging"
+				? await WorkflowCluster(recordingsBucket, secrets)
+				: null;
 
 		if ($app.stage === "staging" || $app.stage === "production") {
 			[
 				...vercelVariables,
-				// { key: "WORKFLOWS_RPC_URL", value: workflowCluster.api.url },
+				workflowCluster && {
+					key: "WORKFLOWS_RPC_URL",
+					value: workflowCluster.api.url,
+				},
 				{
 					key: "WORKFLOWS_RPC_SECRET",
 					value: secrets.WORKFLOWS_RPC_SECRET.result,
 				},
 				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
-			].map(
-				(v) =>
+			]
+				.filter(Boolean)
+				.forEach((_v) => {
+					const v = _v as NonNullable<typeof _v>;
+
 					new vercel.ProjectEnvironmentVariable(`VercelEnv${v.key}`, {
 						...v,
 						projectId: vercelProject.id,
@@ -171,8 +189,8 @@ export default $config({
 								: undefined,
 						targets:
 							$app.stage === "staging" ? undefined : ["preview", "production"],
-					}),
-			);
+					});
+				});
 		}
 
 		// DiscordBot();
@@ -184,7 +202,7 @@ function Secrets() {
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
 		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
 		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
-		// GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
 		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
 			length: 48,
 		}),
@@ -192,21 +210,6 @@ function Secrets() {
 }
 
 type Secrets = ReturnType<typeof Secrets>;
-
-// function Planetscale() {
-// 	const org = planetscale.getOrganizationOutput({ name: "cap" });
-// 	const db = planetscale.getDatabaseOutput({
-// 		name: "cap-production",
-// 		organization: org.name,
-// 	});
-// 	const branch = planetscale.getBranchOutput({
-// 		name: $app.stage === "production" ? "main" : "staging",
-// 		database: db.name,
-// 		organization: org.name,
-// 	});
-
-// 	return { org, db, branch };
-// }
 
 // function DiscordBot() {
 // 	new sst.cloudflare.Worker("DiscordBotScript", {
