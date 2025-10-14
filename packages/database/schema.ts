@@ -103,6 +103,7 @@ export const users = mysqlTable(
 			organizationSetup?: boolean;
 			customDomain?: boolean;
 			inviteTeam?: boolean;
+			download?: boolean;
 		}>(),
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
 		customBucket: nanoIdNullable("customBucket"),

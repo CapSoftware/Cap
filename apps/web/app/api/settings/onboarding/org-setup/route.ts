@@ -31,32 +31,34 @@ export async function POST(request: NextRequest) {
 	const organizationId = Organisation.OrganisationId.make(nanoId());
 
 	try {
-		await db().insert(organizations).values({
-			id: organizationId,
-			ownerId: user.id,
-			name: organizationName,
+		await db().transaction(async (tx) => {
+			await tx.insert(organizations).values({
+				id: organizationId,
+				ownerId: user.id,
+				name: organizationName,
+			});
+
+			await tx.insert(organizationMembers).values({
+				id: nanoId(),
+				userId: user.id,
+				role: "owner",
+				organizationId,
+			});
+			await tx
+				.update(users)
+				.set({
+					activeOrganizationId: organizationId,
+					onboardingSteps: {
+						...user.onboardingSteps,
+						organizationSetup: true,
+					},
+				})
+				.where(eq(users.id, user.id));
 		});
 
 		if (organizationIcon) {
 			await uploadOrganizationIcon(formData, organizationId);
 		}
-
-		await db().insert(organizationMembers).values({
-			id: nanoId(),
-			userId: user.id,
-			role: "owner",
-			organizationId,
-		});
-		await db()
-			.update(users)
-			.set({
-				activeOrganizationId: organizationId,
-				onboardingSteps: {
-					...user.onboardingSteps,
-					organizationSetup: true,
-				},
-			})
-			.where(eq(users.id, user.id));
 
 		revalidatePath("/onboarding", "layout");
 		return NextResponse.json({ success: true }, { status: 200 });

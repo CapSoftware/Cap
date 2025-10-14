@@ -47,7 +47,7 @@ export default function YourNamePage() {
 	return (
 		<Base
 			title="Welcome to Cap"
-			description="Lets get you started"
+			description="Let's get you started"
 			hideBackButton
 		>
 			<form className="space-y-7" onSubmit={handleSubmit}>

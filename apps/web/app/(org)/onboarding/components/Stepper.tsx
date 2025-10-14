@@ -14,6 +14,7 @@ export default function Stepper({
 		organizationSetup?: boolean;
 		customDomain?: boolean;
 		inviteTeam?: boolean;
+		download?: boolean;
 	};
 }) {
 	const currentPath = usePathname();
@@ -45,6 +46,11 @@ export default function Stepper({
 			id: "4",
 			name: "Invite your team",
 			completed: completedSteps.inviteTeam || false,
+		},
+		{
+			id: "5",
+			name: "Download",
+			completed: completedSteps.download || false,
 		},
 	];
 

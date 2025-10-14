@@ -29,11 +29,7 @@ export default async function DashboardLayout({
 	}
 
 	// Check if user needs to complete onboarding
-	const onboardingSteps = user.onboardingSteps || {};
 	if (!user.name || user.name.length === 0) {
-		redirect("/onboarding/welcome");
-	}
-	if ((!onboardingSteps.welcome && !user.name) || user.name.length === 0) {
 		redirect("/onboarding/welcome");
 	}
 
