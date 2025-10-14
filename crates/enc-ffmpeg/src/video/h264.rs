@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
@@ -99,7 +99,10 @@ impl H264EncoderBuilder {
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
 
-        encoder_ctx.set_threading(Config::count(4));
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().video()?;
 
         encoder.set_width(input_config.width);
