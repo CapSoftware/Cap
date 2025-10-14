@@ -47,7 +47,7 @@ fn main() {
         (sentry_client, _guard)
     });
 
-    let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+    let (reload_layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
 
     let logs_dir = {
         #[cfg(target_os = "macos")]
@@ -73,12 +73,7 @@ fn main() {
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
     let (non_blocking, _logger_guard) = tracing_appender::non_blocking(file_appender);
 
-    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
-        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
-    ));
-
-    // #[cfg(debug_assertions)]
-    let (registry, _tracer) = {
+    let (otel_layer, _tracer) = if cfg!(debug_assertions) {
         use opentelemetry::trace::TracerProvider;
         use opentelemetry_otlp::WithExportConfig;
         use tracing_subscriber::Layer;
@@ -93,15 +88,22 @@ fn main() {
             )
             .build();
 
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer.tracer("cap-desktop"))
+            .boxed();
+
         opentelemetry::global::set_tracer_provider(tracer.clone());
-        (
-            registry.with(tracing_opentelemetry::layer().with_tracer(tracer.tracer("cap-desktop"))),
-            tracer,
-        )
+        (Some(layer), Some(tracer))
+    } else {
+        (None, None)
     };
 
-    registry
-        .with(layer)
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::filter_fn(
+            (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+        ))
+        .with(reload_layer)
+        .with(otel_layer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(true)
@@ -127,5 +129,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle.boxed()));
+        .block_on(cap_desktop_lib::run(handle));
 }

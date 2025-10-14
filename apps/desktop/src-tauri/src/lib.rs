@@ -1887,22 +1887,10 @@ async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
-type FilteredRegistryInner = tracing_subscriber::layer::Layered<
+type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
 >;
-
-#[cfg(debug_assertions)]
-pub type FilteredRegistry = tracing_subscriber::layer::Layered<
-    tracing_opentelemetry::OpenTelemetryLayer<
-        // FilteredRegistryInner,
-        tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
-        opentelemetry_sdk::trace::SdkTracerProvider,
-    >,
-    tracing_subscriber::Registry,
->;
-#[cfg(not(debug_assertions))]
-pub type FilteredRegistry = FilteredRegistryInner;
 
 pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> + Send + Sync>;
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
