@@ -6,7 +6,7 @@ import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
+import { AwsCredentials, S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -73,10 +73,9 @@ app.post(
 
 					const cloudfront = new CloudFrontClient({
 						region: serverEnv().CAP_AWS_REGION || "us-east-1",
-						credentials: {
-							accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
-							secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
-						},
+						credentials: await runPromise(
+							Effect.map(AwsCredentials, (c) => c.credentials),
+						),
 					});
 
 					const pathToInvalidate = "/" + fileKey;

@@ -1,10 +1,11 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
+import { fromContainerMetadata, fromSSO } from "@aws-sdk/credential-providers";
 import { decrypt } from "@cap/database/crypto";
 import type { S3Bucket, User } from "@cap/web-domain";
-import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Effect, Layer, Option } from "effect";
 
+import { AwsCredentials } from "../Aws.ts";
 import { Database } from "../Database.ts";
 import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
@@ -13,6 +14,7 @@ import { S3BucketsRepo } from "./S3BucketsRepo.ts";
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 	effect: Effect.gen(function* () {
 		const repo = yield* S3BucketsRepo;
+		const { credentials } = yield* AwsCredentials;
 
 		const defaultConfigs = {
 			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
@@ -24,24 +26,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				Config.option,
 			),
 			region: yield* Config.string("CAP_AWS_REGION"),
-			credentials: Option.getOrUndefined(
-				yield* Config.option(
-					Config.all([
-						Config.string("CAP_AWS_ACCESS_KEY"),
-						Config.string("CAP_AWS_SECRET_KEY"),
-					]).pipe(
-						Config.map(([accessKeyId, secretAccessKey]) => ({
-							accessKeyId,
-							secretAccessKey,
-						})),
-						Config.orElse(() =>
-							Config.string("VERCEL_AWS_ROLE_ARN").pipe(
-								Config.map((arn) => awsCredentialsProvider({ roleArn: arn })),
-							),
-						),
-					),
-				),
-			),
+			credentials,
 			forcePathStyle:
 				Option.getOrNull(
 					yield* Config.boolean("S3_PATH_STYLE").pipe(Config.option),
@@ -57,6 +42,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				region: defaultConfigs.region,
 				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
+				requestStreamBufferSize: 16 * 1024,
 			});
 
 		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {
@@ -194,7 +180,11 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			),
 		};
 	}),
-	dependencies: [S3BucketsRepo.Default, Database.Default],
+	dependencies: [
+		S3BucketsRepo.Default,
+		Database.Default,
+		AwsCredentials.Default,
+	],
 }) {
 	static getBucketAccess = (bucketId: Option.Option<S3Bucket.S3BucketId>) =>
 		Effect.flatMap(S3Buckets, (b) =>

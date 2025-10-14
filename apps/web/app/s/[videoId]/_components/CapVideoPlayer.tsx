@@ -4,6 +4,7 @@ import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
@@ -77,9 +78,6 @@ export function CapVideoPlayer({
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 	const [isMobile, setIsMobile] = useState(false);
-	const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
-	const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
-	const [urlResolved, setUrlResolved] = useState(false);
 	const retryCount = useRef(0);
 	const retryTimeout = useRef<NodeJS.Timeout | null>(null);
 	const startTime = useRef<number>(Date.now());
@@ -100,50 +98,72 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
-	const fetchNewUrl = useCallback(async () => {
-		try {
-			const timestamp = new Date().getTime();
-			const urlWithTimestamp = videoSrc.includes("?")
-				? `${videoSrc}&_t=${timestamp}`
-				: `${videoSrc}?_t=${timestamp}`;
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	// if the video comes back from S3, just ignore the upload progress.
+	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
+	const isUploading = uploadProgress?.status === "uploading";
+	const isUploadProgressPending = uploadProgress?.status === "fetching";
 
-			const response = await fetch(urlWithTimestamp, {
-				method: "GET",
-				headers: { range: "bytes=0-0" },
-			});
-			const finalUrl = response.redirected ? response.url : urlWithTimestamp;
+	const resolvedSrc = useQuery<{ url: string; supportsCrossOrigin: boolean }>({
+		queryKey: ["resolvedSrc", videoSrc],
+		queryFn:
+			isUploadProgressPending || isUploading
+				? skipToken
+				: async () => {
+						try {
+							const timestamp = Date.now();
+							const urlWithTimestamp = videoSrc.includes("?")
+								? `${videoSrc}&_t=${timestamp}`
+								: `${videoSrc}?_t=${timestamp}`;
 
-			// Check if the resolved URL is from a CORS-incompatible service
-			const isCloudflareR2 = finalUrl.includes(".r2.cloudflarestorage.com");
-			const isS3 =
-				finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
-			const isCorsIncompatible = isCloudflareR2 || isS3;
+							const response = await fetch(urlWithTimestamp, {
+								method: "GET",
+								headers: { range: "bytes=0-0" },
+							});
+							const finalUrl = response.redirected
+								? response.url
+								: urlWithTimestamp;
 
-			// Set CORS based on URL compatibility BEFORE video element is created
-			if (isCorsIncompatible) {
-				console.log(
-					"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
-					finalUrl,
-				);
-				setUseCrossOrigin(false);
-			} else {
-				setUseCrossOrigin(enableCrossOrigin);
-			}
+							// Check if the resolved URL is from a CORS-incompatible service
+							const isCloudflareR2 = finalUrl.includes(
+								".r2.cloudflarestorage.com",
+							);
+							const isS3 =
+								finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
+							const isCorsIncompatible = isCloudflareR2 || isS3;
 
-			setResolvedVideoSrc(finalUrl);
-			setUrlResolved(true);
-			return finalUrl;
-		} catch (error) {
-			console.error("CapVideoPlayer: Error fetching new video URL:", error);
-			const timestamp = new Date().getTime();
-			const fallbackUrl = videoSrc.includes("?")
-				? `${videoSrc}&_t=${timestamp}`
-				: `${videoSrc}?_t=${timestamp}`;
-			setResolvedVideoSrc(fallbackUrl);
-			setUrlResolved(true);
-			return fallbackUrl;
-		}
-	}, [videoSrc, enableCrossOrigin]);
+							let supportsCrossOrigin = enableCrossOrigin;
+
+							// Set CORS based on URL compatibility BEFORE video element is created
+							if (isCorsIncompatible) {
+								console.log(
+									"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
+									finalUrl,
+								);
+								supportsCrossOrigin = false;
+							}
+
+							return { url: finalUrl, supportsCrossOrigin };
+						} catch (error) {
+							console.error(
+								"CapVideoPlayer: Error fetching new video URL:",
+								error,
+							);
+							const timestamp = Date.now();
+							const fallbackUrl = videoSrc.includes("?")
+								? `${videoSrc}&_t=${timestamp}`
+								: `${videoSrc}?_t=${timestamp}`;
+							return {
+								url: fallbackUrl,
+								supportsCrossOrigin: enableCrossOrigin,
+							};
+						}
+					},
+		refetchOnWindowFocus: false,
+	});
 
 	const reloadVideo = useCallback(async () => {
 		const video = videoRef.current;
@@ -172,7 +192,7 @@ export function CapVideoPlayer({
 		}
 
 		retryCount.current += 1;
-	}, [fetchNewUrl, maxRetries]);
+	}, [maxRetries]);
 
 	const setupRetry = useCallback(() => {
 		if (retryTimeout.current) {
@@ -216,26 +236,19 @@ export function CapVideoPlayer({
 
 	// Reset state when video source changes
 	useEffect(() => {
-		setResolvedVideoSrc(videoSrc);
+		resolvedSrc.refetch();
 		setVideoLoaded(false);
 		setHasError(false);
 		isRetryingRef.current = false;
 		setIsRetrying(false);
 		retryCount.current = 0;
 		startTime.current = Date.now();
-		setUrlResolved(false);
-		setUseCrossOrigin(enableCrossOrigin);
 
 		if (retryTimeout.current) {
 			clearTimeout(retryTimeout.current);
 			retryTimeout.current = null;
 		}
-	}, [videoSrc, enableCrossOrigin]);
-
-	// Resolve video URL on mount and when videoSrc changes
-	useEffect(() => {
-		fetchNewUrl();
-	}, [fetchNewUrl]);
+	}, [resolvedSrc.refetch, videoSrc, enableCrossOrigin]);
 
 	// Track video duration for comment markers
 	useEffect(() => {
@@ -251,7 +264,7 @@ export function CapVideoPlayer({
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
 		};
-	}, [urlResolved]);
+	}, [resolvedSrc.isLoading]);
 
 	// Track when all data is ready for comment markers
 	const [markersReady, setMarkersReady] = useState(false);
@@ -275,7 +288,7 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || !urlResolved) return;
+		if (!video || resolvedSrc.data?.url) return;
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
@@ -445,7 +458,7 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [hasPlayedOnce, videoSrc, urlResolved]);
+	}, [hasPlayedOnce, resolvedSrc.data?.url]);
 
 	const generateVideoFrameThumbnail = useCallback((time: number): string => {
 		const video = videoRef.current;
@@ -470,13 +483,6 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
-	const uploadProgressRaw = useUploadProgress(
-		videoId,
-		hasActiveUpload || false,
-	);
-	// if the video comes back from S3, just ignore the upload progress.
-	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
-	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
@@ -529,9 +535,9 @@ export function CapVideoPlayer({
 					)}
 				</div>
 			</div>
-			{urlResolved && (
+			{resolvedSrc.data && (
 				<MediaPlayerVideo
-					src={resolvedVideoSrc}
+					src={resolvedSrc.data.url}
 					ref={videoRef}
 					onLoadedData={() => {
 						setVideoLoaded(true);
@@ -540,7 +546,9 @@ export function CapVideoPlayer({
 						setShowPlayButton(false);
 						setHasPlayedOnce(true);
 					}}
-					crossOrigin={useCrossOrigin ? "anonymous" : undefined}
+					crossOrigin={
+						resolvedSrc.data.supportsCrossOrigin ? "anonymous" : undefined
+					}
 					playsInline
 					autoPlay={autoplay}
 				>
@@ -654,7 +662,7 @@ export function CapVideoPlayer({
 				<MediaPlayerControlsOverlay />
 				<MediaPlayerSeek
 					tooltipThumbnailSrc={
-						isMobile || !useCrossOrigin || isUploading
+						isMobile || !resolvedSrc.isSuccess
 							? undefined
 							: generateVideoFrameThumbnail
 					}

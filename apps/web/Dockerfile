@@ -12,8 +12,6 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm i --fro
 
 ARG NEXT_PUBLIC_DOCKER_BUILD=true
 ENV NEXT_PUBLIC_WEB_URL=http://localhost:3000
-ENV NEXT_PUBLIC_CAP_AWS_BUCKET=capso
-ENV NEXT_PUBLIC_CAP_AWS_REGION=us-east-1
 
 RUN pnpm run build:web
 

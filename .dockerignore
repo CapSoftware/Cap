@@ -1,3 +1,4 @@
-target/
-node_modules/
-crates/
+target
+crates
+**/node_modules
+**/.next

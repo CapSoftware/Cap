@@ -4,9 +4,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::AppHandle;
+use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
+#[instrument]
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
@@ -44,6 +46,7 @@ pub async fn upload_multipart_initiate(
         .map(|data| data.upload_id)
 }
 
+#[instrument(skip(upload_id))]
 pub async fn upload_multipart_presign_part(
     app: &AppHandle,
     video_id: &str,
@@ -86,7 +89,7 @@ pub async fn upload_multipart_presign_part(
         .map(|data| data.presigned_url)
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadedPart {
     pub part_number: u32,
@@ -107,6 +110,7 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
+#[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
     video_id: &str,
@@ -128,6 +132,8 @@ pub async fn upload_multipart_complete(
     pub struct Response {
         location: Option<String>,
     }
+
+    trace!("Completing multipart upload");
 
     let resp = app
         .authed_api_request("/api/upload/multipart/complete", |c, url| {
@@ -158,7 +164,7 @@ pub async fn upload_multipart_complete(
         .map(|data| data.location)
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresignedS3PutRequestMethod {
     #[allow(unused)]
@@ -166,7 +172,7 @@ pub enum PresignedS3PutRequestMethod {
     Put,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresignedS3PutRequest {
     pub video_id: String,
@@ -176,6 +182,7 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
+#[instrument(skip())]
 pub async fn upload_signed(
     app: &AppHandle,
     body: PresignedS3PutRequest,
@@ -213,6 +220,7 @@ pub async fn upload_signed(
         .map(|data| data.presigned_put_data.url)
 }
 
+#[instrument]
 pub async fn desktop_video_progress(
     app: &AppHandle,
     video_id: &str,

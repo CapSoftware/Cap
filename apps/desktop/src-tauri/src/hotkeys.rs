@@ -11,8 +11,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
+use tracing::instrument;
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy, Debug)]
 pub struct Hotkey {
     #[specta(type = String)]
     code: Code,
@@ -180,6 +181,7 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
 
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument(skip(app))]
 pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) -> Result<(), ()> {
     let global_shortcut = app.global_shortcut();
     let state = app.state::<HotkeysState>();

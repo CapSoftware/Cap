@@ -24,10 +24,6 @@ declare module "sst" {
 			type: "sst.sst.Secret";
 			value: string;
 		};
-		DATABASE_URL_HTTP: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
 		DATABASE_URL_MYSQL: {
 			type: "sst.sst.Secret";
 			value: string;

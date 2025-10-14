@@ -9,6 +9,7 @@ export function handleRecordingResult(
 ) {
 	return result
 		.then(async (result) => {
+			if (result === "Started") return;
 			if (result === "InvalidAuthentication") {
 				const buttons = setOptions
 					? {
