@@ -128,12 +128,6 @@ async function main() {
 							defaultValue: allEnvs.CAP_AWS_BUCKET,
 							placeholder: allEnvs.CAP_AWS_BUCKET,
 						}),
-					CAP_AWS_ENDPOINT: () =>
-						text({
-							message: "CAP_AWS_ENDPOINT",
-							defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-							placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-						}),
 					CAP_AWS_BUCKET_URL: () => text({ message: "CAP_AWS_BUCKET_URL" }),
 					CAP_CLOUDFRONT_DISTRIBUTION_ID: () =>
 						text({ message: "CAP_CLOUDFRONT_DISTRIBUTION_ID" }),
