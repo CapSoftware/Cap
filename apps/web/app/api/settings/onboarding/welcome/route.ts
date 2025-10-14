@@ -14,17 +14,22 @@ export async function POST(request: NextRequest) {
 		return NextResponse.json({ error: true }, { status: 401 });
 	}
 
-	await db()
-		.update(users)
-		.set({
-			onboardingSteps: {
-				welcome: true,
-			},
-			name: firstName,
-			lastName: lastName || "",
-		})
-		.where(eq(users.id, user.id));
+	try {
+		await db()
+			.update(users)
+			.set({
+				onboardingSteps: {
+					welcome: true,
+				},
+				name: firstName,
+				lastName: lastName || "",
+			})
+			.where(eq(users.id, user.id));
 
-	revalidatePath("/onboarding", "layout");
-	return NextResponse.json({ success: true }, { status: 200 });
+		revalidatePath("/onboarding", "layout");
+		return NextResponse.json({ success: true }, { status: 200 });
+	} catch (error) {
+		console.error("Failed to update user onboarding steps", error);
+		return NextResponse.json({ error: true }, { status: 500 });
+	}
 }

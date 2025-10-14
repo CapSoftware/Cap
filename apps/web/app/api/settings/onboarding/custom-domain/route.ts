@@ -18,8 +18,7 @@ export async function POST() {
 			.update(users)
 			.set({
 				onboardingSteps: {
-					welcome: true,
-					organizationSetup: true,
+					...user.onboardingSteps,
 					customDomain: true,
 				},
 			})

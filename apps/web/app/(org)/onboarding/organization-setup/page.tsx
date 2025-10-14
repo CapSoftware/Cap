@@ -51,7 +51,8 @@ export default function OrganizationSetupPage() {
 				router.push("/onboarding/custom-domain");
 				router.refresh();
 			});
-		} catch {
+		} catch (error) {
+			console.error(error);
 			toast.error("An error occurred, please try again");
 		} finally {
 			setIsLoading(false);

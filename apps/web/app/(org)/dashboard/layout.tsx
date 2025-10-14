@@ -33,17 +33,8 @@ export default async function DashboardLayout({
 	if (!user.name || user.name.length === 0) {
 		redirect("/onboarding/welcome");
 	}
-	if (!onboardingSteps.welcome) {
+	if ((!onboardingSteps.welcome && !user.name) || user.name.length === 0) {
 		redirect("/onboarding/welcome");
-	}
-	if (!onboardingSteps.organizationSetup) {
-		redirect("/onboarding/organization-setup");
-	}
-	if (!onboardingSteps.customDomain) {
-		redirect("/onboarding/custom-domain");
-	}
-	if (!onboardingSteps.inviteTeam) {
-		redirect("/onboarding/invite-team");
 	}
 
 	let organizationSelect: Organization[] = [];

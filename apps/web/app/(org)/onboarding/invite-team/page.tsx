@@ -54,42 +54,45 @@ export default function InviteTeamPage() {
 	};
 
 	const planCheckout = async (planId?: string) => {
-		setProLoading(true);
-
-		if (!planId) {
-			planId = getProPlanId(isAnnually ? "yearly" : "monthly");
+		try {
+			setProLoading(true);
+			if (!planId) {
+				planId = getProPlanId(isAnnually ? "yearly" : "monthly");
+			}
+			const response = await fetch(`/api/settings/billing/subscribe`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					priceId: planId,
+					quantity: users,
+					isOnBoarding: true,
+					currentOnboardingStep: "invite-team",
+				}),
+			});
+			if (!response.ok) {
+				toast.error("Unable to start checkout. Please try again.");
+				return;
+			}
+			const data = await response.json();
+			if (data.subscription === true) {
+				toast.success("You are already on the Cap Pro plan");
+				return;
+			}
+			if (data.url) {
+				window.location.href = data.url;
+			}
+		} catch {
+			toast.error("Something went wrong. Please try again.");
+		} finally {
+			setProLoading(false);
 		}
-
-		const response = await fetch(`/api/settings/billing/subscribe`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				priceId: planId,
-				quantity: users,
-				isOnBoarding: true,
-				currentOnboardingStep: "invite-team",
-			}),
-		});
-		const data = await response.json();
-
-		if (data.subscription === true) {
-			toast.success("You are already on the Cap Pro plan");
-		}
-
-		if (data.url) {
-			window.location.href = data.url;
-		}
-
-		setProLoading(false);
 	};
 
 	return (
 		<Base
 			title="Invite your team"
 			descriptionClassName="max-w-[360px]"
-			description="Invite members of your to team to join your organization and share Caps together"
+			description="Invite members of your team to join your organization and share Caps together"
 		>
 			<div className="text-center">
 				<span className="mr-2 text-3xl tabular-nums text-gray-12">
