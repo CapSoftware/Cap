@@ -33,7 +33,7 @@ export default async function DashboardLayout({
 	}
 
 	let organizationSelect: Organization[] = [];
-	let userCapsCount: number | null = null;
+	let userCapsCount: number | null = 0;
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
@@ -49,7 +49,7 @@ export default async function DashboardLayout({
 	} catch (error) {
 		console.error("Failed to load dashboard data", error);
 		organizationSelect = [];
-		userCapsCount = null;
+		userCapsCount = 0;
 		organizationSettings = null;
 		spacesData = [];
 		anyNewNotifications = false;

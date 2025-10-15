@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt};
 use tauri_specta::Event;
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, instrument};
 
 #[derive(tauri_specta::Event, Serialize, Type, Clone)]
 pub struct TargetUnderCursor {
@@ -42,6 +42,7 @@ pub struct DisplayInformation {
 
 #[specta::specta]
 #[tauri::command]
+#[instrument(skip(app, state))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
@@ -102,6 +103,7 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
+#[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
@@ -114,6 +116,7 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> {
     let window_id = window_id
         .parse::<WindowId>()
@@ -127,6 +130,7 @@ pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> 
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn display_information(display_id: &str) -> Result<DisplayInformation, String> {
     let display_id = display_id
         .parse::<DisplayId>()
@@ -142,6 +146,7 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     let window = Window::from_id(&window_id).ok_or("Window not found")?;
 

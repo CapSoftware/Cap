@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { UserId } from "./User";
+import { UserId } from "./User.ts";
 
 export const S3BucketId = Schema.String.pipe(Schema.brand("S3BucketId"));
 export type S3BucketId = typeof S3BucketId.Type;

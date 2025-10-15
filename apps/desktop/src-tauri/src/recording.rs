@@ -213,6 +213,7 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
     tokio::task::spawn_blocking(|| {
         tauri::async_runtime::block_on(collect_displays_with_thumbnails())
@@ -223,6 +224,7 @@ pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThu
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
     tokio::task::spawn_blocking(
         || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
@@ -663,6 +665,7 @@ pub async fn start_recording(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -675,6 +678,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -687,6 +691,7 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
@@ -703,6 +708,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn restart_recording(
     app: AppHandle,
     state: MutableState<'_, App>,
@@ -724,6 +730,7 @@ pub async fn restart_recording(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let recording_data = {
         let mut app_state = state.write().await;
@@ -942,7 +949,7 @@ async fn handle_recording_finish(
                             .map_err(|err|
                                 error!("Error compressing thumbnail for instant mode progressive upload: {err}")
                             ) {
-                                crate::upload::singlepart_uploader(
+                                let res = crate::upload::singlepart_uploader(
                                     app.clone(),
                                     crate::api::PresignedS3PutRequest {
                                         video_id: video_upload_info.id.clone(),
@@ -952,13 +959,19 @@ async fn handle_recording_finish(
                                     },
                                     bytes.len() as u64,
                                     stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-
                                 )
-                                .await
-                                .map_err(|err| {
-                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
-                                })
-                                .ok();
+                                .await;
+                                if let Err(err) = res {
+	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
+	                                return;
+                                }
+
+                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload {
+	                                if let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
+	                                	error!("Failed to remove recording files after upload: {err:?}");
+		                                return;
+	                                }
+                                }
                             }
                     } else if let Ok(meta) = build_video_meta(&output_path)
                         .map_err(|err| error!("Error getting video metadata: {}", err))

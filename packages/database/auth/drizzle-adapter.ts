@@ -1,13 +1,13 @@
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
+import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import type Stripe from "stripe";
 import { nanoId } from "../helpers.ts";
 import { accounts, sessions, users, verificationTokens } from "../schema.ts";
 
-export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
+export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
 		async createUser(userData: any) {
 			await db.insert(users).values({

@@ -3,11 +3,11 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
-import { useFeatureFlag } from "@/app/Layout/features";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 
 type UploadProgress =
+	| { status: "fetching" }
 	| {
 			status: "uploading";
 			lastUpdated: Date;
@@ -23,7 +23,10 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
+export function useUploadProgress(
+	videoId: Video.VideoId,
+	enabled: boolean,
+): UploadProgress | null {
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
@@ -41,11 +44,16 @@ export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
 			else return SECOND;
 		},
 	});
-	if (!enabled || !query.data) return null;
+
+	if (!enabled) return null;
+	if (query.isPending) return { status: "fetching" };
+	if (!query.data) return null;
+
 	const lastUpdated = new Date(query.data.updatedAt);
 
-	return (
-		Date.now() - lastUpdated.getTime() > 5 * MINUTE
+	return query.data.total > 0 && query.data.uploaded >= query.data.total
+		? null
+		: Date.now() - lastUpdated.getTime() > 5 * MINUTE
 			? {
 					status: "failed",
 					lastUpdated,
@@ -58,8 +66,7 @@ export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
 						query.data.total === 0
 							? 0
 							: (query.data.uploaded / query.data.total) * 100,
-				}
-	) satisfies UploadProgress;
+				};
 }
 
 const ProgressCircle = ({

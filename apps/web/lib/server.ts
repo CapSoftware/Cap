@@ -2,6 +2,7 @@ import "server-only";
 
 import { decrypt } from "@cap/database/crypto";
 import {
+	AwsCredentials,
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
@@ -16,13 +17,14 @@ import {
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import {
 	FetchHttpClient,
+	Headers,
 	type HttpApi,
 	HttpApiBuilder,
 	HttpApiClient,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { RpcClient } from "@effect/rpc";
+import { RpcClient, RpcMessage, RpcMiddleware } from "@effect/rpc";
 import {
 	Cause,
 	Config,
@@ -31,6 +33,7 @@ import {
 	Layer,
 	ManagedRuntime,
 	Option,
+	Redacted,
 } from "effect";
 import { cookies } from "next/headers";
 
@@ -50,11 +53,21 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
+class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
+	"WorkflowRpcSecret",
+	{
+		effect: Effect.map(
+			Config.redacted(Config.string("WORKFLOWS_RPC_SECRET")),
+			(v) => ({ authSecret: v }),
+		),
+	},
+) {}
+
 const WorkflowRpcLive = Layer.scoped(
 	Workflows.RpcClient,
 	Effect.gen(function* () {
 		const url = Option.getOrElse(
-			yield* Config.option(Config.string("REMOTE_WORKFLOW_URL")),
+			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
 			() => "http://127.0.0.1:42169",
 		);
 
@@ -66,6 +79,22 @@ const WorkflowRpcLive = Layer.scoped(
 			),
 		);
 	}),
+).pipe(
+	Layer.provide(
+		RpcMiddleware.layerClient(Workflows.SecretAuthMiddleware, ({ request }) =>
+			Effect.gen(function* () {
+				const { authSecret } = yield* WorkflowRpcSecret;
+				return {
+					...request,
+					headers: Headers.set(
+						request.headers,
+						"authorization",
+						Redacted.value(authSecret),
+					),
+				};
+			}),
+		),
+	),
 );
 
 export const Dependencies = Layer.mergeAll(
@@ -76,10 +105,17 @@ export const Dependencies = Layer.mergeAll(
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
 	Spaces.Default,
+	AwsCredentials.Default,
 	WorkflowRpcLive,
 	layerTracer,
 ).pipe(
-	Layer.provideMerge(Layer.mergeAll(Database.Default, FetchHttpClient.layer)),
+	Layer.provideMerge(
+		Layer.mergeAll(
+			Database.Default,
+			FetchHttpClient.layer,
+			WorkflowRpcSecret.Default,
+		),
+	),
 );
 
 // purposefully not exposed
@@ -132,6 +168,7 @@ export const apiToHandler = (
 		Layer.provide(
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
+		Layer.provide(layerTracer),
 		Layer.provideMerge(Dependencies),
 		HttpApiBuilder.toWebHandler,
 		(v) => (req: Request) => v.handler(req),

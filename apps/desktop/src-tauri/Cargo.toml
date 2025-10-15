@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.73"
+version = "0.3.74"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -107,6 +107,12 @@ tauri-plugin-sentry = "0.5.0"
 thiserror.workspace = true
 bytes = "1.10.1"
 async-stream = "0.3.6"
+tracing-futures = { version = "0.2.5", features = ["futures-03"] }
+tracing-opentelemetry = "0.32.0"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
+
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

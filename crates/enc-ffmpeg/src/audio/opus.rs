@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
@@ -43,7 +43,10 @@ impl OpusEncoder {
     ) -> Result<Self, OpusEncoderError> {
         let codec = encoder::find_by_name("libopus").ok_or(OpusEncoderError::CodecNotFound)?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
-        encoder_ctx.set_threading(Config::count(4));
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().audio()?;
 
         let rate = {
