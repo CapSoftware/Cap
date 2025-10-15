@@ -63,6 +63,7 @@ const UpgradeModalImpl = ({
 	open,
 	onOpenChange,
 	onCheckout,
+	onboarding,
 }: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
 	const [isAnnual, setIsAnnual] = useState(true);
@@ -137,7 +138,7 @@ const UpgradeModalImpl = ({
 		},
 	];
 
-	const planCheckout = useMutation({
+	const proCheckoutMutation = useMutation({
 		mutationFn: async () => {
 			const planId = stripeCtx.plans[isAnnual ? "yearly" : "monthly"];
 
@@ -146,7 +147,11 @@ const UpgradeModalImpl = ({
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: proQuantity }),
+				body: JSON.stringify({
+					priceId: planId,
+					quantity: proQuantity,
+					isOnBoarding: onboarding,
+				}),
 			});
 			const data = await response.json();
 
@@ -270,11 +275,15 @@ const UpgradeModalImpl = ({
 
 									<Button
 										variant="blue"
-										onClick={() => planCheckout.mutate()}
+										type="button"
+										onClick={(e) => {
+											e.preventDefault();
+											proCheckoutMutation.mutate();
+										}}
 										className="mt-5 w-full max-w-sm h-14 text-lg"
-										disabled={planCheckout.isPending}
+										disabled={proCheckoutMutation.isPending}
 									>
-										{planCheckout.isPending
+										{proCheckoutMutation.isPending
 											? "Loading..."
 											: "Upgrade to Cap Pro"}
 									</Button>

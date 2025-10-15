@@ -38,9 +38,8 @@ export function CustomDomainPage() {
 		},
 	});
 
-	const handleSubmit = async (redirect = true) => {
-		await customDomainMutation.mutateAsync(redirect);
-	};
+	const handleSubmit = (redirect = true) =>
+		customDomainMutation.mutateAsync(redirect);
 
 	return (
 		<Base
