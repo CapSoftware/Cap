@@ -180,7 +180,7 @@ app.post(
 					c.req,
 					UPLOAD_PROGRESS_VERSION,
 				);
-				if (fileKey === "result.mp4" && clientSupportsUploadProgress)
+				if (fileKey.endsWith("result.mp4") && clientSupportsUploadProgress)
 					await db()
 						.update(Db.videoUploads)
 						.set({ mode: "singlepart" })
