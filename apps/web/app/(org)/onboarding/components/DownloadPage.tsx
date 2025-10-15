@@ -73,9 +73,9 @@ export function DownloadPage() {
 			<div className="space-y-10">
 				<div className="flex flex-col gap-6 justify-center items-center">
 					<LogoBadge className="mx-auto w-auto h-12" />
-					<div className="space-y-2 text-center">
-						<h1 className="text-4xl font-medium text-gray-12">Download Cap</h1>
-						<p className="text-lg text-center text-gray-10 text-pretty">
+					<div className="space-y-1 text-center">
+						<h1 className="text-3xl font-medium text-gray-12">Download Cap</h1>
+						<p className="text-lg text-center text-gray-11 text-pretty">
 							Start recording beautiful screen recordings today
 						</p>
 					</div>
