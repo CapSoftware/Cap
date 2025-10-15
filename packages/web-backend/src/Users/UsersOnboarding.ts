@@ -198,6 +198,26 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 				}),
+
+				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
+					const currentUser = yield* CurrentUser;
+
+					yield* db.use((db) =>
+						db
+							.update(Db.users)
+							.set({
+								name: "Cap",
+								onboardingSteps: {
+									welcome: true,
+									organizationSetup: true,
+									customDomain: true,
+									inviteTeam: true,
+									download: true,
+								},
+							})
+							.where(Dz.eq(Db.users.id, currentUser.id)),
+					);
+				}),
 			};
 		}),
 		dependencies: [Database.Default, S3Buckets.Default],

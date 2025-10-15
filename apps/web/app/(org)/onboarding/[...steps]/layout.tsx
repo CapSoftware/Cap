@@ -35,8 +35,6 @@ export default async function OnboardingStepLayout({
 						? Boolean(steps.inviteTeam)
 						: Boolean(steps.download);
 
-	if (isComplete("download")) redirect("/dashboard/caps");
-
 	const firstIncomplete = ordered.find((s) => !isComplete(s)) ?? "download";
 
 	if (currentStep !== firstIncomplete) {

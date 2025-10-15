@@ -1,10 +1,10 @@
 "use client";
 
-import { Button } from "@cap/ui";
+import { Button, LogoBadge } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
@@ -39,17 +39,29 @@ export function DownloadPage() {
 	const { platform, isIntel } = useDetectPlatform();
 	const loading = platform === null;
 	const router = useRouter();
+	const [clickedContinue, setClickedContinue] = useState(false);
+
+	//mark as complete when loading the page
+	useEffect(() => {
+		onboardingRequest.mutate();
+		router.refresh();
+	}, []);
 
 	const onboardingRequest = useEffectMutation({
 		mutationFn: () =>
-			withRpc((r) =>
-				r.UserCompleteOnboardingStep({ step: "download", data: undefined }),
-			),
+			withRpc((r) => {
+				return r.UserCompleteOnboardingStep({
+					step: "download",
+					data: undefined,
+				});
+			}),
 		onSuccess: () => {
-			startTransition(() => {
-				router.push("/dashboard/caps");
-				router.refresh();
-			});
+			if (clickedContinue) {
+				startTransition(() => {
+					router.push("/dashboard/caps");
+					router.refresh();
+				});
+			}
 		},
 		onError: () => {
 			toast.error("An error occurred, please try again");
@@ -57,13 +69,16 @@ export function DownloadPage() {
 	});
 
 	return (
-		<div className="flex flex-col gap-12 justify-center items-center h-full lg:gap-20">
+		<div className="flex flex-col gap-12 justify-center items-center min-h-fit lg:gap-20">
 			<div className="space-y-10">
-				<div className="flex flex-col gap-2 justify-center items-center">
-					<h1 className="text-4xl font-medium text-gray-12">Download Cap</h1>
-					<p className="text-lg text-center text-gray-10 text-pretty">
-						Start recording beautiful screen recordings today
-					</p>
+				<div className="flex flex-col gap-6 justify-center items-center">
+					<LogoBadge className="mx-auto w-auto h-12" />
+					<div className="space-y-2 text-center">
+						<h1 className="text-4xl font-medium text-gray-12">Download Cap</h1>
+						<p className="text-lg text-center text-gray-10 text-pretty">
+							Start recording beautiful screen recordings today
+						</p>
+					</div>
 				</div>
 				<div className="flex flex-wrap gap-10 justify-center items-center w-full max-w-[1000px] mx-auto">
 					{recordingModes.map((recordingMode) => (
@@ -82,7 +97,7 @@ export function DownloadPage() {
 					))}
 				</div>
 			</div>
-			<div className="flex flex-wrap gap-4 justify-center mt-5">
+			<div className="flex flex-wrap gap-4 justify-center">
 				<Button
 					variant="blue"
 					size="lg"
@@ -94,12 +109,13 @@ export function DownloadPage() {
 				</Button>
 				<Button
 					onClick={() => {
+						setClickedContinue(true);
 						onboardingRequest.mutate();
 					}}
-					spinner={onboardingRequest.isPending}
-					disabled={onboardingRequest.isPending}
+					spinner={onboardingRequest.isPending && clickedContinue}
+					disabled={onboardingRequest.isPending && clickedContinue}
 					className="min-w-[120px]"
-					variant="outline"
+					variant="dark"
 					size="lg"
 				>
 					Continue

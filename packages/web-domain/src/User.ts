@@ -41,6 +41,10 @@ export const OnboardingStepPayload = Schema.Union(
 		step: Schema.Literal("download"),
 		data: Schema.Void,
 	}),
+	Schema.Struct({
+		step: Schema.Literal("skipToDashboard"),
+		data: Schema.Void,
+	}),
 );
 
 export const OnboardingStepResult = Schema.Union(
@@ -64,6 +68,10 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 	Schema.Struct({
 		step: Schema.Literal("download"),
+		data: Schema.Void,
+	}),
+	Schema.Struct({
+		step: Schema.Literal("skipToDashboard"),
 		data: Schema.Void,
 	}),
 );

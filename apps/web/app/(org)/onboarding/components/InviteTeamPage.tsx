@@ -120,7 +120,7 @@ export function InviteTeamPage() {
 			description="Invite members of your team to join your organization and share Caps together"
 		>
 			<div className="text-center">
-				<span className="mr-2 text-3xl tabular-nums text-gray-12">
+				<span className="mr-2 text-2xl tabular-nums lg:text-3xl text-gray-12">
 					$<NumberFlow suffix="/mo" value={currentTotalPrice} />
 				</span>
 				<span className="text-base tabular-nums text-gray-10">
@@ -132,7 +132,7 @@ export function InviteTeamPage() {
 						or,{" "}
 						<NumberFlow
 							value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
-							className="text-base tabular-nums text-gray-12"
+							className="text-sm tabular-nums lg:text-base text-gray-12"
 							format={{
 								notation: "compact",
 								style: "currency",
@@ -156,7 +156,7 @@ export function InviteTeamPage() {
 						or,{" "}
 						<NumberFlow
 							value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
-							className="text-base tabular-nums text-gray-12"
+							className="text-sm tabular-nums lg:text-base text-gray-12"
 							format={{
 								notation: "compact",
 								style: "currency",

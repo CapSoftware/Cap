@@ -20,7 +20,6 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 								data: result,
 							};
 						}
-
 						case "customDomain":
 							yield* onboarding.customDomain();
 							return { step: "customDomain" as const, data: undefined };
@@ -32,6 +31,9 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						case "download":
 							yield* onboarding.download();
 							return { step: "download" as const, data: undefined };
+						case "skipToDashboard":
+							yield* onboarding.skipToDashboard();
+							return { step: "skipToDashboard" as const, data: undefined };
 					}
 				}).pipe(
 					Effect.catchTag(

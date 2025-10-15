@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { CustomDomainPage } from "../components/CustomDomainPage";
-import { DownloadPage } from "../components/Download";
+import { DownloadPage } from "../components/DownloadPage";
 import { InviteTeamPage } from "../components/InviteTeamPage";
 import { OrganizationSetupPage } from "../components/OrganizationSetupPage";
 import { WelcomePage } from "../components/WelcomePage";
