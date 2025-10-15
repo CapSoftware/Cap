@@ -4,7 +4,7 @@ import {
 } from "@aws-sdk/client-cloudfront";
 import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -156,21 +156,25 @@ app.post(
 			const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
 
 			const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
-			if (videoIdToUse)
+			if (videoIdToUse) {
+				const videoId = Video.VideoId.make(videoIdToUse);
 				await db()
-					.update(videos)
+					.update(Db.videos)
 					.set({
-						duration: updateIfDefined(durationInSecs, videos.duration),
-						width: updateIfDefined(width, videos.width),
-						height: updateIfDefined(height, videos.height),
-						fps: updateIfDefined(fps, videos.fps),
+						duration: updateIfDefined(durationInSecs, Db.videos.duration),
+						width: updateIfDefined(width, Db.videos.width),
+						height: updateIfDefined(height, Db.videos.height),
+						fps: updateIfDefined(fps, Db.videos.fps),
 					})
-					.where(
-						and(
-							eq(videos.id, Video.VideoId.make(videoIdToUse)),
-							eq(videos.ownerId, user.id),
-						),
-					);
+					.where(and(eq(Db.videos.id), eq(Db.videos.ownerId, user.id)));
+
+				// i hate this but it'll have to do
+				if (fileKey === "result.mp4")
+					await db()
+						.update(Db.videoUploads)
+						.set({ mode: "singlepart" })
+						.where(eq(Db.videoUploads.videoId, videoId));
+			}
 
 			if (method === "post") return c.json({ presignedPostData: data! });
 			else return c.json({ presignedPutData: data! });

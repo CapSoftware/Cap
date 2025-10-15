@@ -46,6 +46,34 @@ app.post(
 			subpath: "result.mp4",
 		});
 
+		const resp = await Effect.gen(function* () {
+			const videos = yield* Videos;
+			const db = yield* Database;
+
+			const video = yield* videos.getById(Video.VideoId.make(user.id));
+			if (Option.isNone(video)) return yield* new Video.NotFoundError();
+
+			yield* db.use((db) =>
+				db
+					.update(Db.videoUploads)
+					.set({ mode: "multipart" })
+					.where(eq(Db.videoUploads.videoId, video.value[0].id)),
+			);
+		}).pipe(
+			provideOptionalAuth,
+			Effect.tapError(Effect.logError),
+			Effect.catchAll((e) => {
+				if (e._tag === "VideoNotFoundError")
+					return Effect.succeed<Response>(c.text("Video not found", 404));
+
+				return Effect.succeed<Response>(
+					c.json({ error: "Error initiating multipart upload" }, 500),
+				);
+			}),
+			runPromise,
+		);
+		if (resp) return resp;
+
 		try {
 			try {
 				const uploadId = await Effect.gen(function* () {

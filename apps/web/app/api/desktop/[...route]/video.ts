@@ -334,41 +334,44 @@ app.post(
 
 		try {
 			const [video] = await db()
-				.select({ id: videos.id })
+				.select({ id: videos.id, upload: videoUploads })
 				.from(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId));
 			if (!video)
 				return c.json(
 					{ error: true, message: "Video not found" },
 					{ status: 404 },
 				);
 
-			const [result] = await db()
-				.update(videoUploads)
-				.set({
-					uploaded,
-					total,
-					updatedAt,
-				})
-				.where(
-					and(
-						eq(videoUploads.videoId, videoId),
-						lte(videoUploads.updatedAt, updatedAt),
-					),
-				);
-
-			if (result.affectedRows === 0)
+			if (video.upload) {
+				if (uploaded === total && video.upload.mode === "singlepart") {
+					await db()
+						.delete(videoUploads)
+						.where(eq(videoUploads.videoId, videoId));
+				} else {
+					await db()
+						.update(videoUploads)
+						.set({
+							uploaded,
+							total,
+							updatedAt,
+						})
+						.where(
+							and(
+								eq(videoUploads.videoId, videoId),
+								lte(videoUploads.updatedAt, updatedAt),
+							),
+						);
+				}
+			} else {
 				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
-
-			// if (uploaded === total)
-			// 	await db()
-			// 		.delete(videoUploads)
-			// 		.where(eq(videoUploads.videoId, videoId));
+			}
 
 			return c.json(true);
 		} catch (error) {
