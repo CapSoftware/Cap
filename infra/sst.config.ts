@@ -99,7 +99,7 @@ export default $config({
 		});
 
 		const cloudfrontDistribution =
-			$app.stage === "production"
+			stage.variant === "production"
 				? aws.cloudfront.getDistributionOutput({ id: "E36XSZEM0VIIYB" })
 				: null;
 
@@ -129,16 +129,9 @@ export default $config({
 			return {
 				aud,
 				url,
-				provider:
-					$app.stage === "production" ||
-					$app.stage === "staging" ||
-					$app.stage.startsWith("git-branch-")
-						? aws.iam.getOpenIdConnectProviderOutput({ url: `https://${url}` })
-						: new aws.iam.OpenIdConnectProvider(
-								"VercelAWSOIDC",
-								{ url: `https://${url}`, clientIdLists: [aud] },
-								{ retainOnDelete: true },
-							),
+				provider: aws.iam.getOpenIdConnectProviderOutput({
+					url: `https://${url}`,
+				}),
 			};
 		})();
 
@@ -158,7 +151,7 @@ export default $config({
 							},
 							StringLike: {
 								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${$app.stage.startsWith("git-branch-") ? "preview" : $app.stage}`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${stage.variant === "git-branch" ? "preview" : stage.variant}`,
 								],
 							},
 						},
@@ -198,7 +191,7 @@ export default $config({
 		});
 
 		const workflowCluster =
-			$app.stage === "staging"
+			stage.variant === "staging"
 				? await WorkflowCluster(recordingsBucket, secrets)
 				: null;
 
