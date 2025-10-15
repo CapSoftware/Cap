@@ -10,8 +10,6 @@ export class AwsCredentials extends Effect.Service<AwsCredentials>()(
 	"AwsCredentials",
 	{
 		effect: Effect.gen(function* () {
-			let credentials: AwsCredentialIdentity | AwsCredentialIdentityProvider;
-
 			const accessKeys = yield* Config.option(
 				Config.all([
 					Config.string("CAP_AWS_ACCESS_KEY"),
@@ -22,20 +20,29 @@ export class AwsCredentials extends Effect.Service<AwsCredentials>()(
 				Config.string("VERCEL_AWS_ROLE_ARN"),
 			);
 
-			if (Option.isSome(accessKeys)) {
-				const [accessKeyId, secretAccessKey] = accessKeys.value;
-				yield* Effect.log("Using CAP_AWS_ACCESS_KEY and CAP_AWS_SECRET_KEY");
-				credentials = { accessKeyId, secretAccessKey };
-			} else if (Option.isSome(vercelAwsRole)) {
-				yield* Effect.log("Using VERCEL_AWS_ROLE_ARN");
-				credentials = awsCredentialsProvider({ roleArn: vercelAwsRole.value });
-			} else if (process.env.NODE_ENV === "development") {
-				yield* Effect.log("Using AWS_DEFAULT_PROFILE");
-				credentials = fromSSO({ profile: process.env.AWS_DEFAULT_PROFILE });
-			} else {
-				yield* Effect.log("Falling back to ECS metadata");
-				credentials = fromContainerMetadata();
-			}
+			const credentials: AwsCredentialIdentity | AwsCredentialIdentityProvider =
+				yield* Effect.gen(function* () {
+					if (Option.isSome(vercelAwsRole)) {
+						yield* Effect.log("Using VERCEL_AWS_ROLE_ARN");
+						return awsCredentialsProvider({ roleArn: vercelAwsRole.value });
+					}
+
+					if (Option.isSome(accessKeys)) {
+						const [accessKeyId, secretAccessKey] = accessKeys.value;
+						yield* Effect.log(
+							"Using CAP_AWS_ACCESS_KEY and CAP_AWS_SECRET_KEY",
+						);
+						return { accessKeyId, secretAccessKey };
+					}
+
+					if (process.env.NODE_ENV === "development") {
+						yield* Effect.log("Using AWS_DEFAULT_PROFILE");
+						return fromSSO({ profile: process.env.AWS_DEFAULT_PROFILE });
+					}
+
+					yield* Effect.log("Falling back to ECS metadata");
+					return fromContainerMetadata();
+				});
 
 			return { credentials };
 		}),
