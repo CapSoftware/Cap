@@ -29,7 +29,7 @@ interface UpgradeModalProps {
 	open: boolean;
 	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
-	onCheckout?: () => Promise<unknown>;
+	onCheckout?: () => Promise<void>;
 }
 
 const modalVariants = {
@@ -59,11 +59,11 @@ const modalVariants = {
 	},
 };
 
-export const UpgradeModalImpl = ({
+const UpgradeModalImpl = ({
 	open,
 	onOpenChange,
-	onboarding = false,
 	onCheckout,
+	onboarding,
 }: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
 	const [isAnnual, setIsAnnual] = useState(true);
@@ -178,9 +178,6 @@ export const UpgradeModalImpl = ({
 				window.location.href = data.url;
 			}
 		},
-		onError: () => {
-			toast.error("Something went wrong. Please try again.");
-		},
 	});
 
 	return (
@@ -281,7 +278,7 @@ export const UpgradeModalImpl = ({
 										type="button"
 										onClick={(e) => {
 											e.preventDefault();
-											proCheckoutMutation.mutate(e);
+											proCheckoutMutation.mutate();
 										}}
 										className="mt-5 w-full max-w-sm h-14 text-lg"
 										disabled={proCheckoutMutation.isPending}
