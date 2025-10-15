@@ -652,13 +652,11 @@ fn multipart_uploader(
             let size = chunk.len();
 
             let presigned_url = if expected_part_number == part_number {
-                // The optimistic presigned URL matches, wait for it
                 if let Some(task) = optimistic_presigned_url_task.take() {
                     task.await
                         .map_err(|e| format!("uploader/part/{part_number}/task_join: {e:?}"))?
                         .map_err(|e| format!("uploader/part/{part_number}/presign: {e}"))?
                 } else {
-                    // Fallback if no task available
                     api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
                         .await?
                 }
@@ -668,7 +666,6 @@ fn multipart_uploader(
                     task.abort();
                 }
                 debug!("Throwing out optimistic presigned URL for part {expected_part_number} as part {part_number} was requested!");
-                expected_part_number = part_number;
                 api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
                     .await?
             };
@@ -719,7 +716,6 @@ fn multipart_uploader(
             }));
         }
 
-        // Clean up any remaining optimistic task
         if let Some(task) = optimistic_presigned_url_task.take() {
             task.abort();
         }
