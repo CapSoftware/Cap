@@ -1945,6 +1945,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .ok();
 
+    tokio::spawn(async move {
+        posthog_rs::init_global("phc_nXz1MDsMR0QPrWYp669AcaWkLA3S5xzIGRhqhqTesRL")
+            .await
+            .map_err(|err| error!("Error initializing PostHog: {err}"))
+            .ok();
+    });
+
     let tauri_context = tauri::generate_context!();
 
     let specta_builder = tauri_specta::Builder::new()
@@ -2762,4 +2769,13 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn capture_event(event: posthog_rs::Event) {
+    tokio::spawn(async move {
+        posthog_rs::capture(event)
+            .await
+            .map_err(|err| error!("Error sending event to PostHog: {err:?}"))
+            .ok();
+    });
 }

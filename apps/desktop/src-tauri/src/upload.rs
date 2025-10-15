@@ -3,6 +3,7 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    async_capture_event,
     general_settings::GeneralSettingsStore,
     upload_legacy,
     web_api::{AuthedApiError, ManagerExt},
