@@ -93,6 +93,7 @@ pub async fn upload_video(
 
     info!("Uploading video {video_id}...");
 
+    let start = Instant::now();
     let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
     let video_fut = async {
@@ -113,7 +114,6 @@ pub async fn upload_video(
             stream.boxed()
         };
 
-        let start = Instant::now();
         let mut parts = stream.try_collect::<Vec<_>>().await?;
 
         // Deduplicate parts - keep the last occurrence of each part number
@@ -150,7 +150,7 @@ pub async fn upload_video(
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
 
-    async_capture_event(match video_result {
+    async_capture_event(match &video_result {
         Ok(took) => {
             let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
             e.insert_prop("took", took.as_millis());
@@ -366,13 +366,30 @@ impl InstantMultipartUpload {
         recording_dir: PathBuf,
     ) -> Self {
         Self {
-            handle: spawn_actor(Self::run(
-                app,
-                file_path,
-                pre_created_video,
-                realtime_upload_done,
-                recording_dir,
-            )),
+            handle: spawn_actor(async move {
+                let result = Self::run(
+                    app,
+                    file_path,
+                    pre_created_video,
+                    realtime_upload_done,
+                    recording_dir,
+                )
+                .await;
+                async_capture_event(match &result {
+                    Ok(took) => {
+                        let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
+                        e.insert_prop("took", took.as_millis());
+                        e
+                    }
+                    Err(err) => {
+                        let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
+                        e.insert_prop("error", err.to_string());
+                        e
+                    }
+                });
+
+                result.map(|_| ())
+            }),
         }
     }
 
@@ -382,7 +399,7 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<(), AuthedApiError> {
+    ) -> Result<Duration, AuthedApiError> {
         let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
             .map_err(|err| {
                 error!("Error checking status of new uploader flow from settings: {err}")
@@ -391,6 +408,7 @@ impl InstantMultipartUpload {
             .and_then(|v| v.map(|v| v.enable_new_uploader))
             .unwrap_or(false);
         info!("InstantMultipartUpload::run: is new uploader enabled? {is_new_uploader_enabled}");
+        let start = Instant::now();
         if !is_new_uploader_enabled {
             return upload_legacy::InstantMultipartUpload::run(
                 app,
@@ -400,6 +418,7 @@ impl InstantMultipartUpload {
                 realtime_video_done,
             )
             .await
+            .map(|_| start.elapsed())
             .map_err(Into::into);
         }
 
@@ -460,7 +479,7 @@ impl InstantMultipartUpload {
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        Ok(())
+        Ok(start.elapsed())
     }
 }
 

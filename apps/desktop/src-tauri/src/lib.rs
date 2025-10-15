@@ -66,7 +66,6 @@ use serde_json::json;
 use specta::Type;
 use std::{
     collections::BTreeMap,
-    fmt,
     fs::File,
     future::Future,
     io::BufWriter,
@@ -2771,7 +2770,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn capture_event(event: posthog_rs::Event) {
+pub fn async_capture_event(event: posthog_rs::Event) {
     tokio::spawn(async move {
         posthog_rs::capture(event)
             .await
