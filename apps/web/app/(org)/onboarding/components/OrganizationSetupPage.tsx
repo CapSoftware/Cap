@@ -6,14 +6,17 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import type { User } from "next-auth";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { Base } from "./Base";
 
-export function OrganizationSetupPage() {
-	const [organizationName, setOrganizationName] = useState("");
+export function OrganizationSetupPage({ user }: { user: User }) {
+	const [organizationName, setOrganizationName] = useState(
+		`${user.name}'s organization` || "",
+	);
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const router = useRouter();

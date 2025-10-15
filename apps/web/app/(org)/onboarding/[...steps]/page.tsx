@@ -1,3 +1,4 @@
+import { getCurrentUser } from "@cap/database/auth/session";
 import { CustomDomainPage } from "../components/CustomDomainPage";
 import { DownloadPage } from "../components/Download";
 import { InviteTeamPage } from "../components/InviteTeamPage";
@@ -11,13 +12,14 @@ export default async function OnboardingStepPage({
 		steps: "welcome" | "organization-setup" | "custom-domain" | "invite-team";
 	}>;
 }) {
+	const user = await getCurrentUser();
 	const step = (await params).steps[0];
 
 	switch (step) {
 		case "welcome":
 			return <WelcomePage />;
 		case "organization-setup":
-			return <OrganizationSetupPage />;
+			return <OrganizationSetupPage user={user} />;
 		case "custom-domain":
 			return <CustomDomainPage />;
 		case "invite-team":
