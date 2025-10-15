@@ -650,7 +650,7 @@ fn multipart_uploader(
             let size = chunk.len();
 
             // We prefetched for the wrong chunk. Let's try again.
-            if expected_part_number == part_number {
+            if expected_part_number != part_number {
                 presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
                     .await?
             }
