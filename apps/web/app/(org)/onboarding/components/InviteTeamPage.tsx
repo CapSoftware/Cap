@@ -38,7 +38,7 @@ export function InviteTeamPage() {
 	const decrementUsers = () => setUsers((n) => (n > 1 ? n - 1 : 1));
 
 	const inviteTeamMutation = useEffectMutation({
-		mutationFn: () =>
+		mutationFn: (redirect: boolean) =>
 			Effect.gen(function* () {
 				yield* withRpc((r) =>
 					r.UserCompleteOnboardingStep({
@@ -46,18 +46,27 @@ export function InviteTeamPage() {
 						data: undefined,
 					}),
 				);
+				return redirect;
 			}),
-		onSuccess: () => {
-			router.refresh();
+		onSuccess: (redirect: boolean) => {
+			startTransition(() => {
+				if (redirect) {
+					router.push("/onboarding/download");
+				}
+				router.refresh();
+			});
 		},
 		onError: () => {
 			toast.error("An error occurred, please try again");
 		},
 	});
 
-	const handleSubmit = async (e: MouseEvent<HTMLButtonElement>) => {
+	const handleSubmit = async (
+		e: MouseEvent<HTMLButtonElement>,
+		redirect = true,
+	) => {
 		e.preventDefault();
-		await inviteTeamMutation.mutateAsync();
+		await inviteTeamMutation.mutateAsync(redirect);
 	};
 
 	const planCheckout = async (e: MouseEvent<HTMLButtonElement>) => {
@@ -83,7 +92,7 @@ export function InviteTeamPage() {
 				return;
 			}
 
-			await handleSubmit(e);
+			await handleSubmit(e, false);
 
 			if (data.url) {
 				window.location.href = data.url;
@@ -228,7 +237,7 @@ export function InviteTeamPage() {
 					variant="blue"
 					spinner={planCheckoutMutation.isPending}
 					disabled={planCheckoutMutation.isPending}
-					onClick={(e) => planCheckoutMutation.mutate(e)}
+					onClick={planCheckoutMutation.mutate}
 				>
 					Get Started
 				</Button>

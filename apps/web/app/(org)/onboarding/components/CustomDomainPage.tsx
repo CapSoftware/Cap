@@ -3,7 +3,7 @@
 import { Button } from "@cap/ui";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, useState } from "react";
+import { type MouseEvent, startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -15,7 +15,7 @@ export function CustomDomainPage() {
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
 	const customDomainMutation = useEffectMutation({
-		mutationFn: () =>
+		mutationFn: (redirect: boolean) =>
 			Effect.gen(function* () {
 				yield* withRpc((r) =>
 					r.UserCompleteOnboardingStep({
@@ -23,18 +23,27 @@ export function CustomDomainPage() {
 						data: undefined,
 					}),
 				);
+				return redirect;
 			}),
-		onSuccess: () => {
-			router.refresh();
+		onSuccess: (redirect: boolean) => {
+			startTransition(() => {
+				if (redirect) {
+					router.push("/onboarding/invite-team");
+				}
+				router.refresh();
+			});
 		},
 		onError: () => {
 			toast.error("An error occurred, please try again");
 		},
 	});
 
-	const handleSubmit = async (e: MouseEvent<HTMLButtonElement>) => {
+	const handleSubmit = async (
+		e: MouseEvent<HTMLButtonElement>,
+		redirect = true,
+	) => {
 		e.preventDefault();
-		await customDomainMutation.mutateAsync();
+		await customDomainMutation.mutateAsync(redirect);
 	};
 
 	return (
@@ -74,7 +83,7 @@ export function CustomDomainPage() {
 			</Button>
 
 			<UpgradeModal
-				onCheckout={handleSubmit}
+				onCheckout={(e) => handleSubmit(e, false)}
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}
