@@ -153,12 +153,16 @@ pub async fn upload_video(
     async_capture_event(match &video_result {
         Ok(took) => {
             let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-            e.insert_prop("took", took.as_millis());
+            e.insert_prop("took", took.as_millis())
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
             e
         }
         Err(err) => {
             let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
-            e.insert_prop("error", err.to_string());
+            e.insert_prop("error", err.to_string())
+                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                .ok();
             e
         }
     });
@@ -206,6 +210,7 @@ pub async fn upload_image(
             .map_err(Into::into);
     }
 
+    let start = Instant::now();
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -378,12 +383,16 @@ impl InstantMultipartUpload {
                 async_capture_event(match &result {
                     Ok(took) => {
                         let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-                        e.insert_prop("took", took.as_millis());
+                        e.insert_prop("took", took.as_millis())
+                            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                            .ok();
                         e
                     }
                     Err(err) => {
                         let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
-                        e.insert_prop("error", err.to_string());
+                        e.insert_prop("error", err.to_string())
+                            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                            .ok();
                         e
                     }
                 });
