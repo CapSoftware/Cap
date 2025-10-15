@@ -51,20 +51,22 @@ export function useUploadProgress(
 
 	const lastUpdated = new Date(query.data.updatedAt);
 
-	return Date.now() - lastUpdated.getTime() > 5 * MINUTE
-		? {
-				status: "failed",
-				lastUpdated,
-			}
-		: {
-				status: "uploading",
-				lastUpdated,
-				progress:
-					// `0/0` for progress is `NaN`
-					query.data.total === 0
-						? 0
-						: (query.data.uploaded / query.data.total) * 100,
-			};
+	return query.data.uploaded >= query.data.total
+		? null
+		: Date.now() - lastUpdated.getTime() > 5 * MINUTE
+			? {
+					status: "failed",
+					lastUpdated,
+				}
+			: {
+					status: "uploading",
+					lastUpdated,
+					progress:
+						// `0/0` for progress is `NaN`
+						query.data.total === 0
+							? 0
+							: (query.data.uploaded / query.data.total) * 100,
+				};
 }
 
 const ProgressCircle = ({
