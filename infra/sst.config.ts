@@ -93,7 +93,9 @@ export default $config({
 				aud,
 				url,
 				provider:
-					$app.stage === "production" || $app.stage === "staging"
+					$app.stage === "production" ||
+					$app.stage === "staging" ||
+					$app.stage.startsWith("git-branch-")
 						? aws.iam.getOpenIdConnectProviderOutput({ url: `https://${url}` })
 						: new aws.iam.OpenIdConnectProvider(
 								"VercelAWSOIDC",
@@ -119,7 +121,7 @@ export default $config({
 							},
 							StringLike: {
 								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${$app.stage}`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${$app.stage.startsWith("git-branch-") ? "preview" : $app.stage}`,
 								],
 							},
 						},
@@ -188,7 +190,16 @@ export default $config({
 								? ["env_CFbtmnpsI11e4o8X5UD8MZzxELQi"]
 								: undefined,
 						targets:
-							$app.stage === "staging" ? undefined : ["preview", "production"],
+							$app.stage === "production"
+								? ["production"]
+								: $app.stage === "staging"
+									? ["development", "preview"]
+									: $app.stage.startsWith("git-branch-")
+										? ["preview"]
+										: undefined,
+						gitBranch: $app.stage.startsWith("git-branch-")
+							? new sst.Secret("GIT_BRANCH_NAME").value
+							: undefined,
 					});
 				});
 		}
