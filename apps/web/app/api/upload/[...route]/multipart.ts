@@ -5,7 +5,13 @@ import {
 import { db, updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { AwsCredentials, Database, S3Buckets, Videos } from "@cap/web-backend";
+import {
+	AwsCredentials,
+	Database,
+	provideOptionalAuth,
+	S3Buckets,
+	Videos,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -428,5 +434,5 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(runPromise),
+		}).pipe(provideOptionalAuth, runPromise),
 );
