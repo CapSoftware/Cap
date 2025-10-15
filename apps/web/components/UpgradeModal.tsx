@@ -1,10 +1,11 @@
 "use client";
 
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
-import { getProPlanId } from "@cap/utils";
 import NumberFlow from "@number-flow/react";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	BarChart3,
@@ -56,10 +57,8 @@ const modalVariants = {
 	},
 };
 
-export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
-	if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
-
-	const [proLoading, setProLoading] = useState(false);
+const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
+	const stripeCtx = useStripeContext();
 	const [isAnnual, setIsAnnual] = useState(true);
 	const [proQuantity, setProQuantity] = useState(1);
 	const { push } = useRouter();
@@ -132,38 +131,36 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 		},
 	];
 
-	const planCheckout = async () => {
-		setProLoading(true);
+	const planCheckout = useMutation({
+		mutationFn: async () => {
+			const planId = stripeCtx.plans[isAnnual ? "yearly" : "monthly"];
 
-		const planId = getProPlanId(isAnnual ? "yearly" : "monthly");
+			const response = await fetch(`/api/settings/billing/subscribe`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ priceId: planId, quantity: proQuantity }),
+			});
+			const data = await response.json();
 
-		const response = await fetch(`/api/settings/billing/subscribe`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ priceId: planId, quantity: proQuantity }),
-		});
-		const data = await response.json();
+			if (data.auth === false) {
+				localStorage.setItem("pendingPriceId", planId);
+				localStorage.setItem("pendingQuantity", proQuantity.toString());
+				push(`/login?next=/dashboard`);
+				return;
+			}
 
-		if (data.auth === false) {
-			localStorage.setItem("pendingPriceId", planId);
-			localStorage.setItem("pendingQuantity", proQuantity.toString());
-			push(`/login?next=/dashboard`);
-			return;
-		}
+			if (data.subscription === true) {
+				toast.success("You are already on the Cap Pro plan");
+				onOpenChange(false);
+			}
 
-		if (data.subscription === true) {
-			toast.success("You are already on the Cap Pro plan");
-			onOpenChange(false);
-		}
-
-		if (data.url) {
-			window.location.href = data.url;
-		}
-
-		setProLoading(false);
-	};
+			if (data.url) {
+				window.location.href = data.url;
+			}
+		},
+	});
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -260,11 +257,13 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 
 									<Button
 										variant="blue"
-										onClick={planCheckout}
+										onClick={() => planCheckout.mutate()}
 										className="mt-5 w-full max-w-sm h-14 text-lg"
-										disabled={proLoading}
+										disabled={planCheckout.isPending}
 									>
-										{proLoading ? "Loading..." : "Upgrade to Cap Pro"}
+										{planCheckout.isPending
+											? "Loading..."
+											: "Upgrade to Cap Pro"}
 									</Button>
 									<button
 										type="button"
@@ -303,6 +302,9 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 		</Dialog>
 	);
 };
+
+export const UpgradeModal =
+	buildEnv.NEXT_PUBLIC_IS_CAP !== "true" ? () => null : UpgradeModalImpl;
 
 const ProRiveArt = memo(() => {
 	const { RiveComponent: ProModal } = useRive({

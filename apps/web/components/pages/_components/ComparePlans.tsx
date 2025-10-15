@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { getProPlanId, userIsPro } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { faCheckCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { clsx } from "clsx";
@@ -13,6 +13,7 @@ import {
 	type CommercialArtRef,
 } from "../HomePage/Pricing/CommercialArt";
 import { ProArt, type ProArtRef } from "../HomePage/Pricing/ProArt";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 
 const COLUMN_WIDTH = "min-w-[200px]";
 
@@ -93,6 +94,7 @@ export const ComparePlans = () => {
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
+	const stripeCtx = useStripeContext();
 
 	// Check if user is already pro or any loading state is active
 	const isDisabled = useMemo(
@@ -247,7 +249,7 @@ export const ComparePlans = () => {
 		);
 
 	const planCheckout = async (planId?: string) => {
-		const finalPlanId = planId || getProPlanId("yearly");
+		const finalPlanId = planId || stripeCtx.plans.yearly;
 		setProLoading(true);
 
 		try {
