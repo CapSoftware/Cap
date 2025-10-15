@@ -71,28 +71,18 @@ pub async fn get_shareable_content()
         .as_ref()
         .map(|v| v.content.retained())
     {
-        trace!(
-            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-            "Resolved ScreenCaptureKit from warmed cache"
-        );
         return Ok(Some(content));
     }
 
     prewarm_shareable_content().await?;
 
     let content = state().cache.read().unwrap();
-    trace!(
-        elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-        cache_hit = content.is_some(),
-        "Resolved ScreenCaptureKit after cache populate"
-    );
     Ok(content.as_ref().map(|v| v.content.retained()))
 }
 
 async fn run_warmup(task: WarmupTask) {
     let result = async {
         let warm_start = Instant::now();
-        debug!("Populating ScreenCaptureKit shareable content cache");
 
         let content = sc::ShareableContent::current().await?;
         let cache = ShareableContentCache::new(content);
@@ -102,10 +92,6 @@ async fn run_warmup(task: WarmupTask) {
         let replaced = guard.is_some();
         *guard = Some(cache);
 
-        info!(
-            elapsed_ms,
-            replaced, "ScreenCaptureKit shareable content cache populated"
-        );
         Ok::<(), arc::R<ns::Error>>(())
     }
     .await;

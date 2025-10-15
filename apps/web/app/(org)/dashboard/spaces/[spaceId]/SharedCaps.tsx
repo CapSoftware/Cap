@@ -8,6 +8,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
 import { useDashboardContext } from "../../Contexts";
 import { CapPagination } from "../../caps/components/CapPagination";
 import Folder, { type FolderDataType } from "../../caps/components/Folder";
@@ -94,52 +96,12 @@ export const SharedCaps = ({
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-		queryKey: ["analytics", data.map((video) => video.id)],
-		queryFn: async () => {
-			if (!dubApiKeyEnabled || data.length === 0) {
-				return {};
-			}
+	const analyticsQuery = useVideosAnalyticsQuery(
+		data.map((video) => video.id),
+		dubApiKeyEnabled,
+	);
 
-			const analyticsPromises = data.map(async (video) => {
-				try {
-					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-						},
-					});
-
-					if (response.ok) {
-						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
-					}
-					return { videoId: video.id, count: 0 };
-				} catch (error) {
-					console.warn(
-						`Failed to fetch analytics for video ${video.id}:`,
-						error,
-					);
-					return { videoId: video.id, count: 0 };
-				}
-			});
-
-			const results = await Promise.allSettled(analyticsPromises);
-			const analyticsData: Record<string, number> = {};
-
-			results.forEach((result) => {
-				if (result.status === "fulfilled" && result.value) {
-					analyticsData[result.value.videoId] = result.value.count;
-				}
-			});
-
-			return analyticsData;
-		},
-		staleTime: 30000, // 30 seconds
-		refetchOnWindowFocus: false,
-	});
-
-	const analytics = analyticsData || {};
+	const analytics = analyticsQuery.data || {};
 
 	const handleVideosAdded = () => {
 		router.refresh();
@@ -296,7 +258,7 @@ export const SharedCaps = ({
 									key={cap.id}
 									cap={cap}
 									hideSharedStatus
-									isLoadingAnalytics={isLoadingAnalytics}
+									isLoadingAnalytics={analyticsQuery.isLoading}
 									analytics={analytics[cap.id] || 0}
 									organizationName={activeOrganization?.organization.name || ""}
 									spaceName={spaceData?.name || ""}

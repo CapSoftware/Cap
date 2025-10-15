@@ -125,6 +125,23 @@ impl MP4Encoder {
                 .as_id_ref(),
             );
 
+            output_settings.insert(
+                av::video_settings_keys::color_props(),
+                ns::Dictionary::with_keys_values(
+                    &[
+                        unsafe { AVVideoTransferFunctionKey },
+                        unsafe { AVVideoColorPrimariesKey },
+                        unsafe { AVVideoYCbCrMatrixKey },
+                    ],
+                    &[
+                        unsafe { AVVideoTransferFunction_ITU_R_709_2 },
+                        unsafe { AVVideoColorPrimaries_ITU_R_709_2 },
+                        unsafe { AVVideoYCbCrMatrix_ITU_R_709_2 },
+                    ],
+                )
+                .as_id_ref(),
+            );
+
             let mut video_input = av::AssetWriterInput::with_media_type_and_output_settings(
                 av::MediaType::video(),
                 Some(output_settings.as_ref()),
@@ -370,7 +387,14 @@ impl Drop for MP4Encoder {
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
-    static AVVideoAverageBitRateKey: &'static cidre::ns::String;
+    static AVVideoAverageBitRateKey: &'static ns::String;
+    static AVVideoTransferFunctionKey: &'static ns::String;
+    static AVVideoColorPrimariesKey: &'static ns::String;
+    static AVVideoYCbCrMatrixKey: &'static ns::String;
+
+    static AVVideoTransferFunction_ITU_R_709_2: &'static cidre::ns::String;
+    static AVVideoColorPrimaries_ITU_R_709_2: &'static cidre::ns::String;
+    static AVVideoYCbCrMatrix_ITU_R_709_2: &'static cidre::ns::String;
 }
 
 unsafe fn result_unchecked<T, R>(op: impl FnOnce(&mut Option<T>) -> R) -> cidre::os::Result<T>

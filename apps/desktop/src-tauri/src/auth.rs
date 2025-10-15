@@ -118,6 +118,3 @@ impl AuthStore {
         store.save().map_err(|e| e.to_string())
     }
 }
-
-#[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone, serde::Deserialize)]
-pub struct AuthenticationInvalid;

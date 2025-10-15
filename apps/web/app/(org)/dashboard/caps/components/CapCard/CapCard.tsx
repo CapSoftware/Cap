@@ -196,7 +196,6 @@ export const CapCard = ({
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
-	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 
 	// Helper function to create a drag preview element
@@ -462,10 +461,7 @@ export const CapCard = ({
 											error: "Failed to duplicate cap",
 										});
 									}}
-									disabled={
-										duplicateMutation.isPending ||
-										(enableBetaUploadProgress && cap.hasActiveUpload)
-									}
+									disabled={duplicateMutation.isPending || cap.hasActiveUpload}
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faCopy} />
@@ -553,7 +549,9 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
-						{imageStatus !== "success" && uploadProgress ? (
+						{imageStatus !== "success" &&
+						uploadProgress &&
+						uploadProgress?.status !== "fetching" ? (
 							<div className="relative inset-0 z-20 w-full h-full">
 								<div className="overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video z-5">
 									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">

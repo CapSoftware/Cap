@@ -49,8 +49,8 @@ impl Mp4ExportSettings {
         info!("Exporting mp4 with settings: {:?}", &self);
         info!("Expected to render {} frames", base.total_frames(self.fps));
 
-        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
+        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(8);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(8);
 
         let fps = self.fps;
 

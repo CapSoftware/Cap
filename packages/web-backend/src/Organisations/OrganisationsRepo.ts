@@ -13,7 +13,7 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 
 			return {
 				membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
-					db.execute((db) =>
+					db.use((db) =>
 						db
 							.select({ membershipId: Db.organizationMembers.id })
 							.from(Db.organizationMembers)
@@ -33,7 +33,7 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 					),
 				membership: (userId: User.UserId, orgId: Organisation.OrganisationId) =>
 					db
-						.execute((db) =>
+						.use((db) =>
 							db
 								.select({
 									membershipId: Db.organizationMembers.id,
