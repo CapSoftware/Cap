@@ -52,7 +52,6 @@ pub async fn upload_multipart_presign_part(
     video_id: &str,
     upload_id: &str,
     part_number: u32,
-    md5_sum: &str,
 ) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -68,7 +67,6 @@ pub async fn upload_multipart_presign_part(
                     "videoId": video_id,
                     "uploadId": upload_id,
                     "partNumber": part_number,
-                    "md5Sum": md5_sum
                 }))
         })
         .await
