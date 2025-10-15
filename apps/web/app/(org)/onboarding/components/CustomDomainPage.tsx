@@ -29,8 +29,8 @@ export function CustomDomainPage() {
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/invite-team");
+					router.refresh();
 				}
-				router.refresh();
 			});
 		},
 		onError: () => {

@@ -52,8 +52,8 @@ export function InviteTeamPage() {
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/download");
+					router.refresh();
 				}
-				router.refresh();
 			});
 		},
 		onError: () => {
