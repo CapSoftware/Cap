@@ -1,6 +1,5 @@
 "use client";
 
-import type { users } from "@cap/database/schema";
 import { Button, Input } from "@cap/ui";
 import { faImage } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -14,12 +13,12 @@ import { withRpc } from "@/lib/Rpcs";
 import { Base } from "./Base";
 
 export function OrganizationSetupPage({
-	user,
+	firstName,
 }: {
-	user: typeof users.$inferSelect | null;
+	firstName: string | null | undefined;
 }) {
 	const [organizationName, setOrganizationName] = useState(
-		user ? `${user.name}'s organization` : "",
+		firstName ? `${firstName}'s organization` : "",
 	);
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +85,7 @@ export function OrganizationSetupPage({
 	return (
 		<Base
 			title="Organization Setup"
-			description="Lets get your dashboard setup with your organization"
+			description="Let's get your dashboard setup with your organization"
 		>
 			<form onSubmit={handleSubmit} className="space-y-7">
 				<div className="space-y-3">

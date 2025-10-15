@@ -12,14 +12,15 @@ export default async function OnboardingStepPage({
 		steps: "welcome" | "organization-setup" | "custom-domain" | "invite-team";
 	}>;
 }) {
-	const user = await getCurrentUser();
 	const step = (await params).steps[0];
 
 	switch (step) {
 		case "welcome":
 			return <WelcomePage />;
-		case "organization-setup":
-			return <OrganizationSetupPage user={user} />;
+		case "organization-setup": {
+			const user = await getCurrentUser();
+			return <OrganizationSetupPage firstName={user?.name} />;
+		}
 		case "custom-domain":
 			return <CustomDomainPage />;
 		case "invite-team":
