@@ -3,7 +3,7 @@
 import { Button } from "@cap/ui";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, startTransition, useState } from "react";
+import { type MouseEvent, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -25,10 +25,7 @@ export function CustomDomainPage() {
 				);
 			}),
 		onSuccess: () => {
-			startTransition(() => {
-				router.push("/onboarding/invite-team");
-				router.refresh();
-			});
+			router.refresh();
 		},
 		onError: () => {
 			toast.error("An error occurred, please try again");

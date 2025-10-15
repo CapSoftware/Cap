@@ -48,10 +48,7 @@ export function InviteTeamPage() {
 				);
 			}),
 		onSuccess: () => {
-			startTransition(() => {
-				router.push("/onboarding/download");
-				router.refresh();
-			});
+			router.refresh();
 		},
 		onError: () => {
 			toast.error("An error occurred, please try again");
