@@ -663,7 +663,6 @@ fn multipart_uploader(
                 .build()
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .header("Content-Length", chunk.len())
                 .timeout(Duration::from_secs(120))
                 .body(chunk)
