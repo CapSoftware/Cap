@@ -647,7 +647,6 @@ fn multipart_uploader(
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
             trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
             prev_part_number = Some(part_number);
-            let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
 
             // We prefetched for the wrong chunk. Let's try again.
@@ -663,7 +662,6 @@ fn multipart_uploader(
                 .build()
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .header("Content-Length", chunk.len())
                 .timeout(Duration::from_secs(120))
                 .body(chunk)

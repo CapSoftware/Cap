@@ -141,14 +141,14 @@ app.post(
 			.object({
 				uploadId: z.string(),
 				partNumber: z.number(),
+				// deprecated
+				md5Sum: z.string().optional(),
 			})
 			.and(
 				z.union([
 					z.object({ videoId: z.string() }),
 					// deprecated
 					z.object({ fileKey: z.string() }),
-					// deprecated
-					// z.object({ md5Sum: z.string() }),
 				]),
 			),
 	),
@@ -175,6 +175,7 @@ app.post(
 							fileKey,
 							uploadId,
 							partNumber,
+							{ ContentMD5: body.md5Sum },
 						);
 
 					return presignedUrl;

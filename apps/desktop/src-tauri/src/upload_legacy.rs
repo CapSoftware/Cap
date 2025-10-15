@@ -913,7 +913,6 @@ impl InstantMultipartUpload {
                         "videoId": video_id,
                         "uploadId": upload_id,
                         "partNumber": *part_number,
-                        "md5Sum": &md5_sum
                     }))
             })
             .await
@@ -972,7 +971,6 @@ impl InstantMultipartUpload {
 
             match client
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .timeout(Duration::from_secs(120))
                 .body(chunk.clone())
                 .send()
