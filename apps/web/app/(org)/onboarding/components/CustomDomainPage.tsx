@@ -3,7 +3,7 @@
 import { Button } from "@cap/ui";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
-import { type MouseEvent, startTransition, useState } from "react";
+import { startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -38,11 +38,7 @@ export function CustomDomainPage() {
 		},
 	});
 
-	const handleSubmit = async (
-		e: MouseEvent<HTMLButtonElement>,
-		redirect = true,
-	) => {
-		e.preventDefault();
+	const handleSubmit = async (redirect = true) => {
 		await customDomainMutation.mutateAsync(redirect);
 	};
 
@@ -77,13 +73,13 @@ export function CustomDomainPage() {
 				spinner={customDomainMutation.isPending}
 				disabled={customDomainMutation.isPending}
 				className="mx-auto w-full"
-				onClick={handleSubmit}
+				onClick={() => handleSubmit()}
 			>
 				Skip
 			</Button>
 
 			<UpgradeModal
-				onCheckout={(e) => handleSubmit(e, false)}
+				onCheckout={() => handleSubmit(false)}
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}
