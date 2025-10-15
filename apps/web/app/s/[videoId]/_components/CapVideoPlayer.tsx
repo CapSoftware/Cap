@@ -288,7 +288,7 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		const video = videoRef.current;
-		if (!video || resolvedSrc.data?.url) return;
+		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
 			setVideoLoaded(true);
@@ -458,7 +458,7 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [hasPlayedOnce, resolvedSrc.data?.url]);
+	}, [hasPlayedOnce, resolvedSrc.isPending]);
 
 	const generateVideoFrameThumbnail = useCallback((time: number): string => {
 		const video = videoRef.current;

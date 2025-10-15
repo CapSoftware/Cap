@@ -51,7 +51,7 @@ export function useUploadProgress(
 
 	const lastUpdated = new Date(query.data.updatedAt);
 
-	return query.data.uploaded >= query.data.total
+	return query.data.total > 0 && query.data.uploaded >= query.data.total
 		? null
 		: Date.now() - lastUpdated.getTime() > 5 * MINUTE
 			? {
