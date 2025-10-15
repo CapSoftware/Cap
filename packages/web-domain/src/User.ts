@@ -60,6 +60,7 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 	Schema.Struct({
 		step: Schema.Literal("inviteTeam"),
+		data: Schema.Void,
 	}),
 	Schema.Struct({
 		step: Schema.Literal("download"),

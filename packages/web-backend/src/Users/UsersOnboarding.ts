@@ -94,12 +94,16 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 						if (data.organizationIcon) {
 							const organizationIcon = data.organizationIcon;
 							const uploadEffect = Effect.gen(function* () {
-								const {
-									data: fileData,
-									contentType,
-									fileName,
-								} = organizationIcon;
-								const fileExtension = fileName.split(".").pop();
+								const { data: fileData, contentType } = organizationIcon;
+								const allowedExt = new Map<string, string>([
+									["image/png", "png"],
+									["image/jpeg", "jpg"],
+									["image/webp", "webp"],
+									["image/svg+xml", "svg"],
+								]);
+								const fileExtension = allowedExt.get(contentType);
+								if (!fileExtension)
+									throw new Error("Unsupported icon content type");
 								const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
 								const [bucket] = yield* s3Buckets.getBucketAccess(

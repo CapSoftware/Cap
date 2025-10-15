@@ -9,7 +9,7 @@ import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
-import { startTransition, useId, useState } from "react";
+import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
@@ -58,12 +58,12 @@ export function InviteTeamPage() {
 		},
 	});
 
-	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+	const handleSubmit = async (e: MouseEvent<HTMLButtonElement>) => {
 		e.preventDefault();
-		inviteTeamMutation.mutate();
+		await inviteTeamMutation.mutateAsync();
 	};
 
-	const planCheckout = async (e: React.MouseEvent<HTMLButtonElement>) => {
+	const planCheckout = async (e: MouseEvent<HTMLButtonElement>) => {
 		e.preventDefault();
 		try {
 			const planId = getProPlanId(isAnnually ? "yearly" : "monthly");
@@ -94,13 +94,11 @@ export function InviteTeamPage() {
 		} catch (error) {
 			console.error("Plan checkout error:", error);
 			toast.error("Something went wrong. Please try again.");
-		} finally {
-			planCheckoutMutation.mutate(e);
 		}
 	};
 
 	const planCheckoutMutation = useMutation({
-		mutationFn: (e: React.MouseEvent<HTMLButtonElement>) => planCheckout(e),
+		mutationFn: (e: MouseEvent<HTMLButtonElement>) => planCheckout(e),
 		onError: (error) => {
 			console.error("Plan checkout error:", error);
 			toast.error("Something went wrong. Please try again.");

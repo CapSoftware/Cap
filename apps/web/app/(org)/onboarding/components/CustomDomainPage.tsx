@@ -3,7 +3,7 @@
 import { Button } from "@cap/ui";
 import { Effect } from "effect";
 import { useRouter } from "next/navigation";
-import { startTransition, useState } from "react";
+import { type MouseEvent, startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -35,9 +35,9 @@ export function CustomDomainPage() {
 		},
 	});
 
-	const handleSubmit = async (e: React.MouseEvent<HTMLButtonElement>) => {
+	const handleSubmit = async (e: MouseEvent<HTMLButtonElement>) => {
 		e.preventDefault();
-		customDomainMutation.mutate();
+		await customDomainMutation.mutateAsync();
 	};
 
 	return (

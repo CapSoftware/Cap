@@ -275,24 +275,8 @@ export const POST = async (req: Request) => {
 							invite_quota: inviteQuota,
 							price_id: subscription.items.data[0]?.price.id,
 							quantity: inviteQuota,
-							is_onboarding:
-								typeof session.metadata === "object" &&
-								session.metadata !== null &&
-								"isOnBoarding" in session.metadata &&
-								typeof (session.metadata as Record<string, unknown>)
-									.isOnBoarding === "string"
-									? ((session.metadata as Record<string, unknown>)
-											.isOnBoarding as string)
-									: "false",
-							platform:
-								typeof session.metadata === "object" &&
-								session.metadata !== null &&
-								"platform" in session.metadata &&
-								typeof (session.metadata as Record<string, unknown>)
-									.platform === "string"
-									? ((session.metadata as Record<string, unknown>)
-											.platform as string)
-									: "web",
+							is_onboarding: session.metadata?.isOnBoarding === "true",
+							platform: session.metadata?.platform === "web",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
 						},
