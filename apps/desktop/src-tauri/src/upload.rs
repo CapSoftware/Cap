@@ -113,6 +113,7 @@ pub async fn upload_video(
             stream.boxed()
         };
 
+        let start = Instant::now();
         let mut parts = stream.try_collect::<Vec<_>>().await?;
 
         // Deduplicate parts - keep the last occurrence of each part number
@@ -129,7 +130,7 @@ pub async fn upload_video(
 
         api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
 
-        Ok(())
+        Ok(start.elapsed())
     };
 
     // TODO: We don't report progress on image upload
@@ -148,6 +149,19 @@ pub async fn upload_video(
 
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
+
+    async_capture_event(match video_result {
+        Ok(took) => {
+            let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
+            e.insert_prop("took", took.as_millis());
+            e
+        }
+        Err(err) => {
+            let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
+            e.insert_prop("error", err.to_string());
+            e
+        }
+    });
 
     let _ = (video_result?, thumbnail_result?);
 
