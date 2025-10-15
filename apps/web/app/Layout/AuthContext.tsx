@@ -13,10 +13,6 @@ export function AuthContextProvider({
 }: {
 	children: React.ReactNode;
 	user: ReturnType<typeof getCurrentUser>;
-	stripePlans?: {
-		yearly: string;
-		monthly: string;
-	};
 }) {
 	return (
 		<AuthContext.Provider value={{ user }}>{children}</AuthContext.Provider>
