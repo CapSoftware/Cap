@@ -172,33 +172,12 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								onboardingSteps: {
 									...user.onboardingSteps,
 									inviteTeam: true,
+									download: true,
 								},
 							})
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 				}),
-
-				download: Effect.fn("Onboarding.download")(function* () {
-					const currentUser = yield* CurrentUser;
-
-					const [user] = yield* db.use((db) =>
-						db
-							.select()
-							.from(Db.users)
-							.where(Dz.eq(Db.users.id, currentUser.id)),
-					);
-
-					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({
-								onboardingSteps: { ...user.onboardingSteps, download: true },
-								onboarding_completed_at: new Date(),
-							})
-							.where(Dz.eq(Db.users.id, currentUser.id)),
-					);
-				}),
-
 				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
 					const currentUser = yield* CurrentUser;
 

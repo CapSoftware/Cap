@@ -38,10 +38,6 @@ export const OnboardingStepPayload = Schema.Union(
 		data: Schema.Void,
 	}),
 	Schema.Struct({
-		step: Schema.Literal("download"),
-		data: Schema.Void,
-	}),
-	Schema.Struct({
 		step: Schema.Literal("skipToDashboard"),
 		data: Schema.Void,
 	}),
@@ -64,10 +60,6 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 	Schema.Struct({
 		step: Schema.Literal("inviteTeam"),
-		data: Schema.Void,
-	}),
-	Schema.Struct({
-		step: Schema.Literal("download"),
 		data: Schema.Void,
 	}),
 	Schema.Struct({

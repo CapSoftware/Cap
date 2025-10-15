@@ -27,10 +27,6 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						case "inviteTeam":
 							yield* onboarding.inviteTeam();
 							return { step: "inviteTeam" as const, data: undefined };
-
-						case "download":
-							yield* onboarding.download();
-							return { step: "download" as const, data: undefined };
 						case "skipToDashboard":
 							yield* onboarding.skipToDashboard();
 							return { step: "skipToDashboard" as const, data: undefined };
