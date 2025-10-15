@@ -49,7 +49,6 @@ interface Props {
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
-	const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const manageNavigation = [
@@ -323,23 +322,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									/>
 								)}
 
-								{hoveredItem === item.name && !isPathActive(item.href) && (
-									<motion.div
-										layoutId="hoverIndicator"
-										className={clsx(
-											"absolute bg-transparent rounded-xl",
-											sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0",
-										)}
-										initial={{ opacity: 0 }}
-										animate={{ opacity: 1 }}
-										exit={{ opacity: 0 }}
-										transition={{
-											type: "spring",
-											bounce: 0.2,
-											duration: 0.2,
-										}}
-									/>
-								)}
 								<NavItem
 									name={item.name}
 									href={item.href}
