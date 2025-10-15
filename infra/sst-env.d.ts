@@ -4,51 +4,14 @@
 /* deno-fmt-ignore-file */
 
 declare module "sst" {
-	export interface Resource {
-		AuroraDB: {
-			clusterArn: string;
-			database: string;
-			host: string;
-			password: string;
-			port: number;
-			reader: string;
-			secretArn: string;
-			type: "sst.aws.Aurora";
-			username: string;
-		};
-		CAP_AWS_ACCESS_KEY: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
-		CAP_AWS_SECRET_KEY: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
-		DATABASE_URL_MYSQL: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
-		GITHUB_PAT: {
-			type: "sst.sst.Secret";
-			value: string;
-		};
-		MyApi: {
-			type: "sst.aws.ApiGatewayV2";
-			url: string;
-		};
-		Runner: {
-			service: string;
-			type: "sst.aws.Service";
-		};
-		ShardManager: {
-			service: string;
-			type: "sst.aws.Service";
-		};
-		Vpc: {
-			type: "sst.aws.Vpc";
-		};
-	}
+  export interface Resource {
+    "DATABASE_URL_MYSQL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+  }
 }
 /// <reference path="sst-env.d.ts" />
 
-import "sst";
+import "sst"
+export {}
