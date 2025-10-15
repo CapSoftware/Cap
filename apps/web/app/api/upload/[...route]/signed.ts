@@ -56,8 +56,8 @@ app.post(
 		try {
 			const [customBucket] = await db()
 				.select()
-				.from(s3Buckets)
-				.where(eq(s3Buckets.ownerId, user.id));
+				.from(Db.s3Buckets)
+				.where(eq(Db.s3Buckets.ownerId, user.id));
 
 			const s3Config = customBucket
 				? {
