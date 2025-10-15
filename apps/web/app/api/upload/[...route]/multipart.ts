@@ -46,11 +46,15 @@ app.post(
 			subpath: "result.mp4",
 		});
 
+		const videoIdFromFileKey = fileKey.split("/")[1];
+		const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
+		if (!videoId) throw new Error("Video ID is required");
+
 		const resp = await Effect.gen(function* () {
 			const videos = yield* Videos;
 			const db = yield* Database;
 
-			const video = yield* videos.getById(Video.VideoId.make(user.id));
+			const video = yield* videos.getById(Video.VideoId.make(videoId));
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
 			yield* db.use((db) =>
