@@ -47,6 +47,12 @@ export function InviteTeamPage() {
 						data: undefined,
 					}),
 				);
+				yield* withRpc((r) =>
+					r.UserCompleteOnboardingStep({
+						step: "download",
+						data: undefined,
+					}),
+				);
 				return redirect;
 			}),
 		onSuccess: (redirect: boolean) => {
