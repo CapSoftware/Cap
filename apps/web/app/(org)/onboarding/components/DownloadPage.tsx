@@ -41,10 +41,11 @@ export function DownloadPage() {
 	const router = useRouter();
 	const [clickedContinue, setClickedContinue] = useState(false);
 
-	//mark as complete when loading the page
 	useEffect(() => {
-		onboardingRequest.mutate();
-		router.refresh();
+		startTransition(() => {
+			onboardingRequest.mutate();
+			router.refresh();
+		});
 	}, []);
 
 	const onboardingRequest = useEffectMutation({
