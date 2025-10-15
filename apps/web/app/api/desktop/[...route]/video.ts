@@ -20,6 +20,11 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
+import {
+	isAtLeastSemver,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -186,10 +191,10 @@ app.get(
 					fps,
 				});
 
-			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
-			const clientSupportsUploadProgress = xCapVersion
-				? isAtLeastSemver(xCapVersion, 0, 3, 68)
-				: false;
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
 
 			if (clientSupportsUploadProgress)
 				await db().insert(videoUploads).values({
@@ -380,27 +385,3 @@ app.post(
 		}
 	},
 );
-
-function isAtLeastSemver(
-	versionString: string,
-	major: number,
-	minor: number,
-	patch: number,
-): boolean {
-	const match = versionString
-		.replace(/^v/, "")
-		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
-	if (!match) return false;
-	const [, vMajor, vMinor, vPatch, prerelease] = match;
-	const M = vMajor ? parseInt(vMajor, 10) || 0 : 0;
-	const m = vMinor ? parseInt(vMinor, 10) || 0 : 0;
-	const p = vPatch ? parseInt(vPatch, 10) || 0 : 0;
-	if (M > major) return true;
-	if (M < major) return false;
-	if (m > minor) return true;
-	if (m < minor) return false;
-	if (p > patch) return true;
-	if (p < patch) return false;
-	// Equal triplet: accept only non-prerelease
-	return !prerelease;
-}

@@ -15,6 +15,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { runPromise } from "@/lib/server";
+import {
+	isAtLeastSemver,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
@@ -166,10 +171,16 @@ app.post(
 						height: updateIfDefined(height, Db.videos.height),
 						fps: updateIfDefined(fps, Db.videos.fps),
 					})
-					.where(and(eq(Db.videos.id), eq(Db.videos.ownerId, user.id)));
+					.where(
+						and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+					);
 
 				// i hate this but it'll have to do
-				if (fileKey === "result.mp4")
+				const clientSupportsUploadProgress = isFromDesktopSemver(
+					c.req,
+					UPLOAD_PROGRESS_VERSION,
+				);
+				if (fileKey === "result.mp4" && clientSupportsUploadProgress)
 					await db()
 						.update(Db.videoUploads)
 						.set({ mode: "singlepart" })
