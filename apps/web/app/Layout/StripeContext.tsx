@@ -20,7 +20,7 @@ export function useStripeContext() {
 	const context = use(StripeContext);
 	if (!context) {
 		throw new Error(
-			"useStripeContext must be used within a StripeContextProvideriteContextProvider",
+			"useStripeContext must be used within a StripeContextProvider",
 		);
 	}
 	return context;
