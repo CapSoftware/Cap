@@ -1,7 +1,6 @@
 "use client";
 
 import { Button, Switch } from "@cap/ui";
-import { getProPlanId } from "@cap/utils";
 import { faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
@@ -11,6 +10,7 @@ import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { homepageCopy } from "../../../../data/homepage-copy";
@@ -18,6 +18,7 @@ import { Base } from "./Base";
 
 export function InviteTeamPage() {
 	const billingCycleId = useId();
+	const stripeCtx = useStripeContext();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
 	const router = useRouter();
@@ -72,7 +73,8 @@ export function InviteTeamPage() {
 	const planCheckout = async (e: MouseEvent<HTMLButtonElement>) => {
 		e.preventDefault();
 		try {
-			const planId = getProPlanId(isAnnually ? "yearly" : "monthly");
+			const planId = stripeCtx.plans[isAnnually ? "yearly" : "monthly"];
+
 			const response = await fetch(`/api/settings/billing/subscribe`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
