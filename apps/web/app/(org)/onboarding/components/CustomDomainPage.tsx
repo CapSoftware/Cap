@@ -38,13 +38,8 @@ export function CustomDomainPage() {
 		},
 	});
 
-	const handleSubmit = async (
-		e: MouseEvent<HTMLButtonElement>,
-		redirect = true,
-	) => {
-		e.preventDefault();
-		await customDomainMutation.mutateAsync(redirect);
-	};
+	const handleSubmit = (redirect = true) =>
+		customDomainMutation.mutateAsync(redirect);
 
 	return (
 		<Base
@@ -77,13 +72,13 @@ export function CustomDomainPage() {
 				spinner={customDomainMutation.isPending}
 				disabled={customDomainMutation.isPending}
 				className="mx-auto w-full"
-				onClick={handleSubmit}
+				onClick={() => handleSubmit()}
 			>
 				Skip
 			</Button>
 
 			<UpgradeModal
-				onCheckout={(e) => handleSubmit(e, false)}
+				onCheckout={() => handleSubmit(false)}
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}

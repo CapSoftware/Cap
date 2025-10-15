@@ -141,18 +141,19 @@ app.post(
 			.object({
 				uploadId: z.string(),
 				partNumber: z.number(),
-				md5Sum: z.string(),
 			})
 			.and(
 				z.union([
 					z.object({ videoId: z.string() }),
 					// deprecated
 					z.object({ fileKey: z.string() }),
+					// deprecated
+					// z.object({ md5Sum: z.string() }),
 				]),
 			),
 	),
 	async (c) => {
-		const { uploadId, partNumber, md5Sum, ...body } = c.req.valid("json");
+		const { uploadId, partNumber, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, {
@@ -174,7 +175,6 @@ app.post(
 							fileKey,
 							uploadId,
 							partNumber,
-							{ ContentMD5: md5Sum },
 						);
 
 					return presignedUrl;

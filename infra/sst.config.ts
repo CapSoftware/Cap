@@ -6,12 +6,24 @@ const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
 const GITHUB_APP_ID = "1196731";
 
+const VERCEL_PROJECT_NAME = "cap-web";
 const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 
 const CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
 const AXIOM_API_TOKEN = "xaat-c0704be6-e942-4935-b068-3b491d7cc00f";
 const AXIOM_DATASET = "cap-otel";
+
+const parsedStage = () => {
+	if ($app.stage === "staging") return { variant: "staging" } as const;
+	if ($app.stage === "production") return { variant: "production" } as const;
+	if ($app.stage.startsWith("git-branch-"))
+		return {
+			variant: "git-branch",
+			branch: $app.stage.slice("git-branch-".length),
+		} as const;
+	throw new Error("Unsupported stage");
+};
 
 export default $config({
 	app(input) {
@@ -37,11 +49,14 @@ export default $config({
 		};
 	},
 	async run() {
+		const stage = parsedStage();
 		const WEB_URLS: Record<string, string> = {
 			production: "https://cap.so",
 			staging: "https://staging.cap.so",
 		};
-		const webUrl = WEB_URLS[$app.stage];
+		const webUrl =
+			WEB_URLS[stage.variant] ??
+			`https://${VERCEL_PROJECT_NAME}-git-${stage.branch}-${VERCEL_TEAM_SLUG}.vercel.app`;
 		const secrets = Secrets();
 		// const planetscale = Planetscale();
 
@@ -51,6 +66,26 @@ export default $config({
 			{ retainOnDelete: true },
 		);
 
+		new aws.s3.BucketCorsConfigurationV2("RecordingsBucketCors", {
+			bucket: recordingsBucket.bucket,
+			corsRules: [
+				{
+					allowedHeaders: ["*"],
+					allowedMethods: ["GET", "POST"],
+					allowedOrigins:
+						stage.variant === "production"
+							? [
+									"https://cap.so",
+									"https://cap.link",
+									"https://v.cap.so",
+									"https://dyk2p776s2gx5.cloudfront.net",
+								]
+							: ["http://localhost:*", "https://*.vercel.app", webUrl],
+					exposeHeaders: [],
+				},
+			],
+		});
+
 		const vercelVariables = [
 			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
 			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
@@ -58,19 +93,21 @@ export default $config({
 			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
 
-		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
-		// 	bucket: recordingsBucket.id,
-		// 	status: "Enabled",
-		// });
+		new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
+			bucket: recordingsBucket.id,
+			status: "Enabled",
+		});
 
 		const cloudfrontDistribution =
-			$app.stage === "production"
+			stage.variant === "production"
 				? aws.cloudfront.getDistributionOutput({ id: "E36XSZEM0VIIYB" })
 				: null;
 
 		const vercelUser = new aws.iam.User("VercelUser", { forceDestroy: false });
 
-		const vercelProject = vercel.getProjectOutput({ name: "cap-web" });
+		const vercelProject = vercel.getProjectOutput({
+			name: VERCEL_PROJECT_NAME,
+		});
 
 		if (webUrl)
 			vercelVariables.push(
@@ -92,14 +129,9 @@ export default $config({
 			return {
 				aud,
 				url,
-				provider:
-					$app.stage === "production" || $app.stage === "staging"
-						? aws.iam.getOpenIdConnectProviderOutput({ url: `https://${url}` })
-						: new aws.iam.OpenIdConnectProvider(
-								"VercelAWSOIDC",
-								{ url: `https://${url}`, clientIdLists: [aud] },
-								{ retainOnDelete: true },
-							),
+				provider: aws.iam.getOpenIdConnectProviderOutput({
+					url: `https://${url}`,
+				}),
 			};
 		})();
 
@@ -119,7 +151,7 @@ export default $config({
 							},
 							StringLike: {
 								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${$app.stage}`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${stage.variant === "git-branch" ? "preview" : stage.variant}`,
 								],
 							},
 						},
@@ -159,39 +191,51 @@ export default $config({
 		});
 
 		const workflowCluster =
-			$app.stage === "staging"
+			stage.variant === "staging"
 				? await WorkflowCluster(recordingsBucket, secrets)
 				: null;
 
-		if ($app.stage === "staging" || $app.stage === "production") {
-			[
-				...vercelVariables,
-				workflowCluster && {
-					key: "WORKFLOWS_RPC_URL",
-					value: workflowCluster.api.url,
-				},
-				workflowCluster && {
-					key: "WORKFLOWS_RPC_SECRET",
-					value: secrets.WORKFLOWS_RPC_SECRET.result,
-				},
-				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
-			]
-				.filter(Boolean)
-				.forEach((_v) => {
-					const v = _v as NonNullable<typeof _v>;
+		[
+			...vercelVariables,
+			workflowCluster && {
+				key: "WORKFLOWS_RPC_URL",
+				value: workflowCluster.api.url,
+			},
+			workflowCluster && {
+				key: "WORKFLOWS_RPC_SECRET",
+				value: secrets.WORKFLOWS_RPC_SECRET.result,
+			},
+			{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
+		]
+			.filter(Boolean)
+			.forEach((_v) => {
+				const v = _v as NonNullable<typeof _v>;
 
-					new vercel.ProjectEnvironmentVariable(`VercelEnv${v.key}`, {
+				new vercel.ProjectEnvironmentVariable(
+					`VercelEnv${v.key}`,
+					{
 						...v,
 						projectId: vercelProject.id,
 						customEnvironmentIds:
-							$app.stage === "staging"
+							stage.variant === "staging"
 								? ["env_CFbtmnpsI11e4o8X5UD8MZzxELQi"]
 								: undefined,
 						targets:
-							$app.stage === "staging" ? undefined : ["preview", "production"],
-					});
-				});
-		}
+							stage.variant === "production"
+								? ["production"]
+								: stage.variant === "staging"
+									? ["development", "preview"]
+									: stage.variant === "git-branch"
+										? ["preview"]
+										: undefined,
+						gitBranch:
+							stage.variant === "git-branch" ? stage.branch : undefined,
+						comment:
+							"This var is being managed by SST, do not edit or delete it via the Vercel dashboard",
+					},
+					{ deleteBeforeReplace: true },
+				);
+			});
 
 		// DiscordBot();
 	},
@@ -200,9 +244,8 @@ export default $config({
 function Secrets() {
 	return {
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
-		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
-		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
-		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		GITHUB_PAT:
+			$app.stage === "staging" ? new sst.Secret("GITHUB_PAT") : undefined,
 		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
 			length: 48,
 		}),
@@ -312,15 +355,16 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		"GHCRCredentialsSecret",
 	);
 
-	new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
-		secretId: ghcrCredentialsSecret.id,
-		secretString: secrets.GITHUB_PAT.value.apply((password) =>
-			JSON.stringify({
-				username: "brendonovich",
-				password,
-			}),
-		),
-	});
+	if (secrets.GITHUB_PAT)
+		new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
+			secretId: ghcrCredentialsSecret.id,
+			secretString: secrets.GITHUB_PAT.value.apply((password) =>
+				JSON.stringify({
+					username: "brendonovich",
+					password,
+				}),
+			),
+		});
 
 	const ghcrCredentialsTransform = {
 		taskRole(args) {
