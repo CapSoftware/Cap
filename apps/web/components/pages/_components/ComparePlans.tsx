@@ -8,12 +8,12 @@ import { clsx } from "clsx";
 import { use, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAuthContext } from "@/app/Layout/AuthContext";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import {
 	CommercialArt,
 	type CommercialArtRef,
 } from "../HomePage/Pricing/CommercialArt";
 import { ProArt, type ProArtRef } from "../HomePage/Pricing/ProArt";
-import { useStripeContext } from "@/app/Layout/StripeContext";
 
 const COLUMN_WIDTH = "min-w-[200px]";
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useStripeContext } from "@/app/Layout/StripeContext";
 import { buildEnv } from "@cap/env";
 import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
@@ -24,6 +23,7 @@ import {
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
 import { toast } from "sonner";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 
 interface UpgradeModalProps {
 	open: boolean;

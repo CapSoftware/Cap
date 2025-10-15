@@ -10,13 +10,13 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { ProArt, type ProArtRef } from "./ProArt";
-import { useStripeContext } from "@/app/Layout/StripeContext";
-import { useMutation } from "@tanstack/react-query";
 
 export const ProCard = () => {
 	const stripeCtx = useStripeContext();

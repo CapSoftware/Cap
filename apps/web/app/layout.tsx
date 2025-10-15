@@ -1,6 +1,7 @@
 import "@/app/globals.css";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
+import { STRIPE_PLAN_IDS } from "@cap/utils";
 import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
@@ -19,10 +20,9 @@ import {
 	ReactQueryProvider,
 	SessionProvider,
 } from "./Layout/providers";
+import { StripeContextProvider } from "./Layout/StripeContext";
 //@ts-expect-error
 import { script } from "./themeScript";
-import { STRIPE_PLAN_IDS } from "@cap/utils";
-import { StripeContextProvider } from "./Layout/StripeContext";
 
 const defaultFont = localFont({
 	src: [
