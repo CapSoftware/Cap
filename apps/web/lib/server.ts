@@ -55,7 +55,11 @@ const CookiePasswordAttachmentLive = Layer.effect(
 
 class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
 	"WorkflowRpcSecret",
-	{ sync: () => ({ authSecret: serverEnv().WORKFLOWS_RPC_SECRET }) },
+	{
+		sync: () => ({
+			authSecret: Redacted.make(serverEnv().WORKFLOWS_RPC_SECRET),
+		}),
+	},
 ) {}
 
 const WorkflowRpcLive = Layer.scoped(
