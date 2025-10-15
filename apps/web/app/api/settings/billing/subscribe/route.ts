@@ -62,11 +62,14 @@ export async function POST(request: NextRequest) {
 				.where(eq(users.id, user.id));
 			customerId = customer.id;
 		}
+
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
 			mode: "subscription",
-			success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+			success_url: isOnBoarding
+				? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+				: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
 			cancel_url: isOnBoarding
 				? `${serverEnv().WEB_URL}/onboarding`
 				: `${serverEnv().WEB_URL}/pricing`,
