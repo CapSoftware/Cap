@@ -123,16 +123,6 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 
 	const totalCount = totalCountResult[0]?.count || 0;
 
-	// Get custom domain and verification status for the user's organization
-	const organizationData = await db()
-		.select({
-			customDomain: organizations.customDomain,
-			domainVerified: organizations.domainVerified,
-		})
-		.from(organizations)
-		.where(eq(organizations.id, user.activeOrganizationId))
-		.limit(1);
-
 	const videoData = await db()
 		.select({
 			id: videos.id,

@@ -29,6 +29,8 @@ const buttonVariants = cva(
 					"bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
 				radialblue:
 					"text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+				transparent:
+					"bg-transparent text-gray-10 hover:underline transition-all duration-200 hover:text-gray-12",
 			},
 			size: {
 				xs: "text-xs h-[32px]",

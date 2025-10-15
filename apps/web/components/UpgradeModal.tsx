@@ -27,7 +27,9 @@ import { useStripeContext } from "@/app/Layout/StripeContext";
 
 interface UpgradeModalProps {
 	open: boolean;
+	onboarding?: boolean;
 	onOpenChange: (open: boolean) => void;
+	onCheckout?: () => Promise<void>;
 }
 
 const modalVariants = {
@@ -57,7 +59,12 @@ const modalVariants = {
 	},
 };
 
-const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
+const UpgradeModalImpl = ({
+	open,
+	onOpenChange,
+	onCheckout,
+	onboarding,
+}: UpgradeModalProps) => {
 	const stripeCtx = useStripeContext();
 	const [isAnnual, setIsAnnual] = useState(true);
 	const [proQuantity, setProQuantity] = useState(1);
@@ -131,7 +138,7 @@ const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
 		},
 	];
 
-	const planCheckout = useMutation({
+	const proCheckoutMutation = useMutation({
 		mutationFn: async () => {
 			const planId = stripeCtx.plans[isAnnual ? "yearly" : "monthly"];
 
@@ -140,7 +147,11 @@ const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ priceId: planId, quantity: proQuantity }),
+				body: JSON.stringify({
+					priceId: planId,
+					quantity: proQuantity,
+					isOnBoarding: onboarding,
+				}),
 			});
 			const data = await response.json();
 
@@ -155,6 +166,13 @@ const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
 				toast.success("You are already on the Cap Pro plan");
 				onOpenChange(false);
 			}
+
+			if (data.subscription === true) {
+				toast.success("You are already on the Cap Pro plan");
+				onOpenChange(false);
+			}
+
+			await onCheckout?.();
 
 			if (data.url) {
 				window.location.href = data.url;
@@ -257,11 +275,15 @@ const UpgradeModalImpl = ({ open, onOpenChange }: UpgradeModalProps) => {
 
 									<Button
 										variant="blue"
-										onClick={() => planCheckout.mutate()}
+										type="button"
+										onClick={(e) => {
+											e.preventDefault();
+											proCheckoutMutation.mutate();
+										}}
 										className="mt-5 w-full max-w-sm h-14 text-lg"
-										disabled={planCheckout.isPending}
+										disabled={proCheckoutMutation.isPending}
 									>
-										{planCheckout.isPending
+										{proCheckoutMutation.isPending
 											? "Loading..."
 											: "Upgrade to Cap Pro"}
 									</Button>
