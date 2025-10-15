@@ -1,6 +1,7 @@
 import "server-only";
 
 import { decrypt } from "@cap/database/crypto";
+import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
@@ -36,7 +37,6 @@ import {
 	Redacted,
 } from "effect";
 import { cookies } from "next/headers";
-
 import { allowedOrigins } from "@/utils/cors";
 import { layerTracer } from "./tracing";
 
@@ -55,12 +55,7 @@ const CookiePasswordAttachmentLive = Layer.effect(
 
 class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
 	"WorkflowRpcSecret",
-	{
-		effect: Effect.map(
-			Config.redacted(Config.string("WORKFLOWS_RPC_SECRET")),
-			(v) => ({ authSecret: v }),
-		),
-	},
+	{ sync: () => ({ authSecret: serverEnv().WORKFLOWS_RPC_SECRET }) },
 ) {}
 
 const WorkflowRpcLive = Layer.scoped(
