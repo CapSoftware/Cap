@@ -634,8 +634,9 @@ fn multipart_uploader(
         loop {
             let (Some(item), presigned_url) = join(
                 stream.next(),
-                // We generate the presigned URL ahead of time for the part we expect to come next. If it's not
-                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, we aren't just doing nothing.
+                // We generate the presigned URL ahead of time for the part we expect to come next.
+                // If it's not the chunk that actually comes next we just throw it out.
+                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
                 api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number)
               ).await else {
                 break;
