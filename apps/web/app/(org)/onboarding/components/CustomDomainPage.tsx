@@ -38,8 +38,8 @@ export function CustomDomainPage() {
 		},
 	});
 
-	const handleSubmit = (redirect = true) =>
-		customDomainMutation.mutateAsync(redirect);
+	const handleSubmit = async (redirect = true) =>
+		await customDomainMutation.mutateAsync(redirect);
 
 	return (
 		<Base
@@ -76,9 +76,10 @@ export function CustomDomainPage() {
 			>
 				Skip
 			</Button>
-
 			<UpgradeModal
-				onCheckout={() => handleSubmit(false)}
+				onCheckout={async () => {
+					await handleSubmit();
+				}}
 				onboarding={true}
 				open={showUpgradeModal}
 				onOpenChange={setShowUpgradeModal}
