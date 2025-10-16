@@ -182,19 +182,29 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 					const currentUser = yield* CurrentUser;
 
 					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({
-								name: "Cap",
-								onboardingSteps: {
-									welcome: true,
-									organizationSetup: true,
-									customDomain: true,
-									inviteTeam: true,
-									download: true,
-								},
-							})
-							.where(Dz.eq(Db.users.id, currentUser.id)),
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.users)
+								.set({
+									name: "Cap",
+									onboardingSteps: {
+										welcome: true,
+										organizationSetup: true,
+										customDomain: true,
+										inviteTeam: true,
+										download: true,
+									},
+								})
+								.where(Dz.eq(Db.users.id, currentUser.id));
+							await tx
+								.update(Db.organizations)
+								.set({
+									name: "Your Organization",
+								})
+								.where(
+									Dz.eq(Db.organizations.id, currentUser.activeOrganizationId),
+								);
+						}),
 					);
 				}),
 			};
