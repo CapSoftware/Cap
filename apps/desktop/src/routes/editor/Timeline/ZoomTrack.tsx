@@ -150,6 +150,8 @@ export function ZoomTrack(props: {
 					return;
 				}
 
+				if (e.button !== 0) return;
+
 				createRoot((dispose) => {
 					const startTime = hoveredTime();
 					if (startTime === undefined) {
