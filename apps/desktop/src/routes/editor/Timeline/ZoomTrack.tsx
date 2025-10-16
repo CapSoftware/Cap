@@ -40,17 +40,32 @@ export function ZoomTrack(props: {
 	const [hoveringSegment, setHoveringSegment] = createSignal(false);
 	const [hoveredTime, setHoveredTime] = createSignal<number>();
 
+	// Track the number of segments to detect when segments are deleted
+	const [previousSegmentCount, setPreviousSegmentCount] = createSignal(0);
+
 	// When we delete a segment that's being hovered, the onMouseLeave never fires
 	// because the element gets removed from the DOM. This leaves hoveringSegment stuck
 	// as true, which blocks the onMouseMove from setting hoveredTime, preventing
 	// users from creating new segments. This effect ensures we reset the hover state
-	// when all segments are deleted.
+	// when segments are deleted.
 	createEffect(() => {
 		const segments = project.timeline?.zoomSegments;
-		if (!segments || segments.length === 0) {
+		const currentCount = segments?.length ?? 0;
+		const prevCount = previousSegmentCount();
+
+		// If segments were deleted (count decreased), reset hover state
+		if (currentCount < prevCount) {
 			setHoveringSegment(false);
 			setHoveredTime(undefined);
 		}
+
+		// If no segments exist, also reset
+		if (currentCount === 0) {
+			setHoveringSegment(false);
+			setHoveredTime(undefined);
+		}
+
+		setPreviousSegmentCount(currentCount);
 	});
 
 	const handleGenerateZoomSegments = async () => {
@@ -130,14 +145,27 @@ export function ZoomTrack(props: {
 			}}
 			onMouseLeave={() => setHoveredTime()}
 			onMouseDown={(e) => {
+				// Don't create segments when hovering over existing segments
+				if (hoveringSegment()) {
+					return;
+				}
+
 				createRoot((dispose) => {
-					createEventListener(e.currentTarget, "mouseup", (e) => {
+					const startTime = hoveredTime();
+					if (startTime === undefined) {
 						dispose();
+						return;
+					}
 
-						const time = hoveredTime();
-						if (time === undefined) return;
+					const minPixelWidth = 80;
+					let segmentCreated = false;
+					let createdSegmentIndex = -1;
+					const initialMouseX = e.clientX;
+					const initialEndTime = startTime + 1; // Start with 1 second duration
 
-						e.stopPropagation();
+					const createSegment = (endTime: number) => {
+						if (segmentCreated) return;
+
 						batch(() => {
 							setProject("timeline", "zoomSegments", (v) => v ?? []);
 							setProject(
@@ -146,18 +174,20 @@ export function ZoomTrack(props: {
 								produce((zoomSegments) => {
 									zoomSegments ??= [];
 
-									let index = zoomSegments.length;
+									let index = 0;
 
-									for (let i = zoomSegments.length - 1; i >= 0; i--) {
-										if (zoomSegments[i].start > time) {
-											index = i;
-											break;
+									for (let i = 0; i < zoomSegments.length; i++) {
+										if (zoomSegments[i].start < startTime) {
+											index = i + 1;
 										}
 									}
 
+									const minDuration = minPixelWidth * secsPerPixel();
+									const minEndTime = startTime + minDuration;
+
 									zoomSegments.splice(index, 0, {
-										start: time,
-										end: time + 1,
+										start: startTime,
+										end: Math.max(minEndTime, endTime),
 										amount: 1.5,
 										mode: {
 											manual: {
@@ -166,9 +196,73 @@ export function ZoomTrack(props: {
 											},
 										},
 									});
+
+									createdSegmentIndex = index;
 								}),
 							);
 						});
+						segmentCreated = true;
+					};
+
+					const updateSegment = (endTime: number) => {
+						if (!segmentCreated || createdSegmentIndex === -1) return;
+
+						// Ensure minimum pixel width (80px) for the segment
+						const minDuration = minPixelWidth * secsPerPixel();
+						const minEndTime = startTime + minDuration;
+
+						setProject(
+							"timeline",
+							"zoomSegments",
+							createdSegmentIndex,
+							"end",
+							Math.max(minEndTime, endTime),
+						);
+					};
+
+					const handleMouseMove = (moveEvent: MouseEvent) => {
+						const deltaX = moveEvent.clientX - initialMouseX;
+						const deltaTime = deltaX * secsPerPixel();
+						const newEndTime = initialEndTime + deltaTime;
+
+						// Check boundaries
+						const nextSegment = project.timeline?.zoomSegments?.find(
+							(s) => s.start > startTime,
+						);
+						const maxEndTime = nextSegment
+							? nextSegment.start - 0.1
+							: duration() - 0.1;
+
+						const minDuration = minPixelWidth * secsPerPixel();
+						const minEndTime = startTime + minDuration;
+
+						const clampedEndTime = Math.min(
+							Math.max(minEndTime, newEndTime),
+							maxEndTime,
+						);
+
+						if (!segmentCreated) {
+							// Create the segment on first movement
+							createSegment(clampedEndTime);
+						} else {
+							// Update the segment duration using direct index access
+							updateSegment(clampedEndTime);
+						}
+					};
+
+					const handleMouseUp = (upEvent: MouseEvent) => {
+						dispose();
+
+						if (!segmentCreated) {
+							// If no movement, create a default 1-second segment
+							upEvent.stopPropagation();
+							createSegment(initialEndTime);
+						}
+					};
+
+					createEventListenerMap(window, {
+						mousemove: handleMouseMove,
+						mouseup: handleMouseUp,
 					});
 				});
 			}}
