@@ -2,6 +2,7 @@ use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
     Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
+    SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use flume::TrySendError;
@@ -146,16 +147,25 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
 
-            configs
-                .into_iter()
-                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
-                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+            configs.into_iter().find_map(|config| {
+                ffmpeg_sample_format_for(config.sample_format())
+                    .map(|_| config.with_sample_rate(select_sample_rate(&config)))
+            })
         });
 
-    result.and_then(|config| {
-        let final_config = config.with_sample_rate(cpal::SampleRate(48000));
-        device.name().ok().map(|name| (name, device, final_config))
-    })
+    result.and_then(|config| device.name().ok().map(|name| (name, device, config)))
+}
+
+fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
+    const PREFERRED_RATES: [u32; 2] = [48_000, 44_100];
+
+    for rate in PREFERRED_RATES {
+        if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
+            return cpal::SampleRate(rate);
+        }
+    }
+
+    cpal::SampleRate(config.max_sample_rate().0)
 }
 
 #[derive(Reply)]
