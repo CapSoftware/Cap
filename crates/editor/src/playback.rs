@@ -245,13 +245,26 @@ impl AudioPlayback {
         let mut elapsed = 0;
         let mut prev_audio_config = project.borrow().audio.clone();
 
+        let mut latency_correction_secs: Option<f64> = None;
+        let sample_rate_f64 = output_info.sample_rate as f64;
+
         let stream_result = device.build_output_stream(
             &config,
-            move |buffer: &mut [T], _info| {
+            move |buffer: &mut [T], info| {
                 let project = project.borrow();
 
+                if latency_correction_secs.is_none() {
+                    latency_correction_secs = info
+                        .timestamp()
+                        .playback
+                        .duration_since(&info.timestamp().callback)
+                        .map(|latency| latency.as_secs_f64());
+                }
+
+                let latency_secs = latency_correction_secs.unwrap_or_default();
+
                 audio_renderer.set_playhead(
-                    playhead + elapsed as f64 / output_info.sample_rate as f64,
+                    playhead + latency_secs + elapsed as f64 / sample_rate_f64,
                     &project,
                 );
                 prev_audio_config = project.audio.clone();
