@@ -4,12 +4,12 @@ use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
-    BufferSize, SampleFormat,
+    BufferSize, SampleFormat, SupportedBufferSize,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, time::Instant};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
@@ -232,135 +232,264 @@ impl AudioPlayback {
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config);
-        output_info.sample_format = output_info.sample_format.packed();
+        let mut base_output_info = AudioInfo::from_stream_config(&supported_config);
+        base_output_info.sample_format = base_output_info.sample_format.packed();
 
-        let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
+        let initial_latency_hint =
+            default_output_latency_hint(base_output_info.sample_rate, base_output_info.buffer_size);
+        let is_wireless = initial_latency_hint
+            .as_ref()
+            .map(|hint| hint.transport.is_wireless())
+            .unwrap_or(false);
+
+        let default_samples_count = AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT;
+        let wireless_samples_count = AudioPlaybackBuffer::<T>::WIRELESS_PLAYBACK_SAMPLES_COUNT;
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum BufferSizeStrategy {
+            Fixed(u32),
+            DeviceDefault,
+        }
+
+        let candidate_order = if is_wireless {
+            vec![
+                BufferSizeStrategy::Fixed(wireless_samples_count),
+                BufferSizeStrategy::Fixed(default_samples_count),
+                BufferSizeStrategy::DeviceDefault,
+            ]
+        } else {
+            vec![
+                BufferSizeStrategy::Fixed(default_samples_count),
+                BufferSizeStrategy::DeviceDefault,
+            ]
+        };
+
+        let mut attempts = Vec::new();
+        for strategy in candidate_order {
+            if !attempts.contains(&strategy) {
+                attempts.push(strategy);
+            }
+        }
+
         let playhead = f64::from(start_frame_number) / f64::from(fps);
-        audio_renderer.set_playhead(playhead, &project.borrow());
+        let mut last_error: Option<MediaError> = None;
 
-        let mut config = supported_config.config();
-        config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
+        for (attempt_index, strategy) in attempts.into_iter().enumerate() {
+            let mut config = supported_config.config();
+            let output_info = match strategy {
+                BufferSizeStrategy::Fixed(desired) => {
+                    let clamped = match supported_config.buffer_size() {
+                        SupportedBufferSize::Range { min, max } => desired.clamp(*min, *max),
+                        SupportedBufferSize::Unknown => desired,
+                    };
 
-        let mut elapsed = 0;
+                    if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
+                    {
+                        if clamped != desired {
+                            info!(
+                                requested_frames = desired,
+                                clamped_frames = clamped,
+                                range_min = *min,
+                                range_max = *max,
+                                "Adjusted requested audio buffer to fit device capabilities",
+                            );
+                        }
+                    }
 
-        let static_latency_hint =
-            default_output_latency_hint(output_info.sample_rate, output_info.buffer_size);
+                    config.buffer_size = BufferSize::Fixed(clamped);
 
-        if let Some(hint) = static_latency_hint {
-            if hint.latency_secs > 0.0 {
-                match hint.transport {
-                    cap_audio::OutputTransportKind::Airplay => info!(
-                        "Applying AirPlay output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
-                    transport if transport.is_wireless() => info!(
-                        "Applying wireless output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
-                    _ => info!(
-                        "Applying output latency hint: {:.1} ms",
-                        hint.latency_secs * 1_000.0
-                    ),
+                    let mut info =
+                        AudioInfo::from_stream_config_with_buffer(&supported_config, Some(clamped));
+                    info.sample_format = info.sample_format.packed();
+                    info
+                }
+                BufferSizeStrategy::DeviceDefault => {
+                    config.buffer_size = BufferSize::Default;
+                    base_output_info
+                }
+            };
+
+            let sample_rate = output_info.sample_rate;
+            let buffer_size = output_info.buffer_size;
+            let channels = output_info.channels;
+
+            let headroom_samples = (buffer_size as usize)
+                .saturating_mul(channels)
+                .saturating_mul(2)
+                .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
+
+            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), output_info);
+
+            match strategy {
+                BufferSizeStrategy::Fixed(desired) => {
+                    let actual = match config.buffer_size {
+                        BufferSize::Fixed(value) => value,
+                        _ => desired,
+                    };
+
+                    if attempt_index == 0 {
+                        if actual > default_samples_count {
+                            info!("Using enlarged audio buffer: {} frames", actual);
+                        } else if is_wireless {
+                            info!(
+                                "Using device-limited audio buffer for wireless output: {} frames",
+                                actual
+                            );
+                        }
+                    } else {
+                        info!("Falling back to audio buffer size: {} frames", actual);
+                    }
+                }
+                BufferSizeStrategy::DeviceDefault => {
+                    if attempt_index == 0 {
+                        info!("Using device default audio buffer size");
+                    } else {
+                        info!("Falling back to device default audio buffer size");
+                    }
+                }
+            }
+
+            let static_latency_hint =
+                default_output_latency_hint(sample_rate, buffer_size).or(initial_latency_hint);
+            let initial_latency_secs = static_latency_hint
+                .map(|hint| hint.latency_secs)
+                .unwrap_or_default();
+
+            {
+                let project_snapshot = project.borrow();
+                audio_renderer.set_playhead(playhead + initial_latency_secs, &project_snapshot);
+                audio_renderer.prefill(&project_snapshot, headroom_samples);
+            }
+
+            if let Some(hint) = static_latency_hint {
+                if hint.latency_secs > 0.0 {
+                    match hint.transport {
+                        cap_audio::OutputTransportKind::Airplay => info!(
+                            "Applying AirPlay output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                        transport if transport.is_wireless() => info!(
+                            "Applying wireless output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                        _ => info!(
+                            "Applying output latency hint: {:.1} ms",
+                            hint.latency_secs * 1_000.0
+                        ),
+                    }
+                }
+            }
+
+            let mut latency_estimator = static_latency_hint
+                .map(OutputLatencyEstimator::from_hint)
+                .unwrap_or_else(OutputLatencyEstimator::new);
+            let mut last_latency_used = latency_estimator.current_secs();
+            let mut last_logged_latency_ms: Option<i32> = None;
+            const LATENCY_LOG_CHANGE_THRESHOLD_MS: i32 = 5;
+            const MIN_LATENCY_APPLY_DELTA_SECS: f64 = 0.005;
+            const MIN_UPDATES_FOR_DYNAMIC_LATENCY: u64 = 4;
+            const MAX_LATENCY_CHANGE_PER_SEC: f64 = 0.15;
+            const INITIAL_LATENCY_FREEZE_DURATION_SECS: f64 = 0.35;
+            let mut last_latency_update_at = std::time::Instant::now();
+            let latency_freeze_until = std::time::Instant::now()
+                + std::time::Duration::from_secs_f64(INITIAL_LATENCY_FREEZE_DURATION_SECS);
+
+            let project_for_stream = project.clone();
+            let headroom_for_stream = headroom_samples;
+
+            let stream_result = device.build_output_stream(
+                &config,
+                move |buffer: &mut [T], info| {
+                    let previous_update_count = latency_estimator.update_count();
+                    let estimated_latency_secs = latency_estimator
+                        .observe_callback(info)
+                        .or(last_latency_used)
+                        .unwrap_or_default();
+
+                    let now = std::time::Instant::now();
+
+                    let latency_secs = if let Some(previous) = last_latency_used {
+                        if now < latency_freeze_until {
+                            previous
+                        } else if latency_estimator.update_count()
+                            >= MIN_UPDATES_FOR_DYNAMIC_LATENCY
+                        {
+                            let dt_secs = now
+                                .checked_duration_since(last_latency_update_at)
+                                .map(|d| d.as_secs_f64())
+                                .unwrap_or(0.0);
+                            let max_delta = (MAX_LATENCY_CHANGE_PER_SEC * dt_secs)
+                                .max(MIN_LATENCY_APPLY_DELTA_SECS);
+                            let delta = estimated_latency_secs - previous;
+
+                            if delta.abs() <= max_delta {
+                                last_latency_update_at = now;
+                                estimated_latency_secs
+                            } else {
+                                last_latency_update_at = now;
+                                previous + delta.signum() * max_delta
+                            }
+                        } else if (estimated_latency_secs - previous).abs()
+                            < MIN_LATENCY_APPLY_DELTA_SECS
+                        {
+                            previous
+                        } else {
+                            last_latency_update_at = now;
+                            estimated_latency_secs
+                        }
+                    } else {
+                        last_latency_update_at = now;
+                        estimated_latency_secs
+                    };
+
+                    last_latency_used = Some(latency_secs);
+
+                    if latency_estimator.update_count() != previous_update_count {
+                        let latency_ms = (latency_secs * 1_000.0).round() as i32;
+                        let should_log = match last_logged_latency_ms {
+                            Some(prev) => {
+                                (prev - latency_ms).abs() >= LATENCY_LOG_CHANGE_THRESHOLD_MS
+                            }
+                            None => latency_ms >= 0,
+                        };
+
+                        if should_log {
+                            info!(
+                                "Estimated audio output latency: {:.1} ms",
+                                latency_secs * 1_000.0
+                            );
+                            last_logged_latency_ms = Some(latency_ms);
+                        }
+                    }
+
+                    let project = project_for_stream.borrow();
+
+                    let playback_samples = buffer.len();
+                    let min_headroom = headroom_for_stream.max(playback_samples * 2);
+                    audio_renderer.fill(buffer, &project, min_headroom);
+                },
+                |_err| eprintln!("Audio stream error: {_err}"),
+                None,
+            );
+
+            match stream_result {
+                Ok(stream) => {
+                    return Ok((stop_rx, stream));
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "Audio stream creation failed, attempting fallback"
+                    );
+                    last_error = Some(MediaError::TaskLaunch(format!(
+                        "Failed to build audio output stream: {err}"
+                    )));
                 }
             }
         }
 
-        let mut latency_estimator = static_latency_hint
-            .map(OutputLatencyEstimator::from_hint)
-            .unwrap_or_else(OutputLatencyEstimator::new);
-        let mut last_latency_used = latency_estimator.current_secs();
-        let mut last_logged_latency_ms: Option<i32> = None;
-        let sample_rate_f64 = output_info.sample_rate as f64;
-        const LATENCY_LOG_CHANGE_THRESHOLD_MS: i32 = 5;
-        const MIN_LATENCY_APPLY_DELTA_SECS: f64 = 0.005;
-        const MIN_UPDATES_FOR_DYNAMIC_LATENCY: u64 = 4;
-        const MAX_LATENCY_CHANGE_PER_SEC: f64 = 0.15;
-        const INITIAL_LATENCY_FREEZE_DURATION_SECS: f64 = 0.35;
-        let mut last_latency_update_at = std::time::Instant::now();
-        let latency_freeze_until = std::time::Instant::now()
-            + std::time::Duration::from_secs_f64(INITIAL_LATENCY_FREEZE_DURATION_SECS);
-
-        let stream_result = device.build_output_stream(
-            &config,
-            move |buffer: &mut [T], info| {
-                let previous_update_count = latency_estimator.update_count();
-                let estimated_latency_secs = latency_estimator
-                    .observe_callback(info)
-                    .or(last_latency_used)
-                    .unwrap_or_default();
-
-                let now = std::time::Instant::now();
-
-                let latency_secs = if let Some(previous) = last_latency_used {
-                    if now < latency_freeze_until {
-                        previous
-                    } else if latency_estimator.update_count() >= MIN_UPDATES_FOR_DYNAMIC_LATENCY {
-                        let dt_secs = now
-                            .checked_duration_since(last_latency_update_at)
-                            .map(|d| d.as_secs_f64())
-                            .unwrap_or(0.0);
-                        let max_delta = (MAX_LATENCY_CHANGE_PER_SEC * dt_secs)
-                            .max(MIN_LATENCY_APPLY_DELTA_SECS);
-                        let delta = estimated_latency_secs - previous;
-
-                        if delta.abs() <= max_delta {
-                            last_latency_update_at = now;
-                            estimated_latency_secs
-                        } else {
-                            last_latency_update_at = now;
-                            previous + delta.signum() * max_delta
-                        }
-                    } else if (estimated_latency_secs - previous).abs()
-                        < MIN_LATENCY_APPLY_DELTA_SECS
-                    {
-                        previous
-                    } else {
-                        last_latency_update_at = now;
-                        estimated_latency_secs
-                    }
-                } else {
-                    last_latency_update_at = now;
-                    estimated_latency_secs
-                };
-
-                last_latency_used = Some(latency_secs);
-
-                if latency_estimator.update_count() != previous_update_count {
-                    let latency_ms = (latency_secs * 1_000.0).round() as i32;
-                    let should_log = match last_logged_latency_ms {
-                        Some(prev) => (prev - latency_ms).abs() >= LATENCY_LOG_CHANGE_THRESHOLD_MS,
-                        None => latency_ms >= 0,
-                    };
-
-                    if should_log {
-                        info!(
-                            "Estimated audio output latency: {:.1} ms",
-                            latency_secs * 1_000.0
-                        );
-                        last_logged_latency_ms = Some(latency_ms);
-                    }
-                }
-
-                let project = project.borrow();
-
-                audio_renderer.set_playhead(
-                    playhead + latency_secs + elapsed as f64 / sample_rate_f64,
-                    &project,
-                );
-                audio_renderer.render(&project);
-                audio_renderer.fill(buffer);
-
-                elapsed += buffer.len() / output_info.channels;
-            },
-            |_err| eprintln!("Audio stream error: {_err}"),
-            None,
-        );
-
-        let stream = stream_result.map_err(|e| {
-            MediaError::TaskLaunch(format!("Failed to build audio output stream: {e}"))
-        })?;
-
-        Ok((stop_rx, stream))
+        Err(last_error.unwrap_or_else(|| {
+            MediaError::TaskLaunch("Failed to build audio output stream".to_string())
+        }))
     }
 }

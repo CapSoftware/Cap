@@ -73,6 +73,7 @@ const WARMUP_GUARD_SAMPLES: u32 = 3;
 const WARMUP_SPIKE_RATIO: f64 = 50.0;
 #[cfg(not(target_os = "macos"))]
 const FALLBACK_WIRED_LATENCY_SECS: f64 = 0.03;
+const WIRELESS_FALLBACK_LATENCY_SECS: f64 = 0.20;
 const WIRELESS_MIN_LATENCY_SECS: f64 = 0.12;
 
 #[cfg(target_os = "macos")]
@@ -353,9 +354,15 @@ mod macos {
 
         if total_frames == 0 {
             let (floor, ceiling) = transport_constraints(transport_kind);
-            let fallback = floor
-                .max((buffer_frames as f64 / effective_rate).min(ceiling))
-                .min(MAX_LATENCY_SECS);
+            let base_latency = (buffer_frames as f64 / effective_rate).min(ceiling);
+            let fallback = if transport_kind.is_wireless() {
+                base_latency
+                    .max(super::WIRELESS_FALLBACK_LATENCY_SECS)
+                    .max(floor)
+            } else {
+                base_latency.max(floor)
+            }
+            .min(MAX_LATENCY_SECS);
             return Ok(OutputLatencyHint::new(fallback, transport_kind));
         }
 
