@@ -1,7 +1,7 @@
 #[tokio::main]
 pub async fn main() {
     #[cfg(target_os = "macos")]
-    mac::run().await;
+    mac::run_ffmpeg();
     #[cfg(not(target_os = "macos"))]
     panic!("This example is only supported on macOS");
 }
@@ -11,6 +11,7 @@ mod mac {
     use std::path::PathBuf;
 
     use cap_video_decode::AVAssetReaderDecoder;
+    use ffmpeg::ffi::AVHWDeviceType;
 
     pub(super) async fn run() {
         let handle = tokio::runtime::Handle::current();
@@ -26,6 +27,29 @@ mod mac {
                 };
 
                 println!("{:?}", frame.pts());
+            }
+        })
+        .join();
+    }
+
+    pub fn run_ffmpeg() {
+        let path: PathBuf = std::env::args().collect::<Vec<_>>().swap_remove(1).into();
+
+        let _ = std::thread::spawn(|| {
+            let mut decoder = cap_video_decode::FFmpegDecoder::new(
+                path,
+                Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX),
+            )
+            .unwrap();
+
+            for frame in decoder.frames() {
+                let Ok(frame) = frame else {
+                    return;
+                };
+
+                dbg!(frame.format());
+                dbg!(frame.pts());
+                // println!("{:?}", frame.pts());
             }
         })
         .join();

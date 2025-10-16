@@ -54,13 +54,13 @@ pub async fn spawn_decoder(
 
     let handle = AsyncVideoDecoderHandle { sender: tx, offset };
 
-    if cfg!(target_os = "macos") {
-        #[cfg(target_os = "macos")]
-        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
-    } else {
-        ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
-            .map_err(|e| format!("'{name}' decoder / {e}"))?;
-    }
+    // if cfg!(target_os = "macos") {
+    //     #[cfg(target_os = "macos")]
+    //     avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
+    // } else {
+    ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+        .map_err(|e| format!("'{name}' decoder / {e}"))?;
+    // }
 
     ready_rx.await.map_err(|e| e.to_string())?.map(|()| handle)
 }

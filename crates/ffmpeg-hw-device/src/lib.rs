@@ -24,12 +24,16 @@ unsafe extern "C" fn get_format(
     unsafe {
         let mut fmt = pix_fmts;
 
+        dbg!(HW_PIX_FMT.get());
+
         loop {
+            dbg!(fmt.read());
             if *fmt == AVPixelFormat::AV_PIX_FMT_NONE {
                 break;
             }
 
             if *fmt == HW_PIX_FMT.get() {
+                println!("yay");
                 return *fmt;
             }
 
@@ -48,10 +52,18 @@ pub struct HwDevice {
 impl HwDevice {
     pub fn get_hwframe(&self, src: &Video) -> Option<Video> {
         unsafe {
+            dbg!(src.format());
             if src.format() == HW_PIX_FMT.get().into() {
                 let mut sw_frame = frame::Video::empty();
+                sw_frame.set_pts(src.pts());
+                dbg!(src.pts());
 
-                if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
+                if dbg!(av_hwframe_transfer_data(
+                    sw_frame.as_mut_ptr(),
+                    src.as_ptr(),
+                    0
+                )) >= 0
+                {
                     return Some(sw_frame);
                 };
             }
@@ -90,6 +102,8 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
             if av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), null_mut(), 0) < 0 {
                 return Err("failed to create hw device context");
             }
+
+            dbg!(hw_config.read().pix_fmt);
 
             HW_PIX_FMT.set((*hw_config).pix_fmt);
 
