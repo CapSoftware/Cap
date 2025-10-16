@@ -161,7 +161,7 @@ export function ZoomTrack(props: {
 					let segmentCreated = false;
 					let createdSegmentIndex = -1;
 					const initialMouseX = e.clientX;
-					const initialEndTime = startTime + 1; // Start with 1 second duration
+					const initialEndTime = startTime + 1;
 
 					const createSegment = (endTime: number) => {
 						if (segmentCreated) return;
@@ -207,7 +207,6 @@ export function ZoomTrack(props: {
 					const updateSegment = (endTime: number) => {
 						if (!segmentCreated || createdSegmentIndex === -1) return;
 
-						// Ensure minimum pixel width (80px) for the segment
 						const minDuration = minPixelWidth * secsPerPixel();
 						const minEndTime = startTime + minDuration;
 
