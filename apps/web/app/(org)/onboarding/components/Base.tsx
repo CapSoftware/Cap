@@ -21,7 +21,7 @@ export const Base = ({
 }) => {
 	const router = useRouter();
 	return (
-		<div className="relative w-[calc(100%-2%)] space-y-7 p-7 max-w-[472px] bg-gray-2 border border-gray-4 rounded-2xl">
+		<div className="relative w-[calc(100%-2%)] z-10 space-y-7 p-7 max-w-[472px] bg-gray-2 border border-gray-4 rounded-2xl">
 			{!hideBackButton && (
 				<div
 					onClick={() => router.back()}
