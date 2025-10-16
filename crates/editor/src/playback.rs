@@ -1,4 +1,4 @@
-use cap_audio::FromSampleBytes;
+use cap_audio::{FromSampleBytes, OutputLatencyEstimator, default_output_latency_hint};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
@@ -243,32 +243,111 @@ impl AudioPlayback {
         config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
 
         let mut elapsed = 0;
-        let mut prev_audio_config = project.borrow().audio.clone();
 
-        let mut latency_correction_secs: Option<f64> = None;
+        let static_latency_hint =
+            default_output_latency_hint(output_info.sample_rate, output_info.buffer_size);
+
+        if let Some(hint) = static_latency_hint {
+            if hint.latency_secs > 0.0 {
+                match hint.transport {
+                    cap_audio::OutputTransportKind::Airplay => info!(
+                        "Applying AirPlay output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    transport if transport.is_wireless() => info!(
+                        "Applying wireless output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    _ => info!(
+                        "Applying output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                }
+            }
+        }
+
+        let mut latency_estimator = static_latency_hint
+            .map(OutputLatencyEstimator::from_hint)
+            .unwrap_or_else(OutputLatencyEstimator::new);
+        let mut last_latency_used = latency_estimator.current_secs();
+        let mut last_logged_latency_ms: Option<i32> = None;
         let sample_rate_f64 = output_info.sample_rate as f64;
+        const LATENCY_LOG_CHANGE_THRESHOLD_MS: i32 = 5;
+        const MIN_LATENCY_APPLY_DELTA_SECS: f64 = 0.005;
+        const MIN_UPDATES_FOR_DYNAMIC_LATENCY: u64 = 4;
+        const MAX_LATENCY_CHANGE_PER_SEC: f64 = 0.15;
+        const INITIAL_LATENCY_FREEZE_DURATION_SECS: f64 = 0.35;
+        let mut last_latency_update_at = std::time::Instant::now();
+        let latency_freeze_until = std::time::Instant::now()
+            + std::time::Duration::from_secs_f64(INITIAL_LATENCY_FREEZE_DURATION_SECS);
 
         let stream_result = device.build_output_stream(
             &config,
             move |buffer: &mut [T], info| {
-                let project = project.borrow();
+                let previous_update_count = latency_estimator.update_count();
+                let estimated_latency_secs = latency_estimator
+                    .observe_callback(info)
+                    .or(last_latency_used)
+                    .unwrap_or_default();
 
-                if latency_correction_secs.is_none() {
-                    latency_correction_secs = info
-                        .timestamp()
-                        .playback
-                        .duration_since(&info.timestamp().callback)
-                        .map(|latency| latency.as_secs_f64());
+                let now = std::time::Instant::now();
+
+                let latency_secs = if let Some(previous) = last_latency_used {
+                    if now < latency_freeze_until {
+                        previous
+                    } else if latency_estimator.update_count() >= MIN_UPDATES_FOR_DYNAMIC_LATENCY {
+                        let dt_secs = now
+                            .checked_duration_since(last_latency_update_at)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0);
+                        let max_delta = (MAX_LATENCY_CHANGE_PER_SEC * dt_secs)
+                            .max(MIN_LATENCY_APPLY_DELTA_SECS);
+                        let delta = estimated_latency_secs - previous;
+
+                        if delta.abs() <= max_delta {
+                            last_latency_update_at = now;
+                            estimated_latency_secs
+                        } else {
+                            last_latency_update_at = now;
+                            previous + delta.signum() * max_delta
+                        }
+                    } else if (estimated_latency_secs - previous).abs()
+                        < MIN_LATENCY_APPLY_DELTA_SECS
+                    {
+                        previous
+                    } else {
+                        last_latency_update_at = now;
+                        estimated_latency_secs
+                    }
+                } else {
+                    last_latency_update_at = now;
+                    estimated_latency_secs
+                };
+
+                last_latency_used = Some(latency_secs);
+
+                if latency_estimator.update_count() != previous_update_count {
+                    let latency_ms = (latency_secs * 1_000.0).round() as i32;
+                    let should_log = match last_logged_latency_ms {
+                        Some(prev) => (prev - latency_ms).abs() >= LATENCY_LOG_CHANGE_THRESHOLD_MS,
+                        None => latency_ms >= 0,
+                    };
+
+                    if should_log {
+                        info!(
+                            "Estimated audio output latency: {:.1} ms",
+                            latency_secs * 1_000.0
+                        );
+                        last_logged_latency_ms = Some(latency_ms);
+                    }
                 }
 
-                let latency_secs = latency_correction_secs.unwrap_or_default();
+                let project = project.borrow();
 
                 audio_renderer.set_playhead(
                     playhead + latency_secs + elapsed as f64 / sample_rate_f64,
                     &project,
                 );
-                prev_audio_config = project.audio.clone();
-
                 audio_renderer.render(&project);
                 audio_renderer.fill(buffer);
 

@@ -46,6 +46,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "macos_13_0",
     "cv",
     "cf",
+    "core_audio",
     "sc",
     "av",
     "blocks",

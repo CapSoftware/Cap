@@ -1,7 +1,9 @@
 mod audio_data;
+mod playback;
 mod renderer;
 
 pub use audio_data::*;
+pub use playback::*;
 pub use renderer::*;
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
