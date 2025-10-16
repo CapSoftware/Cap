@@ -234,6 +234,7 @@ impl AudioPlayback {
 
         let mut base_output_info = AudioInfo::from_stream_config(&supported_config);
         base_output_info.sample_format = base_output_info.sample_format.packed();
+        let default_output_info = base_output_info;
 
         let initial_latency_hint =
             default_output_latency_hint(base_output_info.sample_rate, base_output_info.buffer_size);
@@ -276,7 +277,7 @@ impl AudioPlayback {
 
         for (attempt_index, strategy) in attempts.into_iter().enumerate() {
             let mut config = supported_config.config();
-            let output_info = match strategy {
+            base_output_info = match strategy {
                 BufferSizeStrategy::Fixed(desired) => {
                     let clamped = match supported_config.buffer_size() {
                         SupportedBufferSize::Range { min, max } => desired.clamp(*min, *max),
@@ -305,20 +306,21 @@ impl AudioPlayback {
                 }
                 BufferSizeStrategy::DeviceDefault => {
                     config.buffer_size = BufferSize::Default;
-                    base_output_info
+                    default_output_info
                 }
             };
 
-            let sample_rate = output_info.sample_rate;
-            let buffer_size = output_info.buffer_size;
-            let channels = output_info.channels;
+            let sample_rate = base_output_info.sample_rate;
+            let buffer_size = base_output_info.buffer_size;
+            let channels = base_output_info.channels;
 
             let headroom_samples = (buffer_size as usize)
                 .saturating_mul(channels)
                 .saturating_mul(2)
                 .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
 
-            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), output_info);
+            let mut audio_renderer =
+                AudioPlaybackBuffer::new(segments.clone(), base_output_info);
 
             match strategy {
                 BufferSizeStrategy::Fixed(desired) => {

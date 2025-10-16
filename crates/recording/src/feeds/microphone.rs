@@ -195,17 +195,15 @@ fn desired_buffer_size_frames(config: &SupportedStreamConfig) -> Option<u32> {
                 return None;
             }
 
-            let mut desired = latency_ms_to_frames(sample_rate, TARGET_LATENCY_MS);
+            let desired = latency_ms_to_frames(sample_rate, TARGET_LATENCY_MS);
             let min_latency_frames = latency_ms_to_frames(sample_rate, MIN_LATENCY_MS);
             let max_latency_frames = latency_ms_to_frames(sample_rate, MAX_LATENCY_MS);
 
-            desired = desired.max(min_latency_frames);
-            desired = desired.max(ABS_MIN_BUFFER_FRAMES.min(*max));
-            desired = desired.max(*min);
-            desired = desired.min(*max);
-            desired = desired.min(max_latency_frames.max(*min));
+            let desired = desired.clamp(min_latency_frames, max_latency_frames);
+            let device_max = *max;
+            let device_min = ABS_MIN_BUFFER_FRAMES.min(device_max).max(*min);
 
-            Some(desired)
+            Some(desired.clamp(device_min, device_max))
         }
         cpal::SupportedBufferSize::Unknown => None,
     }
