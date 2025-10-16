@@ -181,20 +181,56 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
 					const currentUser = yield* CurrentUser;
 
-					yield* db.use((db) =>
+					const [user] = yield* db.use((db) =>
 						db
-							.update(Db.users)
-							.set({
-								name: "Cap",
-								onboardingSteps: {
-									welcome: true,
-									organizationSetup: true,
-									customDomain: true,
-									inviteTeam: true,
-									download: true,
-								},
-							})
+							.select()
+							.from(Db.users)
 							.where(Dz.eq(Db.users.id, currentUser.id)),
+					);
+
+					const shouldUsePlaceholder = !user.onboardingSteps?.welcome;
+					const userName = shouldUsePlaceholder ? "Your name" : user.name;
+					const orgName = shouldUsePlaceholder
+						? "Your Organization"
+						: `${user.name}'s organization`;
+
+					yield* db.use((db) =>
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.users)
+								.set({
+									name: userName,
+									onboardingSteps: {
+										welcome: true,
+										organizationSetup: true,
+										customDomain: true,
+										inviteTeam: true,
+										download: true,
+									},
+								})
+								.where(Dz.eq(Db.users.id, currentUser.id));
+
+							const [existingOrg] = await tx
+								.select()
+								.from(Db.organizations)
+								.where(
+									Dz.eq(Db.organizations.id, currentUser.activeOrganizationId),
+								);
+
+							if (!existingOrg || !user.onboardingSteps?.organizationSetup) {
+								await tx
+									.update(Db.organizations)
+									.set({
+										name: orgName,
+									})
+									.where(
+										Dz.eq(
+											Db.organizations.id,
+											currentUser.activeOrganizationId,
+										),
+									);
+							}
+						}),
 					);
 				}),
 			};
