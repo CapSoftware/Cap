@@ -52,18 +52,30 @@ impl FfmpegDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
     ) -> Result<(), String> {
-        let mut this = cap_video_decode::FFmpegDecoder::new(
-            path,
-            Some(if cfg!(target_os = "macos") {
-                AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-            } else {
-                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA
-            }),
-        )?;
+        let (continue_tx, continue_rx) = mpsc::channel();
 
-        let time_base = this.decoder().time_base();
-        let start_time = this.start_time();
         std::thread::spawn(move || {
+            let mut this = match cap_video_decode::FFmpegDecoder::new(
+                path,
+                Some(if cfg!(target_os = "macos") {
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
+                } else {
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2
+                }),
+            ) {
+                Err(e) => {
+                    let _ = continue_tx.send(Err(e));
+                    return;
+                }
+                Ok(v) => {
+                    let _ = continue_tx.send(Ok(()));
+                    v
+                }
+            };
+
+            let time_base = this.decoder().time_base();
+            let start_time = this.start_time();
+
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
@@ -228,6 +240,8 @@ impl FfmpegDecoder {
                 }
             }
         });
+
+        continue_rx.recv().map_err(|e| e.to_string())??;
 
         Ok(())
     }
