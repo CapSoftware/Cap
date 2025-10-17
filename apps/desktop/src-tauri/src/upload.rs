@@ -4,6 +4,7 @@ use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     general_settings::GeneralSettingsStore,
+    posthog::{PostHogEvent, async_capture_event},
     upload_legacy,
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -92,6 +93,7 @@ pub async fn upload_video(
 
     info!("Uploading video {video_id}...");
 
+    let start = Instant::now();
     let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
     let video_fut = async {
@@ -147,6 +149,16 @@ pub async fn upload_video(
 
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
+
+    async_capture_event(match &video_result {
+        Ok(()) => PostHogEvent::MultipartUploadComplete {
+            duration: start.elapsed(),
+        },
+        Err(err) => PostHogEvent::MultipartUploadFailed {
+            duration: start.elapsed(),
+            error: err.to_string(),
+        },
+    });
 
     let _ = (video_result?, thumbnail_result?);
 
@@ -351,13 +363,28 @@ impl InstantMultipartUpload {
         recording_dir: PathBuf,
     ) -> Self {
         Self {
-            handle: spawn_actor(Self::run(
-                app,
-                file_path,
-                pre_created_video,
-                realtime_upload_done,
-                recording_dir,
-            )),
+            handle: spawn_actor(async move {
+                let start = Instant::now();
+                let result = Self::run(
+                    app,
+                    file_path,
+                    pre_created_video,
+                    realtime_upload_done,
+                    recording_dir,
+                )
+                .await;
+                async_capture_event(match &result {
+                    Ok(()) => PostHogEvent::MultipartUploadComplete {
+                        duration: start.elapsed(),
+                    },
+                    Err(err) => PostHogEvent::MultipartUploadFailed {
+                        duration: start.elapsed(),
+                        error: err.to_string(),
+                    },
+                });
+
+                result.map(|_| ())
+            }),
         }
     }
 

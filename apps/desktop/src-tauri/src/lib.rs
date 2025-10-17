@@ -17,6 +17,7 @@ mod logging;
 mod notifications;
 mod permissions;
 mod platform;
+mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
@@ -67,7 +68,6 @@ use serde_json::json;
 use specta::Type;
 use std::{
     collections::BTreeMap,
-    fmt,
     fs::File,
     future::Future,
     io::BufWriter,
@@ -1938,6 +1938,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             error!("Failed to initialize ffmpeg: {e}");
         })
         .ok();
+
+    posthog::init();
 
     let tauri_context = tauri::generate_context!();
 
