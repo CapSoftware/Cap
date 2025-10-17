@@ -29,6 +29,7 @@ declare global {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
+	authorImage: string | null;
 };
 
 export const ShareVideo = forwardRef<
