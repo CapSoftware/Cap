@@ -120,12 +120,13 @@ export function ProfileImage({
 									disabled={disabled || isLoading || isRemoving}
 									size="icon"
 									onClick={handleRemove}
+									spinnerClassName="mr-0"
 									spinner={isRemoving}
 								>
 									{isRemoving ? null : (
 										<FontAwesomeIcon
 											icon={faTrash}
-											className="size-2.5 text-gray-12"
+											className="size-2.5 text-gray-12 mx-auto"
 										/>
 									)}
 								</Button>
