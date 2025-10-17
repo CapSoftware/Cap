@@ -7,7 +7,7 @@ use ffmpeg::{
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use std::path::PathBuf;
-use tracing::debug;
+use tracing::*;
 
 pub struct FFmpegDecoder {
     input: avformat::context::Input,
@@ -52,15 +52,18 @@ impl FFmpegDecoder {
 
             let hw_device = hw_device_type.and_then(|hw_device_type| {
                 if exceeds_common_hw_limits {
-                    debug!(
+                    warn!(
                         "Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration"
                     );
                     None
                 } else {
                     match decoder.try_use_hw_device(hw_device_type) {
-                        Ok(device) => Some(device),
+                        Ok(device) => {
+                            debug!("Using hardware device");
+                            Some(device)
+                        },
                         Err(error) => {
-                            debug!("Failed to enable hardware decoder: {error:?}");
+                            error!("Failed to enable hardware decoder: {error:?}");
                             None
                         }
                     }
