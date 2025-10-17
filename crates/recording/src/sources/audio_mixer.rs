@@ -309,8 +309,9 @@ impl AudioMixer {
 
                                 frame.set_rate(source.info.rate() as u32);
 
-                                let silence_duration =
-                                    Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
+                                let silence_duration = Duration::from_secs_f64(
+                                    silence_samples_count as f64 / rate as f64,
+                                );
                                 let timestamp = buffer_last_timestamp + buffer_last_duration;
                                 source.buffer_last = Some((timestamp, silence_duration));
                                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
@@ -687,4 +688,3 @@ mod test {
         }
     }
 }
-
