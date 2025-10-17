@@ -729,9 +729,9 @@ function Inner() {
 										});
 									}}
 								>
-									<Show when={hasArea()}>
-										<Occluders />
+									<Occluders />
 
+									<Show when={hasArea()}>
 										<div
 											class={cx(
 												"flex absolute flex-col items-center",
@@ -823,16 +823,17 @@ function Inner() {
 										/>
 									</Show>
 
-									<Show when={!hasArea() && !creating()}>
-										<p class="z-10 text-xl pointer-events-none text-white">
-											Click and drag to select area
-										</p>
-									</Show>
-
-									<Show when={hasArea() && !creating()}>
-										<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
-											Click and drag to create new area
-										</p>
+									<Show when={!creating()}>
+										<Show when={!hasArea()}>
+											<p class="z-10 text-xl pointer-events-none text-white">
+												Click and drag to select area
+											</p>
+										</Show>
+										<Show when={hasArea()}>
+											<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
+												Click and drag to create new area
+											</p>
+										</Show>
 									</Show>
 								</div>
 							);
