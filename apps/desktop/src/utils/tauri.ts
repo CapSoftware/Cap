@@ -275,8 +275,8 @@ async focusWindow(windowId: WindowId) : Promise<null> {
 async editorDeleteProject() : Promise<null> {
     return await TAURI_INVOKE("editor_delete_project");
 },
-async importAndUploadVideo(sourcePath: string, channel: TAURI_CHANNEL<UploadProgress>) : Promise<UploadResult> {
-    return await TAURI_INVOKE("import_and_upload_video", { sourcePath, channel });
+async importAndUploadVideo(path: string, channel: TAURI_CHANNEL<UploadProgress>) : Promise<UploadResult> {
+    return await TAURI_INVOKE("import_and_upload_video", { path, channel });
 }
 }
 
@@ -438,8 +438,8 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingDeleted = { path: string }
 export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Failed"; error: string }
-export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }
-export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus }
+export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta | { from: string }) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }
+export type RecordingMetaWithMetadata = ((StudioRecordingMeta | InstantRecordingMeta | { from: string }) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null; upload?: UploadMeta | null }) & { mode: RecordingMode; status: StudioRecordingStatus }
 export type RecordingMode = "studio" | "instant"
 export type RecordingOptionsChanged = null
 export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean }

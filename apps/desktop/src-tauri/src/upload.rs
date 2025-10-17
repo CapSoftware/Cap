@@ -20,7 +20,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
     pin::pin,

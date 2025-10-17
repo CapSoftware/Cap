@@ -916,6 +916,9 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
                     .collect(),
             }
         }
+        RecordingMetaInner::Upload { .. } => {
+            vec![path.join("output/result.mp4")]
+        }
     };
 
     let duration = display_paths
@@ -1432,6 +1435,7 @@ impl RecordingMetaWithMetadata {
             mode: match &inner.inner {
                 RecordingMetaInner::Studio(_) => RecordingMode::Studio,
                 RecordingMetaInner::Instant(_) => RecordingMode::Instant,
+                RecordingMetaInner::Upload { .. } => RecordingMode::Studio,
             },
             status: match &inner.inner {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
@@ -1453,6 +1457,20 @@ impl RecordingMetaWithMetadata {
                 }
                 RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
                     StudioRecordingStatus::Complete
+                }
+                RecordingMetaInner::Upload { .. } => {
+                    // Check upload status to determine recording status
+                    match &inner.upload {
+                        Some(UploadMeta::Complete) => StudioRecordingStatus::Complete,
+                        Some(UploadMeta::Failed { error }) => StudioRecordingStatus::Failed {
+                            error: error.clone(),
+                        },
+                        Some(UploadMeta::SinglePartUpload { .. })
+                        | Some(UploadMeta::MultipartUpload { .. }) => {
+                            StudioRecordingStatus::InProgress
+                        }
+                        None => StudioRecordingStatus::InProgress,
+                    }
                 }
             },
             inner,
@@ -1770,7 +1788,7 @@ async fn import_and_upload_video(
     path: PathBuf,
     channel: Channel<UploadProgress>,
 ) -> Result<UploadResult, String> {
-    import::from(app, path, channel)
+    import::from(app, path, channel).await
 }
 
 async fn transcode_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
@@ -2402,9 +2420,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         .and_then(|v| v.map(|v| v.enable_new_uploader))
                         .unwrap_or(false);
                     if is_new_uploader_enabled {
-                        resume_uploads(app)
+                        resume_uploads(app.clone())
                             .await
                             .map_err(|err| warn!("Error resuming uploads: {err}"))
+                            .ok();
+
+                        import::resume_transcoding(app)
+                            .await
+                            .map_err(|err| warn!("Error resuming import transcoding: {err}"))
                             .ok();
                     }
                 }
@@ -2926,6 +2949,27 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                     .open_path(mp4_path.to_str().unwrap_or_default(), None::<String>);
                 if let Some(main_window) = CapWindowId::Main.get(&app) {
                     main_window.close().ok();
+                }
+            }
+        }
+        RecordingMetaInner::Upload { .. } => {
+            // Check if upload is complete, if so open the editor like a studio recording
+            match &meta.upload {
+                Some(UploadMeta::Complete) => {
+                    let project_path = path.to_path_buf();
+                    tokio::spawn(
+                        async move { ShowCapWindow::Editor { project_path }.show(&app).await },
+                    );
+                }
+                Some(UploadMeta::Failed { error }) => {
+                    return Err(format!("Upload failed: {}", error));
+                }
+                Some(UploadMeta::SinglePartUpload { .. })
+                | Some(UploadMeta::MultipartUpload { .. }) => {
+                    return Err("Upload still in progress".to_string());
+                }
+                None => {
+                    return Err("Upload not started".to_string());
                 }
             }
         }

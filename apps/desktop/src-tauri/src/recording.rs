@@ -699,7 +699,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         }
     };
 
-    if let Some((recording, recording_dir, video_id)) = recording_data {
+    if let Some((_recording, recording_dir, video_id)) = recording_data {
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
@@ -768,6 +768,10 @@ async fn handle_recording_end(
                     }
                     RecordingMetaInner::Instant(meta) => {
                         *meta = InstantRecordingMeta::Failed { error: error };
+                    }
+                    RecordingMetaInner::Upload { .. } => {
+                        // Upload recordings don't have a failed state to set
+                        // The upload process handles its own error states
                     }
                 }
                 project_meta

@@ -119,9 +119,8 @@ pub enum UploadMeta {
 pub enum RecordingMetaInner {
     Studio(StudioRecordingMeta),
     Instant(InstantRecordingMeta),
+    Upload { from: PathBuf },
 }
-
-impl specta::Flatten for RecordingMetaInner {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
@@ -188,6 +187,9 @@ impl RecordingMeta {
         match &self.inner {
             RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
             RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
+            RecordingMetaInner::Upload { .. } => {
+                self.project_path.join("output").join("result.mp4")
+            }
         }
     }
 
