@@ -282,33 +282,39 @@ impl AudioMixer {
 
                         if let Some(diff) =
                             elapsed_since_last_frame.checked_sub(buffer_last_duration)
-                            && diff >= Duration::from_millis(1)
                         {
-                            let gap = diff;
+                            let min_gap = if buffer_last_duration.is_zero() {
+                                Duration::from_micros(1)
+                            } else {
+                                buffer_last_duration
+                            };
 
-                            print!("Gap between last buffer frame, inserting {gap:?} of silence");
+                            if diff >= min_gap {
+                                let gap = diff;
 
-                            let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
-                            let silence_samples_count = silence_samples_needed.ceil() as usize;
+                                debug!(?gap, "Gap between last buffer frame, inserting silence");
 
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                source.info.sample_format,
-                                silence_samples_count,
-                                source.info.channel_layout(),
-                            );
+                                let silence_samples_needed = (gap.as_secs_f64()) * rate as f64;
+                                let silence_samples_count = silence_samples_needed.ceil() as usize;
 
-                            for i in 0..frame.planes() {
-                                frame.data_mut(i).fill(0);
+                                let mut frame = ffmpeg::frame::Audio::new(
+                                    source.info.sample_format,
+                                    silence_samples_count,
+                                    source.info.channel_layout(),
+                                );
+
+                                for i in 0..frame.planes() {
+                                    frame.data_mut(i).fill(0);
+                                }
+
+                                frame.set_rate(source.info.rate() as u32);
+
+                                let silence_duration =
+                                    Duration::from_secs_f64(silence_samples_count as f64 / rate as f64);
+                                let timestamp = buffer_last_timestamp + buffer_last_duration;
+                                source.buffer_last = Some((timestamp, silence_duration));
+                                source.buffer.push_back(AudioFrame::new(frame, timestamp));
                             }
-
-                            frame.set_rate(source.info.rate() as u32);
-
-                            let timestamp = buffer_last_timestamp + gap;
-                            source.buffer_last = Some((
-                                timestamp,
-                                Duration::from_secs_f64(silence_samples_count as f64 / rate as f64),
-                            ));
-                            source.buffer.push_back(AudioFrame::new(frame, timestamp));
                         }
                     }
                 }
@@ -681,3 +687,4 @@ mod test {
         }
     }
 }
+
