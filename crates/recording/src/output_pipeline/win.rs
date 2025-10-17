@@ -209,7 +209,7 @@ impl Muxer for WindowsMuxer {
         let _ = self.video_tx.send(None);
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
+    fn finish(&mut self, _: Duration) -> anyhow::Result<()> {
         let mut output = self.output.lock().unwrap();
         if let Some(audio_encoder) = self.audio_encoder.as_mut() {
             let _ = audio_encoder.finish(&mut output);
