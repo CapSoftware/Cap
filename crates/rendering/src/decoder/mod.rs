@@ -10,7 +10,25 @@ mod avassetreader;
 mod ffmpeg;
 mod frame_converter;
 
-pub type DecodedFrame = Arc<Vec<u8>>;
+pub struct DecodedFrame {
+    data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
+}
+
+impl DecodedFrame {
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
 
 pub enum VideoDecoderMessage {
     GetFrame(f32, tokio::sync::oneshot::Sender<DecodedFrame>),

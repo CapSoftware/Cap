@@ -13,6 +13,8 @@ use cidre::{
 use ffmpeg::{Rational, format, frame};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
+use crate::DecodedFrame;
+
 use super::frame_converter::{FrameConverter, copy_rgba_plane};
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
@@ -20,6 +22,8 @@ use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 struct ProcessedFrame {
     number: u32,
     data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Clone)]
@@ -151,6 +155,8 @@ impl CachedFrame {
                 let data = ProcessedFrame {
                     number: *number,
                     data: Arc::new(frame_buffer),
+                    width: image_buf.width() as u32,
+                    height: image_buf.height() as u32,
                 };
 
                 *self = Self::Processed(data.clone());
@@ -227,14 +233,22 @@ impl AVAssetReaderDecoder {
                     let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                         let data = cached.process(&mut processor);
 
-                        sender.send(data.data.clone()).ok();
+                        let _ = sender.send(DecodedFrame {
+                            data: data.data.clone(),
+                            width: data.width,
+                            height: data.height,
+                        });
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
                         let last_sent_frame = last_sent_frame.clone();
                         Some(move |data: ProcessedFrame| {
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = sender.send(data.data);
+                            let _ = sender.send(DecodedFrame {
+                                data: data.data.clone(),
+                                width: data.width,
+                                height: data.height,
+                            });
                         })
                     };
 
