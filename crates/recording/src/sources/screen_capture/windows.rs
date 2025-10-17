@@ -19,9 +19,17 @@ use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
     collections::VecDeque,
+    sync::{
+        Arc,
+        atomic::{self, AtomicU32},
+    },
     time::{Duration, Instant},
 };
-use tracing::{error, info, trace};
+use tokio_util::{
+    future::FutureExt as _,
+    sync::{CancellationToken, DropGuard},
+};
+use tracing::*;
 
 const WINDOW_DURATION: Duration = Duration::from_secs(3);
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
@@ -174,6 +182,8 @@ impl output_pipeline::VideoSource for VideoSource {
         let (mut error_tx, mut error_rx) = mpsc::channel(1);
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
 
+        let tokio_rt = tokio::runtime::Handle::current();
+
         ctx.tasks().spawn_thread("d3d-capture-thread", move || {
             cap_mediafoundation_utils::thread_init();
 
@@ -199,17 +209,24 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
             };
 
+            let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+            let cancel_token = CancellationToken::new();
+
             let res = scap_direct3d::Capturer::new(
                 capture_item,
                 settings,
-                move |frame| {
-                    let timestamp = frame.inner().SystemRelativeTime()?;
-                    let timestamp = Timestamp::PerformanceCounter(
-                        PerformanceCounterTimestamp::new(timestamp.Duration),
-                    );
-                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
+                {
+	                let video_frame_counter = video_frame_counter.clone();
+	                move |frame| {
+	                	video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+	                    let timestamp = frame.inner().SystemRelativeTime()?;
+	                    let timestamp = Timestamp::PerformanceCounter(
+	                        PerformanceCounterTimestamp::new(timestamp.Duration),
+	                    );
+	                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
 
-                    Ok(())
+	                    Ok(())
+	                }
                 },
                 {
                     let mut error_tx = error_tx.clone();
@@ -240,6 +257,21 @@ impl output_pipeline::VideoSource for VideoSource {
                 return;
             };
 
+            tokio_rt.spawn(
+                async move {
+	                loop {
+	                    tokio::time::sleep(Duration::from_secs(5)).await;
+	                    debug!(
+	                        "Captured {} frames",
+	                        video_frame_counter.load(atomic::Ordering::Relaxed)
+	                    );
+	                }
+	            }
+	            .with_cancellation_token_owned(cancel_token.clone())
+	            .in_current_span()
+            );
+			let drop_guard = cancel_token.drop_guard();
+
             trace!("Starting D3D capturer");
             let start_result = capturer.start().map_err(Into::into);
             if let Err(ref e) = start_result {
@@ -258,6 +290,8 @@ impl output_pipeline::VideoSource for VideoSource {
             if reply.send(capturer.stop().map_err(Into::into)).is_err() {
                 return;
             }
+
+            drop(drop_guard)
         });
 
         ctx.tasks().spawn("d3d-capture", async move {
