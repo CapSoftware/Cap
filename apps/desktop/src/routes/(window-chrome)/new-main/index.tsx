@@ -631,7 +631,7 @@ function Page() {
 			exitClass="scale-100"
 			exitToClass="scale-95"
 		>
-			<div class="flex flex-col gap-2 w-full">
+			<div class="flex flex-col w-full space-y-2">
 				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
 					<div
 						class={cx(
@@ -655,7 +655,7 @@ function Page() {
 						/>
 						<TargetDropdownButton
 							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0 h-full",
 								displayMenuOpen() && "bg-gray-5",
 							)}
 							ref={(el) => (displayTriggerRef = el)}
@@ -697,7 +697,7 @@ function Page() {
 						/>
 						<TargetDropdownButton
 							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
+								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0 h-full",
 								windowMenuOpen() && "bg-gray-5",
 							)}
 							ref={(el) => (windowTriggerRef = el)}
