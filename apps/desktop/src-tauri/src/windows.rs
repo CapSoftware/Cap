@@ -167,7 +167,7 @@ impl CapWindowId {
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
-            Self::Main => (300.0, 360.0),
+            Self::Main => (300.0, 320.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),

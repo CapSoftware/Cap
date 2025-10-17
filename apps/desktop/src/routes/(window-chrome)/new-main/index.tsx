@@ -56,6 +56,7 @@ import {
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
+import IconLucideCamera from "~icons/lucide/camera";
 import IconLucideSearch from "~icons/lucide/search";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
@@ -74,8 +75,8 @@ import TargetTypeButton from "./TargetTypeButton";
 
 function getWindowSize() {
 	return {
-		width: 270,
-		height: 256,
+		width: 300,
+		height: 320,
 	};
 }
 
@@ -192,7 +193,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 
 	return (
 		<div class="flex flex-col w-full">
-			<div class="flex gap-3 justify-between items-center mt-3">
+			<div class="flex gap-3 justify-between items-center">
 				<div
 					onClick={() => props.onBack()}
 					class="flex gap-1 items-center rounded-md px-1.5 text-xs 
@@ -651,7 +652,7 @@ function Page() {
 								);
 							}}
 							name="Display"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
+							class="flex-1 h-full rounded-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 						/>
 						<TargetDropdownButton
 							class={cx(
@@ -693,7 +694,7 @@ function Page() {
 								);
 							}}
 							name="Window"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
+							class="flex-1 h-full rounded-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
 						/>
 						<TargetDropdownButton
 							class={cx(
@@ -717,6 +718,8 @@ function Page() {
 							aria-label="Choose window"
 						/>
 					</div>
+				</div>
+				<div class="grid grid-cols-2 gap-2 w-full text-xs text-gray-11">
 					<TargetTypeButton
 						selected={rawOptions.targetMode === "area"}
 						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
@@ -726,6 +729,16 @@ function Page() {
 							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
 						}}
 						name="Area"
+					/>
+					<TargetTypeButton
+						selected={false}
+						Component={IconLucideCamera}
+						disabled={isRecording()}
+						onClick={() => {
+							if (isRecording()) return;
+							console.log("Camera mode coming soon");
+						}}
+						name="Camera only"
 					/>
 				</div>
 				<BaseControls />
@@ -755,7 +768,7 @@ function Page() {
 		<div
 			class={`flex relative ${
 				displayMenuOpen() || windowMenuOpen() ? "" : "justify-center"
-			} flex-col px-3 gap-2 h-full text-[--text-primary]`}
+			} flex-col px-3 py-3 gap-3 h-full text-[--text-primary]`}
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
