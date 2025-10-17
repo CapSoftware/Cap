@@ -138,7 +138,6 @@ impl CursorShapeMacOS {
                 raw: include_str!("../assets/mac/ibeam_vertical.svg"),
                 hotspot: (0.51, 0.49),
             },
-
             // Tahoe cursor variants
             Self::TahoeArrow => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/default.svg"),
@@ -230,7 +229,6 @@ impl CursorShapeMacOS {
     /// macOS cursor are also resolution-independent so this works.
     pub fn from_hash(hash: &str) -> Option<Self> {
         Some(match hash {
-            // Regular macOS cursor hashes
             "de2d1f4a81e520b65fd1317b845b00a1c51a4d1f71cca3cd4ccdab52b98d1ac9" => Self::Arrow,
             "ab26ca862492d41355b711c58544687a799dd7ae14cf161959ca524bbc97c322" => {
                 Self::ContextualMenu
@@ -264,59 +262,69 @@ impl CursorShapeMacOS {
                 Self::IBeamVerticalForVerticalLayout
             }
 
-            //Hash values obtained from a macOS Tahoe system.
+            // macOS Tahoe
             "57a1d610df3e421ebef670ba58c97319d2ab6990d64dca34d28140e4527fd54d" => Self::TahoeArrow,
-            "877e1c153d942d18ddfe88e72e2f34ad4435a6839fc447c1a32a71e6bbe1104c" => {
-                Self::TahoeContextualMenu
+            "24ae740b1b618e08ccf3f54375e6f072da5eb47048426460d0500e21a8be0963" => {
+                Self::ContextualMenu
             }
-            "bc1a01ced20ea38eda8f0eb1976bfe74ac39150ed9a044d3df918faf3dff15ae" => {
+            "e8dcb6cb19ebfa9336297a61950674a365e19ff01b8bf1a327a2f83851f3bc6c" => {
                 Self::TahoeClosedHand
             }
-            "0aa0d950a742ed4802ed44095cbf5834de3eea84bf78026cacb8e2c37d244f46" => {
+            "c5bc204d864e56fce70bca01f309b6cf21e1c77b4389c32883c1c140621bc024" => {
                 Self::TahoeCrosshair
             }
-            "f44a524d6fcfe5a1b1bebf23fcb12fbfeaea0ecf92beb7f69fdf586c319dd8ab" => {
+            "45bc17d1d3754c60229ebf534ba62827af72815dd4a100d20464ce8072b87fea" => {
                 Self::TahoeDisappearingItem
             }
-            "93d05bf80e702fdf5d6924447c91a0ab5fb196251d5758e98c5b6a5f08f0e960" => {
+            "ef6d71540be9ba0eac3f45328171cb3c864e267d29ee24c15467a353f958529d" => {
                 Self::TahoeDragCopy
             }
-            "00cdb9c59246bf98172a027a94b323498bf8d82c701c4d0d85c6e452549fa351" => {
+            "f5299f02b606041ce03a39c518feafaf977d3d178f73849be00e5e6468ca2f09" => {
                 Self::TahoeDragLink
             }
             "3de4a52b22f76f28db5206dc4c2219dff28a6ee5abfb9c5656a469f2140f7eaa" => Self::TahoeIBeam,
-            "a6f87e2749a5a6799c04ca8e1782194b770a2b5f966e70b79c7c245222176ec5" => {
+            "e335333967dc50a93683f85da145e3e4858f0618a81e5d2ca93d496d9159fbf1" => {
                 Self::TahoeOpenHand
             }
-            "48941d14eefe97e53fe38531c0f927d71fbd3e63b32e1e10e0a4ff729d64e320" => {
+            "57f34c3b50a051f7504b165226f552d009378f1cd20f16ba6568216f3982fd59" => {
                 Self::TahoeOperationNotAllowed
             }
-            "cb0277925fa3ecca8bc54bc98b3ef1d5c08cfd4c6086733f4d849c675f68bf6f" => {
+            "65d626a50079c3111f3c3da9ad8a98220331a592332e00afcf61c0c9c77402f2" => {
                 Self::TahoePointingHand
             }
-            "825236ff95d98fd49868da5a588ad7077ea507e15ad0a4924495511d05c1bc35" => {
-                Self::TahoeResizeDown
+            // As calculated from `NSCursor` directly
+            "de549b270ba98c1d02ee6b72ec8019001d09e6a750aa65b012c529d90eb2aeea" |
+            // As reported when hovering on HTML cursor tester
+            "d0cceb4314b74f8f0bc82d206e28c0e5f84ec441c62882542ab2ab2a4b5bd033" => Self::ResizeDown,
+            // As calculated from `NSCursor` directly
+            "ac46c5f4d94cc2ec68ca760e197d3467e2113efd18808cc3da88dd35045d7b49" |
+            // As reported when hovering on HTML cursor tester
+            "2a527730da48b7943c4b1ad844eba0a12fcc81147114b47a4eb1e0fef01241a9" => Self::ResizeLeft,
+            // As calculated from `NSCursor` directly
+            "b94c84b13da63547851b41fbd7897a423cf87d30c19b1c7f67f69c266f614268" |
+            // As reported when hovering on HTML cursor tester
+            "4c4dae9b638d0c74629e6073f1301a6a36cd4b47602cff7bf168559e4c745903" => {
+                Self::ResizeLeftRight
             }
-            "8a8608a42590e7c518f410aa0750894d2296c7a72e74e3a9dcceb72bc3bc2daf" => {
-                Self::TahoeResizeLeft
+            // As calculated from `NSCursor` directly
+            "324b63acd82ca78ba13e69f65eb21c7f047f87dbb49d2d552b3c112e425fbfb6" |
+            // As reported when hovering on HTML cursor tester
+            "3a8abc0eeeeb0ded8a2070bc9af9cd7da4e3eff057aa13b5721db2748f6c340a" => Self::ResizeRight,
+            // As calculated from `NSCursor` directly
+            "d07eda9c435c22c0874a6c9953cecd886dee38c5f115c3b8c754a99ebab76ad5" |
+            // As reported when hovering on HTML cursor tester
+            "78e3453975ac617f3dd108e5f39574e51955cf234b5c4f1971b73dc6836c928b" => Self::ResizeUp,
+            // As calculated from `NSCursor` directly
+            "b3b52be9bbdc48f26b5f2b6d808c9d9facd8d11f5d5eaad4ebe21ec2b7ec1e98" |
+            // As reported when hovering on HTML cursor tester
+            "1fbfd7a8b9bdb0ed9455d88726bcbefe031893a523ac74d27ab7f993c0239f1d" => {
+                Self::ResizeUpDown
             }
-            "1db16810eb4c14a9c86807b15633d891298e4decd22ed650d8d5d2375f94d27e" => {
-                Self::TahoeResizeLeftRight
+            "c715df2b1e5956f746fea3cdbe259136f3349773e9dbf26cc65b122905c4eb1c" => {
+                Self::IBeamVerticalForVerticalLayout
             }
-            "426e4d72be3d8b97fadca5e1067c5a5c2c939e0bbe9c686947c60e3350f386cb" => {
-                Self::TahoeResizeRight
-            }
-            "95b05d0dd57d3a5c7198c7e8fbcf001c316530dd65de9ec26dde42ba9922e11b" => {
-                Self::TahoeResizeUp
-            }
-            "f919de8ef1e36cd95ec8805f6731e831cb5996a4e4403f7c62b6ff994d429451" => {
-                Self::TahoeResizeUpDown
-            }
-            "5113d2b572347a56228457ca3e96102934eb394c7d26c3d985d4ee146959d34a" => {
-                Self::TahoeIBeamVerticalForVerticalLayout
-            }
-            "e539c32a13a6b2caf0e0a991a21d31f8d16cb9feee61fb4efc27a21d6dd6a177" => Self::TahoeZoomIn,
-            "d2324ade560f68ce638bb2fd98e9ba2f08d219593afab6b94fb647b1c243d049" => {
+            "08bb474d7bdb5ee4be6e3a797a7fd05ebd8e4e813e92a685a91f33dbc32c572a" => Self::TahoeZoomIn,
+            "411f5864a498e2d7533d462e85fe2bfe44bcad5b4120300fdf3c3f9f541dade0" => {
                 Self::TahoeZoomOut
             }
             _ => return None,
