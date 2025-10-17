@@ -49,6 +49,7 @@ export interface ButtonProps
 	asChild?: boolean;
 	spinner?: boolean;
 	href?: string;
+	spinnerClassName?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
 	target?: string;
@@ -62,6 +63,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			size,
 			asChild = false,
 			spinner = false,
+			spinnerClassName,
 			href,
 			kbd,
 			icon,
@@ -79,7 +81,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 				href={href || undefined}
 				{...props}
 			>
-				{spinner && <LoadingSpinner className="mr-1" size={16} />}
+				{spinner && (
+					<LoadingSpinner
+						className={classNames("mr-1", spinnerClassName)}
+						size={16}
+					/>
+				)}
 				{icon && icon}
 				{props.children}
 				{kbd && (
