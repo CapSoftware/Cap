@@ -39,7 +39,7 @@ impl Muxer for Mp4Muxer {
         video_config: Option<cap_media_info::VideoInfo>,
         audio_config: Option<cap_media_info::AudioInfo>,
         _: Arc<AtomicBool>,
-        tasks: &mut TaskPool,
+        _: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
