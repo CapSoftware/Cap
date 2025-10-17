@@ -2,7 +2,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::frame;
 use std::{ops::Sub, path::PathBuf, time::Duration};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 // before pausing at all, subtract 0.
 // on pause, record last frame time.
@@ -24,6 +24,9 @@ pub struct MP4Encoder {
     // elapsed_duration: cm::Time,
     video_frames_appended: usize,
     audio_frames_appended: usize,
+    last_timestamp: Option<Duration>,
+    last_video_pts: Option<Duration>,
+    last_audio_pts: Option<Duration>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -204,6 +207,9 @@ impl MP4Encoder {
             is_paused: false,
             video_frames_appended: 0,
             audio_frames_appended: 0,
+            last_timestamp: None,
+            last_video_pts: None,
+            last_audio_pts: None,
         })
     }
 
@@ -227,15 +233,41 @@ impl MP4Encoder {
         self.most_recent_frame = Some((frame.clone(), timestamp));
 
         if let Some(pause_timestamp) = self.pause_timestamp {
-            self.timestamp_offset += timestamp - pause_timestamp;
-            self.pause_timestamp = None;
+            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
+                self.timestamp_offset += gap;
+                self.pause_timestamp = None;
+            }
         }
 
+        let mut pts_duration = timestamp
+            .checked_sub(self.timestamp_offset)
+            .unwrap_or(Duration::ZERO);
+
+        if let Some(last_pts) = self.last_video_pts {
+            if pts_duration <= last_pts {
+                let frame_duration = self.video_frame_duration();
+                let adjusted_pts = last_pts + frame_duration;
+
+                trace!(
+                    ?timestamp,
+                    ?last_pts,
+                    adjusted_pts = ?adjusted_pts,
+                    frame_duration_ns = frame_duration.as_nanos(),
+                    "Monotonic video pts correction",
+                );
+
+                if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
+                    self.timestamp_offset = new_offset;
+                }
+
+                pts_duration = adjusted_pts;
+            }
+        }
+
+        self.last_video_pts = Some(pts_duration);
+
         let mut timing = frame.timing_info(0).unwrap();
-        timing.pts = cm::Time::new(
-            timestamp.sub(self.timestamp_offset).as_millis() as i64,
-            1_000,
-        );
+        timing.pts = cm::Time::new(pts_duration.as_millis() as i64, 1_000);
         let frame = frame.copy_with_new_timing(&[timing]).unwrap();
 
         self.video_input
@@ -244,6 +276,7 @@ impl MP4Encoder {
             .and_then(|v| v.then_some(()).ok_or(QueueVideoFrameError::Failed))?;
 
         self.video_frames_appended += 1;
+        self.last_timestamp = Some(timestamp);
 
         Ok(())
     }
@@ -257,6 +290,13 @@ impl MP4Encoder {
     ) -> Result<(), QueueAudioFrameError> {
         if self.is_paused || !self.is_writing {
             return Ok(());
+        }
+
+        if let Some(pause_timestamp) = self.pause_timestamp {
+            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
+                self.timestamp_offset += gap;
+                self.pause_timestamp = None;
+            }
         }
 
         let Some(audio_input) = &mut self.audio_input else {
@@ -297,8 +337,37 @@ impl MP4Encoder {
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
 
+        let mut pts_duration = timestamp
+            .checked_sub(self.timestamp_offset)
+            .unwrap_or(Duration::ZERO);
+
+        if let Some(last_pts) = self.last_audio_pts {
+            if pts_duration <= last_pts {
+                let frame_duration = Self::audio_frame_duration(&frame);
+                let adjusted_pts = last_pts + frame_duration;
+
+                trace!(
+                    ?timestamp,
+                    ?last_pts,
+                    adjusted_pts = ?adjusted_pts,
+                    frame_duration_ns = frame_duration.as_nanos(),
+                    samples = frame.samples(),
+                    sample_rate = frame.rate(),
+                    "Monotonic audio pts correction",
+                );
+
+                if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
+                    self.timestamp_offset = new_offset;
+                }
+
+                pts_duration = adjusted_pts;
+            }
+        }
+
+        self.last_audio_pts = Some(pts_duration);
+
         let pts = cm::Time::new(
-            (timestamp.sub(self.timestamp_offset).as_secs_f64() * frame.rate() as f64) as i64,
+            (pts_duration.as_secs_f64() * frame.rate() as f64) as i64,
             frame.rate() as i32,
         );
 
@@ -322,8 +391,41 @@ impl MP4Encoder {
             .and_then(|v| v.then_some(()).ok_or(QueueAudioFrameError::Failed))?;
 
         self.audio_frames_appended += 1;
+        self.last_timestamp = Some(timestamp);
 
         Ok(())
+    }
+
+    fn video_frame_duration(&self) -> Duration {
+        let fps_num = self.config.frame_rate.0;
+        let fps_den = self.config.frame_rate.1;
+
+        if fps_num <= 0 {
+            return Duration::from_millis(1);
+        }
+
+        let numerator = fps_den.unsigned_abs() as u128 * 1_000_000_000u128;
+        let denominator = fps_num as u128;
+        let nanos = (numerator / denominator).max(1);
+
+        Duration::from_nanos(nanos as u64)
+    }
+
+    fn audio_frame_duration(frame: &frame::Audio) -> Duration {
+        let rate = frame.rate();
+
+        if rate <= 0 {
+            return Duration::from_millis(1);
+        }
+
+        let samples = frame.samples() as u128;
+        if samples == 0 {
+            return Duration::from_nanos(1);
+        }
+
+        let nanos = (samples * 1_000_000_000u128) / rate as u128;
+
+        Duration::from_nanos(nanos.max(1) as u64)
     }
 
     pub fn pause(&mut self) {
@@ -331,7 +433,7 @@ impl MP4Encoder {
             return;
         }
 
-        let Some((_, timestamp)) = self.most_recent_frame else {
+        let Some(timestamp) = self.last_timestamp else {
             return;
         };
 
