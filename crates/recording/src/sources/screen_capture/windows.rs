@@ -19,7 +19,12 @@ use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
     collections::VecDeque,
+    sync::atomic,
     time::{Duration, Instant},
+};
+use tokio_util::{
+    future::FutureExt as _,
+    sync::{CancellationToken, DropGuard},
 };
 use tracing::{error, info, trace};
 
@@ -199,10 +204,14 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
             };
 
+            let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+            let cancel_token = CancellationToken::new();
+
             let res = scap_direct3d::Capturer::new(
                 capture_item,
                 settings,
                 move |frame| {
+                	video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
                     let timestamp = frame.inner().SystemRelativeTime()?;
                     let timestamp = Timestamp::PerformanceCounter(
                         PerformanceCounterTimestamp::new(timestamp.Duration),
@@ -239,6 +248,22 @@ impl output_pipeline::VideoSource for VideoSource {
                 let _ = error_tx.send(anyhow!("Control channel disconnected before Start"));
                 return;
             };
+
+            let drop_guard = cancel_token.drop_guard();
+	        tokio::spawn({
+	            let video_frame_count = video_frame_counter.clone();
+	            async move {
+	                loop {
+	                    tokio::time::sleep(Duration::from_secs(3));
+	                    debug!(
+	                        "Captured {} frames",
+	                        video_frame_count.load(atomic::Ordering::Relaxed)
+	                    );
+	                }
+	            }
+	            .with_cancellation_token_owned(cancel_token.clone())
+	            .in_current_span()
+            });
 
             trace!("Starting D3D capturer");
             let start_result = capturer.start().map_err(Into::into);

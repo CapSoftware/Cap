@@ -8,12 +8,19 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cidre::*;
-use futures::{FutureExt, channel::mpsc, future::BoxFuture};
-use std::sync::{
-    Arc,
-    atomic::{self, AtomicBool},
+use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
+use std::{
+    sync::{
+        Arc,
+        atomic::{self, AtomicBool, AtomicU32},
+    },
+    time::Duration,
 };
 use tokio::sync::broadcast;
+use tokio_util::{
+    future::FutureExt as _,
+    sync::{CancellationToken, DropGuard},
+};
 use tracing::debug;
 
 #[derive(Debug)]
@@ -149,8 +156,27 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
         );
 
+        let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let cancel_token = CancellationToken::new();
+
+        tokio::spawn({
+            let video_frame_count = video_frame_counter.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3));
+                    debug!(
+                        "Captured {} frames",
+                        video_frame_count.load(atomic::Ordering::Relaxed)
+                    );
+                }
+            }
+            .with_cancellation_token_owned(cancel_token.clone())
+            .in_current_span()
+        });
+
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
+                let video_frame_count = video_frame_counter.clone();
                 move |frame| {
                     let sample_buffer = frame.sample_buf();
 
@@ -165,6 +191,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                             if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
                                 return;
                             }
+
+                            video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
                             let check_skip_send = || {
                                 cap_fail::fail_err!(
@@ -218,17 +246,27 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     }
                 }
             })
-            .with_stop_with_err_cb(move |_, err| {
-                let _ = error_tx.send(err.retained());
+            .with_stop_with_err_cb({
+                let video_frame_count = video_frame_counter.clone();
+                move |_, err| {
+                    debug!(
+                        "Capturer stopping after creating {} video frames",
+                        video_frame_count.load(atomic::Ordering::Relaxed)
+                    );
+
+                    let _ = error_tx.send(err.retained());
+                }
             });
 
         let capturer = Capturer::new(Arc::new(builder.build()?));
         Ok((
-            VideoSourceConfig(
-                ChannelVideoSourceConfig::new(self.video_info, video_rx),
-                capturer.clone(),
-                error_rx.resubscribe(),
-            ),
+            VideoSourceConfig {
+                inner: ChannelVideoSourceConfig::new(self.video_info, video_rx),
+                capturer: capturer.clone(),
+                error_rx: error_rx.resubscribe(),
+                drop_guard: cancel_token.drop_guard(),
+                video_frame_counter: video_frame_counter.clone(),
+            },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
                     ChannelAudioSourceConfig::new(self.audio_info(), rx),
@@ -297,12 +335,19 @@ impl Capturer {
     }
 }
 
-pub struct VideoSourceConfig(
-    ChannelVideoSourceConfig<VideoFrame>,
-    Capturer,
-    broadcast::Receiver<arc::R<ns::Error>>,
-);
-pub struct VideoSource(ChannelVideoSource<VideoFrame>, Capturer);
+pub struct VideoSourceConfig {
+    inner: ChannelVideoSourceConfig<VideoFrame>,
+    capturer: Capturer,
+    error_rx: broadcast::Receiver<arc::R<ns::Error>>,
+    drop_guard: DropGuard,
+    video_frame_counter: Arc<AtomicU32>,
+}
+pub struct VideoSource {
+    inner: ChannelVideoSource<VideoFrame>,
+    capturer: Capturer,
+    drop_guard: Option<DropGuard>,
+    video_frame_counter: Arc<AtomicU32>,
+}
 
 impl output_pipeline::VideoSource for VideoSource {
     type Config = VideoSourceConfig;
@@ -317,21 +362,26 @@ impl output_pipeline::VideoSource for VideoSource {
         Self: Sized,
     {
         ctx.tasks().spawn("screen-capture", async move {
-            if let Ok(err) = config.2.recv().await {
+            if let Ok(err) = config.error_rx.recv().await {
                 return Err(anyhow!("{err}"));
             }
 
             Ok(())
         });
 
-        ChannelVideoSource::setup(config.0, video_tx, ctx)
+        ChannelVideoSource::setup(config.inner, video_tx, ctx)
             .await
-            .map(|source| Self(source, config.1))
+            .map(|source| Self {
+                inner: source,
+                capturer: config.capturer,
+                drop_guard: Some(config.drop_guard),
+                video_frame_counter: config.video_frame_counter,
+            })
     }
 
     fn start(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            self.1.start().await?;
+            self.capturer.start().await?;
 
             Ok(())
         }
@@ -340,7 +390,13 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            self.1.stop().await?;
+            debug!(
+                "Capturer stopping after creating {} video frames",
+                self.video_frame_counter.load(atomic::Ordering::Relaxed)
+            );
+            self.capturer.stop().await?;
+
+            drop(self.drop_guard.take());
 
             Ok(())
         }
@@ -348,7 +404,7 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 
     fn video_info(&self) -> VideoInfo {
-        self.0.video_info()
+        self.inner.video_info()
     }
 }
 
