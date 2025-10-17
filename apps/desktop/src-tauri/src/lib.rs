@@ -1944,12 +1944,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .ok();
 
-    tokio::spawn(async move {
-        posthog_rs::init_global("phc_nXz1MDsMR0QPrWYp669AcaWkLA3S5xzIGRhqhqTesRL")
-            .await
-            .map_err(|err| error!("Error initializing PostHog: {err}"))
-            .ok();
-    });
+    if let Some(env) = option_env!("VITE_POSTHOG_KEY") {
+        tokio::spawn(async move {
+            posthog_rs::init_global(env)
+                .await
+                .map_err(|err| error!("Error initializing PostHog: {err}"))
+                .ok();
+        });
+    }
 
     let tauri_context = tauri::generate_context!();
 

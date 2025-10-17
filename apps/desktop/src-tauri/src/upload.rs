@@ -130,7 +130,7 @@ pub async fn upload_video(
 
         api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
 
-        Ok(start.elapsed())
+        Ok(())
     };
 
     // TODO: We don't report progress on image upload
@@ -151,9 +151,9 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(took) => {
+        Ok(()) => {
             let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-            e.insert_prop("took", took.as_millis())
+            e.insert_prop("took", start.elapsed().as_millis())
                 .map_err(|err| error!("Error adding PostHog property: {err:?}"))
                 .ok();
             e
@@ -372,6 +372,7 @@ impl InstantMultipartUpload {
     ) -> Self {
         Self {
             handle: spawn_actor(async move {
+                let start = Instant::now();
                 let result = Self::run(
                     app,
                     file_path,
@@ -381,9 +382,9 @@ impl InstantMultipartUpload {
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(took) => {
+                    Ok(()) => {
                         let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-                        e.insert_prop("took", took.as_millis())
+                        e.insert_prop("took", start.elapsed().as_millis())
                             .map_err(|err| error!("Error adding PostHog property: {err:?}"))
                             .ok();
                         e
@@ -408,7 +409,7 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<Duration, AuthedApiError> {
+    ) -> Result<(), AuthedApiError> {
         let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
             .map_err(|err| {
                 error!("Error checking status of new uploader flow from settings: {err}")
@@ -417,7 +418,6 @@ impl InstantMultipartUpload {
             .and_then(|v| v.map(|v| v.enable_new_uploader))
             .unwrap_or(false);
         info!("InstantMultipartUpload::run: is new uploader enabled? {is_new_uploader_enabled}");
-        let start = Instant::now();
         if !is_new_uploader_enabled {
             return upload_legacy::InstantMultipartUpload::run(
                 app,
@@ -427,7 +427,6 @@ impl InstantMultipartUpload {
                 realtime_video_done,
             )
             .await
-            .map(|_| start.elapsed())
             .map_err(Into::into);
         }
 
@@ -488,7 +487,7 @@ impl InstantMultipartUpload {
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        Ok(start.elapsed())
+        Ok(())
     }
 }
 
