@@ -156,6 +156,7 @@ impl CursorShapeMacOS {
                 raw: include_str!("../assets/mac/tahoe/crosshair.svg"),
                 hotspot: (0.52, 0.51),
             },
+            Self::TahoeDisappearingItem => return None,
             Self::TahoeDragCopy => ResolvedCursor {
                 raw: include_str!("../assets/mac/drag_copy.svg"),
                 hotspot: (0.255, 0.1),
