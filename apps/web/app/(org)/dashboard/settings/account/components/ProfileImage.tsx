@@ -101,25 +101,23 @@ export function ProfileImage({
 				/>
 				<div className="space-y-3">
 					<div className="flex gap-2">
-						{!isRemoving && (
-							<Button
-								type="button"
-								variant="gray"
-								disabled={disabled || isLoading}
-								size="xs"
-								onClick={handleUploadClick}
-								spinner={isUploading}
-							>
-								{isUploading ? "Uploading..." : "Upload Image"}
-							</Button>
-						)}
+						<Button
+							type="button"
+							variant="gray"
+							disabled={disabled || isLoading || isRemoving}
+							size="xs"
+							onClick={handleUploadClick}
+							spinner={isUploading}
+						>
+							{isUploading ? "Uploading..." : "Upload Image"}
+						</Button>
 						{(previewUrl || isRemoving) && (
 							<Tooltip content="Remove image">
 								<Button
 									type="button"
 									variant="outline"
 									className="p-0 size-8"
-									disabled={disabled || isLoading}
+									disabled={disabled || isLoading || isRemoving}
 									size="icon"
 									onClick={handleRemove}
 									spinner={isRemoving}
