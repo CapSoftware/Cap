@@ -254,7 +254,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	            let video_frame_count = video_frame_counter.clone();
 	            async move {
 	                loop {
-	                    tokio::time::sleep(Duration::from_secs(3)).await;
+	                    tokio::time::sleep(Duration::from_secs(5)).await;
 	                    debug!(
 	                        "Captured {} frames",
 	                        video_frame_count.load(atomic::Ordering::Relaxed)

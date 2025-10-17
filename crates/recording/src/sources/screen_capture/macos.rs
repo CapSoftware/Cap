@@ -178,14 +178,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                             video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
-                            let check_skip_send = || {
-                                cap_fail::fail_err!(
-                                    "media::sources::screen_capture::skip_send",
-                                    ()
-                                );
-
-                                Ok::<(), ()>(())
-                            };
+                            cap_fail::fail_ret!("screen_capture vidoe skip");
 
                             let _ = video_tx.try_send(VideoFrame {
                                 sample_buf: sample_buffer.retained(),
@@ -195,13 +188,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                         scap_screencapturekit::Frame::Audio(_) => {
                             use ffmpeg::ChannelLayout;
 
-                            let res = || {
-                                cap_fail::fail_err!("screen_capture audio skip", ());
-                                Ok::<(), ()>(())
-                            };
-                            if res().is_err() {
-                                return;
-                            }
+                            cap_fail::fail_ret!("screen_capture audio skip");
 
                             let Some(audio_tx) = &mut audio_tx else {
                                 return;
@@ -377,7 +364,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 let video_frame_count = self.video_frame_counter.clone();
                 async move {
                     loop {
-                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        tokio::time::sleep(Duration::from_secs(5)).await;
                         debug!(
                             "Captured {} frames",
                             video_frame_count.load(atomic::Ordering::Relaxed)
