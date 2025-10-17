@@ -1,17 +1,18 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
+import { Array, Option } from "effect";
 import {
 	batch,
 	createMemo,
 	createRoot,
 	createSignal,
 	For,
+	Match,
 	Show,
 	Switch,
 } from "solid-js";
 import { produce } from "solid-js/store";
-import { Array, Option } from "effect";
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import {
@@ -20,7 +21,6 @@ import {
 	useTrackContext,
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
-import { Match } from "solid-js";
 
 export type ZoomSegmentDragState =
 	| { type: "idle" }
@@ -321,7 +321,7 @@ export function ZoomTrack(props: {
 												Array.isArray(currentSelection.indices)
 													? currentSelection.indices
 													: "index" in currentSelection &&
-														  typeof currentSelection.index === "number"
+															typeof currentSelection.index === "number"
 														? [currentSelection.index]
 														: [];
 
