@@ -1057,6 +1057,7 @@ dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "ffmpeg-next",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
