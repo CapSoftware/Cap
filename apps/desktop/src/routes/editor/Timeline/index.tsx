@@ -52,6 +52,22 @@ export function Timeline() {
 			});
 			resume();
 		}
+
+		const checkBounds = () => {
+			if (timelineBounds.width && timelineBounds.width > 0) {
+				const minSegmentPixels = 80;
+				const secondsPerPixel = 1 / minSegmentPixels;
+				const desiredZoom = timelineBounds.width * secondsPerPixel;
+
+				if (transform().zoom > desiredZoom) {
+					transform().updateZoom(desiredZoom, 0);
+				}
+			} else {
+				setTimeout(checkBounds, 10);
+			}
+		};
+
+		checkBounds();
 	});
 
 	if (

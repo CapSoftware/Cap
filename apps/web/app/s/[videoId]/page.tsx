@@ -661,6 +661,7 @@ async function AuthorizedContent({
 				updatedAt: comments.updatedAt,
 				parentCommentId: comments.parentCommentId,
 				authorName: users.name,
+				authorImage: users.image,
 			})
 			.from(comments)
 			.leftJoin(users, eq(comments.authorId, users.id))

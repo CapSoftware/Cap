@@ -12,8 +12,11 @@ import {
 import { Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { removeProfileImage } from "@/actions/account/remove-profile-image";
+import { uploadProfileImage } from "@/actions/account/upload-profile-image";
+import { FileInput } from "@/components/FileInput";
 import { useDashboardContext } from "../../Contexts";
 import { patchAccountSettings } from "./server";
 
@@ -29,6 +32,24 @@ export const Settings = ({
 	const [defaultOrgId, setDefaultOrgId] = useState<
 		Organisation.OrganisationId | undefined
 	>(user?.defaultOrgId || undefined);
+	const avatarInputId = useId();
+	const initialProfileImage = user?.image ?? null;
+	const [profileImageOverride, setProfileImageOverride] = useState<
+		string | null | undefined
+	>(undefined);
+	const profileImagePreviewUrl =
+		profileImageOverride !== undefined
+			? profileImageOverride
+			: initialProfileImage;
+
+	useEffect(() => {
+		if (
+			profileImageOverride !== undefined &&
+			profileImageOverride === initialProfileImage
+		) {
+			setProfileImageOverride(undefined);
+		}
+	}, [initialProfileImage, profileImageOverride]);
 
 	// Track if form has unsaved changes
 	const hasChanges =
@@ -66,6 +87,74 @@ export const Settings = ({
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
 	}, [hasChanges]);
 
+	const {
+		mutate: uploadProfileImageMutation,
+		isPending: isUploadingProfileImage,
+	} = useMutation({
+		mutationFn: async (file: File) => {
+			const formData = new FormData();
+			formData.append("image", file);
+			return uploadProfileImage(formData);
+		},
+		onSuccess: (result) => {
+			if (result.success) {
+				setProfileImageOverride(undefined);
+				toast.success("Profile image updated successfully");
+				router.refresh();
+			}
+		},
+		onError: (error) => {
+			console.error("Error uploading profile image:", error);
+			setProfileImageOverride(undefined);
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to upload profile image",
+			);
+		},
+	});
+
+	const {
+		mutate: removeProfileImageMutation,
+		isPending: isRemovingProfileImage,
+	} = useMutation({
+		mutationFn: removeProfileImage,
+		onSuccess: (result) => {
+			if (result.success) {
+				setProfileImageOverride(null);
+				toast.success("Profile image removed");
+				router.refresh();
+			}
+		},
+		onError: (error) => {
+			console.error("Error removing profile image:", error);
+			setProfileImageOverride(initialProfileImage);
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to remove profile image",
+			);
+		},
+	});
+
+	const isProfileImageMutating =
+		isUploadingProfileImage || isRemovingProfileImage;
+
+	const handleProfileImageChange = (file: File | null) => {
+		if (!file || isProfileImageMutating) {
+			return;
+		}
+		uploadProfileImageMutation(file);
+	};
+
+	const handleProfileImageRemove = () => {
+		if (isProfileImageMutating) {
+			return;
+		}
+		setProfileImageOverride(null);
+		removeProfileImageMutation();
+	};
+
 	return (
 		<form
 			onSubmit={(e) => {
@@ -73,8 +162,27 @@ export const Settings = ({
 				updateName();
 			}}
 		>
-			<div className="flex flex-col flex-wrap gap-6 w-full md:flex-row">
-				<Card className="flex-1 space-y-1">
+			<div className="grid gap-6 w-full md:grid-cols-2">
+				<Card className="flex flex-col gap-4">
+					<div className="space-y-1">
+						<CardTitle>Profile image</CardTitle>
+						<CardDescription>
+							This image appears in your profile, comments, and shared caps.
+						</CardDescription>
+					</div>
+					<FileInput
+						id={avatarInputId}
+						name="profileImage"
+						height={120}
+						previewIconSize={28}
+						initialPreviewUrl={profileImagePreviewUrl}
+						onChange={handleProfileImageChange}
+						onRemove={handleProfileImageRemove}
+						disabled={isProfileImageMutating}
+						isLoading={isProfileImageMutating}
+					/>
+				</Card>
+				<Card className="space-y-1">
 					<CardTitle>Your name</CardTitle>
 					<CardDescription>
 						Changing your name below will update how your name appears when
@@ -103,7 +211,7 @@ export const Settings = ({
 						</div>
 					</div>
 				</Card>
-				<Card className="flex flex-col flex-1 gap-4 justify-between items-stretch">
+				<Card className="flex flex-col gap-4">
 					<div className="space-y-1">
 						<CardTitle>Contact email address</CardTitle>
 						<CardDescription>
@@ -118,7 +226,7 @@ export const Settings = ({
 						disabled
 					/>
 				</Card>
-				<Card className="flex flex-col flex-1 gap-4 justify-between items-stretch">
+				<Card className="flex flex-col gap-4">
 					<div className="space-y-1">
 						<CardTitle>Default organization</CardTitle>
 						<CardDescription>This is the default organization</CardDescription>
