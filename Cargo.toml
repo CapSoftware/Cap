@@ -84,4 +84,4 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
 
 # https://github.com/CapSoftware/posthog-rs/commit/c7e9712be2f9a9122b1df685d5a067afa5415288
-posthog_rs = { git = "https://github.com/CapSoftware/posthog-rs", rev = "c7e9712be2f9a9122b1df685d5a067afa5415288" }
+posthog-rs = { git = "https://github.com/CapSoftware/posthog-rs", rev = "c7e9712be2f9a9122b1df685d5a067afa5415288" }

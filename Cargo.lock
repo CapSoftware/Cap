@@ -6732,8 +6732,7 @@ dependencies = [
 [[package]]
 name = "posthog-rs"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "610d236077c94c96194b0d2b40989bda4bf8faf60e15a0da6ef8ffd4c78f6c1c"
+source = "git+https://github.com/CapSoftware/posthog-rs?rev=c7e9712be2f9a9122b1df685d5a067afa5415288#c7e9712be2f9a9122b1df685d5a067afa5415288"
 dependencies = [
  "chrono",
  "derive_builder",
