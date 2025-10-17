@@ -1,10 +1,10 @@
 // credit @filleduchaos
 
 use crate::{
-    PostHogEvent, UploadProgress, VideoUploadInfo,
+    UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
-    async_capture_event,
     general_settings::GeneralSettingsStore,
+    posthog::{PostHogEvent, async_capture_event},
     upload_legacy,
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -151,10 +151,10 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(()) => PostHogEvent::MultpartUploadComplete {
+        Ok(()) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
         },
-        Err(err) => PostHogEvent::MultpartUploadFailed {
+        Err(err) => PostHogEvent::MultipartUploadFailed {
             duration: start.elapsed(),
             error: err.to_string(),
         },
@@ -374,10 +374,10 @@ impl InstantMultipartUpload {
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(()) => PostHogEvent::MultpartUploadComplete {
+                    Ok(()) => PostHogEvent::MultipartUploadComplete {
                         duration: start.elapsed(),
                     },
-                    Err(err) => PostHogEvent::MultpartUploadFailed {
+                    Err(err) => PostHogEvent::MultipartUploadFailed {
                         duration: start.elapsed(),
                         error: err.to_string(),
                     },
