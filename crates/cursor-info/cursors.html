@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -50,25 +50,31 @@
         display: inline-block;
         border: 2px solid #ddd;
         border-radius: 4px;
-        background: linear-gradient(45deg, #ccc 25%, transparent 25%),
+        background:
+          linear-gradient(45deg, #ccc 25%, transparent 25%),
           linear-gradient(-45deg, #ccc 25%, transparent 25%),
           linear-gradient(45deg, transparent 75%, #ccc 75%),
           linear-gradient(-45deg, transparent 75%, #ccc 75%);
         background-size: 10px 10px;
-        background-position: 0 0, 0 5px, 5px -5px, -5px 0px;
+        background-position:
+          0 0,
+          0 5px,
+          5px -5px,
+          -5px 0px;
         cursor: crosshair;
       }
 
       .cursor-svg {
         display: block;
-        max-width: 200px;
-        max-height: 200px;
+        width: 200px;
+        height: 200px;
         pointer-events: none;
+        object-fit: contain;
       }
 
       .cursor-svg.macos {
-        max-width: 250px;
-        max-height: 250px;
+        width: 200px;
+        height: 200px;
       }
 
       .hotspot {
@@ -135,8 +141,8 @@
     <div class="header">
       <h1>Cursor Hotspot Viewer</h1>
       <p>
-        Hover over cursors to see mouse coordinates, click to copy hotspot
-        values
+        Hover over cursors to see mouse coordinates, click to copy
+        hotspot values
       </p>
     </div>
 
@@ -253,6 +259,120 @@
             name: "ibeam_vertical",
             hash: "024e1d486a7f16368669d419e69c9a326e464ec1b8ed39645e5c89cb183e03c5",
             svg: "assets/mac/ibeam_vertical.svg",
+            hotspot: [0.51, 0.49],
+          },
+          {
+            name: "tahoe_arrow",
+            hash: "57a1d610df3e421ebef670ba58c97319d2ab6990d64dca34d28140e4527fd54d",
+            svg: "assets/mac/tahoe/default.svg",
+            hotspot: [0.495, 0.463],
+          },
+          {
+            name: "tahoe_contextual_menu",
+            hash: "877e1c153d942d18ddfe88e72e2f34ad4435a6839fc447c1a32a71e6bbe1104c",
+            svg: "assets/mac/tahoe/context-menu.svg",
+            hotspot: [0.495, 0.352],
+          },
+          {
+            name: "tahoe_closed_hand",
+            hash: "bc1a01ced20ea38eda8f0eb1976bfe74ac39150ed9a044d3df918faf3dff15ae",
+            svg: "assets/mac/tahoe/grabbing.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_crosshair",
+            hash: "0aa0d950a742ed4802ed44095cbf5834de3eea84bf78026cacb8e2c37d244f46",
+            svg: "assets/mac/tahoe/crosshair.svg",
+            hotspot: [0.52, 0.51],
+          },
+          {
+            name: "tahoe_drag_copy",
+            hash: "93d05bf80e702fdf5d6924447c91a0ab5fb196251d5758e98c5b6a5f08f0e960",
+            svg: "assets/mac/drag_copy.svg",
+            hotspot: [0.255, 0.1],
+          },
+          {
+            name: "tahoe_drag_link",
+            hash: "00cdb9c59246bf98172a027a94b323498bf8d82c701c4d0d85c6e452549fa351",
+            svg: "assets/mac/drag_link.svg",
+            hotspot: [0.621, 0.309],
+          },
+          {
+            name: "tahoe_ibeam",
+            hash: "3de4a52b22f76f28db5206dc4c2219dff28a6ee5abfb9c5656a469f2140f7eaa",
+            svg: "assets/mac/tahoe/text.svg",
+            hotspot: [0.525, 0.52],
+          },
+          {
+            name: "tahoe_open_hand",
+            hash: "a6f87e2749a5a6799c04ca8e1782194b770a2b5f966e70b79c7c245222176ec5",
+            svg: "assets/mac/tahoe/grab.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_operation_not_allowed",
+            hash: "48941d14eefe97e53fe38531c0f927d71fbd3e63b32e1e10e0a4ff729d64e320",
+            svg: "assets/mac/operation_not_allowed.svg",
+            hotspot: [0.24, 0.1],
+          },
+          {
+            name: "tahoe_pointing_hand",
+            hash: "cb0277925fa3ecca8bc54bc98b3ef1d5c08cfd4c6086733f4d849c675f68bf6f",
+            svg: "assets/mac/tahoe/pointer.svg",
+            hotspot: [0.5, 0.4],
+          },
+          {
+            name: "tahoe_resize_down",
+            hash: "825236ff95d98fd49868da5a588ad7077ea507e15ad0a4924495511d05c1bc35",
+            svg: "assets/mac/tahoe/resize-s.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_resize_left",
+            hash: "8a8608a42590e7c518f410aa0750894d2296c7a72e74e3a9dcceb72bc3bc2daf",
+            svg: "assets/mac/tahoe/resize-w.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_resize_left_right",
+            hash: "1db16810eb4c14a9c86807b15633d891298e4decd22ed650d8d5d2375f94d27e",
+            svg: "assets/mac/tahoe/resize-ew.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_resize_right",
+            hash: "426e4d72be3d8b97fadca5e1067c5a5c2c939e0bbe9c686947c60e3350f386cb",
+            svg: "assets/mac/tahoe/resize-e.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_resize_up",
+            hash: "95b05d0dd57d3a5c7198c7e8fbcf001c316530dd65de9ec26dde42ba9922e11b",
+            svg: "assets/mac/tahoe/resize-n.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_resize_up_down",
+            hash: "f919de8ef1e36cd95ec8805f6731e831cb5996a4e4403f7c62b6ff994d429451",
+            svg: "assets/mac/tahoe/resize-ns.svg",
+            hotspot: [0.5, 0.5],
+          },
+          {
+            name: "tahoe_ibeam_vertical",
+            hash: "5113d2b572347a56228457ca3e96102934eb394c7d26c3d985d4ee146959d34a",
+            svg: "assets/mac/ibeam_vertical.svg",
+            hotspot: [0.51, 0.49],
+          },
+          {
+            name: "tahoe_zoom_in",
+            hash: "e539c32a13a6b2caf0e0a991a21d31f8d16cb9feee61fb4efc27a21d6dd6a177",
+            svg: "assets/mac/tahoe/zoom-in.svg",
+            hotspot: [0.51, 0.49],
+          },
+          {
+            name: "tahoe_zoom_out",
+            hash: "d2324ade560f68ce638bb2fd98e9ba2f08d219593afab6b94fb647b1c243d049",
+            svg: "assets/mac/tahoe/zoom-out.svg",
             hotspot: [0.51, 0.49],
           },
         ],
@@ -398,7 +518,7 @@
 
         if (cursor.hotspot) {
           hotspotInfo.textContent = `Hotspot: (${cursor.hotspot[0].toFixed(
-            3
+            3,
           )}, ${cursor.hotspot[1].toFixed(3)})`;
         } else {
           hotspotInfo.innerHTML =
@@ -418,7 +538,7 @@
           const y = (e.clientY - rect.top) / rect.height;
           currentMousePos = [x, y];
           mousePosition.textContent = `Mouse: (${x.toFixed(3)}, ${y.toFixed(
-            3
+            3,
           )})`;
         });
 
@@ -431,14 +551,14 @@
           // If mouse is over the container, use current mouse position
           if (currentMousePos) {
             const hotspotText = `(${currentMousePos[0].toFixed(
-              3
+              3,
             )}, ${currentMousePos[1].toFixed(3)})`;
             navigator.clipboard.writeText(hotspotText).then(() => {
               mousePosition.textContent = "Copied!";
               setTimeout(() => {
                 if (currentMousePos) {
                   mousePosition.textContent = `Mouse: (${currentMousePos[0].toFixed(
-                    3
+                    3,
                   )}, ${currentMousePos[1].toFixed(3)})`;
                 } else {
                   mousePosition.textContent = "";
@@ -448,7 +568,7 @@
           } else if (cursor.hotspot) {
             // Fallback to defined hotspot if no current mouse position
             const hotspotText = `(${cursor.hotspot[0].toFixed(
-              3
+              3,
             )}, ${cursor.hotspot[1].toFixed(3)})`;
             navigator.clipboard.writeText(hotspotText).then(() => {
               mousePosition.textContent = "Copied!";
@@ -479,14 +599,19 @@
 
       function initializeCursors() {
         const macosContainer = document.getElementById("macos-cursors");
-        const windowsContainer = document.getElementById("windows-cursors");
+        const windowsContainer =
+          document.getElementById("windows-cursors");
 
         cursors.macos.forEach((cursor) => {
-          macosContainer.appendChild(createCursorElement(cursor, "macos"));
+          macosContainer.appendChild(
+            createCursorElement(cursor, "macos"),
+          );
         });
 
         cursors.windows.forEach((cursor) => {
-          windowsContainer.appendChild(createCursorElement(cursor, "windows"));
+          windowsContainer.appendChild(
+            createCursorElement(cursor, "windows"),
+          );
         });
       }
 
