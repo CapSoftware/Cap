@@ -1,5 +1,5 @@
 use cpal::{SampleFormat, StreamConfig};
-use ffmpeg::format::{sample, Sample};
+use ffmpeg::format::{Sample, sample};
 
 pub trait DataExt {
     fn as_ffmpeg(&self, config: &StreamConfig) -> ffmpeg::frame::Audio;
@@ -36,13 +36,19 @@ impl DataExt for ::cpal::Data {
                 }
                 let src = &bytes[base..end];
                 let dst = ffmpeg_frame.data_mut(i as usize);
-                debug_assert!(dst.len() >= src.len(), "FFmpeg plane smaller than CPAL buffer");
+                debug_assert!(
+                    dst.len() >= src.len(),
+                    "FFmpeg plane smaller than CPAL buffer"
+                );
                 let copy_len = dst.len().min(src.len());
                 dst[..copy_len].copy_from_slice(&src[..copy_len]);
             }
         } else {
             let dst = ffmpeg_frame.data_mut(0);
-            debug_assert!(dst.len() >= bytes.len(), "FFmpeg buffer smaller than CPAL buffer");
+            debug_assert!(
+                dst.len() >= bytes.len(),
+                "FFmpeg buffer smaller than CPAL buffer"
+            );
             let copy_len = dst.len().min(bytes.len());
             dst[..copy_len].copy_from_slice(&bytes[..copy_len]);
         }
