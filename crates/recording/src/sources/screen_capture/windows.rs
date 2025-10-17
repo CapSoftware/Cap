@@ -254,7 +254,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	            let video_frame_count = video_frame_counter.clone();
 	            async move {
 	                loop {
-	                    tokio::time::sleep(Duration::from_secs(3));
+	                    tokio::time::sleep(Duration::from_secs(3)).await;
 	                    debug!(
 	                        "Captured {} frames",
 	                        video_frame_count.load(atomic::Ordering::Relaxed)
@@ -283,6 +283,8 @@ impl output_pipeline::VideoSource for VideoSource {
             if reply.send(capturer.stop().map_err(Into::into)).is_err() {
                 return;
             }
+
+            drop(drop_guard)
         });
 
         ctx.tasks().spawn("d3d-capture", async move {

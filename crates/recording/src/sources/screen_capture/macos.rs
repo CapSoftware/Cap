@@ -157,22 +157,6 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         );
 
         let video_frame_counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-        let cancel_token = CancellationToken::new();
-
-        tokio::spawn({
-            let video_frame_count = video_frame_counter.clone();
-            async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(3));
-                    debug!(
-                        "Captured {} frames",
-                        video_frame_count.load(atomic::Ordering::Relaxed)
-                    );
-                }
-            }
-            .with_cancellation_token_owned(cancel_token.clone())
-            .in_current_span()
-        });
 
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
@@ -258,14 +242,17 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 }
             });
 
+        let cancel_token = CancellationToken::new();
         let capturer = Capturer::new(Arc::new(builder.build()?));
+
         Ok((
             VideoSourceConfig {
                 inner: ChannelVideoSourceConfig::new(self.video_info, video_rx),
                 capturer: capturer.clone(),
                 error_rx: error_rx.resubscribe(),
-                drop_guard: cancel_token.drop_guard(),
                 video_frame_counter: video_frame_counter.clone(),
+                cancel_token: cancel_token.clone(),
+                drop_guard: cancel_token.drop_guard(),
             },
             audio_rx.map(|rx| {
                 SystemAudioSourceConfig(
@@ -339,14 +326,16 @@ pub struct VideoSourceConfig {
     inner: ChannelVideoSourceConfig<VideoFrame>,
     capturer: Capturer,
     error_rx: broadcast::Receiver<arc::R<ns::Error>>,
+    cancel_token: CancellationToken,
     drop_guard: DropGuard,
     video_frame_counter: Arc<AtomicU32>,
 }
 pub struct VideoSource {
     inner: ChannelVideoSource<VideoFrame>,
     capturer: Capturer,
-    drop_guard: Option<DropGuard>,
+    cancel_token: CancellationToken,
     video_frame_counter: Arc<AtomicU32>,
+    _drop_guard: DropGuard,
 }
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -374,7 +363,8 @@ impl output_pipeline::VideoSource for VideoSource {
             .map(|source| Self {
                 inner: source,
                 capturer: config.capturer,
-                drop_guard: Some(config.drop_guard),
+                cancel_token: config.cancel_token,
+                _drop_guard: config.drop_guard,
                 video_frame_counter: config.video_frame_counter,
             })
     }
@@ -382,6 +372,21 @@ impl output_pipeline::VideoSource for VideoSource {
     fn start(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
             self.capturer.start().await?;
+
+            tokio::spawn({
+                let video_frame_count = self.video_frame_counter.clone();
+                async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        debug!(
+                            "Captured {} frames",
+                            video_frame_count.load(atomic::Ordering::Relaxed)
+                        );
+                    }
+                }
+                .with_cancellation_token_owned(self.cancel_token.clone())
+                .in_current_span()
+            });
 
             Ok(())
         }
@@ -396,7 +401,7 @@ impl output_pipeline::VideoSource for VideoSource {
             );
             self.capturer.stop().await?;
 
-            drop(self.drop_guard.take());
+            self.cancel_token.cancel();
 
             Ok(())
         }
