@@ -107,7 +107,7 @@ export function ProfileImage({
 						{(previewUrl || isRemoving) && (
 							<Button
 								type="button"
-								variant="gray"
+								variant="outline"
 								disabled={disabled || isLoading}
 								size="xs"
 								onClick={handleRemove}
