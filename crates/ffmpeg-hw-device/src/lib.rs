@@ -55,7 +55,6 @@ impl HwDevice {
             dbg!(src.format());
             if src.format() == HW_PIX_FMT.get().into() {
                 let mut sw_frame = frame::Video::empty();
-                sw_frame.set_pts(src.pts());
                 dbg!(src.pts());
 
                 if dbg!(av_hwframe_transfer_data(
@@ -64,6 +63,8 @@ impl HwDevice {
                     0
                 )) >= 0
                 {
+                    sw_frame.set_pts(src.pts());
+                    dbg!(sw_frame.pts());
                     return Some(sw_frame);
                 };
             }

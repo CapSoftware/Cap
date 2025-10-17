@@ -52,7 +52,7 @@ impl FfmpegDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
     ) -> Result<(), String> {
-        let (tx, rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
 
         std::thread::spawn(move || {
             let mut this = match cap_video_decode::FFmpegDecoder::new(
@@ -64,11 +64,11 @@ impl FfmpegDecoder {
                 }),
             ) {
                 Err(e) => {
-                    tx.send(Err(e));
+                    let _ = continue_tx.send(Err(e));
                     return;
                 }
                 Ok(v) => {
-                    tx.send(Ok(()));
+                    let _ = continue_tx.send(Ok(()));
                     v
                 }
             };
@@ -240,6 +240,8 @@ impl FfmpegDecoder {
                 }
             }
         });
+
+        continue_rx.recv().map_err(|e| e.to_string())??;
 
         Ok(())
     }

@@ -35,22 +35,24 @@ async fn main() {
 
     let base = ExporterBase::builder(path).build().await.unwrap();
 
-    let format = cli.format.unwrap_or_else(|| {
-        inquire::Select::new(
-            "Select export format",
-            vec![ExportFormat::MP4, ExportFormat::GIF],
-        )
-        .prompt()
-        .unwrap()
-    });
+    let format = ExportFormat::MP4;
+    // cli.format.unwrap_or_else(|| {
+    //     inquire::Select::new(
+    //         "Select export format",
+    //         vec![ExportFormat::MP4, ExportFormat::GIF],
+    //     )
+    //     .prompt()
+    //     .unwrap()
+    // });
 
     let settings_str = cli
         .settings
-        .unwrap_or_else(|| inquire::Text::new("Export settings JSON").prompt().unwrap());
+        // .or_else(|| inquire::Text::new("Export settings JSON").prompt().ok())
+        .filter(|v| v != " ");
 
     match format {
         ExportFormat::GIF => {
-            let settings: GifExportSettings = serde_json::from_str(&settings_str).unwrap();
+            let settings: GifExportSettings = serde_json::from_str(&settings_str.unwrap()).unwrap();
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {
@@ -60,7 +62,9 @@ async fn main() {
                 .unwrap();
         }
         ExportFormat::MP4 => {
-            let settings: Mp4ExportSettings = serde_json::from_str(&settings_str).unwrap();
+            let settings: Mp4ExportSettings = settings_str
+                .map(|v| serde_json::from_str(&v).unwrap())
+                .unwrap_or_default();
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {

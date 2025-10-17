@@ -37,6 +37,16 @@ pub struct Mp4ExportSettings {
     pub compression: ExportCompression,
 }
 
+impl Default for Mp4ExportSettings {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            resolution_base: XY::new(1920, 1080),
+            compression: ExportCompression::Minimal,
+        }
+    }
+}
+
 impl Mp4ExportSettings {
     pub async fn export(
         self,
