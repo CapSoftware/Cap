@@ -215,7 +215,7 @@ impl CursorLayer {
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
         let mut cursor_opacity = 1.0f32;
-        if uniforms.project.cursor.hide_when_idle {
+        if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {
             let hide_delay_secs = uniforms
                 .project
                 .cursor
