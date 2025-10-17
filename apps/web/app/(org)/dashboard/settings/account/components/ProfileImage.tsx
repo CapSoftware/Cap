@@ -1,12 +1,13 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faImage } from "@fortawesome/free-solid-svg-icons";
+import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Tooltip } from "@/components/Tooltip";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: string | null;
@@ -113,16 +114,22 @@ export function ProfileImage({
 							</Button>
 						)}
 						{(previewUrl || isRemoving) && (
-							<Button
-								type="button"
-								variant="outline"
-								disabled={disabled || isLoading}
-								size="xs"
-								onClick={handleRemove}
-								spinner={isRemoving}
-							>
-								{isRemoving ? "Removing image..." : "Remove"}
-							</Button>
+							<Tooltip content="Remove image">
+								<Button
+									type="button"
+									variant="outline"
+									className="p-0 size-8"
+									disabled={disabled || isLoading}
+									size="icon"
+									onClick={handleRemove}
+									spinner={isRemoving}
+								>
+									<FontAwesomeIcon
+										icon={faTrash}
+										className="size-2.5 text-gray-12"
+									/>
+								</Button>
+							</Tooltip>
 						)}
 					</div>
 					<p className="text-xs text-gray-10">Recommended size: 120x120</p>
