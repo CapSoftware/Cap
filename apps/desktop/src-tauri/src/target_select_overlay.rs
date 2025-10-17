@@ -180,13 +180,30 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
-            SW_RESTORE, SetForegroundWindow, ShowWindow,
+            GetWindowPlacement, IsIconic, SW_RESTORE, SetForegroundWindow, SetWindowPlacement,
+            ShowWindow, WINDOWPLACEMENT,
         };
 
         let hwnd = window.raw_handle().inner();
 
         unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
+            // Only restore if the window is actually minimized
+            if IsIconic(hwnd).as_bool() {
+                // Get current window placement to preserve size/position
+                let mut wp = WINDOWPLACEMENT::default();
+                wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+
+                if GetWindowPlacement(hwnd, &mut wp).as_bool() {
+                    // Restore using the previous placement to avoid resizing
+                    wp.showCmd = SW_RESTORE;
+                    SetWindowPlacement(hwnd, &wp);
+                } else {
+                    // Fallback to simple restore if placement fails
+                    ShowWindow(hwnd, SW_RESTORE);
+                }
+            }
+
+            // Always try to bring to foreground
             SetForegroundWindow(hwnd);
         }
     }
