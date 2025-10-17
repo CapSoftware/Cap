@@ -218,12 +218,10 @@ function Inner() {
 			<Match
 				when={
 					rawOptions.targetMode === "window" &&
-					(targetUnderCursor.display_id === params.displayId ||
-						(rawOptions.captureTarget.variant === "window" &&
-							selectedWindow.data))
+					targetUnderCursor.display_id === params.displayId
 				}
 			>
-				<Show when={windowToShow()} keyed>
+				<Show when={targetUnderCursor.window} keyed>
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
