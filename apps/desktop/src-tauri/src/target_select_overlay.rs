@@ -193,9 +193,9 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
                 let mut wp = WINDOWPLACEMENT::default();
                 wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
 
-                if GetWindowPlacement(hwnd, &mut wp).as_bool() {
+                if GetWindowPlacement(hwnd, &mut wp).is_ok() {
                     // Restore using the previous placement to avoid resizing
-                    wp.showCmd = SW_RESTORE;
+                    wp.showCmd = SW_RESTORE.0 as u32;
                     SetWindowPlacement(hwnd, &wp);
                 } else {
                     // Fallback to simple restore if placement fails
