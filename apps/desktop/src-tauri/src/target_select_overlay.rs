@@ -6,6 +6,7 @@ use std::{
 };
 
 use base64::prelude::*;
+use cap_recording::screen_capture::ScreenCaptureTarget;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use scap_targets::{
@@ -46,6 +47,7 @@ pub struct DisplayInformation {
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
+    focused_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
     let displays = scap_targets::Display::list()
         .into_iter()
@@ -59,11 +61,18 @@ pub async fn open_target_select_overlays(
 
     let handle = tokio::spawn({
         let app = app.clone();
+
         async move {
             loop {
                 {
-                    let display = scap_targets::Display::get_containing_cursor();
-                    let window = scap_targets::Window::get_topmost_at_cursor();
+                    let display = focused_target
+                        .as_ref()
+                        .map(|v| v.display())
+                        .unwrap_or_else(|| scap_targets::Display::get_containing_cursor());
+                    let window = focused_target
+                        .as_ref()
+                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
+                        .unwrap_or_else(|| scap_targets::Window::get_topmost_at_cursor());
 
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
