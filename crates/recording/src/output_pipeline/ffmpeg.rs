@@ -65,7 +65,7 @@ impl Muxer for Mp4Muxer {
         })
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
+    fn finish(&mut self, _: Duration) -> anyhow::Result<()> {
         if let Some(video_encoder) = self.video_encoder.as_mut() {
             video_encoder.finish(&mut self.output);
         }
@@ -131,7 +131,7 @@ impl Muxer for OggMuxer {
         ))
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
+    fn finish(&mut self, _: Duration) -> anyhow::Result<()> {
         self.0.finish();
         Ok(())
     }
