@@ -6,7 +6,7 @@ import {
 	organizationMembers,
 	users,
 } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -46,18 +46,40 @@ export async function POST(request: NextRequest) {
 			);
 		}
 
-		await db().insert(organizationMembers).values({
-			id: nanoId(),
-			organizationId: invite.organizationId,
-			userId: user.id,
-			role: invite.role,
-		});
+		const [existingMembership] = await db()
+			.select({ id: organizationMembers.id })
+			.from(organizationMembers)
+			.where(
+				and(
+					eq(organizationMembers.organizationId, invite.organizationId),
+					eq(organizationMembers.userId, user.id),
+				),
+			)
+			.limit(1);
+
+		if (!existingMembership) {
+			await db().insert(organizationMembers).values({
+				id: nanoId(),
+				organizationId: invite.organizationId,
+				userId: user.id,
+				role: invite.role,
+			});
+		}
+
+		const onboardingSteps = {
+			...(user.onboardingSteps ?? {}),
+			organizationSetup: true,
+			customDomain: true,
+			inviteTeam: true,
+		};
 
 		await db()
 			.update(users)
 			.set({
 				thirdPartyStripeSubscriptionId: organizationOwner.stripeSubscriptionId,
 				activeOrganizationId: invite.organizationId,
+				defaultOrgId: invite.organizationId,
+				onboardingSteps,
 			})
 			.where(eq(users.id, user.id));
 

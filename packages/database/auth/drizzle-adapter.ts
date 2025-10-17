@@ -20,15 +20,6 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 		async createUser(userData: any) {
 			const userId = User.UserId.make(nanoId());
 			await db.transaction(async (tx) => {
-				await tx.insert(users).values({
-					id: userId,
-					email: userData.email,
-					emailVerified: userData.emailVerified,
-					name: userData.name,
-					image: userData.image,
-					activeOrganizationId: Organisation.OrganisationId.make(""),
-				});
-
 				const [pendingInvite] = await tx
 					.select({ id: organizationInvites.id })
 					.from(organizationInvites)
@@ -40,30 +31,41 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					)
 					.limit(1);
 
-				if (!pendingInvite) {
-					const organizationId = Organisation.OrganisationId.make(nanoId());
+				await tx.insert(users).values({
+					id: userId,
+					email: userData.email,
+					emailVerified: userData.emailVerified,
+					name: userData.name,
+					image: userData.image,
+					activeOrganizationId: Organisation.OrganisationId.make(""),
+				});
 
-					await tx.insert(organizations).values({
-						id: organizationId,
-						ownerId: userId,
-						name: "My Organization",
-					});
-
-					await tx.insert(organizationMembers).values({
-						id: nanoId(),
-						organizationId,
-						userId,
-						role: "owner",
-					});
-
-					await tx
-						.update(users)
-						.set({
-							activeOrganizationId: organizationId,
-							defaultOrgId: organizationId,
-						})
-						.where(eq(users.id, userId));
+				if (pendingInvite) {
+					return;
 				}
+
+				const organizationId = Organisation.OrganisationId.make(nanoId());
+
+				await tx.insert(organizations).values({
+					id: organizationId,
+					ownerId: userId,
+					name: "My Organization",
+				});
+
+				await tx.insert(organizationMembers).values({
+					id: nanoId(),
+					organizationId,
+					userId,
+					role: "owner",
+				});
+
+				await tx
+					.update(users)
+					.set({
+						activeOrganizationId: organizationId,
+						defaultOrgId: organizationId,
+					})
+					.where(eq(users.id, userId));
 			});
 
 			const rows = await db
