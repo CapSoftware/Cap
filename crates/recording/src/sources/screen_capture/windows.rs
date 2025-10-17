@@ -182,6 +182,8 @@ impl output_pipeline::VideoSource for VideoSource {
         let (mut error_tx, mut error_rx) = mpsc::channel(1);
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
 
+        let tokio_rt = tokio::runtime::Handle::current();
+
         ctx.tasks().spawn_thread("d3d-capture-thread", move || {
             cap_mediafoundation_utils::thread_init();
 
@@ -255,8 +257,8 @@ impl output_pipeline::VideoSource for VideoSource {
                 return;
             };
 
-	        tokio::spawn({
-	            async move {
+            tokio_rt.spawn(
+                async move {
 	                loop {
 	                    tokio::time::sleep(Duration::from_secs(5)).await;
 	                    debug!(
@@ -267,7 +269,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	            }
 	            .with_cancellation_token_owned(cancel_token.clone())
 	            .in_current_span()
-            });
+            );
 			let drop_guard = cancel_token.drop_guard();
 
             trace!("Starting D3D capturer");
