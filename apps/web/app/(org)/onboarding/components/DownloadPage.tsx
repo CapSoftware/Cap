@@ -4,10 +4,6 @@ import { Button, LogoBadge } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { startTransition, useEffect, useState } from "react";
-import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -39,35 +35,6 @@ export function DownloadPage() {
 	const { platform, isIntel } = useDetectPlatform();
 	const loading = platform === null;
 	const router = useRouter();
-	const [clickedContinue, setClickedContinue] = useState(false);
-
-	useEffect(() => {
-		startTransition(() => {
-			onboardingRequest.mutate();
-			router.refresh();
-		});
-	}, []);
-
-	const onboardingRequest = useEffectMutation({
-		mutationFn: () =>
-			withRpc((r) => {
-				return r.UserCompleteOnboardingStep({
-					step: "download",
-					data: undefined,
-				});
-			}),
-		onSuccess: () => {
-			if (clickedContinue) {
-				startTransition(() => {
-					router.push("/dashboard/caps");
-					router.refresh();
-				});
-			}
-		},
-		onError: () => {
-			toast.error("An error occurred, please try again");
-		},
-	});
 
 	return (
 		<div className="flex flex-col gap-12 justify-center items-center min-h-fit lg:gap-20">
@@ -109,12 +76,7 @@ export function DownloadPage() {
 					{getDownloadButtonText(platform, loading, isIntel)}
 				</Button>
 				<Button
-					onClick={() => {
-						setClickedContinue(true);
-						onboardingRequest.mutate();
-					}}
-					spinner={onboardingRequest.isPending && clickedContinue}
-					disabled={onboardingRequest.isPending && clickedContinue}
+					onClick={() => router.push("/dashboard/caps")}
 					className="min-w-[120px]"
 					variant="dark"
 					size="lg"
