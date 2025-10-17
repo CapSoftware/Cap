@@ -116,8 +116,6 @@ pub struct GeneralSettingsStore {
     pub enable_new_recording_flow: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
-    #[serde(default = "default_enable_new_uploader", skip_serializing_if = "no")]
-    pub enable_new_uploader: bool,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
     #[serde(default)]
@@ -131,10 +129,6 @@ fn default_enable_native_camera_preview() -> bool {
 
 fn default_enable_new_recording_flow() -> bool {
     cfg!(debug_assertions)
-}
-
-fn default_enable_new_uploader() -> bool {
-    true
 }
 
 fn no(_: &bool) -> bool {
@@ -184,7 +178,6 @@ impl Default for GeneralSettingsStore {
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
-            enable_new_uploader: default_enable_new_uploader(),
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
         }

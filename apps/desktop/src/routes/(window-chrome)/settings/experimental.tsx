@@ -26,7 +26,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNewRecordingFlow: false,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
-			enableNewUploader: false,
 		},
 	);
 
@@ -90,19 +89,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							value={!!settings.enableNewRecordingFlow}
 							onChange={(value) => {
 								handleChange("enableNewRecordingFlow", value);
-								// This is bad code, but I just want the UI to not jank and can't seem to find the issue.
-								setTimeout(
-									() => window.scrollTo({ top: 0, behavior: "instant" }),
-									5,
-								);
-							}}
-						/>
-						<ToggleSettingItem
-							label="New uploader"
-							description="Improved uploader for faster and more reliable uploads!"
-							value={!!settings.enableNewUploader}
-							onChange={(value) => {
-								handleChange("enableNewUploader", value);
 								// This is bad code, but I just want the UI to not jank and can't seem to find the issue.
 								setTimeout(
 									() => window.scrollTo({ top: 0, behavior: "instant" }),

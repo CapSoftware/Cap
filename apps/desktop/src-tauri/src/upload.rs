@@ -3,9 +3,7 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
-    general_settings::GeneralSettingsStore,
     posthog::{PostHogEvent, async_capture_event},
-    upload_legacy,
     web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
@@ -68,29 +66,6 @@ pub async fn upload_video(
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
     println!("Uploading video {video_id}...");
-    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
-        .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
-        .ok()
-        .and_then(|v| v.map(|v| v.enable_new_uploader))
-        .unwrap_or(false);
-    info!("uploader_video: is new uploader enabled? {is_new_uploader_enabled}");
-    if !is_new_uploader_enabled {
-        return upload_legacy::upload_video(
-            app,
-            video_id,
-            file_path,
-            None,
-            Some(screenshot_path),
-            Some(meta),
-            channel,
-        )
-        .await
-        .map(|v| UploadedItem {
-            link: v.link,
-            id: v.id,
-        });
-    }
-
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
@@ -187,22 +162,6 @@ pub async fn upload_image(
     app: &AppHandle,
     file_path: PathBuf,
 ) -> Result<UploadedItem, AuthedApiError> {
-    let is_new_uploader_enabled = GeneralSettingsStore::get(app)
-        .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
-        .ok()
-        .and_then(|v| v.map(|v| v.enable_new_uploader))
-        .unwrap_or(false);
-    info!("upload_image: is new uploader enabled? {is_new_uploader_enabled}");
-    if !is_new_uploader_enabled {
-        return upload_legacy::upload_image(app, file_path)
-            .await
-            .map(|v| UploadedItem {
-                link: v.link,
-                id: v.id,
-            })
-            .map_err(Into::into);
-    }
-
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -395,26 +354,6 @@ impl InstantMultipartUpload {
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
     ) -> Result<(), AuthedApiError> {
-        let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
-            .map_err(|err| {
-                error!("Error checking status of new uploader flow from settings: {err}")
-            })
-            .ok()
-            .and_then(|v| v.map(|v| v.enable_new_uploader))
-            .unwrap_or(false);
-        info!("InstantMultipartUpload::run: is new uploader enabled? {is_new_uploader_enabled}");
-        if !is_new_uploader_enabled {
-            return upload_legacy::InstantMultipartUpload::run(
-                app,
-                pre_created_video.id.clone(),
-                file_path,
-                pre_created_video,
-                realtime_video_done,
-            )
-            .await
-            .map_err(Into::into);
-        }
-
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
