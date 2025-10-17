@@ -74,8 +74,8 @@ import TargetTypeButton from "./TargetTypeButton";
 
 function getWindowSize() {
 	return {
-		width: 270,
-		height: 256,
+		width: 320,
+		height: 300,
 	};
 }
 
@@ -195,8 +195,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 			<div class="flex gap-3 justify-between items-center mt-3">
 				<div
 					onClick={() => props.onBack()}
-					class="flex gap-1 items-center rounded-md px-1.5 text-xs 
-					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12 
+					class="flex gap-1 items-center rounded-md px-1.5 text-xs
+					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12
 					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
