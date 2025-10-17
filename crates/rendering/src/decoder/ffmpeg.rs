@@ -9,12 +9,16 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+use crate::DecodedFrame;
+
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
     data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
 }
 
 impl CachedFrame {
@@ -25,6 +29,8 @@ impl CachedFrame {
                 let data = ProcessedFrame {
                     data: Arc::new(frame_buffer),
                     number: *number,
+                    width: frame.width(),
+                    height: frame.height(),
                 };
 
                 *self = Self::Processed(data.clone());
@@ -99,14 +105,22 @@ impl FfmpegDecoder {
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&mut converter);
 
-                            sender.send(data.data.clone()).ok();
+                            let _ = sender.send(DecodedFrame {
+                                data: data.data.clone(),
+                                width: data.width,
+                                height: data.height,
+                            });
                             *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
                             let last_sent_frame = last_sent_frame.clone();
                             Some(move |data: ProcessedFrame| {
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = sender.send(data.data);
+                                let _ = sender.send(DecodedFrame {
+                                    data: data.data.clone(),
+                                    width: data.width,
+                                    height: data.height,
+                                });
                             })
                         };
 
