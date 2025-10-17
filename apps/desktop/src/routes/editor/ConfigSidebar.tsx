@@ -53,6 +53,7 @@ import {
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
+import IconLucideTimer from "~icons/lucide/timer";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
 import {
@@ -232,6 +233,13 @@ export function ConfigSidebar() {
 		editorState,
 		meta,
 	} = useEditorContext();
+
+	const cursorIdleDelay = () =>
+		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
+			2) as number;
+
+	const clampIdleDelay = (value: number) =>
+		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -466,6 +474,39 @@ export function ConfigSidebar() {
 								step={1}
 							/>
 						</Field>
+						<Field
+							name="Hide When Idle"
+							icon={<IconLucideTimer class="size-4" />}
+							value={
+								<Toggle
+									checked={project.cursor.hideWhenIdle}
+									onChange={(value) =>
+										setProject("cursor", "hideWhenIdle", value)
+									}
+								/>
+							}
+						/>
+						<Show when={project.cursor.hideWhenIdle}>
+							<Subfield name="Inactivity Delay" class="items-center gap-4">
+								<div class="flex items-center gap-3 flex-1">
+									<Slider
+										class="flex-1"
+										value={[cursorIdleDelay()]}
+										onChange={(v) => {
+											const rounded = clampIdleDelay(v[0]);
+											setProject("cursor", "hideWhenIdleDelay" as any, rounded);
+										}}
+										minValue={0.5}
+										maxValue={5}
+										step={0.1}
+										formatTooltip={(value) => `${value.toFixed(1)}s`}
+									/>
+									<span class="w-12 text-xs text-right text-gray-11">
+										{cursorIdleDelay().toFixed(1)}s
+									</span>
+								</div>
+							</Subfield>
+						</Show>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
