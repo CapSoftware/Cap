@@ -195,6 +195,8 @@ export function ClipTrack(
 	const hasMultipleRecordingSegments = () =>
 		editorInstance.recordings.segments.length > 1;
 
+	const split = () => editorState.timeline.interactMode === "split";
+
 	return (
 		<TrackRoot ref={props.ref}>
 			<For each={segments()}>
@@ -406,6 +408,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const start = segment.start;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
@@ -496,6 +499,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const end = segment.end;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
