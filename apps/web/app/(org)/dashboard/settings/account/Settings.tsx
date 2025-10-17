@@ -98,14 +98,14 @@ export const Settings = ({
 		},
 		onSuccess: (result) => {
 			if (result.success) {
-				setProfileImageOverride(result.imageUrl ?? null);
+				setProfileImageOverride(undefined);
 				toast.success("Profile image updated successfully");
 				router.refresh();
 			}
 		},
 		onError: (error) => {
 			console.error("Error uploading profile image:", error);
-			setProfileImageOverride(initialProfileImage);
+			setProfileImageOverride(undefined);
 			toast.error(
 				error instanceof Error
 					? error.message
@@ -144,7 +144,6 @@ export const Settings = ({
 		if (!file || isProfileImageMutating) {
 			return;
 		}
-		setProfileImageOverride(undefined);
 		uploadProfileImageMutation(file);
 	};
 

@@ -14,10 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
 
-const ALLOWED_IMAGE_TYPES = new Set([
-	"image/jpeg",
-	"image/png",
-]);
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = Array.from(ALLOWED_IMAGE_TYPES).join(",");
 
@@ -129,7 +126,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 				toast.error("Please select a PNG or JPEG image");
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
-					}
+				}
 				return;
 			}
 
