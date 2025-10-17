@@ -353,7 +353,6 @@ export function ClipTrack(
 									isSelected()
 										? "wobble-wrapper border-gray-12"
 										: "border-transparent",
-										split() ? "timeline-scissors-cursor" : "",
 								)}
 								innerClass="ring-blue-9"
 								segment={relativeSegment}
