@@ -36,14 +36,14 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
         fs::metadata(&log_file).map_err(|e| format!("Failed to read log file metadata: {}", e))?;
     let file_size = metadata.len();
 
-    const MAX_SIZE: u64 = 9 * 1024 * 1024;
+    const MAX_SIZE: u64 = 1 * 1024 * 1024;
 
     let log_content = if file_size > MAX_SIZE {
         let content =
             fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {}", e))?;
 
         let header = format!(
-            "⚠️ Log file truncated (original size: {} bytes, showing last ~9MB)\n\n",
+            "⚠️ Log file truncated (original size: {} bytes, showing last ~1MB)\n\n",
             file_size
         );
         let max_content_size = (MAX_SIZE as usize) - header.len();
