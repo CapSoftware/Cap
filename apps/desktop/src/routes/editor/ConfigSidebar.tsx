@@ -235,7 +235,8 @@ export function ConfigSidebar() {
 	} = useEditorContext();
 
 	const cursorIdleDelay = () =>
-		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ?? 2) as number;
+		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
+			2) as number;
 
 	const clampIdleDelay = (value: number) =>
 		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
@@ -479,7 +480,9 @@ export function ConfigSidebar() {
 							value={
 								<Toggle
 									checked={project.cursor.hideWhenIdle}
-									onChange={(value) => setProject("cursor", "hideWhenIdle", value)}
+									onChange={(value) =>
+										setProject("cursor", "hideWhenIdle", value)
+									}
 								/>
 							}
 						/>
@@ -491,11 +494,7 @@ export function ConfigSidebar() {
 										value={[cursorIdleDelay()]}
 										onChange={(v) => {
 											const rounded = clampIdleDelay(v[0]);
-											setProject(
-												"cursor",
-												"hideWhenIdleDelay" as any,
-												rounded,
-											);
+											setProject("cursor", "hideWhenIdleDelay" as any, rounded);
 										}}
 										minValue={0.5}
 										maxValue={5}
