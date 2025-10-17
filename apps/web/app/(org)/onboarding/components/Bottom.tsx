@@ -31,7 +31,7 @@ export const Bottom = () => {
 	});
 
 	return (
-		<div className="flex right-0 bottom-0 left-0 justify-between items-center p-0 mt-5 w-full lg:absolute lg:mt-0 lg:p-16">
+		<div className="flex right-0 bottom-0 left-0 justify-between items-center p-0 lg:mb-10 my-5 mx-auto w-full lg:w-[calc(100%-120px)] lg:absolute lg:mt-0">
 			<Button
 				className="w-fit"
 				variant="outline"

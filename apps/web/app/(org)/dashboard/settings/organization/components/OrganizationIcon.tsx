@@ -31,7 +31,6 @@ export const OrganizationIcon = () => {
 				toast.success("Organization icon updated successfully");
 			}
 		} catch (error) {
-			console.error("Error uploading organization icon:", error);
 			toast.error(
 				error instanceof Error ? error.message : "Failed to upload icon",
 			);
@@ -75,6 +74,7 @@ export const OrganizationIcon = () => {
 				isLoading={isUploading}
 				initialPreviewUrl={existingIconUrl || null}
 				onRemove={handleRemoveIcon}
+				maxFileSizeBytes={1 * 1024 * 1024} // 1MB
 			/>
 		</div>
 	);

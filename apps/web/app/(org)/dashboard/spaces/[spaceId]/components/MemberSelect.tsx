@@ -12,7 +12,6 @@ import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { ChevronDown } from "lucide-react";
-import Image from "next/image";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import { useDashboardContext } from "../../../Contexts";
 
@@ -196,17 +195,12 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 										key={opt.value}
 										className="flex gap-2 items-center justify-start p-1.5 text-[13px] rounded-xl cursor-pointer"
 									>
-										{opt.image ? (
-											<Image
-												src={opt.image}
-												alt={opt.label}
-												width={20}
-												height={20}
-												className="w-5 h-5 rounded-full"
-											/>
-										) : (
-											<Avatar name={opt.label} className="w-5 h-5" />
-										)}
+										<Avatar
+											name={opt.label}
+											imageUrl={opt.image}
+											className="w-5 h-5"
+											letterClass="text-[11px]"
+										/>
 										{opt.label}
 									</DropdownMenuItem>
 								))}
@@ -224,17 +218,12 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 								className="flex gap-4 items-center hover:scale-[1.02] transition-transform h-full px-2 py-1.5 min-h-full text-xs rounded-xl bg-gray-3 text-gray-11 wobble"
 							>
 								<div className="flex gap-2 items-center">
-									{tag.image ? (
-										<Image
-											src={tag.image}
-											alt={tag.label}
-											width={20}
-											height={20}
-											className="w-5 h-5 rounded-full"
-										/>
-									) : (
-										<Avatar name={tag.label} className="w-5 h-5" />
-									)}
+									<Avatar
+										name={tag.label}
+										imageUrl={tag.image}
+										className="w-5 h-5"
+										letterClass="text-[11px]"
+									/>
 									<p className="truncate text-[13px] text-gray-12">
 										{tag.label}
 									</p>

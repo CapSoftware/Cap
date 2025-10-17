@@ -28,6 +28,9 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 
+					const firstName = data.firstName.trim();
+					const lastName = data.lastName?.trim() ?? "";
+
 					yield* db.use((db) =>
 						db
 							.update(Db.users)
@@ -36,11 +39,31 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 									...user.onboardingSteps,
 									welcome: true,
 								},
-								name: data.firstName,
-								lastName: data.lastName || "",
+								name: firstName,
+								lastName,
 							})
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
+
+					const activeOrgId = user.activeOrganizationId ?? user.defaultOrgId;
+					if (activeOrgId && firstName.length > 0) {
+						const [organization] = yield* db.use((db) =>
+							db
+								.select({ name: Db.organizations.name })
+								.from(Db.organizations)
+								.where(Dz.eq(Db.organizations.id, activeOrgId)),
+						);
+
+						if (organization?.name === "My Organization") {
+							const personalizedName = `${firstName}'s Organization`;
+							yield* db.use((db) =>
+								db
+									.update(Db.organizations)
+									.set({ name: personalizedName })
+									.where(Dz.eq(Db.organizations.id, activeOrgId)),
+							);
+						}
+					}
 				}),
 
 				organizationSetup: Effect.fn("Onboarding.organizationSetup")(
@@ -61,35 +84,82 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								.where(Dz.eq(Db.users.id, currentUser.id)),
 						);
 
-						const organizationId = Organisation.OrganisationId.make(nanoId());
+						const organizationName =
+							data.organizationName.trim() || data.organizationName;
+						let organizationId =
+							user.activeOrganizationId ?? user.defaultOrgId ?? null;
 
 						yield* db.use((db) =>
 							db.transaction(async (tx) => {
-								await tx.insert(Db.organizations).values({
-									id: organizationId,
-									ownerId: currentUser.id,
-									name: data.organizationName,
-								});
+								let resolvedOrgId = organizationId;
 
-								await tx.insert(Db.organizationMembers).values({
-									id: nanoId(),
-									userId: currentUser.id,
-									role: "owner",
-									organizationId,
-								});
+								if (resolvedOrgId) {
+									const [existingOrg] = await tx
+										.select({ id: Db.organizations.id })
+										.from(Db.organizations)
+										.where(Dz.eq(Db.organizations.id, resolvedOrgId));
+
+									if (existingOrg) {
+										await tx
+											.update(Db.organizations)
+											.set({ name: organizationName })
+											.where(Dz.eq(Db.organizations.id, resolvedOrgId));
+									} else {
+										resolvedOrgId = Organisation.OrganisationId.make(nanoId());
+
+										await tx.insert(Db.organizations).values({
+											id: resolvedOrgId,
+											ownerId: currentUser.id,
+											name: organizationName,
+										});
+
+										await tx.insert(Db.organizationMembers).values({
+											id: nanoId(),
+											organizationId: resolvedOrgId,
+											userId: currentUser.id,
+											role: "owner",
+										});
+									}
+								} else {
+									resolvedOrgId = Organisation.OrganisationId.make(nanoId());
+
+									await tx.insert(Db.organizations).values({
+										id: resolvedOrgId,
+										ownerId: currentUser.id,
+										name: organizationName,
+									});
+
+									await tx.insert(Db.organizationMembers).values({
+										id: nanoId(),
+										organizationId: resolvedOrgId,
+										userId: currentUser.id,
+										role: "owner",
+									});
+								}
 
 								await tx
 									.update(Db.users)
 									.set({
-										activeOrganizationId: organizationId,
+										activeOrganizationId: resolvedOrgId,
+										defaultOrgId: resolvedOrgId,
 										onboardingSteps: {
 											...user.onboardingSteps,
 											organizationSetup: true,
 										},
 									})
 									.where(Dz.eq(Db.users.id, currentUser.id));
+
+								organizationId = resolvedOrgId;
 							}),
 						);
+
+						if (!organizationId) {
+							throw new Error(
+								"Failed to resolve organization during onboarding",
+							);
+						}
+
+						const finalOrganizationId = organizationId;
 
 						if (data.organizationIcon) {
 							const organizationIcon = data.organizationIcon;
@@ -104,7 +174,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								const fileExtension = allowedExt.get(contentType);
 								if (!fileExtension)
 									throw new Error("Unsupported icon content type");
-								const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
+								const fileKey = `organizations/${finalOrganizationId}/icon-${Date.now()}.${fileExtension}`;
 
 								const [bucket] = yield* s3Buckets.getBucketAccess(
 									Option.none(),
@@ -117,7 +187,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 									db
 										.update(Db.organizations)
 										.set({ iconUrl })
-										.where(Dz.eq(Db.organizations.id, organizationId)),
+										.where(Dz.eq(Db.organizations.id, finalOrganizationId)),
 								);
 							}).pipe(
 								Effect.catchAll((error) =>
@@ -128,7 +198,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							yield* uploadEffect;
 						}
 
-						return { organizationId };
+						return { organizationId: finalOrganizationId };
 					},
 				),
 
@@ -172,13 +242,13 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								onboardingSteps: {
 									...user.onboardingSteps,
 									inviteTeam: true,
+									download: true,
 								},
 							})
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 				}),
-
-				download: Effect.fn("Onboarding.download")(function* () {
+				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
 					const currentUser = yield* CurrentUser;
 
 					const [user] = yield* db.use((db) =>
@@ -188,34 +258,49 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 							.where(Dz.eq(Db.users.id, currentUser.id)),
 					);
 
-					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({
-								onboardingSteps: { ...user.onboardingSteps, download: true },
-								onboarding_completed_at: new Date(),
-							})
-							.where(Dz.eq(Db.users.id, currentUser.id)),
-					);
-				}),
-
-				skipToDashboard: Effect.fn("Onboarding.skipToDashboard")(function* () {
-					const currentUser = yield* CurrentUser;
+					const shouldUsePlaceholder = !user.onboardingSteps?.welcome;
+					const userName = shouldUsePlaceholder ? "Your name" : user.name;
+					const orgName = shouldUsePlaceholder
+						? "Your Organization"
+						: `${user.name}'s organization`;
 
 					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({
-								name: "Cap",
-								onboardingSteps: {
-									welcome: true,
-									organizationSetup: true,
-									customDomain: true,
-									inviteTeam: true,
-									download: true,
-								},
-							})
-							.where(Dz.eq(Db.users.id, currentUser.id)),
+						db.transaction(async (tx) => {
+							await tx
+								.update(Db.users)
+								.set({
+									name: userName,
+									onboardingSteps: {
+										welcome: true,
+										organizationSetup: true,
+										customDomain: true,
+										inviteTeam: true,
+										download: true,
+									},
+								})
+								.where(Dz.eq(Db.users.id, currentUser.id));
+
+							const [existingOrg] = await tx
+								.select()
+								.from(Db.organizations)
+								.where(
+									Dz.eq(Db.organizations.id, currentUser.activeOrganizationId),
+								);
+
+							if (!existingOrg || !user.onboardingSteps?.organizationSetup) {
+								await tx
+									.update(Db.organizations)
+									.set({
+										name: orgName,
+									})
+									.where(
+										Dz.eq(
+											Db.organizations.id,
+											currentUser.activeOrganizationId,
+										),
+									);
+							}
+						}),
 					);
 				}),
 			};

@@ -9,7 +9,6 @@ import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -238,18 +237,12 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									{data.ownerImage ? (
-										<Image
-											src={data.ownerImage}
-											alt={data.ownerName || ""}
-											width={32}
-											unoptimized
-											height={32}
-											className="rounded-full"
-										/>
-									) : (
-										<Avatar name={data.ownerName} className="size-8" />
-									)}
+									<Avatar
+										name={data.ownerName}
+										imageUrl={data.ownerImage ?? undefined}
+										className="size-8"
+										letterClass="text-base"
+									/>
 									<div className="flex flex-col text-left">
 										<p className="text-sm text-gray-12">{data.ownerName}</p>
 										<p className="text-xs text-gray-10">

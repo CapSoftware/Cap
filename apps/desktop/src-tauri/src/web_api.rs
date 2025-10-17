@@ -39,6 +39,16 @@ impl From<String> for AuthedApiError {
     }
 }
 
+fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let mut req = req.header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"));
+
+    if let Ok(s) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
+        req = req.header("x-vercel-protection-bypass", s);
+    }
+
+    req
+}
+
 async fn do_authed_request(
     auth: &AuthStore,
     build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
@@ -46,24 +56,18 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    let mut req = build(client, url)
-        .header(
-            "Authorization",
-            format!(
-                "Bearer {}",
-                match &auth.secret {
-                    AuthSecret::ApiKey { api_key } => api_key,
-                    AuthSecret::Session { token, .. } => token,
-                }
-            ),
-        )
-        .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"));
+    let req = build(client, url).header(
+        "Authorization",
+        format!(
+            "Bearer {}",
+            match &auth.secret {
+                AuthSecret::ApiKey { api_key } => api_key,
+                AuthSecret::Session { token, .. } => token,
+            }
+        ),
+    );
 
-    if let Ok(s) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
-        req = req.header("x-vercel-protection-bypass", s);
-    }
-
-    req.send().await
+    apply_env_headers(req).send().await
 }
 
 pub trait ManagerExt<R: Runtime>: Manager<R> {
@@ -72,6 +76,12 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
         path: impl Into<String>,
         build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError>;
+
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
 }
@@ -97,6 +107,17 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         }
 
         Ok(response)
+    }
+
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = self.make_app_url(path.into()).await;
+        let client = reqwest::Client::new();
+
+        apply_env_headers(build(client, url)).send().await
     }
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {

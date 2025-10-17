@@ -9,7 +9,12 @@ export default async function OnboardingStepPage({
 	params,
 }: {
 	params: Promise<{
-		steps: "welcome" | "organization-setup" | "custom-domain" | "invite-team";
+		steps:
+			| "welcome"
+			| "organization-setup"
+			| "custom-domain"
+			| "invite-team"
+			| "download";
 	}>;
 }) {
 	const step = (await params).steps[0];
