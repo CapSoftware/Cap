@@ -8,6 +8,7 @@ import {
 	createEffect,
 	createMemo,
 	createRoot,
+	createSignal,
 	For,
 	Match,
 	mergeProps,
@@ -176,10 +177,14 @@ export function ClipTrack(
 		totalDuration,
 		micWaveforms,
 		systemAudioWaveforms,
-		metaQuery,
 	} = useEditorContext();
 
 	const { secsPerPixel, duration } = useTimelineContext();
+
+	const [startResizePreview, setStartResizePreview] = createSignal<{
+		index: number;
+		previewStart: number;
+	} | null>(null);
 
 	const segments = (): Array<TimelineSegment> =>
 		project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
@@ -188,7 +193,10 @@ export function ClipTrack(
 		const { transform } = editorState.timeline;
 
 		if (transform.position + transform.zoom > totalDuration() + 4) {
-			transform.updateZoom(totalDuration(), editorState.previewTime!);
+			transform.updateZoom(
+				totalDuration(),
+				editorState.previewTime ?? editorState.playbackTime,
+			);
 		}
 	}
 
@@ -442,20 +450,19 @@ export function ClipTrack(
 												start +
 												(event.clientX - downEvent.clientX) * secsPerPixel();
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"start",
-												Math.min(
-													Math.max(
-														newStart,
-														prevSegmentIsSameClip ? prevSegment.end : 0,
-														segment.end - maxDuration,
-													),
-													segment.end - 1,
+											const constrained = Math.min(
+												Math.max(
+													newStart,
+													prevSegmentIsSameClip ? prevSegment.end : 0,
+													segment.end - maxDuration,
 												),
+												segment.end - 1,
 											);
+
+											setStartResizePreview({
+												index: i(),
+												previewStart: constrained,
+											});
 										}
 
 										const resumeHistory = projectHistory.pause();
@@ -466,12 +473,48 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
+													const p = startResizePreview();
+													if (p && p.index === i()) {
+														setProject(
+															"timeline",
+															"segments",
+															i(),
+															"start",
+															p.previewStart,
+														);
+													}
+													setStartResizePreview(null);
 													onHandleReleased();
 												},
 											});
 										});
 									}}
 								/>
+								<Show
+									when={(() => {
+										const p = startResizePreview();
+										return p && p.index === i();
+									})()}
+								>
+									{() => {
+										const p = startResizePreview();
+										const previewWidth = () =>
+											(segment.end - (p?.previewStart ?? segment.start)) /
+											secsPerPixel();
+										const leftOffset = () =>
+											((p?.previewStart ?? segment.start) - segment.start) /
+											secsPerPixel();
+										return (
+											<div
+												class="absolute z-20 inset-y-0 left-0 pointer-events-none bg-white/30 dark:bg-black/30 ring-1 ring-white/70 dark:ring-white/30 rounded-md"
+												style={{
+													left: `${Math.max(0, leftOffset())}px`,
+													width: `${Math.max(0, previewWidth())}px`,
+												}}
+											/>
+										);
+									}}
+								</Show>
 								<SegmentContent class="relative justify-center items-center">
 									{(() => {
 										const ctx = useSegmentContext();

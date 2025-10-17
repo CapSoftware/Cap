@@ -487,6 +487,45 @@ pub enum SceneMode {
     Default,
     CameraOnly,
     HideCamera,
+    SplitView,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SplitViewSettings {
+    pub camera_position: XY<f64>,
+    pub screen_position: XY<f64>,
+    pub camera_side: SplitViewSide,
+    #[serde(default = "default_zoom")]
+    pub camera_zoom: f64,
+    #[serde(default = "default_zoom")]
+    pub screen_zoom: f64,
+    #[serde(default)]
+    pub fullscreen: bool,
+}
+
+fn default_zoom() -> f64 {
+    1.0
+}
+
+impl Default for SplitViewSettings {
+    fn default() -> Self {
+        Self {
+            camera_position: XY { x: 0.5, y: 0.5 },
+            screen_position: XY { x: 0.5, y: 0.5 },
+            camera_side: SplitViewSide::Right,
+            camera_zoom: 1.0,
+            screen_zoom: 1.0,
+            fullscreen: false,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum SplitViewSide {
+    Left,
+    Right,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -496,6 +535,8 @@ pub struct SceneSegment {
     pub end: f64,
     #[serde(default)]
     pub mode: SceneMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_view_settings: Option<SplitViewSettings>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
