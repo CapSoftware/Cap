@@ -31,8 +31,14 @@ export function SceneTrack(props: {
 	onDragStateChanged: (v: SceneSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
-	const { project, setProject, projectHistory, setEditorState, editorState } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		projectHistory,
+		setEditorState,
+		editorState,
+		projectActions,
+	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
 
@@ -200,13 +206,15 @@ export function SceneTrack(props: {
 				{(segment, i) => {
 					const { setTrackState } = useTrackContext();
 
-					const sceneSegments = () => project.timeline!.sceneSegments!;
+					const sceneSegments = () => project.timeline?.sceneSegments ?? [];
 
 					function createMouseDownDrag<T>(
 						setup: () => T,
 						_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
 					) {
 						return (downEvent: MouseEvent) => {
+							if (editorState.timeline.interactMode !== "seek") return;
+
 							downEvent.stopPropagation();
 
 							const initial = setup();
@@ -297,6 +305,18 @@ export function SceneTrack(props: {
 							}}
 							onMouseLeave={() => {
 								setHoveringSegment(false);
+							}}
+							onMouseDown={(e) => {
+								e.stopPropagation();
+
+								if (editorState.timeline.interactMode === "split") {
+									const rect = e.currentTarget.getBoundingClientRect();
+									const fraction = (e.clientX - rect.left) / rect.width;
+
+									const splitTime = fraction * (segment.end - segment.start);
+
+									projectActions.splitSceneSegment(i(), splitTime);
+								}
 							}}
 						>
 							<SegmentHandle

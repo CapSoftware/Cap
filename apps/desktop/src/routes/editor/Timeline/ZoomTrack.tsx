@@ -41,6 +41,7 @@ export function ZoomTrack(props: {
 		setEditorState,
 		editorState,
 		totalDuration,
+		projectActions,
 	} = useEditorContext();
 
 	const { duration, secsPerPixel } = useTimelineContext();
@@ -291,6 +292,8 @@ export function ZoomTrack(props: {
 						_update: (e: MouseEvent, v: T, initialMouseX: number) => void,
 					) {
 						return (downEvent: MouseEvent) => {
+							if (editorState.timeline.interactMode !== "seek") return;
+
 							downEvent.stopPropagation();
 
 							const initial = setup();
@@ -420,6 +423,18 @@ export function ZoomTrack(props: {
 							)}
 							innerClass="ring-red-5"
 							segment={segment}
+							onMouseDown={(e) => {
+								e.stopPropagation();
+
+								if (editorState.timeline.interactMode === "split") {
+									const rect = e.currentTarget.getBoundingClientRect();
+									const fraction = (e.clientX - rect.left) / rect.width;
+
+									const splitTime = fraction * (segment.end - segment.start);
+
+									projectActions.splitZoomSegment(i(), splitTime);
+								}
+							}}
 						>
 							<SegmentHandle
 								position="start"

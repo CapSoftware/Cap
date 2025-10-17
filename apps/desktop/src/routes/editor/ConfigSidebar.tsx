@@ -1913,26 +1913,25 @@ function ZoomSegmentPreview(props: {
 
 	const start = createMemo(() => props.segment.start);
 
-	const segmentIndex = createMemo(() => {
+	const clipSegment = createMemo(() => {
 		const st = start();
-		const i = project.timeline?.segments.findIndex(
-			(s) => s.start <= st && s.end > st,
-		);
-		if (i === undefined || i === -1) return 0;
-		return i;
+		return project.timeline?.segments.find((s) => s.start <= st && s.end > st);
 	});
 
 	const relativeTime = createMemo(() => {
 		const st = start();
-		const segment = project.timeline?.segments[segmentIndex()];
+		const segment = clipSegment();
 		if (!segment) return 0;
 		return Math.max(0, st - segment.start);
 	});
 
 	const video = document.createElement("video");
 	createEffect(() => {
+		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${editorInstance.path}/content/segments/segment-${
+				clipSegment()?.recordingSegment ?? 0
+			}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
