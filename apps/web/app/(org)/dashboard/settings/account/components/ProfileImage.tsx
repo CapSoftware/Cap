@@ -6,6 +6,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: string | null;
@@ -38,7 +39,13 @@ export function ProfileImage({
 
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
-		if (file) {
+		if (!file) return;
+		const sizeLimit = 1024 * 1024 * 1;
+		if (file.size > sizeLimit) {
+			toast.error("File size must be 1MB or less");
+			return;
+		}
+		if (file && file.size <= sizeLimit) {
 			const objectUrl = URL.createObjectURL(file);
 			setPreviewUrl(objectUrl);
 			onChange?.(file);
