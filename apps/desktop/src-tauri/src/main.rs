@@ -134,5 +134,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle));
+        .block_on(cap_desktop_lib::run(handle, logs_dir));
 }

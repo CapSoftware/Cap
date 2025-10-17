@@ -13,6 +13,7 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod logging;
 mod notifications;
 mod permissions;
 mod platform;
@@ -110,24 +111,17 @@ pub enum RecordingState {
     Active(InProgressRecording),
 }
 
-#[derive(specta::Type, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct App {
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_port: u16,
-    #[serde(skip)]
     camera_preview: CameraPreviewManager,
-    #[serde(skip)]
     handle: AppHandle,
-    #[serde(skip)]
     recording_state: RecordingState,
-    #[serde(skip)]
     recording_logging_handle: LoggingHandle,
-    #[serde(skip)]
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
-    #[serde(skip)]
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
+    logs_dir: PathBuf,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -1938,7 +1932,7 @@ pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> +
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle) {
+pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
@@ -2256,6 +2250,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 .map(|v| v.server_url.clone())
                         })
                         .unwrap_or_else(|| "https://cap.so".to_string()),
+                    logs_dir: logs_dir.clone(),
                 })));
 
                 app.manage(Arc::new(RwLock::new(

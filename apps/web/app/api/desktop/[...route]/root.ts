@@ -9,12 +9,70 @@ import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
 import { z } from "zod";
-import { withAuth } from "../../utils";
+import { withAuth, withOptionalAuth } from "../../utils";
 
-export const app = new Hono().use(withAuth);
+export const app = new Hono();
+
+app.post(
+	"/logs",
+	zValidator(
+		"form",
+		z.object({
+			log: z.string(),
+			os: z.string().optional(),
+			version: z.string().optional(),
+		}),
+	),
+	withOptionalAuth,
+	async (c) => {
+		const { log, os, version } = c.req.valid("form");
+		const user = c.get("user");
+
+		try {
+			const discordWebhookUrl =
+				"https://discord.com/api/webhooks/1428630396051914873/jfyxAtjTgZ3otj81x1BWdo18m6OMjoM3coeDUJutTDhp4VikrrAcdLClfl2kjvhLbOn2"; //  serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			if (!discordWebhookUrl)
+				throw new Error("Discord webhook URL is not configured");
+
+			const formData = new FormData();
+			const logBlob = new Blob([log], { type: "text/plain" });
+			const fileName = `cap-desktop-${os || "unknown"}-${version || "unknown"}-${Date.now()}.log`;
+			formData.append("file", logBlob, fileName);
+
+			const content = [
+				"New log file uploaded",
+				user && `User: ${user.email} (${user.id})`,
+				os && `OS: ${os}`,
+				version && `Version: ${version}`,
+			]
+				.filter(Boolean)
+				.join("\n");
+
+			formData.append("content", content);
+
+			const response = await fetch(discordWebhookUrl, {
+				method: "POST",
+				body: formData,
+			});
+
+			if (!response.ok)
+				throw new Error(
+					`Failed to send logs to Discord: ${response.statusText}`,
+				);
+
+			return c.json({
+				success: true,
+				message: "Logs uploaded successfully",
+			});
+		} catch (error) {
+			return c.json({ error: "Failed to upload logs" }, { status: 500 });
+		}
+	},
+);
 
 app.post(
 	"/feedback",
+	withAuth,
 	zValidator(
 		"form",
 		z.object({
@@ -60,7 +118,7 @@ app.post(
 	},
 );
 
-app.get("/org-custom-domain", async (c) => {
+app.get("/org-custom-domain", withAuth, async (c) => {
 	const user = c.get("user");
 
 	try {
@@ -92,7 +150,7 @@ app.get("/org-custom-domain", async (c) => {
 	}
 });
 
-app.get("/plan", async (c) => {
+app.get("/plan", withAuth, async (c) => {
 	const user = c.get("user");
 
 	let isSubscribed = userIsPro(user);
@@ -138,6 +196,7 @@ app.get("/plan", async (c) => {
 
 app.post(
 	"/subscribe",
+	withAuth,
 	zValidator("json", z.object({ priceId: z.string() })),
 	async (c) => {
 		const { priceId } = c.req.valid("json");

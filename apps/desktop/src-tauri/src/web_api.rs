@@ -73,6 +73,12 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
         build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError>;
 
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error>;
+
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
 }
 
@@ -97,6 +103,23 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         }
 
         Ok(response)
+    }
+
+    async fn api_request(
+        &self,
+        path: impl Into<String>,
+        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url = self.make_app_url(path.into()).await;
+        let client = reqwest::Client::new();
+
+        let mut req = build(client, url).header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"));
+
+        if let Ok(s) = std::env::var("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
+            req = req.header("x-vercel-protection-bypass", s);
+        }
+
+        req.send().await
     }
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {
