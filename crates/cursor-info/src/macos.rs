@@ -48,6 +48,7 @@ pub enum CursorShapeMacOS {
     TahoeContextualMenu,
     TahoeClosedHand,
     TahoeCrosshair,
+    TahoeDisappearingItem,
     TahoeDragCopy,
     TahoeDragLink,
     TahoeIBeam,
@@ -272,6 +273,9 @@ impl CursorShapeMacOS {
             }
             "0aa0d950a742ed4802ed44095cbf5834de3eea84bf78026cacb8e2c37d244f46" => {
                 Self::TahoeCrosshair
+            }
+            "f44a524d6fcfe5a1b1bebf23fcb12fbfeaea0ecf92beb7f69fdf586c319dd8ab" => {
+                Self::TahoeDisappearingItem
             }
             "93d05bf80e702fdf5d6924447c91a0ab5fb196251d5758e98c5b6a5f08f0e960" => {
                 Self::TahoeDragCopy
