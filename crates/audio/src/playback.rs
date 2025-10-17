@@ -214,6 +214,8 @@ impl OutputLatencyEstimator {
             if self.update_count < WARMUP_GUARD_SAMPLES as u64
                 && clamped > prev_raw * WARMUP_SPIKE_RATIO
             {
+                self.last_raw_latency_secs = Some(clamped);
+                self.update_count = self.update_count.saturating_add(1);
                 return;
             }
         }

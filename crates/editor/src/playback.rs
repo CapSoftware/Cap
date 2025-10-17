@@ -319,8 +319,7 @@ impl AudioPlayback {
                 .saturating_mul(2)
                 .max(channels * AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT as usize);
 
-            let mut audio_renderer =
-                AudioPlaybackBuffer::new(segments.clone(), base_output_info);
+            let mut audio_renderer = AudioPlaybackBuffer::new(segments.clone(), base_output_info);
 
             match strategy {
                 BufferSizeStrategy::Fixed(desired) => {
