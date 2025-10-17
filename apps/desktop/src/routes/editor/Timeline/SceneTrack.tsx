@@ -77,6 +77,7 @@ export function SceneTrack(props: {
 
 	return (
 		<TrackRoot
+			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "scene")}
 			onMouseMove={(e) => {
 				if (hoveringSegment()) {
 					setHoveredTime(undefined);
@@ -144,6 +145,7 @@ export function SceneTrack(props: {
 			onMouseLeave={() => {
 				setHoveredTime();
 				setMaxAvailableDuration(3);
+				setEditorState("timeline", "hoveredTrack", null);
 			}}
 			onMouseDown={(e) => {
 				createRoot((dispose) => {
