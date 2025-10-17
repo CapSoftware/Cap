@@ -124,10 +124,12 @@ export function ProfileImage({
 									onClick={handleRemove}
 									spinner={isRemoving}
 								>
-									<FontAwesomeIcon
-										icon={faTrash}
-										className="size-2.5 text-gray-12"
-									/>
+									{isRemoving ? null : (
+										<FontAwesomeIcon
+											icon={faTrash}
+											className="size-2.5 text-gray-12"
+										/>
+									)}
 								</Button>
 							</Tooltip>
 						)}
