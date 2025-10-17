@@ -176,9 +176,9 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 return;
                             }
 
-                            video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
+                            cap_fail::fail_ret!("screen_capture video frame skip");
 
-                            cap_fail::fail_ret!("screen_capture vidoe skip");
+                            video_frame_count.fetch_add(1, atomic::Ordering::Relaxed);
 
                             let _ = video_tx.try_send(VideoFrame {
                                 sample_buf: sample_buffer.retained(),
@@ -188,7 +188,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                         scap_screencapturekit::Frame::Audio(_) => {
                             use ffmpeg::ChannelLayout;
 
-                            cap_fail::fail_ret!("screen_capture audio skip");
+                            cap_fail::fail_ret!("screen_capture audio frame skip");
 
                             let Some(audio_tx) = &mut audio_tx else {
                                 return;
