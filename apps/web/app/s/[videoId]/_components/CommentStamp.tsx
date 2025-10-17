@@ -9,6 +9,7 @@ interface CommentStampsProps {
 		type: "text" | "emoji";
 		content: string;
 		authorName?: string | null;
+		authorImage?: string | null;
 	};
 	adjustedPosition: string;
 	handleMouseEnter: (id: string) => void;
@@ -60,12 +61,13 @@ const CommentStamp: React.FC<CommentStampsProps> = ({
 					<div className="absolute top-full left-1/2 w-0 h-0 border-t-4 border-r-4 border-l-4 border-black transform -translate-x-1/2 border-l-transparent border-r-transparent"></div>
 
 					<div className="flex gap-2 items-center">
-						{/* User avatar/initial */}
-						<Avatar
-							className="size-6"
-							letterClass="text-sm"
-							name={comment.authorName}
-						/>
+					{/* User avatar/initial */}
+					<Avatar
+						className="size-6"
+						letterClass="text-sm"
+						name={comment.authorName}
+						imageUrl={comment.authorImage ?? undefined}
+					/>
 						{/* Comment content */}
 						<div className="flex-1 min-w-0">
 							<div className="text-sm font-medium text-white truncate">
