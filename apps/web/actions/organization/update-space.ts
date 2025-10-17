@@ -51,8 +51,8 @@ export async function updateSpace(formData: FormData) {
 		// Remove icon from S3 and set iconUrl to null
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
 		const space = spaceArr[0];
-		if (space?.iconUrl) {
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+		if (space?.iconUrlOrKey) {
+			const key = space.iconUrlOrKey.match(/organizations\/.+/)?.[0];
 
 			if (key) {
 				try {
@@ -65,7 +65,10 @@ export async function updateSpace(formData: FormData) {
 				}
 			}
 		}
-		await db().update(spaces).set({ iconUrl: null }).where(eq(spaces.id, id));
+		await db()
+			.update(spaces)
+			.set({ iconUrlOrKey: null })
+			.where(eq(spaces.id, id));
 	} else if (iconFile && iconFile.size > 0) {
 		await uploadSpaceIcon(formData, id);
 	}

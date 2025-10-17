@@ -44,7 +44,7 @@ export async function GET() {
 				author: {
 					id: users.id,
 					name: users.name,
-					avatar: users.image,
+					avatar: users.imageUrlOrKey,
 				},
 			})
 			.from(notifications)

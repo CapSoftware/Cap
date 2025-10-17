@@ -64,9 +64,9 @@ export async function uploadSpaceIcon(
 
 	try {
 		// Remove previous icon if exists
-		if (space.iconUrl) {
+		if (space.iconUrlOrKey) {
 			// Try to extract the previous S3 key from the URL
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+			const key = space.iconUrlOrKey.match(/organizations\/.+/)?.[0];
 			if (key) {
 				try {
 					await bucket.deleteObject(key).pipe(runPromise);

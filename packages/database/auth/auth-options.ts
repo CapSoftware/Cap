@@ -183,7 +183,7 @@ export const authOptions = (): NextAuthOptions => {
 					name: dbUser.name,
 					lastName: dbUser.lastName,
 					email: dbUser.email,
-					picture: dbUser.image,
+					picture: dbUser.imageUrlOrKey,
 				};
 			},
 		},

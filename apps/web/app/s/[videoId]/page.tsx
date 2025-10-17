@@ -51,7 +51,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: spaces.id,
 			name: spaces.name,
 			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
+			iconUrlOrKey: organizations.iconUrlOrKey,
 		})
 		.from(spaceVideos)
 		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -64,7 +64,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: organizations.id,
 			name: organizations.name,
 			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
+			iconUrlOrKey: organizations.iconUrlOrKey,
 		})
 		.from(sharedVideos)
 		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
@@ -74,7 +74,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		id: string;
 		name: string;
 		organizationId: string;
-		iconUrl?: string;
+		iconUrlOrKey?: string;
 	}> = [];
 
 	// Add space-level sharing
@@ -83,7 +83,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || undefined,
+			iconUrlOrKey: space.iconUrlOrKey || undefined,
 		});
 	});
 
@@ -93,7 +93,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || undefined,
+			iconUrlOrKey: org.iconUrlOrKey || undefined,
 		});
 	});
 
@@ -271,7 +271,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					name: videos.name,
 					ownerId: videos.ownerId,
 					ownerName: users.name,
-					ownerImage: users.image,
+					ownerImage: users.imageUrlOrKey,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -471,7 +471,7 @@ async function AuthorizedContent({
 				name: videos.name,
 				ownerId: videos.ownerId,
 				ownerName: users.name,
-				ownerImage: users.image,
+				ownerImage: users.imageUrlOrKey,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -661,7 +661,7 @@ async function AuthorizedContent({
 				updatedAt: comments.updatedAt,
 				parentCommentId: comments.parentCommentId,
 				authorName: users.name,
-				authorImage: users.image,
+				authorImage: users.imageUrlOrKey,
 			})
 			.from(comments)
 			.leftJoin(users, eq(comments.authorId, users.id))

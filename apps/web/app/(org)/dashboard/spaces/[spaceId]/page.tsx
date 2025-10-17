@@ -63,7 +63,7 @@ async function fetchSpaceMembers(spaceId: Space.SpaceIdOrOrganisationId) {
 			role: sql<string>`'member'`,
 			name: users.name,
 			email: users.email,
-			image: users.image,
+			image: users.imageUrlOrKey,
 		})
 		.from(spaceMembers)
 		.innerJoin(users, eq(spaceMembers.userId, users.id))
@@ -78,7 +78,7 @@ async function fetchOrganizationMembers(orgId: Organisation.OrganisationId) {
 			role: organizationMembers.role,
 			name: users.name,
 			email: users.email,
-			image: users.image,
+			image: users.imageUrlOrKey,
 		})
 		.from(organizationMembers)
 		.innerJoin(users, eq(organizationMembers.userId, users.id))

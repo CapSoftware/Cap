@@ -53,7 +53,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					lastName: users.lastName,
 					email: users.email,
 					inviteQuota: users.inviteQuota,
-					image: users.image,
+					image: users.imageUrlOrKey,
 					defaultOrgId: users.defaultOrgId,
 				},
 			})
@@ -129,7 +129,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					description: spaces.description,
 					organizationId: spaces.organizationId,
 					createdById: spaces.createdById,
-					iconUrl: spaces.iconUrl,
+					iconUrlOrKey: spaces.iconUrlOrKey,
 					memberCount: sql<number>`(
             SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
           )`,
@@ -240,7 +240,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								name: users.name,
 								lastName: users.lastName,
 								email: users.email,
-								image: users.image,
+								image: users.imageUrlOrKey,
 							},
 						})
 						.from(organizationMembers)

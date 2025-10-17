@@ -59,34 +59,20 @@ export async function uploadOrganizationIcon(
 		const sanitizedFile = await sanitizeFile(file);
 		let iconUrl: string | undefined;
 
+		const bodyBytes = await sanitizedFile
+			.arrayBuffer()
+			.then((buf) => new Uint8Array(buf));
+
 		await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
-			const bodyBytes = yield* Effect.promise(async () => {
-				const buf = await sanitizedFile.arrayBuffer();
-				return new Uint8Array(buf);
-			});
-
 			yield* bucket.putObject(fileKey, bodyBytes, { contentType: file.type });
-			// Construct the icon URL
-			if (serverEnv().CAP_AWS_BUCKET_URL) {
-				// If a custom bucket URL is defined, use it
-				iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-			} else if (serverEnv().CAP_AWS_ENDPOINT) {
-				// For custom endpoints like MinIO
-				iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-			} else {
-				// Default AWS S3 URL format
-				iconUrl = `https://${bucket.bucketName}.s3.${
-					serverEnv().CAP_AWS_REGION || "us-east-1"
-				}.amazonaws.com/${fileKey}`;
-			}
 		}).pipe(runPromise);
 
 		// Update organization with new icon URL
 		await db()
 			.update(organizations)
-			.set({ iconUrl })
+			.set({ iconUrlOrKey: fileKey })
 			.where(eq(organizations.id, organizationId));
 
 		revalidatePath("/dashboard/settings/organization");

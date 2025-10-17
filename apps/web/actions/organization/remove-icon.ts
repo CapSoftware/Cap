@@ -32,9 +32,7 @@ export async function removeOrganizationIcon(
 	// Update organization to remove icon URL
 	await db()
 		.update(organizations)
-		.set({
-			iconUrl: null,
-		})
+		.set({ iconUrlOrKey: null })
 		.where(eq(organizations.id, organizationId));
 
 	revalidatePath("/dashboard/settings/organization");

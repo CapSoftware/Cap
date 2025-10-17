@@ -13,17 +13,7 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { runPromise } from "@/lib/server";
 
-interface CreateSpaceResponse {
-	success: boolean;
-	spaceId?: string;
-	name?: string;
-	iconUrl?: string | null;
-	error?: string;
-}
-
-export async function createSpace(
-	formData: FormData,
-): Promise<CreateSpaceResponse> {
+export async function createSpace(formData: FormData) {
 	try {
 		const user = await getCurrentUser();
 
@@ -66,7 +56,7 @@ export async function createSpace(
 		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
-		let iconUrl = null;
+		let iconKey: string | null = null;
 
 		if (iconFile) {
 			// Validate file type
@@ -86,34 +76,20 @@ export async function createSpace(
 			}
 
 			try {
-				// Create a unique file key
-				const fileExtension = iconFile.name.split(".").pop();
-				const fileKey = `organizations/${
-					user.activeOrganizationId
-				}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
-
 				await Effect.gen(function* () {
+					// Create a unique file key
+					const fileExtension = iconFile.name.split(".").pop();
+					iconKey = `organizations/${
+						user.activeOrganizationId
+					}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
+
 					const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
 					yield* bucket.putObject(
-						fileKey,
+						iconKey,
 						yield* Effect.promise(() => iconFile.bytes()),
 						{ contentType: iconFile.type },
 					);
-
-					// Construct the icon URL
-					if (serverEnv().CAP_AWS_BUCKET_URL) {
-						// If a custom bucket URL is defined, use it
-						iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-					} else if (serverEnv().CAP_AWS_ENDPOINT) {
-						// For custom endpoints like MinIO
-						iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-					} else {
-						// Default AWS S3 URL format
-						iconUrl = `https://${bucket.bucketName}.s3.${
-							serverEnv().CAP_AWS_REGION || "us-east-1"
-						}.amazonaws.com/${fileKey}`;
-					}
 				}).pipe(runPromise);
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
@@ -124,18 +100,15 @@ export async function createSpace(
 			}
 		}
 
-		await db()
-			.insert(spaces)
-			.values({
-				id: spaceId,
-				name,
-				organizationId: user.activeOrganizationId,
-				createdById: user.id,
-				iconUrl,
-				description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			});
+		await db().insert(spaces).values({
+			id: spaceId,
+			name,
+			organizationId: user.activeOrganizationId,
+			createdById: user.id,
+			iconUrlOrKey: iconKey,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
 
 		// --- Member Management Logic ---
 		// Collect member emails from formData
@@ -193,18 +166,7 @@ export async function createSpace(
 		}
 
 		revalidatePath("/dashboard");
-
-		return {
-			success: true,
-			spaceId,
-			name,
-			iconUrl,
-		};
 	} catch (error) {
 		console.error("Error creating space:", error);
-		return {
-			success: false,
-			error: "Failed to create space",
-		};
 	}
 }

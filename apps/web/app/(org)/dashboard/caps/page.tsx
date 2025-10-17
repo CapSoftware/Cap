@@ -33,7 +33,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: spaces.id,
 			name: spaces.name,
 			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
+			iconUrlOrKey: organizations.iconUrlOrKey,
 		})
 		.from(spaceVideos)
 		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -47,7 +47,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: organizations.id,
 			name: organizations.name,
 			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
+			iconUrlOrKey: organizations.iconUrlOrKey,
 		})
 		.from(sharedVideos)
 		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
@@ -74,7 +74,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || "",
+			iconUrl: space.iconUrlOrKey || "",
 			isOrg: false,
 		});
 	});
@@ -88,7 +88,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || "",
+			iconUrl: org.iconUrlOrKey || "",
 			isOrg: true,
 		});
 	});
@@ -134,13 +134,15 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
+			sharedOrganizations: sql<
+				{ id: string; name: string; iconUrlOrKey: string }[]
+			>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
               'id', ${organizations.id},
               'name', ${organizations.name},
-              'iconUrl', ${organizations.iconUrl}
+              'iconUrlOrKey', ${organizations.iconUrlOrKey}
             )
           ),
           JSON_ARRAY()
