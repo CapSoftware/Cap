@@ -108,7 +108,7 @@ impl CursorShapeMacOS {
             },
             Self::PointingHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/pointing_hand.svg"),
-                hotspot: (0.406, 0.25),
+                hotspot: (0.516, 0.461),
             },
             Self::ResizeDown => ResolvedCursor {
                 raw: include_str!("../assets/mac/resize_down.svg"),
@@ -150,7 +150,7 @@ impl CursorShapeMacOS {
             },
             Self::TahoeClosedHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/grabbing.svg"),
-                hotspot: (0.5, 0.5),
+                hotspot: (0.539, 0.498),
             },
             Self::TahoeCrosshair => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/crosshair.svg"),
@@ -172,7 +172,7 @@ impl CursorShapeMacOS {
             },
             Self::TahoeOpenHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/grab.svg"),
-                hotspot: (0.5, 0.5),
+                hotspot: (0.543, 0.515),
             },
             Self::TahoeOperationNotAllowed => ResolvedCursor {
                 raw: include_str!("../assets/mac/operation_not_allowed.svg"),
@@ -180,7 +180,7 @@ impl CursorShapeMacOS {
             },
             Self::TahoePointingHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/pointer.svg"),
-                hotspot: (0.5, 0.4),
+                hotspot: (0.516, 0.459),
             },
             Self::TahoeResizeDown => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/resize-s.svg"),
@@ -216,11 +216,11 @@ impl CursorShapeMacOS {
             },
             Self::TahoeZoomIn => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/zoom-in.svg"),
-                hotspot: (0.548, 0.544),
+                hotspot: (0.549, 0.550),
             },
             Self::TahoeZoomOut => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/zoom-out.svg"),
-                hotspot: (0.551, 0.544),
+                hotspot: (0.551, 0.552),
             },
         })
     }
