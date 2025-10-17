@@ -213,15 +213,18 @@ impl output_pipeline::VideoSource for VideoSource {
             let res = scap_direct3d::Capturer::new(
                 capture_item,
                 settings,
-                move |frame| {
-                	video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
-                    let timestamp = frame.inner().SystemRelativeTime()?;
-                    let timestamp = Timestamp::PerformanceCounter(
-                        PerformanceCounterTimestamp::new(timestamp.Duration),
-                    );
-                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
+                {
+	                let video_frame_counter = video_frame_counter.clone();
+	                move |frame| {
+	                	video_frame_counter.fetch_add(1, atomic::Ordering::Relaxed);
+	                    let timestamp = frame.inner().SystemRelativeTime()?;
+	                    let timestamp = Timestamp::PerformanceCounter(
+	                        PerformanceCounterTimestamp::new(timestamp.Duration),
+	                    );
+	                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
 
-                    Ok(())
+	                    Ok(())
+	                }
                 },
                 {
                     let mut error_tx = error_tx.clone();
@@ -252,9 +255,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 return;
             };
 
-            let drop_guard = cancel_token.drop_guard();
 	        tokio::spawn({
-	            let video_frame_count = video_frame_counter.clone();
 	            async move {
 	                loop {
 	                    tokio::time::sleep(Duration::from_secs(5)).await;
@@ -267,6 +268,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	            .with_cancellation_token_owned(cancel_token.clone())
 	            .in_current_span()
             });
+			let drop_guard = cancel_token.drop_guard();
 
             trace!("Starting D3D capturer");
             let start_result = capturer.start().map_err(Into::into);
