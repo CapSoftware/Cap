@@ -29,8 +29,7 @@ app.post(
 		const user = c.get("user");
 
 		try {
-			const discordWebhookUrl =
-				"https://discord.com/api/webhooks/1428630396051914873/jfyxAtjTgZ3otj81x1BWdo18m6OMjoM3coeDUJutTDhp4VikrrAcdLClfl2kjvhLbOn2"; //  serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
 
