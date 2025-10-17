@@ -8,7 +8,7 @@ use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
-#[instrument]
+#[instrument(skip(app))]
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
@@ -46,7 +46,7 @@ pub async fn upload_multipart_initiate(
         .map(|data| data.upload_id)
 }
 
-#[instrument(skip(upload_id))]
+#[instrument(skip(app, upload_id))]
 pub async fn upload_multipart_presign_part(
     app: &AppHandle,
     video_id: &str,
@@ -180,7 +180,7 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
-#[instrument(skip())]
+#[instrument(skip(app))]
 pub async fn upload_signed(
     app: &AppHandle,
     body: PresignedS3PutRequest,
@@ -218,7 +218,7 @@ pub async fn upload_signed(
         .map(|data| data.presigned_put_data.url)
 }
 
-#[instrument]
+#[instrument(skip(app))]
 pub async fn desktop_video_progress(
     app: &AppHandle,
     video_id: &str,
