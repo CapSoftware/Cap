@@ -294,6 +294,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						);
 					},
 				},
+				hoveredTrack: null as null | "clip" | "zoom" | "scene",
 			},
 		});
 

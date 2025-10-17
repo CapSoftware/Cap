@@ -176,7 +176,6 @@ export function ClipTrack(
 		totalDuration,
 		micWaveforms,
 		systemAudioWaveforms,
-		metaQuery,
 	} = useEditorContext();
 
 	const { secsPerPixel, duration } = useTimelineContext();
@@ -198,7 +197,11 @@ export function ClipTrack(
 	const split = () => editorState.timeline.interactMode === "split";
 
 	return (
-		<TrackRoot ref={props.ref}>
+		<TrackRoot
+			ref={props.ref}
+			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
+			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
+		>
 			<For each={segments()}>
 				{(segment, i) => {
 					const prevDuration = () =>
