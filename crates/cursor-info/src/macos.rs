@@ -223,6 +223,9 @@ impl CursorShapeMacOS {
         })
     }
 
+    /// Derive the cursor type from a hash
+    /// macOS doesn't allow comparing `NSCursor` instances directly so we hash the image data.
+    /// macOS cursor are also resolution-independent so this works.
     pub fn from_hash(hash: &str) -> Option<Self> {
         Some(match hash {
             // Regular macOS cursor hashes
