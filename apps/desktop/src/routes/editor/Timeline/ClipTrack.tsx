@@ -191,9 +191,13 @@ export function ClipTrack(
 			transform.updateZoom(totalDuration(), editorState.previewTime!);
 		}
 	}
-
+	
 	const hasMultipleRecordingSegments = () =>
 		editorInstance.recordings.segments.length > 1;
+
+	const split = () => {
+		return editorState.timeline.interactMode === "split";
+	}
 
 	return (
 		<TrackRoot ref={props.ref}>
@@ -260,341 +264,345 @@ export function ClipTrack(
 					};
 
 					return (
-						<>
-							<Show when={marker()}>
-								{(marker) => (
-									<div
-										class="absolute w-0 z-10 h-full *:absolute"
-										style={{
-											transform: `translateX(${
-												i() === 0 ? segmentX() : segmentX()
-											}px)`,
-										}}
-									>
-										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
-										<Switch>
-											<Match
-												when={(() => {
-													const m = marker();
-													if (m.type === "single") return m.value;
-												})()}
-											>
-												{(marker) => (
-													<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
-														<CutOffsetButton
-															value={(() => {
-																const m = marker();
-																return m.type === "time" ? m.time : 0;
-															})()}
-															onClick={() => {
-																setProject(
-																	"timeline",
-																	"segments",
-																	produce((s) => {
-																		if (marker().type === "reset") {
-																			s[i() - 1].end = s[i()].end;
-																			s.splice(i(), 1);
-																		} else {
-																			s[i() - 1].end = s[i()].start;
-																		}
+            <>
+              <Show when={marker()}>
+                {(marker) => (
+                  <div
+                    class="absolute w-0 z-10 h-full *:absolute"
+                    style={{
+                      transform: `translateX(${
+                        i() === 0 ? segmentX() : segmentX()
+                      }px)`,
+                    }}
+                  >
+                    <div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+                    <Switch>
+                      <Match
+                        when={(() => {
+                          const m = marker();
+                          if (m.type === "single") return m.value;
+                        })()}
+                      >
+                        {(marker) => (
+                          <div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
+                            <CutOffsetButton
+                              value={(() => {
+                                const m = marker();
+                                return m.type === "time" ? m.time : 0;
+                              })()}
+                              onClick={() => {
+                                setProject(
+                                  "timeline",
+                                  "segments",
+                                  produce((s) => {
+                                    if (marker().type === "reset") {
+                                      s[i() - 1].end = s[i()].end;
+                                      s.splice(i(), 1);
+                                    } else {
+                                      s[i() - 1].end = s[i()].start;
+                                    }
 																	}),
-																);
-															}}
-														/>
-													</div>
-												)}
-											</Match>
-											<Match
-												when={(() => {
-													const m = marker();
-													if (
-														m.type === "dual" &&
-														m.right &&
-														m.right.type === "time"
-													)
-														return m.right;
-												})()}
-											>
-												{(marker) => {
-													const markerValue = marker();
-													return (
-														<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
-															<CutOffsetButton
-																value={
-																	markerValue.type === "time"
-																		? markerValue.time
-																		: 0
-																}
-																class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
-																onClick={() => {
-																	setProject(
-																		"timeline",
-																		"segments",
-																		i(),
-																		"start",
+                                );
+                              }}
+                            />
+                          </div>
+                        )}
+                      </Match>
+                      <Match
+                        when={(() => {
+                          const m = marker();
+                          if (
+                            m.type === "dual" &&
+                            m.right &&
+                            m.right.type === "time"
+                          )
+                            return m.right;
+                        })()}
+                      >
+                        {(marker) => {
+                          const markerValue = marker();
+                          return (
+                            <div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
+                              <CutOffsetButton
+                                value={
+                                  markerValue.type === "time"
+                                    ? markerValue.time
+                                    : 0
+                                }
+                                class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
+                                onClick={() => {
+                                  setProject(
+                                    "timeline",
+                                    "segments",
+                                    i(),
+                                    "start",
 																		0,
-																	);
-																}}
-															/>
-														</div>
-													);
-												}}
-											</Match>
-										</Switch>
-									</div>
-								)}
-							</Show>
-							<SegmentRoot
-								class={cx(
-									"border transition-colors duration-200 group hover:border-gray-12",
-									"bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
-									isSelected()
-										? "wobble-wrapper border-gray-12"
-										: "border-transparent",
-								)}
-								innerClass="ring-blue-9"
-								segment={relativeSegment}
-								onMouseDown={(e) => {
-									e.stopPropagation();
+                                  );
+                                }}
+                              />
+                            </div>
+                          );
+                        }}
+                      </Match>
+                    </Switch>
+                  </div>
+                )}
+              </Show>
+              <SegmentRoot
+                class={cx(
+                  "border transition-colors duration-200 group hover:border-gray-12",
+                  "bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
+                  isSelected()
+                    ? "wobble-wrapper border-gray-12"
+                    : "border-transparent",
+                  split() && "timeline-scissors-cursor"
+                )}
+				
+                innerClass="ring-blue-9"
+                segment={relativeSegment}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
 
 									if (editorState.timeline.interactMode === "split") {
-										const rect = e.currentTarget.getBoundingClientRect();
-										const fraction = (e.clientX - rect.left) / rect.width;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const fraction = (e.clientX - rect.left) / rect.width;
 
-										const splitTime = fraction * (segment.end - segment.start);
+                    const splitTime = fraction * (segment.end - segment.start);
 
-										projectActions.splitClipSegment(prevDuration() + splitTime);
-									} else {
-										createRoot((dispose) => {
-											createEventListener(e.currentTarget, "mouseup", (e) => {
-												dispose();
+                    projectActions.splitClipSegment(prevDuration() + splitTime);
+                  } else {
+                    createRoot((dispose) => {
+                      createEventListener(e.currentTarget, "mouseup", (e) => {
+                        dispose();
 
-												// // If there's only one segment, don't open the clip config panel
-												// // since there's nothing to configure - just let the normal click behavior happen
-												// const hasOnlyOneSegment = segments().length === 1;
+                        // // If there's only one segment, don't open the clip config panel
+                        // // since there's nothing to configure - just let the normal click behavior happen
+                        // const hasOnlyOneSegment = segments().length === 1;
 
-												// if (hasOnlyOneSegment) {
-												// 	// Clear any existing selection (zoom, layout, etc.) when clicking on a clip
-												// 	// This ensures the sidebar updates properly
-												// 	setEditorState("timeline", "selection", null);
-												// } else {
-												// When there are multiple segments, show the clip configuration
-												setEditorState("timeline", "selection", {
-													type: "clip",
-													index: i(),
-												});
+                        // if (hasOnlyOneSegment) {
+                        // 	// Clear any existing selection (zoom, layout, etc.) when clicking on a clip
+                        // 	// This ensures the sidebar updates properly
+                        // 	setEditorState("timeline", "selection", null);
+                        // } else {
+                        // When there are multiple segments, show the clip configuration
+                        setEditorState("timeline", "selection", {
+                          type: "clip",
+                          index: i(),
+                        });
 
-												// }
-												props.handleUpdatePlayhead(e);
-											});
-										});
-									}
-								}}
-							>
-								<WaveformCanvas
-									micWaveform={micWaveform()}
-									systemWaveform={systemAudioWaveform()}
-									segment={segment}
-									secsPerPixel={secsPerPixel()}
-								/>
+                        // }
+                        props.handleUpdatePlayhead(e);
+                      });
+                    });
+                  }
+                }}
+              >
+                <WaveformCanvas
+                  micWaveform={micWaveform()}
+                  systemWaveform={systemAudioWaveform()}
+                  segment={segment}
+                  secsPerPixel={secsPerPixel()}
+                />
 
-								<Markings segment={segment} prevDuration={prevDuration()} />
+                <Markings segment={segment} prevDuration={prevDuration()} />
 
-								<SegmentHandle
-									position="start"
-									class="opacity-0 group-hover:opacity-100"
-									onMouseDown={(downEvent) => {
-										const start = segment.start;
+                <SegmentHandle
+                  position="start"
+                  class="opacity-0 group-hover:opacity-100"
+                  onMouseDown={(downEvent) => {
+                    const start = segment.start;
 
-										const maxSegmentDuration =
-											editorInstance.recordings.segments[
-												segment.recordingSegment ?? 0
-											].display.duration;
+                    if (split()) return;
+                    const maxSegmentDuration =
+                      editorInstance.recordings.segments[
+                        segment.recordingSegment ?? 0
+                      ].display.duration;
 
-										const availableTimelineDuration =
-											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, segment, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc +
-															(segment.end - segment.start) / segment.timescale,
+                    const availableTimelineDuration =
+                      editorInstance.recordingDuration -
+                      segments().reduce(
+                        (acc, segment, segmentI) =>
+                          segmentI === i()
+                            ? acc
+                            : acc +
+                              (segment.end - segment.start) / segment.timescale,
 												0,
-											);
+                      );
 
-										const maxDuration = Math.min(
-											maxSegmentDuration,
+                    const maxDuration = Math.min(
+                      maxSegmentDuration,
 											availableTimelineDuration,
-										);
+                    );
 
-										const prevSegment = segments()[i() - 1];
-										const prevSegmentIsSameClip =
-											prevSegment?.recordingSegment !== undefined
-												? prevSegment.recordingSegment ===
-													segment.recordingSegment
-												: false;
+                    const prevSegment = segments()[i() - 1];
+                    const prevSegmentIsSameClip =
+                      prevSegment?.recordingSegment !== undefined
+                        ? prevSegment.recordingSegment ===
+                          segment.recordingSegment
+                        : false;
 
-										function update(event: MouseEvent) {
-											const newStart =
-												start +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+                    function update(event: MouseEvent) {
+                      const newStart =
+                        start +
+                        (event.clientX - downEvent.clientX) * secsPerPixel();
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"start",
-												Math.min(
-													Math.max(
-														newStart,
-														prevSegmentIsSameClip ? prevSegment.end : 0,
+                      setProject(
+                        "timeline",
+                        "segments",
+                        i(),
+                        "start",
+                        Math.min(
+                          Math.max(
+                            newStart,
+                            prevSegmentIsSameClip ? prevSegment.end : 0,
 														segment.end - maxDuration,
-													),
+                          ),
 													segment.end - 1,
 												),
-											);
-										}
+                      );
+                    }
 
-										const resumeHistory = projectHistory.pause();
-										createRoot((dispose) => {
-											createEventListenerMap(window, {
-												mousemove: update,
-												mouseup: (e) => {
-													dispose();
-													resumeHistory();
-													update(e);
-													onHandleReleased();
-												},
-											});
-										});
-									}}
-								/>
-								<SegmentContent class="relative justify-center items-center">
-									{(() => {
-										const ctx = useSegmentContext();
+                    const resumeHistory = projectHistory.pause();
+                    createRoot((dispose) => {
+                      createEventListenerMap(window, {
+                        mousemove: update,
+                        mouseup: (e) => {
+                          dispose();
+                          resumeHistory();
+                          update(e);
+                          onHandleReleased();
+                        },
+                      });
+                    });
+                  }}
+                />
+                <SegmentContent class="relative justify-center items-center">
+                  {(() => {
+                    const ctx = useSegmentContext();
 
-										return (
-											<Show when={ctx.width() > 100}>
-												<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
-													<span class="text-white/70">
-														{hasMultipleRecordingSegments()
-															? `Clip ${segment.recordingSegment}`
-															: "Clip"}
-													</span>
-													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
-														<IconLucideClock class="size-3.5" />{" "}
-														{formatTime(segment.end - segment.start)}
-													</div>
-												</div>
-											</Show>
-										);
-									})()}
-								</SegmentContent>
-								<SegmentHandle
-									position="end"
-									class="opacity-0 group-hover:opacity-100"
-									onMouseDown={(downEvent) => {
-										const end = segment.end;
+                    return (
+                      <Show when={ctx.width() > 100}>
+                        <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
+                          <span class="text-white/70">
+                            {hasMultipleRecordingSegments()
+                              ? `Clip ${segment.recordingSegment}`
+                              : "Clip"}
+                          </span>
+                          <div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
+                            <IconLucideClock class="size-3.5" />{" "}
+                            {formatTime(segment.end - segment.start)}
+                          </div>
+                        </div>
+                      </Show>
+                    );
+                  })()}
+                </SegmentContent>
+                <SegmentHandle
+                  position="end"
+                  class="opacity-0 group-hover:opacity-100"
+                  onMouseDown={(downEvent) => {
+                    const end = segment.end;
 
-										const maxSegmentDuration =
-											editorInstance.recordings.segments[
-												segment.recordingSegment ?? 0
-											].display.duration;
+                    if (split()) return;
+                    const maxSegmentDuration =
+                      editorInstance.recordings.segments[
+                        segment.recordingSegment ?? 0
+                      ].display.duration;
 
-										const availableTimelineDuration =
-											editorInstance.recordingDuration -
-											segments().reduce(
-												(acc, segment, segmentI) =>
-													segmentI === i()
-														? acc
-														: acc +
-															(segment.end - segment.start) / segment.timescale,
+                    const availableTimelineDuration =
+                      editorInstance.recordingDuration -
+                      segments().reduce(
+                        (acc, segment, segmentI) =>
+                          segmentI === i()
+                            ? acc
+                            : acc +
+                              (segment.end - segment.start) / segment.timescale,
 												0,
-											);
+                      );
 
-										const nextSegment = segments()[i() + 1];
-										const nextSegmentIsSameClip =
-											nextSegment?.recordingSegment !== undefined
-												? nextSegment.recordingSegment ===
-													segment.recordingSegment
-												: false;
+                    const nextSegment = segments()[i() + 1];
+                    const nextSegmentIsSameClip =
+                      nextSegment?.recordingSegment !== undefined
+                        ? nextSegment.recordingSegment ===
+                          segment.recordingSegment
+                        : false;
 
-										function update(event: MouseEvent) {
-											const newEnd =
-												end +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+                    function update(event: MouseEvent) {
+                      const newEnd =
+                        end +
+                        (event.clientX - downEvent.clientX) * secsPerPixel();
 
-											setProject(
-												"timeline",
-												"segments",
-												i(),
-												"end",
-												Math.max(
-													Math.min(
-														newEnd,
-														segment.end + availableTimelineDuration,
-														nextSegmentIsSameClip
-															? nextSegment.start
+                      setProject(
+                        "timeline",
+                        "segments",
+                        i(),
+                        "end",
+                        Math.max(
+                          Math.min(
+                            newEnd,
+                            segment.end + availableTimelineDuration,
+                            nextSegmentIsSameClip
+                              ? nextSegment.start
 															: maxSegmentDuration,
-													),
+                          ),
 													segment.start + 1,
 												),
-											);
-										}
+                      );
+                    }
 
-										const resumeHistory = projectHistory.pause();
-										createRoot((dispose) => {
-											createEventListenerMap(window, {
-												mousemove: update,
-												mouseup: (e) => {
-													dispose();
-													resumeHistory();
-													update(e);
-													onHandleReleased();
-												},
-											});
-										});
-									}}
-								/>
-							</SegmentRoot>
-							<Show
-								when={(() => {
-									const m = endMarker();
-									if (m?.type === "dual" && m.left && m.left.type === "time")
-										return m.left;
-								})()}
-							>
-								{(marker) => (
-									<div
-										class="absolute w-0 z-10 h-full *:absolute"
-										style={{
-											transform: `translateX(${segmentX() + segmentWidth()}px)`,
-										}}
-									>
-										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
-										<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
-											<CutOffsetButton
-												value={(() => {
-													const m = marker();
-													return m.type === "time" ? m.time : 0;
-												})()}
-												class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
-												onClick={() => {
-													setProject(
-														"timeline",
-														"segments",
-														i(),
-														"end",
+                    const resumeHistory = projectHistory.pause();
+                    createRoot((dispose) => {
+                      createEventListenerMap(window, {
+                        mousemove: update,
+                        mouseup: (e) => {
+                          dispose();
+                          resumeHistory();
+                          update(e);
+                          onHandleReleased();
+                        },
+                      });
+                    });
+                  }}
+                />
+              </SegmentRoot>
+              <Show
+                when={(() => {
+                  const m = endMarker();
+                  if (m?.type === "dual" && m.left && m.left.type === "time")
+                    return m.left;
+                })()}
+              >
+                {(marker) => (
+                  <div
+                    class="absolute w-0 z-10 h-full *:absolute"
+                    style={{
+                      transform: `translateX(${segmentX() + segmentWidth()}px)`,
+                    }}
+                  >
+                    <div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+                    <div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
+                      <CutOffsetButton
+                        value={(() => {
+                          const m = marker();
+                          return m.type === "time" ? m.time : 0;
+                        })()}
+                        class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
+                        onClick={() => {
+                          setProject(
+                            "timeline",
+                            "segments",
+                            i(),
+                            "end",
 														segmentRecording().display.duration,
-													);
-												}}
-											/>
-										</div>
-									</div>
-								)}
-							</Show>
-						</>
-					);
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </Show>
+            </>
+          );
 				}}
 			</For>
 		</TrackRoot>
