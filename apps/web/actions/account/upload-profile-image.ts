@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
@@ -10,7 +11,6 @@ import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
-import { randomUUID } from "node:crypto";
 
 const MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024; // 3MB
 const ALLOWED_IMAGE_TYPES = new Map<string, string>([

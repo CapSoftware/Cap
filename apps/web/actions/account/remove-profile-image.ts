@@ -13,10 +13,7 @@ export async function removeProfileImage() {
 		throw new Error("Unauthorized");
 	}
 
-	await db()
-		.update(users)
-		.set({ image: null })
-		.where(eq(users.id, user.id));
+	await db().update(users).set({ image: null }).where(eq(users.id, user.id));
 
 	revalidatePath("/dashboard/settings/account");
 	revalidatePath("/dashboard", "layout");

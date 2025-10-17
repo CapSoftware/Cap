@@ -14,11 +14,11 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
+import { removeProfileImage } from "@/actions/account/remove-profile-image";
+import { uploadProfileImage } from "@/actions/account/upload-profile-image";
+import { FileInput } from "@/components/FileInput";
 import { useDashboardContext } from "../../Contexts";
 import { patchAccountSettings } from "./server";
-import { uploadProfileImage } from "@/actions/account/upload-profile-image";
-import { removeProfileImage } from "@/actions/account/remove-profile-image";
-import { FileInput } from "@/components/FileInput";
 
 export const Settings = ({
 	user,
@@ -137,7 +137,8 @@ export const Settings = ({
 		},
 	});
 
-	const isProfileImageMutating = isUploadingProfileImage || isRemovingProfileImage;
+	const isProfileImageMutating =
+		isUploadingProfileImage || isRemovingProfileImage;
 
 	const handleProfileImageChange = (file: File | null) => {
 		if (!file || isProfileImageMutating) {
@@ -167,8 +168,7 @@ export const Settings = ({
 					<div className="space-y-1">
 						<CardTitle>Profile image</CardTitle>
 						<CardDescription>
-							This image appears in your profile, comments, and shared
-								caps.
+							This image appears in your profile, comments, and shared caps.
 						</CardDescription>
 					</div>
 					<FileInput
