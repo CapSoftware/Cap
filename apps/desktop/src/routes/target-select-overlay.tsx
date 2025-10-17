@@ -7,7 +7,7 @@ import { useSearchParams } from "@solidjs/router";
 import { createQuery, useMutation } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import * as dialog from "@tauri-apps/plugin-dialog";
+import { makeBroadcastChannel } from "@solid-primitives/broadcast-channel";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -37,6 +37,11 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+
+const DEFAULT_BOUNDS = {
+	position: { x: 0, y: 0 },
+	size: { width: 0, height: 0 },
+};
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -126,10 +131,15 @@ function Inner() {
 			params.displayId !== undefined && rawOptions.targetMode === "display",
 	}));
 
-	const [bounds, _setBounds] = createStore({
-		position: { x: 0, y: 0 },
-		size: { width: 0, height: 0 },
-	});
+	const [bounds, _setBounds] = createStore(structuredClone(DEFAULT_BOUNDS));
+
+	const { postMessage, onMessage } = makeBroadcastChannel(
+		"target_select_overlay",
+	);
+	createEventListener(window, "mousedown", () =>
+		postMessage({ type: "reset" }),
+	);
+	onMessage(() => _setBounds(structuredClone(DEFAULT_BOUNDS)));
 
 	const setBounds = (newBounds: typeof bounds) => {
 		const clampedBounds = {
