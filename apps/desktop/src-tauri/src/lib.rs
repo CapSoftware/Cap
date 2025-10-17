@@ -74,6 +74,7 @@ use std::{
     process::Command,
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -2772,10 +2773,40 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn async_capture_event(event: posthog_rs::Event) {
+#[derive(Debug)]
+pub enum PostHogEvent {
+    MultpartUploadComplete { duration: Duration },
+    MultpartUploadFailed { duration: Duration, error: String },
+}
+
+impl From<PostHogEvent> for posthog_rs::Event {
+    fn from(event: PostHogEvent) -> Self {
+        match event {
+            PostHogEvent::MultpartUploadComplete { duration } => {
+                let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
+                e.insert_prop("duration", duration.as_secs())
+                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                    .ok();
+                e
+            }
+            PostHogEvent::MultpartUploadFailed { duration, error } => {
+                let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
+                e.insert_prop("duration", duration.as_secs())
+                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                    .ok();
+                e.insert_prop("error", error)
+                    .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+                    .ok();
+                e
+            }
+        }
+    }
+}
+
+pub fn async_capture_event(event: PostHogEvent) {
     if option_env!("VITE_POSTHOG_KEY").is_some() {
         tokio::spawn(async move {
-            posthog_rs::capture(event)
+            posthog_rs::capture(event.into())
                 .await
                 .map_err(|err| error!("Error sending event to PostHog: {err:?}"))
                 .ok();

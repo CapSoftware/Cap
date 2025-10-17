@@ -1,7 +1,7 @@
 // credit @filleduchaos
 
 use crate::{
-    UploadProgress, VideoUploadInfo,
+    PostHogEvent, UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     async_capture_event,
     general_settings::GeneralSettingsStore,
@@ -151,20 +151,13 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(()) => {
-            let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-            e.insert_prop("took", start.elapsed().as_millis())
-                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                .ok();
-            e
-        }
-        Err(err) => {
-            let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
-            e.insert_prop("error", err.to_string())
-                .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                .ok();
-            e
-        }
+        Ok(()) => PostHogEvent::MultpartUploadComplete {
+            duration: start.elapsed(),
+        },
+        Err(err) => PostHogEvent::MultpartUploadFailed {
+            duration: start.elapsed(),
+            error: err.to_string(),
+        },
     });
 
     let _ = (video_result?, thumbnail_result?);
@@ -210,7 +203,6 @@ pub async fn upload_image(
             .map_err(Into::into);
     }
 
-    let start = Instant::now();
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -382,20 +374,13 @@ impl InstantMultipartUpload {
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(()) => {
-                        let mut e = posthog_rs::Event::new_anon("multipart_upload_complete");
-                        e.insert_prop("took", start.elapsed().as_millis())
-                            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                            .ok();
-                        e
-                    }
-                    Err(err) => {
-                        let mut e = posthog_rs::Event::new_anon("multipart_upload_failed");
-                        e.insert_prop("error", err.to_string())
-                            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
-                            .ok();
-                        e
-                    }
+                    Ok(()) => PostHogEvent::MultpartUploadComplete {
+                        duration: start.elapsed(),
+                    },
+                    Err(err) => PostHogEvent::MultpartUploadFailed {
+                        duration: start.elapsed(),
+                        error: err.to_string(),
+                    },
                 });
 
                 result.map(|_| ())
