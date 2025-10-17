@@ -2773,10 +2773,12 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
 }
 
 pub fn async_capture_event(event: posthog_rs::Event) {
-    tokio::spawn(async move {
-        posthog_rs::capture(event)
-            .await
-            .map_err(|err| error!("Error sending event to PostHog: {err:?}"))
-            .ok();
-    });
+    if option_env!("VITE_POSTHOG_KEY").is_some() {
+        tokio::spawn(async move {
+            posthog_rs::capture(event)
+                .await
+                .map_err(|err| error!("Error sending event to PostHog: {err:?}"))
+                .ok();
+        });
+    }
 }
