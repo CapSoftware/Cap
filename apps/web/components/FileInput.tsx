@@ -14,6 +14,10 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
 
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
+const MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = Array.from(ALLOWED_IMAGE_TYPES).join(",");
+
 export interface FileInputProps {
 	onChange?: (file: File | null) => void;
 	disabled?: boolean;
@@ -43,7 +47,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 }) => {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragging, setIsDragging] = useState(false);
-	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(
 		initialPreviewUrl,
 	);
@@ -117,24 +120,19 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
 		if (file) {
-			// Validate file type - only allow jpg, jpeg, svg, and png
-			const allowedTypes = [
-				"image/jpeg",
-				"image/jpg",
-				"image/png",
-				"image/svg+xml",
-			];
-			if (!allowedTypes.includes(file.type)) {
-				toast.error("Please select a JPG, JPEG, PNG, or SVG file");
+			// Validate file type - only allow jpg, jpeg, and png
+			const normalizedType = file.type.toLowerCase();
+			if (!ALLOWED_IMAGE_TYPES.has(normalizedType)) {
+				toast.error("Please select a PNG or JPEG image");
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
 				return;
 			}
 
-			// Validate file size (limit to 2MB)
-			if (file.size > 2 * 1024 * 1024) {
-				toast.error("File size must be less than 2MB");
+			// Validate file size (limit to 3MB)
+			if (file.size > MAX_FILE_SIZE_BYTES) {
+				toast.error("File size must be 3MB or less");
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
@@ -149,7 +147,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 			// Create a new preview URL for immediate feedback
 			const newPreviewUrl = URL.createObjectURL(file);
 			setPreviewUrl(newPreviewUrl);
-			setSelectedFile(null);
 
 			// Call the onChange callback
 			if (onChange) {
@@ -167,7 +164,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 		}
 
 		setPreviewUrl(null);
-		setSelectedFile(null);
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -185,51 +181,39 @@ export const FileInput: React.FC<FileInputProps> = ({
 	};
 
 	return (
-		<div className={`relative ${className}`}>
+		<div className={clsx("relative", className)}>
 			<div
 				style={{
-					height: height,
+					height,
 				}}
 			>
-				{" "}
 				{/* Fixed height container to prevent resizing */}
-				{selectedFile || previewUrl ? (
-					<div className="flex gap-2 items-center p-1.5 rounded-xl border border-dashed bg-gray-1 border-gray-4 h-full">
-						<div className="flex flex-1 gap-1.5 items-center">
-							<div className="flex flex-1 gap-1 items-center">
-								{selectedFile ? (
-									<>
-										<p className="text-xs font-medium w-fit max-w-[150px] truncate text-gray-12">
-											{selectedFile.name}
-										</p>
-										<p className="text-xs text-gray-10 min-w-fit">
-											{(selectedFile.size / 1024).toFixed(1)} KB
-										</p>
-									</>
-								) : (
-									<div className="flex gap-2 items-center px-2">
-										<p className="text-xs font-medium text-gray-12">
-											Current icon:{" "}
-										</p>
-										<div
-											style={{
-												width: previewIconSize,
-												height: previewIconSize,
-											}}
-											className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-md"
-										>
-											{previewUrl && (
-												<Image
-													src={previewUrl}
-													width={32}
-													height={32}
-													alt="File preview"
-													className="object-cover rounded-full"
-												/>
-											)}
-										</div>
+				{previewUrl ? (
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 p-1.5">
+						<div className="flex flex-1 items-center gap-1.5">
+							<div className="flex flex-1 items-center gap-1">
+								<div className="flex items-center gap-2 px-2">
+									<p className="text-xs font-medium text-gray-12">
+										Current icon:{" "}
+									</p>
+									<div
+										style={{
+											width: previewIconSize,
+											height: previewIconSize,
+										}}
+										className="relative flex flex-shrink-0 items-center justify-center overflow-hidden rounded-full"
+									>
+										{previewUrl && (
+											<Image
+												src={previewUrl}
+												width={32}
+												height={32}
+												alt="File preview"
+												className="object-cover rounded-full"
+											/>
+										)}
 									</div>
-								)}
+								</div>
 							</div>
 						</div>
 						<Tooltip content="Remove icon">
@@ -241,7 +225,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 								onClick={handleRemove}
 							>
 								<FontAwesomeIcon
-									className="size-2.5 text-gray-12 group-hover:text-gray-1"
+									className="size-2.5 transition-colors text-gray-12 group-hover:text-gray-10"
 									icon={faTrash}
 								/>
 							</Button>
@@ -255,25 +239,25 @@ export const FileInput: React.FC<FileInputProps> = ({
 						onDragLeave={handleDragLeave}
 						onDrop={handleDrop}
 						className={clsx(
-							"flex gap-3 justify-center items-center px-4 w-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer h-full",
+							"flex h-full w-full cursor-pointer items-center justify-center gap-3 rounded-xl border border-dashed px-4 transition-all duration-300",
 							isDragging
 								? "border-blue-500 bg-gray-5"
-								: "hover:bg-gray-2 border-gray-5 " + notDraggingClassName,
-							isLoading || disabled ? "opacity-50 pointer-events-none" : "",
+								: `border-gray-5 hover:bg-gray-2 ${notDraggingClassName}`,
+							isLoading || disabled ? "pointer-events-none opacity-50" : "",
 						)}
 					>
 						{isLoading ? (
 							<FontAwesomeIcon
-								className="animate-spin text-gray-10 size-4"
+								className="size-4 animate-spin text-gray-10"
 								icon={faSpinner}
 							/>
 						) : (
 							<FontAwesomeIcon
-								className="text-gray-10 size-4"
+								className="size-4 text-gray-10"
 								icon={faCloudUpload}
 							/>
 						)}
-						<p className="text-[13px] truncate text-gray-11">
+						<p className="truncate text-[13px] text-gray-11">
 							{isLoading
 								? "Uploading..."
 								: "Choose a file or drag & drop it here"}
@@ -287,7 +271,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 				ref={fileInputRef}
 				id={id}
 				disabled={disabled || isLoading}
-				accept="image/jpeg, image/jpg, image/png, image/svg+xml"
+				accept={ACCEPTED_IMAGE_TYPES}
 				onChange={handleFileChange}
 				name={name}
 			/>

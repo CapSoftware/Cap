@@ -6,10 +6,8 @@ import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
-import DOMPurify from "dompurify";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { JSDOM } from "jsdom";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
@@ -37,7 +35,7 @@ export async function uploadOrganizationIcon(
 		throw new Error("Only the owner can update organization icon");
 	}
 
-	const file = formData.get("file") as File;
+	const file = formData.get("icon") as File | null;
 
 	if (!file) {
 		throw new Error("No file provided");
@@ -64,11 +62,12 @@ export async function uploadOrganizationIcon(
 		await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
-			yield* bucket.putObject(
-				fileKey,
-				yield* Effect.promise(() => sanitizedFile.bytes()),
-				{ contentType: file.type },
-			);
+			const bodyBytes = yield* Effect.promise(async () => {
+				const buf = await sanitizedFile.arrayBuffer();
+				return new Uint8Array(buf);
+			});
+
+			yield* bucket.putObject(fileKey, bodyBytes, { contentType: file.type });
 			// Construct the icon URL
 			if (serverEnv().CAP_AWS_BUCKET_URL) {
 				// If a custom bucket URL is defined, use it

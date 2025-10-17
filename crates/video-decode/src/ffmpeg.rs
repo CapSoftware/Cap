@@ -50,16 +50,22 @@ impl FFmpegDecoder {
 
             let exceeds_common_hw_limits = width > 4096 || height > 4096;
 
-            let hw_device = hw_device_type
-                .and_then(|_| {
-		                if exceeds_common_hw_limits{
-				                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
-				                None
-		                } else {
-			               		None
-		                }
-                })
-                .and_then(|hw_device_type| decoder.try_use_hw_device(hw_device_type).ok());
+            let hw_device = hw_device_type.and_then(|hw_device_type| {
+                if exceeds_common_hw_limits {
+                    debug!(
+                        "Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration"
+                    );
+                    None
+                } else {
+                    match decoder.try_use_hw_device(hw_device_type) {
+                        Ok(device) => Some(device),
+                        Err(error) => {
+                            debug!("Failed to enable hardware decoder: {error:?}");
+                            None
+                        }
+                    }
+                }
+            });
 
             Ok(FFmpegDecoder {
                 input,

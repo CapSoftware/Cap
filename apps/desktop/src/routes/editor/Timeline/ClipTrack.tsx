@@ -176,7 +176,6 @@ export function ClipTrack(
 		totalDuration,
 		micWaveforms,
 		systemAudioWaveforms,
-		metaQuery,
 	} = useEditorContext();
 
 	const { secsPerPixel, duration } = useTimelineContext();
@@ -195,8 +194,14 @@ export function ClipTrack(
 	const hasMultipleRecordingSegments = () =>
 		editorInstance.recordings.segments.length > 1;
 
+	const split = () => editorState.timeline.interactMode === "split";
+
 	return (
-		<TrackRoot ref={props.ref}>
+		<TrackRoot
+			ref={props.ref}
+			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
+			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
+		>
 			<For each={segments()}>
 				{(segment, i) => {
 					const prevDuration = () =>
@@ -369,22 +374,11 @@ export function ClipTrack(
 											createEventListener(e.currentTarget, "mouseup", (e) => {
 												dispose();
 
-												// // If there's only one segment, don't open the clip config panel
-												// // since there's nothing to configure - just let the normal click behavior happen
-												// const hasOnlyOneSegment = segments().length === 1;
-
-												// if (hasOnlyOneSegment) {
-												// 	// Clear any existing selection (zoom, layout, etc.) when clicking on a clip
-												// 	// This ensures the sidebar updates properly
-												// 	setEditorState("timeline", "selection", null);
-												// } else {
-												// When there are multiple segments, show the clip configuration
 												setEditorState("timeline", "selection", {
 													type: "clip",
 													index: i(),
 												});
 
-												// }
 												props.handleUpdatePlayhead(e);
 											});
 										});
@@ -406,6 +400,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const start = segment.start;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
@@ -496,6 +491,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const end = segment.end;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0

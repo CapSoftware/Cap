@@ -6,7 +6,7 @@
 // credit @filleduchaos
 
 use crate::api::S3VideoMeta;
-use crate::web_api::ManagerExt;
+use crate::web_api::{AuthedApiError, ManagerExt};
 use crate::{UploadProgress, VideoUploadInfo};
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
@@ -210,7 +210,7 @@ pub async fn upload_video(
     screenshot_path: Option<PathBuf>,
     meta: Option<S3VideoMeta>,
     channel: Option<Channel<UploadProgress>>,
-) -> Result<UploadedVideo, String> {
+) -> Result<UploadedVideo, AuthedApiError> {
     println!("Uploading video {video_id}...");
 
     let client = reqwest::Client::new();
@@ -320,9 +320,7 @@ pub async fn upload_video(
         status,
         error_body
     );
-    Err(format!(
-        "Failed to upload file. Status: {status}. Body: {error_body}"
-    ))
+    Err(format!("Failed to upload file. Status: {status}. Body: {error_body}").into())
 }
 
 pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedImage, String> {
@@ -915,7 +913,6 @@ impl InstantMultipartUpload {
                         "videoId": video_id,
                         "uploadId": upload_id,
                         "partNumber": *part_number,
-                        "md5Sum": &md5_sum
                     }))
             })
             .await
@@ -974,7 +971,6 @@ impl InstantMultipartUpload {
 
             match client
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .timeout(Duration::from_secs(120))
                 .body(chunk.clone())
                 .send()

@@ -15,6 +15,7 @@ type TabType = "activity" | "transcript" | "summary" | "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
+	authorImage?: string | null;
 };
 
 type VideoWithOrganizationInfo = typeof videos.$inferSelect & {

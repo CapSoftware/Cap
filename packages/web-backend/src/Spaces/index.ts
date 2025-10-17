@@ -3,9 +3,9 @@ import { type Organisation, Policy, type Space } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
-import { Database } from "../Database";
-import { OrganisationsPolicy } from "../Organisations/OrganisationsPolicy";
-import { SpacesPolicy } from "./SpacesPolicy";
+import { Database } from "../Database.ts";
+import { OrganisationsPolicy } from "../Organisations/OrganisationsPolicy.ts";
+import { SpacesPolicy } from "./SpacesPolicy.ts";
 
 export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 	effect: Effect.gen(function* () {
@@ -19,7 +19,7 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 			spaceOrOrgId: Space.SpaceIdOrOrganisationId,
 		) {
 			const [[space], [org]] = yield* Effect.all([
-				db.execute((db) =>
+				db.use((db) =>
 					db
 						.select({
 							id: Db.spaces.id,
@@ -31,7 +31,7 @@ export class Spaces extends Effect.Service<Spaces>()("Spaces", {
 						.where(Dz.eq(Db.spaces.id, spaceOrOrgId))
 						.limit(1),
 				),
-				db.execute((db) =>
+				db.use((db) =>
 					db
 						.select({
 							id: Db.organizations.id,

@@ -128,7 +128,7 @@ impl TaskPool {
                     let res = future.await;
                     match &res {
                         Ok(_) => info!("Task finished successfully"),
-                        Err(err) => error!("Task failed: {}", err),
+                        Err(err) => error!("Task failed: {:#}", err),
                     }
                     res
                 }
@@ -349,7 +349,7 @@ async fn finish_build(
             Ok(())
         }
         .then(async move |res| {
-            let muxer_res = muxer.lock().await.finish();
+            let muxer_res = muxer.lock().await.finish(timestamps.instant().elapsed());
 
             let _ = done_tx.send(match (res, muxer_res) {
                 (Err(e), _) | (_, Err(e)) => Err(e),
@@ -766,7 +766,7 @@ pub trait Muxer: Send + 'static {
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self) -> anyhow::Result<()>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()>;
 }
 
 pub trait AudioMuxer: Muxer {

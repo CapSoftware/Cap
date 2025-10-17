@@ -23,25 +23,21 @@
 		"web": "pnpm --filter=@cap/web",
 		"env-setup": "node scripts/env-cli.js",
 		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
-		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf"
+		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf",
+		"lgtm-otel": "docker run -p 3010:3000 -p 4317:4317 -p 4318:4318 --rm -it docker.io/grafana/otel-lgtm"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.2.0",
 		"@clack/prompts": "^0.10.0",
-		"@effect/language-service": "^0.34.0",
+		"@effect/language-service": "^0.44.0",
 		"dotenv-cli": "latest",
-		"prettier": "^3.5.3",
+		"tsdown": "^0.15.6",
 		"turbo": "^2.3.4",
 		"typescript": "^5.8.3"
 	},
 	"packageManager": "pnpm@10.5.2",
 	"name": "cap",
 	"engines": {
-		"node": "20"
-	},
-	"pnpm": {
-		"overrides": {
-			"undici": "5.28.4"
-		}
+		"node": "24"
 	}
 }

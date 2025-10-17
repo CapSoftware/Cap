@@ -71,7 +71,11 @@ export function ReactQueryProvider({
 }
 
 import { SessionProvider as NASessionProvider } from "next-auth/react";
-import { demoteFromPro, promoteToPro } from "./devtoolsServer";
+import {
+	demoteFromPro,
+	promoteToPro,
+	restartOnboarding,
+} from "./devtoolsServer";
 import { featureFlags, useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
@@ -105,9 +109,9 @@ function CapDevtools() {
 	const flags = useFeatureFlags();
 
 	return (
-		<div className="flex flex-col space-y-4 p-4">
+		<div className="flex flex-col p-4 space-y-4">
 			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
-			<div className="space-y-2">
+			{/*<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Features</h1>
 				<label className="flex items-center space-x-2">
 					<input
@@ -122,7 +126,7 @@ function CapDevtools() {
 					/>
 					<span>Enable Upload Progress UI</span>
 				</label>
-			</div>
+			</div>*/}
 			<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Cap Pro</h1>
 				<p className="text-xs text-muted-foreground">
@@ -132,7 +136,7 @@ function CapDevtools() {
 					<form action={promoteToPro}>
 						<button
 							type="submit"
-							className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"
+							className="px-2 py-1 text-xs font-medium text-white bg-green-600 rounded hover:bg-green-700"
 						>
 							Promote to Pro
 						</button>
@@ -140,12 +144,26 @@ function CapDevtools() {
 					<form action={demoteFromPro}>
 						<button
 							type="submit"
-							className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+							className="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700"
 						>
 							Demote from Pro
 						</button>
 					</form>
 				</div>
+			</div>
+			<div className="space-y-2">
+				<h1 className="text-lg font-semibold">Onboarding</h1>
+				<p className="text-xs text-muted-foreground">
+					Restart the onboarding process for the current user (dev only)
+				</p>
+				<form action={restartOnboarding}>
+					<button
+						type="submit"
+						className="px-2 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+					>
+						Restart Onboarding
+					</button>
+				</form>
 			</div>
 		</div>
 	);

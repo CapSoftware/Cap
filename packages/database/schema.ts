@@ -98,6 +98,13 @@ export const users = mysqlTable(
 		).$type<Organisation.OrganisationId>(),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+		onboardingSteps: json("onboardingSteps").$type<{
+			welcome?: boolean;
+			organizationSetup?: boolean;
+			customDomain?: boolean;
+			inviteTeam?: boolean;
+			download?: boolean;
+		}>(),
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
 		customBucket: nanoIdNullable("customBucket"),
 		inviteQuota: int("inviteQuota").notNull().default(1),
@@ -713,6 +720,7 @@ export const videoUploads = mysqlTable("video_uploads", {
 	total: int("total").notNull().default(0),
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
+	mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
 });
 
 export const importedVideos = mysqlTable(

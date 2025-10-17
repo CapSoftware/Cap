@@ -2,7 +2,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::frame;
 use std::{ops::Sub, path::PathBuf, time::Duration};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 // before pausing at all, subtract 0.
 // on pause, record last frame time.
@@ -16,7 +16,7 @@ pub struct MP4Encoder {
     asset_writer: arc::R<av::AssetWriter>,
     video_input: arc::R<av::AssetWriterInput>,
     audio_input: Option<arc::R<av::AssetWriterInput>>,
-    most_recent_timestamp: Option<Duration>,
+    most_recent_frame: Option<(arc::R<cm::SampleBuf>, Duration)>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
     is_writing: bool,
@@ -125,6 +125,23 @@ impl MP4Encoder {
                 .as_id_ref(),
             );
 
+            output_settings.insert(
+                av::video_settings_keys::color_props(),
+                ns::Dictionary::with_keys_values(
+                    &[
+                        unsafe { AVVideoTransferFunctionKey },
+                        unsafe { AVVideoColorPrimariesKey },
+                        unsafe { AVVideoYCbCrMatrixKey },
+                    ],
+                    &[
+                        unsafe { AVVideoTransferFunction_ITU_R_709_2 },
+                        unsafe { AVVideoColorPrimaries_ITU_R_709_2 },
+                        unsafe { AVVideoYCbCrMatrix_ITU_R_709_2 },
+                    ],
+                )
+                .as_id_ref(),
+            );
+
             let mut video_input = av::AssetWriterInput::with_media_type_and_output_settings(
                 av::MediaType::video(),
                 Some(output_settings.as_ref()),
@@ -180,7 +197,7 @@ impl MP4Encoder {
             audio_input,
             asset_writer,
             video_input,
-            most_recent_timestamp: None,
+            most_recent_frame: None,
             pause_timestamp: None,
             timestamp_offset: Duration::ZERO,
             is_writing: false,
@@ -194,7 +211,7 @@ impl MP4Encoder {
     /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
-        frame: &cidre::cm::SampleBuf,
+        frame: arc::R<cm::SampleBuf>,
         timestamp: Duration,
     ) -> Result<(), QueueVideoFrameError> {
         if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
@@ -207,7 +224,7 @@ impl MP4Encoder {
                 .start_session_at_src_time(cm::Time::new(timestamp.as_millis() as i64, 1_000));
         }
 
-        self.most_recent_timestamp = Some(timestamp);
+        self.most_recent_frame = Some((frame.clone(), timestamp));
 
         if let Some(pause_timestamp) = self.pause_timestamp {
             self.timestamp_offset += timestamp - pause_timestamp;
@@ -314,7 +331,7 @@ impl MP4Encoder {
             return;
         }
 
-        let Some(timestamp) = self.most_recent_timestamp else {
+        let Some((_, timestamp)) = self.most_recent_frame else {
             return;
         };
 
@@ -330,19 +347,34 @@ impl MP4Encoder {
         self.is_paused = false;
     }
 
-    pub fn finish(&mut self) {
+    pub fn finish(&mut self, timestamp: Option<Duration>) {
         if !self.is_writing {
             return;
         }
 
-        let Some(most_recent_timestamp) = self.most_recent_timestamp else {
+        let Some(mut most_recent_frame) = self.most_recent_frame.take() else {
             return;
         };
+
+        // We extend the video to the provided timestamp if possible
+        if let Some(timestamp) = timestamp
+            && let Some(diff) = timestamp.checked_sub(most_recent_frame.1)
+            && diff > Duration::from_millis(500)
+        {
+            match self.queue_video_frame(most_recent_frame.0.clone(), timestamp) {
+                Ok(()) => {
+                    most_recent_frame = (most_recent_frame.0, timestamp);
+                }
+                Err(e) => {
+                    error!("Failed to queue final video frame: {e}");
+                }
+            }
+        }
 
         self.is_writing = false;
 
         self.asset_writer.end_session_at_src_time(cm::Time::new(
-            most_recent_timestamp.sub(self.timestamp_offset).as_millis() as i64,
+            most_recent_frame.1.sub(self.timestamp_offset).as_millis() as i64,
             1000,
         ));
         self.video_input.mark_as_finished();
@@ -364,13 +396,20 @@ impl MP4Encoder {
 
 impl Drop for MP4Encoder {
     fn drop(&mut self) {
-        self.finish();
+        self.finish(None);
     }
 }
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
-    static AVVideoAverageBitRateKey: &'static cidre::ns::String;
+    static AVVideoAverageBitRateKey: &'static ns::String;
+    static AVVideoTransferFunctionKey: &'static ns::String;
+    static AVVideoColorPrimariesKey: &'static ns::String;
+    static AVVideoYCbCrMatrixKey: &'static ns::String;
+
+    static AVVideoTransferFunction_ITU_R_709_2: &'static cidre::ns::String;
+    static AVVideoColorPrimaries_ITU_R_709_2: &'static cidre::ns::String;
+    static AVVideoYCbCrMatrix_ITU_R_709_2: &'static cidre::ns::String;
 }
 
 unsafe fn result_unchecked<T, R>(op: impl FnOnce(&mut Option<T>) -> R) -> cidre::os::Result<T>

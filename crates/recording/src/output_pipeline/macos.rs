@@ -49,8 +49,11 @@ impl Muxer for AVFoundationMp4Muxer {
         ))
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
-        self.0.lock().map_err(|e| anyhow!("{e}"))?.finish();
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .map_err(|e| anyhow!("{e}"))?
+            .finish(Some(timestamp));
         Ok(())
     }
 }
@@ -71,7 +74,7 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             mp4.resume();
         }
 
-        mp4.queue_video_frame(&frame.sample_buf, timestamp)
+        mp4.queue_video_frame(frame.sample_buf, timestamp)
             .map_err(|e| anyhow!("QueueVideoFrame/{e}"))
     }
 }

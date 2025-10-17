@@ -15,6 +15,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
+use tauri_plugin_dialog::DialogExt;
 use tauri_specta::Event;
 
 pub enum TrayItem {
@@ -23,6 +24,7 @@ pub enum TrayItem {
     PreviousRecordings,
     PreviousScreenshots,
     OpenSettings,
+    UploadLogs,
     Quit,
 }
 
@@ -34,6 +36,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
             TrayItem::OpenSettings => "open_settings",
+            TrayItem::UploadLogs => "upload_logs",
             TrayItem::Quit => "quit",
         }
         .into()
@@ -50,6 +53,7 @@ impl TryFrom<MenuId> for TrayItem {
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
             "open_settings" => Ok(TrayItem::OpenSettings),
+            "upload_logs" => Ok(TrayItem::UploadLogs),
             "quit" => Ok(TrayItem::Quit),
             value => Err(format!("Invalid tray item id {value}")),
         }
@@ -78,6 +82,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             )?,
             &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, TrayItem::UploadLogs, "Upload Logs", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 "version",
@@ -129,6 +134,20 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     tokio::spawn(
                         async move { ShowCapWindow::Settings { page: None }.show(&app).await },
                     );
+                }
+                Ok(TrayItem::UploadLogs) => {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        match crate::logging::upload_log_file(&app).await {
+                            Ok(_) => {
+                                tracing::info!("Successfully uploaded logs");
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to upload logs: {e:#}");
+                                app.dialog().message("Failed to upload logs").show(|_| {});
+                            }
+                        }
+                    });
                 }
                 Ok(TrayItem::Quit) => {
                     app.exit(0);

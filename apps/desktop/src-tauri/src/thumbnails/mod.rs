@@ -33,6 +33,7 @@ pub struct CaptureWindowWithThumbnail {
     pub refresh_rate: u32,
     pub thumbnail: Option<String>,
     pub app_icon: Option<String>,
+    pub bundle_identifier: Option<String>,
 }
 
 pub fn normalize_thumbnail_dimensions(image: &image::RgbaImage) -> image::RgbaImage {
@@ -101,7 +102,6 @@ pub async fn collect_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWith
 pub async fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
     let windows = list_windows();
 
-    debug!(window_count = windows.len(), "Collecting window thumbnails");
     let mut results = Vec::new();
     for (capture_window, window) in windows {
         let thumbnail = capture_window_thumbnail(&window).await;
@@ -116,22 +116,6 @@ pub async fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithTh
             }
         });
 
-        if thumbnail.is_none() {
-            warn!(
-                window_id = ?capture_window.id,
-                window_name = %capture_window.name,
-                owner_name = %capture_window.owner_name,
-                "Window thumbnail capture returned None",
-            );
-        } else {
-            debug!(
-                window_id = ?capture_window.id,
-                window_name = %capture_window.name,
-                owner_name = %capture_window.owner_name,
-                "Captured window thumbnail",
-            );
-        }
-
         results.push(CaptureWindowWithThumbnail {
             id: capture_window.id,
             name: capture_window.name,
@@ -140,10 +124,9 @@ pub async fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithTh
             refresh_rate: capture_window.refresh_rate,
             thumbnail,
             app_icon,
+            bundle_identifier: capture_window.bundle_identifier,
         });
     }
-
-    info!(windows = results.len(), "Collected window thumbnail data");
 
     Ok(results)
 }

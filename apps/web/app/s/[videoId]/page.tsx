@@ -633,7 +633,7 @@ async function AuthorizedContent({
 		: Promise.resolve([]);
 
 	const commentsPromise = (async () => {
-		let toplLevelCommentId: Comment.CommentId | undefined;
+		let toplLevelCommentId = Option.none<Comment.CommentId>();
 
 		if (Option.isSome(replyId)) {
 			const [parentComment] = await db()
@@ -641,10 +641,13 @@ async function AuthorizedContent({
 				.from(comments)
 				.where(eq(comments.id, replyId.value))
 				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId ?? undefined;
+			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
 		}
 
-		const commentToBringToTheTop = toplLevelCommentId ?? commentId;
+		const commentToBringToTheTop = Option.orElse(
+			toplLevelCommentId,
+			() => commentId,
+		);
 
 		const allComments = await db()
 			.select({
@@ -658,14 +661,17 @@ async function AuthorizedContent({
 				updatedAt: comments.updatedAt,
 				parentCommentId: comments.parentCommentId,
 				authorName: users.name,
+				authorImage: users.image,
 			})
 			.from(comments)
 			.leftJoin(users, eq(comments.authorId, users.id))
 			.where(eq(comments.videoId, videoId))
 			.orderBy(
-				commentToBringToTheTop
-					? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
-					: comments.createdAt,
+				Option.match(commentToBringToTheTop, {
+					onSome: (commentId) =>
+						sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
+					onNone: () => comments.createdAt,
+				}),
 			);
 
 		return allComments;
