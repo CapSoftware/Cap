@@ -177,7 +177,8 @@ export const Settings = ({
 						onChange={handleProfileImageChange}
 						onRemove={handleProfileImageRemove}
 						disabled={isProfileImageMutating}
-						isLoading={isProfileImageMutating}
+						isUploading={isUploadingProfileImage}
+						isRemoving={isRemovingProfileImage}
 					/>
 				</Card>
 				<Card className="space-y-4">

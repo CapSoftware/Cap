@@ -5,14 +5,15 @@ import { faImage } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: string | null;
 	onChange?: (file: File | null) => void;
 	onRemove?: () => void;
 	disabled?: boolean;
-	isLoading?: boolean;
+	isUploading?: boolean;
+	isRemoving?: boolean;
 }
 
 export function ProfileImage({
@@ -20,13 +21,20 @@ export function ProfileImage({
 	onChange,
 	onRemove,
 	disabled = false,
-	isLoading = false,
+	isUploading = false,
+	isRemoving = false,
 }: ProfileImageProps) {
 	const [previewUrl, setPreviewUrl] = useState<string | null>(
 		initialPreviewUrl || null,
 	);
 	const fileInputRef = useRef<HTMLInputElement>(null);
-	const [removingImage, setRemovingImage] = useState(false);
+
+	// Reset isRemoving when the parent confirms the operation completed
+	useEffect(() => {
+		if (initialPreviewUrl !== undefined) {
+			setPreviewUrl(initialPreviewUrl);
+		}
+	}, [initialPreviewUrl]);
 
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
@@ -38,23 +46,20 @@ export function ProfileImage({
 	};
 
 	const handleRemove = () => {
-		setRemovingImage(true);
-		try {
-			setPreviewUrl(null);
-			if (fileInputRef.current) {
-				fileInputRef.current.value = "";
-			}
-			onRemove?.();
-		} finally {
-			setRemovingImage(false);
+		setPreviewUrl(null);
+		if (fileInputRef.current) {
+			fileInputRef.current.value = "";
 		}
+		onRemove?.();
 	};
 
 	const handleUploadClick = () => {
-		if (!disabled && !isLoading && !removingImage) {
+		if (!disabled && !isUploading && !isRemoving) {
 			fileInputRef.current?.click();
 		}
 	};
+
+	const isLoading = isUploading || isRemoving;
 
 	return (
 		<div className="rounded-xl border border-dashed bg-gray-2 h-fit border-gray-4">
@@ -87,27 +92,28 @@ export function ProfileImage({
 				/>
 				<div className="space-y-3">
 					<div className="flex gap-2">
-						{!removingImage && (
+						{!isRemoving && (
 							<Button
 								type="button"
 								variant="gray"
 								disabled={disabled || isLoading}
 								size="xs"
 								onClick={handleUploadClick}
-								spinner={isLoading}
+								spinner={isUploading}
 							>
-								{isLoading ? "Uploading..." : "Upload Image"}
+								{isUploading ? "Uploading..." : "Upload Image"}
 							</Button>
 						)}
-						{previewUrl && !removingImage && (
+						{(previewUrl || isRemoving) && (
 							<Button
 								type="button"
 								variant="gray"
-								disabled={disabled || isLoading || removingImage}
+								disabled={disabled || isLoading}
 								size="xs"
 								onClick={handleRemove}
+								spinner={isRemoving}
 							>
-								{removingImage ? "Removing..." : "Remove"}
+								{isRemoving ? "Removing image..." : "Remove"}
 							</Button>
 						)}
 					</div>
