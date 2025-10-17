@@ -12,6 +12,8 @@ import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
 
+const MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024; // 1MB
+
 export async function uploadOrganizationIcon(
 	formData: FormData,
 	organizationId: Organisation.OrganisationId,
@@ -47,8 +49,8 @@ export async function uploadOrganizationIcon(
 	}
 
 	// Validate file size (limit to 2MB)
-	if (file.size > 2 * 1024 * 1024) {
-		throw new Error("File size must be less than 2MB");
+	if (file.size > MAX_FILE_SIZE_BYTES) {
+		throw new Error("File size must be less than 1MB");
 	}
 
 	// Create a unique file key

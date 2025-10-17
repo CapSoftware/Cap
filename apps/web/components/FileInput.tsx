@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { Tooltip } from "./Tooltip";
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
-const MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
+const DEFAULT_MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
 const ACCEPTED_IMAGE_TYPES = Array.from(ALLOWED_IMAGE_TYPES).join(",");
 
 export interface FileInputProps {
@@ -23,6 +23,7 @@ export interface FileInputProps {
 	disabled?: boolean;
 	id?: string;
 	name?: string;
+	containerStyle?: React.CSSProperties;
 	className?: string;
 	notDraggingClassName?: string;
 	initialPreviewUrl?: string | null;
@@ -30,10 +31,12 @@ export interface FileInputProps {
 	isLoading?: boolean;
 	height?: string | number;
 	previewIconSize?: string | number;
+	maxFileSizeBytes?: number;
 }
 
 export const FileInput: React.FC<FileInputProps> = ({
 	onChange,
+	containerStyle,
 	disabled = false,
 	id = "file",
 	name = "file",
@@ -42,8 +45,9 @@ export const FileInput: React.FC<FileInputProps> = ({
 	initialPreviewUrl = null,
 	onRemove,
 	isLoading = false,
-	height = "44px",
+	height = 44,
 	previewIconSize = 20,
+	maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES,
 }) => {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragging, setIsDragging] = useState(false);
@@ -130,9 +134,10 @@ export const FileInput: React.FC<FileInputProps> = ({
 				return;
 			}
 
-			// Validate file size (limit to 3MB)
-			if (file.size > MAX_FILE_SIZE_BYTES) {
-				toast.error("File size must be 3MB or less");
+			// Validate file size
+			if (file.size > maxFileSizeBytes) {
+				const maxSizeMB = maxFileSizeBytes / (1024 * 1024);
+				toast.error(`File size must be ${maxSizeMB}MB or less`);
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
@@ -185,14 +190,15 @@ export const FileInput: React.FC<FileInputProps> = ({
 			<div
 				style={{
 					height,
+					...containerStyle,
 				}}
 			>
 				{/* Fixed height container to prevent resizing */}
 				{previewUrl ? (
-					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 p-1.5">
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
 						<div className="flex flex-1 items-center gap-1.5">
-							<div className="flex flex-1 items-center gap-1">
-								<div className="flex items-center gap-2 px-2">
+							<div className="flex flex-1 gap-1 items-center">
+								<div className="flex gap-2 items-center">
 									<p className="text-xs font-medium text-gray-12">
 										Current icon:{" "}
 									</p>
@@ -201,7 +207,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 											width: previewIconSize,
 											height: previewIconSize,
 										}}
-										className="relative flex flex-shrink-0 items-center justify-center overflow-hidden rounded-full"
+										className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
 									>
 										{previewUrl && (
 											<Image
@@ -220,7 +226,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 							<Button
 								variant="outline"
 								size="xs"
-								className="!p-0 size-7 group mr-2"
+								className="!p-0 size-7 group"
 								disabled={isLoading || disabled}
 								onClick={handleRemove}
 							>
@@ -239,7 +245,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 						onDragLeave={handleDragLeave}
 						onDrop={handleDrop}
 						className={clsx(
-							"flex h-full w-full cursor-pointer items-center justify-center gap-3 rounded-xl border border-dashed px-4 transition-all duration-300",
+							"flex gap-3 justify-center items-center px-4 w-full h-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer",
 							isDragging
 								? "border-blue-500 bg-gray-5"
 								: `border-gray-5 hover:bg-gray-2 ${notDraggingClassName}`,
@@ -248,7 +254,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 					>
 						{isLoading ? (
 							<FontAwesomeIcon
-								className="size-4 animate-spin text-gray-10"
+								className="animate-spin size-4 text-gray-10"
 								icon={faSpinner}
 							/>
 						) : (
