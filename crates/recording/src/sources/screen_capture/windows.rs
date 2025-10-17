@@ -19,14 +19,17 @@ use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
     collections::VecDeque,
-    sync::atomic,
+    sync::{
+        Arc,
+        atomic::{self, AtomicU32},
+    },
     time::{Duration, Instant},
 };
 use tokio_util::{
     future::FutureExt as _,
     sync::{CancellationToken, DropGuard},
 };
-use tracing::{error, info, trace};
+use tracing::*;
 
 const WINDOW_DURATION: Duration = Duration::from_secs(3);
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
