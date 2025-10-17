@@ -261,7 +261,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	                    tokio::time::sleep(Duration::from_secs(5)).await;
 	                    debug!(
 	                        "Captured {} frames",
-	                        video_frame_count.load(atomic::Ordering::Relaxed)
+	                        video_frame_counter.load(atomic::Ordering::Relaxed)
 	                    );
 	                }
 	            }
