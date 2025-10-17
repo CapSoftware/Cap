@@ -414,7 +414,7 @@ impl MP4Encoder {
     fn audio_frame_duration(frame: &frame::Audio) -> Duration {
         let rate = frame.rate();
 
-        if rate <= 0 {
+        if rate == 0 {
             return Duration::from_millis(1);
         }
 
