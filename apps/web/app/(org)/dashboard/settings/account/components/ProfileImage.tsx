@@ -45,11 +45,12 @@ export function ProfileImage({
 			toast.error("File size must be 1MB or less");
 			return;
 		}
-		if (file && file.size <= sizeLimit) {
-			const objectUrl = URL.createObjectURL(file);
-			setPreviewUrl(objectUrl);
-			onChange?.(file);
+		if (previewUrl && previewUrl !== initialPreviewUrl) {
+			URL.revokeObjectURL(previewUrl);
 		}
+		const objectUrl = URL.createObjectURL(file);
+		setPreviewUrl(objectUrl);
+		onChange?.(file);
 	};
 
 	const handleRemove = () => {

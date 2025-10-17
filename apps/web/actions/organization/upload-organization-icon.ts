@@ -48,7 +48,6 @@ export async function uploadOrganizationIcon(
 		throw new Error("File must be an image");
 	}
 
-	// Validate file size (limit to 2MB)
 	if (file.size > MAX_FILE_SIZE_BYTES) {
 		throw new Error("File size must be less than 1MB");
 	}

@@ -89,10 +89,7 @@ export const Settings = ({
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
 	}, [hasChanges]);
 
-	const {
-		mutate: uploadProfileImageMutation,
-		isPending: isUploadingProfileImage,
-	} = useMutation({
+	const uploadProfileImageMutation = useMutation({
 		mutationFn: async (file: File) => {
 			const formData = new FormData();
 			formData.append("image", file);
@@ -116,10 +113,7 @@ export const Settings = ({
 		},
 	});
 
-	const {
-		mutate: removeProfileImageMutation,
-		isPending: isRemovingProfileImage,
-	} = useMutation({
+	const removeProfileImageMutation = useMutation({
 		mutationFn: removeProfileImage,
 		onSuccess: (result) => {
 			if (result.success) {
@@ -140,13 +134,14 @@ export const Settings = ({
 	});
 
 	const isProfileImageMutating =
-		isUploadingProfileImage || isRemovingProfileImage;
+		uploadProfileImageMutation.isPending ||
+		removeProfileImageMutation.isPending;
 
 	const handleProfileImageChange = (file: File | null) => {
 		if (!file || isProfileImageMutating) {
 			return;
 		}
-		uploadProfileImageMutation(file);
+		uploadProfileImageMutation.mutate(file);
 	};
 
 	const handleProfileImageRemove = () => {
@@ -154,7 +149,7 @@ export const Settings = ({
 			return;
 		}
 		setProfileImageOverride(null);
-		removeProfileImageMutation();
+		removeProfileImageMutation.mutate();
 	};
 
 	return (
@@ -177,8 +172,8 @@ export const Settings = ({
 						onChange={handleProfileImageChange}
 						onRemove={handleProfileImageRemove}
 						disabled={isProfileImageMutating}
-						isUploading={isUploadingProfileImage}
-						isRemoving={isRemovingProfileImage}
+						isUploading={uploadProfileImageMutation.isPending}
+						isRemoving={removeProfileImageMutation.isPending}
 					/>
 				</Card>
 				<Card className="space-y-4">
