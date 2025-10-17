@@ -17,7 +17,6 @@ import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Image from "next/image";
 import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -166,20 +165,12 @@ export const MembersIndicator = ({
 											key={member.userId}
 											className="flex gap-2 items-center p-3 rounded-lg border bg-gray-3 border-gray-4"
 										>
-											{member.image ? (
-												<Image
-													src={member.image}
-													alt={member.name || member.email}
-													width={24}
-													height={24}
-													className="rounded-full size-8"
-												/>
-											) : (
-												<Avatar
-													name={member.name || member.email}
-													className="size-8"
-												/>
-											)}
+											<Avatar
+												name={member.name || member.email}
+												imageUrl={member.image || undefined}
+												className="size-8"
+												letterClass="text-sm"
+											/>
 											<span className="text-sm text-gray-12">
 												{member.name || member.email}
 											</span>

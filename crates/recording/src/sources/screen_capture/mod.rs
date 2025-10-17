@@ -72,6 +72,13 @@ impl ScreenCaptureTarget {
         }
     }
 
+    pub fn window(&self) -> Option<WindowId> {
+        match self {
+            Self::Window { id } => Some(id.clone()),
+            _ => None,
+        }
+    }
+
     pub fn cursor_crop(&self) -> Option<CursorCropBounds> {
         match self {
             Self::Display { .. } => {

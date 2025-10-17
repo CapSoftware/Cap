@@ -4,6 +4,7 @@ use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     general_settings::GeneralSettingsStore,
+    posthog::{PostHogEvent, async_capture_event},
     upload_legacy,
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -14,14 +15,13 @@ use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{Stream, StreamExt, TryStreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future::join, stream};
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
-use sentry::types::Auth;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
     pin::pin,
@@ -35,10 +35,11 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
-    time,
+    time::{self, Instant},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info};
+use tracing::{Span, debug, error, info, instrument, trace};
+use tracing_futures::Instrument;
 
 pub struct UploadedItem {
     pub link: String,
@@ -57,6 +58,7 @@ pub struct UploadProgressEvent {
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 
+#[instrument(skip(app, channel))]
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -91,10 +93,11 @@ pub async fn upload_video(
 
     info!("Uploading video {video_id}...");
 
+    let start = Instant::now();
     let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
     let video_fut = async {
-        let parts = progress(
+        let stream = progress(
             app.clone(),
             video_id.clone(),
             multipart_uploader(
@@ -103,9 +106,23 @@ pub async fn upload_video(
                 upload_id.clone(),
                 from_pending_file_to_chunks(file_path.clone(), None),
             ),
-        )
-        .try_collect::<Vec<_>>()
-        .await?;
+        );
+
+        let stream = if let Some(channel) = channel {
+            tauri_channel_progress(channel, stream).boxed()
+        } else {
+            stream.boxed()
+        };
+
+        let mut parts = stream.try_collect::<Vec<_>>().await?;
+
+        // Deduplicate parts - keep the last occurrence of each part number
+        let mut deduplicated_parts = HashMap::new();
+        for part in parts {
+            deduplicated_parts.insert(part.part_number, part);
+        }
+        parts = deduplicated_parts.into_values().collect::<Vec<_>>();
+        parts.sort_by_key(|part| part.part_number);
 
         let metadata = build_video_meta(&file_path)
             .map_err(|e| error!("Failed to get video metadata: {e}"))
@@ -133,6 +150,16 @@ pub async fn upload_video(
     let (video_result, thumbnail_result): (Result<_, AuthedApiError>, Result<_, AuthedApiError>) =
         tokio::join!(video_fut, thumbnail_fut);
 
+    async_capture_event(match &video_result {
+        Ok(()) => PostHogEvent::MultipartUploadComplete {
+            duration: start.elapsed(),
+        },
+        Err(err) => PostHogEvent::MultipartUploadFailed {
+            duration: start.elapsed(),
+            error: err.to_string(),
+        },
+    });
+
     let _ = (video_result?, thumbnail_result?);
 
     Ok(UploadedItem {
@@ -155,6 +182,7 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
+#[instrument(skip(app))]
 pub async fn upload_image(
     app: &AppHandle,
     file_path: PathBuf,
@@ -203,6 +231,7 @@ pub async fn upload_image(
     })
 }
 
+#[instrument(skip(app))]
 pub async fn create_or_get_video(
     app: &AppHandle,
     is_screenshot: bool,
@@ -262,6 +291,7 @@ pub async fn create_or_get_video(
     Ok(config)
 }
 
+#[instrument]
 pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     let input =
         ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
@@ -287,6 +317,7 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
+#[instrument]
 pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
         let img = ImageReader::open(&path)
@@ -332,13 +363,28 @@ impl InstantMultipartUpload {
         recording_dir: PathBuf,
     ) -> Self {
         Self {
-            handle: spawn_actor(Self::run(
-                app,
-                file_path,
-                pre_created_video,
-                realtime_upload_done,
-                recording_dir,
-            )),
+            handle: spawn_actor(async move {
+                let start = Instant::now();
+                let result = Self::run(
+                    app,
+                    file_path,
+                    pre_created_video,
+                    realtime_upload_done,
+                    recording_dir,
+                )
+                .await;
+                async_capture_event(match &result {
+                    Ok(()) => PostHogEvent::MultipartUploadComplete {
+                        duration: start.elapsed(),
+                    },
+                    Err(err) => PostHogEvent::MultipartUploadFailed {
+                        duration: start.elapsed(),
+                        error: err.to_string(),
+                    },
+                });
+
+                result.map(|_| ())
+            }),
         }
     }
 
@@ -442,6 +488,7 @@ pub struct Chunk {
 
 /// Creates a stream that reads chunks from a file, yielding [Chunk]'s.
 #[allow(unused)]
+#[instrument]
 pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
         let file = File::open(path).await?;
@@ -461,11 +508,13 @@ pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk
             };
         }
     }
+    .instrument(Span::current())
 }
 
 /// Creates a stream that reads chunks from a potentially growing file, yielding [Chunk]'s.
 /// The first chunk of the file is yielded last to allow for header rewriting after recording completion.
 /// This uploader will continually poll the filesystem and wait for the file to stop uploading before flushing the rest.
+#[instrument(skip(realtime_upload_done))]
 pub fn from_pending_file_to_chunks(
     path: PathBuf,
     realtime_upload_done: Option<Receiver<()>>,
@@ -541,7 +590,7 @@ pub fn from_pending_file_to_chunks(
                 }
             } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
                 // Recording is done and no new data - re-emit first chunk with corrected MP4 header
-                if let Some(first_size) = first_chunk_size {
+                if let Some(first_size) = first_chunk_size && realtime_upload_done.is_some() {
                     file.seek(std::io::SeekFrom::Start(0)).await?;
 
                     let chunk_size = first_size as usize;
@@ -569,6 +618,7 @@ pub fn from_pending_file_to_chunks(
             }
         }
     }
+    .instrument(Span::current())
 }
 
 fn retryable_client(host: String) -> reqwest::ClientBuilder {
@@ -593,6 +643,7 @@ fn retryable_client(host: String) -> reqwest::ClientBuilder {
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
+#[instrument(skip(app, stream, upload_id))]
 fn multipart_uploader(
     app: AppHandle,
     video_id: String,
@@ -600,27 +651,44 @@ fn multipart_uploader(
     stream: impl Stream<Item = io::Result<Chunk>>,
 ) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> {
     debug!("Initializing multipart uploader for video {video_id:?}");
+    let start = Instant::now();
 
     try_stream! {
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
-        while let Some(item) = stream.next().await {
+        let mut expected_part_number = 1u32;
+
+        loop {
+            let (Some(item), presigned_url) = join(
+                stream.next(),
+                // We generate the presigned URL ahead of time for the part we expect to come next.
+                // If it's not the chunk that actually comes next we just throw it out.
+                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
+                api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number)
+              ).await else {
+                break;
+            };
+            let mut presigned_url = presigned_url?;
+
+
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-            debug!("Uploading chunk {part_number} for video {video_id:?}");
+            trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
             prev_part_number = Some(part_number);
-            let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
 
-            let presigned_url =
-                api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
-                    .await?;
+            // We prefetched for the wrong chunk. Let's try again.
+            if expected_part_number != part_number {
+                presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
+                    .await?
+            }
+
+            trace!("Uploading part {part_number}");
 
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
                 .build()
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
                 .header("Content-Length", chunk.len())
                 .timeout(Duration::from_secs(120))
                 .body(chunk)
@@ -635,17 +703,25 @@ fn multipart_uploader(
                 false => Ok(()),
             }?;
 
+            trace!("Completed upload of part {part_number}");
+
             yield UploadedPart {
                 etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
                 part_number,
                 size,
                 total_size
             };
+
+            expected_part_number = part_number + 1;
         }
+
+        debug!("Completed multipart upload for {video_id:?} in {:?}", start.elapsed());
     }
+    .instrument(Span::current())
 }
 
 /// Takes an incoming stream of bytes and streams them to an S3 object.
+#[instrument(skip(app, stream))]
 pub async fn singlepart_uploader(
     app: AppHandle,
     request: PresignedS3PutRequest,
@@ -820,7 +896,7 @@ fn progress<T: UploadedChunk, E>(
 }
 
 /// Track the upload progress into a Tauri channel
-fn tauri_progress<T: UploadedChunk, E>(
+fn tauri_channel_progress<T: UploadedChunk, E>(
     channel: Channel<UploadProgress>,
     stream: impl Stream<Item = Result<T, E>>,
 ) -> impl Stream<Item = Result<T, E>> {

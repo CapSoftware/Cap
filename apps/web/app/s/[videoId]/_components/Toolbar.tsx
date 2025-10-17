@@ -40,6 +40,7 @@ export const Toolbar = ({
 			id: Comment.CommentId.make(`temp-${Date.now()}`),
 			authorId: User.UserId.make(user?.id || "anonymous"),
 			authorName: user?.name || "Anonymous",
+			authorImage: user?.image ?? null,
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
@@ -80,7 +81,8 @@ export const Toolbar = ({
 		const optimisticComment: CommentType = {
 			id: Comment.CommentId.make(`temp-${Date.now()}`),
 			authorId: User.UserId.make(user?.id || "anonymous"),
-			authorName: Comment.CommentId.make(user?.name || "Anonymous"),
+			authorName: user?.name || "Anonymous",
+			authorImage: user?.image ?? null,
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,

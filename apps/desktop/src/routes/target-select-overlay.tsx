@@ -4,10 +4,9 @@ import {
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
-import { createQuery } from "@tanstack/solid-query";
+import { createQuery, useMutation } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -66,48 +65,16 @@ function Inner() {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const selectedWindow = createQuery(() => ({
-		queryKey: ["selectedWindow", rawOptions.captureTarget],
-		queryFn: async () => {
-			if (rawOptions.captureTarget.variant !== "window") return null;
-			const windowId = rawOptions.captureTarget.id;
-
-			const windows = await commands.listCaptureWindows();
-			const window = windows.find((w) => w.id === windowId);
-
-			if (!window) return null;
-
-			return {
-				id: window.id,
-				app_name: window.owner_name || window.name || "Unknown",
-				bounds: window.bounds,
-			};
-		},
-		enabled:
-			rawOptions.captureTarget.variant === "window" &&
-			rawOptions.targetMode === "window",
-		staleTime: 5 * 1000,
-	}));
-
-	const windowToShow = () => {
-		const hoveredWindow = targetUnderCursor.window;
-		if (hoveredWindow) return hoveredWindow;
-		if (rawOptions.captureTarget.variant === "window") {
-			const selected = selectedWindow.data;
-			if (selected) return selected;
-		}
-		return hoveredWindow;
-	};
-
 	const windowIcon = createQuery(() => ({
-		queryKey: ["windowIcon", windowToShow()?.id],
+		queryKey: ["windowIcon", targetUnderCursor.window?.id],
 		queryFn: async () => {
-			const window = windowToShow();
-			if (!window?.id) return null;
-			return await commands.getWindowIcon(window.id.toString());
+			if (!targetUnderCursor.window?.id) return null;
+			return await commands.getWindowIcon(
+				targetUnderCursor.window.id.toString(),
+			);
 		},
-		enabled: !!windowToShow()?.id,
-		staleTime: 5 * 60 * 1000,
+		enabled: !!targetUnderCursor.window?.id,
+		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
 	}));
 
 	const displayInformation = createQuery(() => ({
@@ -159,9 +126,10 @@ function Inner() {
 	};
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
-	const unsubOnEscapePress = events.onEscapePress.listen(() =>
-		setOptions("targetMode", null),
-	);
+	const unsubOnEscapePress = events.onEscapePress.listen(() => {
+		setOptions("targetMode", null);
+		commands.closeTargetSelectOverlays();
+	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
 	// This prevents browser keyboard shortcuts from firing.
@@ -218,12 +186,10 @@ function Inner() {
 			<Match
 				when={
 					rawOptions.targetMode === "window" &&
-					(targetUnderCursor.display_id === params.displayId ||
-						(rawOptions.captureTarget.variant === "window" &&
-							selectedWindow.data))
+					targetUnderCursor.display_id === params.displayId
 				}
 			>
-				<Show when={windowToShow()} keyed>
+				<Show when={targetUnderCursor.window} keyed>
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
@@ -275,6 +241,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
+										commands.openTargetSelectOverlays(null);
 									}}
 								>
 									Adjust recording area
@@ -795,53 +762,73 @@ function RecordingControls(props: {
 		return await Menu.new({ items: [await countdownMenu()] });
 	};
 
+	const startRecording = useMutation(() => ({
+		mutationFn: () =>
+			handleRecordingResult(
+				commands.startRecording({
+					capture_target: props.target,
+					mode: rawOptions.mode,
+					capture_system_audio: rawOptions.captureSystemAudio,
+				}),
+				setOptions,
+			),
+	}));
+
 	return (
 		<>
 			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
 				<div
-					onClick={() => setOptions("targetMode", null)}
+					onClick={() => {
+						setOptions("targetMode", null);
+						commands.closeTargetSelectOverlays();
+					}}
 					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 				>
 					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
 				</div>
 				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+					data-inactive={
+						(rawOptions.mode === "instant" && !auth.data) ||
+						startRecording.isPending
+					}
+					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
 					onClick={() => {
 						if (rawOptions.mode === "instant" && !auth.data) {
 							emit("start-sign-in");
 							return;
 						}
+						if (startRecording.isPending) return;
 
-						handleRecordingResult(
-							commands.startRecording({
-								capture_target: props.target,
-								mode: rawOptions.mode,
-								capture_system_audio: rawOptions.captureSystemAudio,
-							}),
-							setOptions,
-						);
+						startRecording.mutate();
 					}}
 				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
+					<div
+						class={cx(
+							"flex items-center py-1 pl-4 transition-colors",
+							!startRecording.isPending && "hover:bg-blue-10",
+						)}
+					>
 						{rawOptions.mode === "studio" ? (
 							<IconCapFilmCut class="size-4" />
 						) : (
 							<IconCapInstant class="size-4" />
 						)}
 						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
+							<span class="text-sm font-medium text-nowrap">
 								{rawOptions.mode === "instant" && !auth.data
 									? "Sign In To Use"
 									: "Start Recording"}
 							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
+							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
 								{`${capitalize(rawOptions.mode)} Mode`}
 							</span>
 						</div>
 					</div>
 					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
+						class={cx(
+							"pl-2.5 transition-colors pr-3 py-1.5 flex items-center",
+							!startRecording.isPending && "group-hover:bg-blue-10",
+						)}
 						onClick={(e) => {
 							e.stopPropagation();
 							menuModes().then((menu) => menu.popup());

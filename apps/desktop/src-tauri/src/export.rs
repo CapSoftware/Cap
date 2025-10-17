@@ -4,7 +4,7 @@ use cap_project::{RecordingMeta, XY};
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, instrument};
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
@@ -24,6 +24,7 @@ impl ExportSettings {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(progress))]
 pub async fn export_video(
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
@@ -88,6 +89,7 @@ pub struct ExportEstimates {
 // This will need to be refactored at some point to be more accurate.
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn get_export_estimates(
     path: PathBuf,
     resolution: XY<u32>,

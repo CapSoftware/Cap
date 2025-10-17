@@ -138,6 +138,12 @@ const BACKGROUND_GRADIENTS = [
 
 const WALLPAPER_NAMES = [
 	// macOS wallpapers
+	"macOS/tahoe-dusk-min",
+	"macOS/tahoe-dawn-min",
+	"macOS/tahoe-day-min",
+	"macOS/tahoe-night-min",
+	"macOS/tahoe-dark",
+	"macOS/tahoe-light",
 	"macOS/sequoia-dark",
 	"macOS/sequoia-light",
 	"macOS/sonoma-clouds",
@@ -1955,26 +1961,25 @@ function ZoomSegmentPreview(props: {
 
 	const start = createMemo(() => props.segment.start);
 
-	const segmentIndex = createMemo(() => {
+	const clipSegment = createMemo(() => {
 		const st = start();
-		const i = project.timeline?.segments.findIndex(
-			(s) => s.start <= st && s.end > st,
-		);
-		if (i === undefined || i === -1) return 0;
-		return i;
+		return project.timeline?.segments.find((s) => s.start <= st && s.end > st);
 	});
 
 	const relativeTime = createMemo(() => {
 		const st = start();
-		const segment = project.timeline?.segments[segmentIndex()];
+		const segment = clipSegment();
 		if (!segment) return 0;
 		return Math.max(0, st - segment.start);
 	});
 
 	const video = document.createElement("video");
 	createEffect(() => {
+		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${editorInstance.path}/content/segments/segment-${
+				clipSegment()?.recordingSegment ?? 0
+			}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2489,8 +2494,8 @@ function SourceOffsetField(props: {
 
 	return (
 		<Field name={props.name}>
-			<div class="flex flex-row items-center justify-between w-full -mt-2">
-				<div class="flex flex-row space-x-1 items-end">
+			<div class="flex flex-row justify-between items-center -mt-2 w-full">
+				<div class="flex flex-row items-end space-x-1">
 					<NumberField.Root
 						value={value()}
 						onChange={setValue}
@@ -2511,7 +2516,7 @@ function SourceOffsetField(props: {
 					</NumberField.Root>
 					<span class="text-gray-11">ms</span>
 				</div>
-				<div class="text-gray-11 flex flex-row space-x-1">
+				<div class="flex flex-row space-x-1 text-gray-11">
 					{[-100, -10, 10, 100].map((v) => (
 						<button
 							type="button"

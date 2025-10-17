@@ -4,7 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -120,6 +120,8 @@ pub struct GeneralSettingsStore {
     pub enable_new_uploader: bool,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
+    #[serde(default)]
+    pub delete_instant_recordings_after_upload: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -184,6 +186,7 @@ impl Default for GeneralSettingsStore {
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             enable_new_uploader: default_enable_new_uploader(),
             excluded_windows: default_excluded_windows(),
+            delete_instant_recordings_after_upload: false,
         }
     }
 }
@@ -256,6 +259,7 @@ pub fn init(app: &AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
     default_excluded_windows()
 }

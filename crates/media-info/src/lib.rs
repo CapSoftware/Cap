@@ -55,12 +55,19 @@ impl AudioInfo {
     }
 
     pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
+        Self::from_stream_config_with_buffer(config, None)
+    }
+
+    pub fn from_stream_config_with_buffer(
+        config: &SupportedStreamConfig,
+        buffer_size_override: Option<u32>,
+    ) -> Self {
         let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
-        let buffer_size = match config.buffer_size() {
+        let buffer_size = buffer_size_override.unwrap_or_else(|| match config.buffer_size() {
             SupportedBufferSize::Range { max, .. } => *max,
             // TODO: Different buffer sizes for different contexts?
             SupportedBufferSize::Unknown => 1024,
-        };
+        });
 
         let raw_channels = config.channels();
         let channels = if Self::channel_layout_raw(raw_channels).is_some() {
