@@ -71,48 +71,16 @@ function Inner() {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const selectedWindow = createQuery(() => ({
-		queryKey: ["selectedWindow", rawOptions.captureTarget],
-		queryFn: async () => {
-			if (rawOptions.captureTarget.variant !== "window") return null;
-			const windowId = rawOptions.captureTarget.id;
-
-			const windows = await commands.listCaptureWindows();
-			const window = windows.find((w) => w.id === windowId);
-
-			if (!window) return null;
-
-			return {
-				id: window.id,
-				app_name: window.owner_name || window.name || "Unknown",
-				bounds: window.bounds,
-			};
-		},
-		enabled:
-			rawOptions.captureTarget.variant === "window" &&
-			rawOptions.targetMode === "window",
-		staleTime: 5 * 1000,
-	}));
-
-	const windowToShow = () => {
-		const hoveredWindow = targetUnderCursor.window;
-		if (hoveredWindow) return hoveredWindow;
-		if (rawOptions.captureTarget.variant === "window") {
-			const selected = selectedWindow.data;
-			if (selected) return selected;
-		}
-		return hoveredWindow;
-	};
-
 	const windowIcon = createQuery(() => ({
-		queryKey: ["windowIcon", windowToShow()?.id],
+		queryKey: ["windowIcon", targetUnderCursor.window?.id],
 		queryFn: async () => {
-			const window = windowToShow();
-			if (!window?.id) return null;
-			return await commands.getWindowIcon(window.id.toString());
+			if (!targetUnderCursor.window?.id) return null;
+			return await commands.getWindowIcon(
+				targetUnderCursor.window.id.toString(),
+			);
 		},
-		enabled: !!windowToShow()?.id,
-		staleTime: 5 * 60 * 1000,
+		enabled: !!targetUnderCursor.window?.id,
+		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
 	}));
 
 	const displayInformation = createQuery(() => ({
@@ -169,9 +137,10 @@ function Inner() {
 	};
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
-	const unsubOnEscapePress = events.onEscapePress.listen(() =>
-		setOptions("targetMode", null),
-	);
+	const unsubOnEscapePress = events.onEscapePress.listen(() => {
+		setOptions("targetMode", null);
+		commands.closeTargetSelectOverlays();
+	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
 	// This prevents browser keyboard shortcuts from firing.
@@ -283,6 +252,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
+										commands.openTargetSelectOverlays(null);
 									}}
 								>
 									Adjust recording area
@@ -923,7 +893,10 @@ function RecordingControls(props: {
 		<>
 			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
 				<div
-					onClick={() => setOptions("targetMode", null)}
+					onClick={() => {
+						setOptions("targetMode", null);
+						commands.closeTargetSelectOverlays();
+					}}
 					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 				>
 					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
