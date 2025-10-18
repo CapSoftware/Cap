@@ -129,7 +129,8 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isVideoOwnerPro = user && data.ownerId === user.id && userIsPro(user);
+	const isVideoOwnerPro =
+		user !== null && data.ownerId === user.id && userIsPro(user);
 
 	const handleSharingUpdated = () => {
 		refresh();
