@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { CurrentUser, type Folder } from "@cap/web-domain";
+import { Spaces } from "@cap/web-backend";
+import { CurrentUser, type Folder, Space } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";
@@ -16,17 +17,23 @@ import {
 	NewSubfolderButton,
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
-import { getSpaceOrOrg } from "../../utils";
+import AddVideosButton from "./AddVideosButton";
 
 const FolderPage = async (props: {
-	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
+	params: Promise<{
+		spaceId: Space.SpaceIdOrOrganisationId;
+		folderId: Folder.FolderId;
+	}>;
 }) => {
 	const params = await props.params;
 	const user = await getCurrentUser();
 	if (!user) return notFound();
 
 	return await Effect.gen(function* () {
-		const spaceOrOrg = yield* getSpaceOrOrg(params.spaceId);
+		const spaces = yield* Spaces;
+		const spaceOrOrg = yield* spaces.getSpaceOrOrg(
+			Space.SpaceId.make(params.spaceId),
+		);
 		if (!spaceOrOrg) notFound();
 
 		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
@@ -37,21 +44,32 @@ const FolderPage = async (props: {
 					: { variant: "org", organizationId: spaceOrOrg.organization.id },
 			),
 			getFolderBreadcrumb(params.folderId),
-			getVideosByFolderId(params.folderId),
+			getVideosByFolderId(
+				params.folderId,
+				spaceOrOrg.variant === "space"
+					? { variant: "space", spaceId: spaceOrOrg.space.id }
+					: { variant: "org", organizationId: spaceOrOrg.organization.id },
+			),
 		]);
 
 		return (
 			<div>
 				<div className="flex gap-2 items-center mb-10">
 					<NewSubfolderButton parentFolderId={params.folderId} />
+					<AddVideosButton
+						folderId={params.folderId}
+						spaceId={params.spaceId}
+						folderName={breadcrumb[breadcrumb.length - 1]?.name ?? "Folder"}
+					/>
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">
-						<ClientMyCapsLink />
+						<ClientMyCapsLink spaceId={params.spaceId} />
 						{breadcrumb.map((folder, index) => (
 							<div key={folder.id} className="flex items-center">
 								<p className="mx-2 text-gray-10">/</p>
 								<BreadcrumbItem
+									spaceId={params.spaceId}
 									id={folder.id}
 									name={folder.name}
 									color={folder.color}

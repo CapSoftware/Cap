@@ -1,6 +1,7 @@
 "use client";
 
 import { Avatar, Button } from "@cap/ui";
+import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
 	faPlus,
@@ -91,7 +92,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		setActiveDropTarget(null);
 	};
 
-	const handleDrop = async (e: React.DragEvent, spaceId: string) => {
+	const handleDrop = async (
+		e: React.DragEvent,
+		spaceId: Space.SpaceIdOrOrganisationId,
+	) => {
 		e.preventDefault();
 		setActiveDropTarget(null);
 
@@ -120,7 +124,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		}
 	};
 
-	const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
+	const activeSpaceParams = (spaceId: Space.SpaceIdOrOrganisationId) =>
+		params.spaceId === spaceId;
 
 	return (
 		<div className="flex flex-col mt-4">

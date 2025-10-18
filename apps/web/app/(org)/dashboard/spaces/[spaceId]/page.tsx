@@ -12,14 +12,14 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { CurrentUser, Video } from "@cap/web-domain";
+import { Spaces } from "@cap/web-backend";
+import { CurrentUser, type Organisation, Space, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
-import { getSpaceOrOrg } from "./utils";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",
@@ -35,7 +35,11 @@ export type SpaceMemberData = {
 };
 
 // --- Helper functions ---
-async function fetchFolders(spaceId: string) {
+async function fetchFolders(
+	spaceId: Space.SpaceIdOrOrganisationId,
+	allSpacesEntry: boolean,
+) {
+	const table = allSpacesEntry ? sharedVideos : spaceVideos;
 	return db()
 		.select({
 			id: folders.id,
@@ -44,14 +48,14 @@ async function fetchFolders(spaceId: string) {
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
 			videoCount: sql<number>`(
-          SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+          SELECT COUNT(*) FROM ${table} WHERE ${table}.folderId = folders.id
         )`,
 		})
 		.from(folders)
 		.where(and(eq(folders.spaceId, spaceId), isNull(folders.parentId)));
 }
 
-async function fetchSpaceMembers(spaceId: string) {
+async function fetchSpaceMembers(spaceId: Space.SpaceIdOrOrganisationId) {
 	return db()
 		.select({
 			id: spaceMembers.id,
@@ -66,7 +70,7 @@ async function fetchSpaceMembers(spaceId: string) {
 		.where(eq(spaceMembers.spaceId, spaceId));
 }
 
-async function fetchOrganizationMembers(orgId: string) {
+async function fetchOrganizationMembers(orgId: Organisation.OrganisationId) {
 	return db()
 		.select({
 			id: organizationMembers.id,
@@ -92,7 +96,9 @@ export default async function SharedCapsPage(props: {
 	const user = await getCurrentUser();
 	if (!user) notFound();
 
-	const spaceOrOrg = await getSpaceOrOrg(params.spaceId).pipe(
+	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
+		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
+	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
 		Effect.provideService(CurrentUser, user),
 		runPromise,
@@ -108,11 +114,11 @@ export default async function SharedCapsPage(props: {
 			await Promise.all([
 				fetchSpaceMembers(space.id),
 				fetchOrganizationMembers(space.organizationId),
-				fetchFolders(space.id),
+				fetchFolders(space.id, false),
 			]);
 
 		async function fetchSpaceVideos(
-			spaceId: string,
+			spaceId: Space.SpaceIdOrOrganisationId,
 			page: number,
 			limit: number,
 		) {
@@ -193,6 +199,7 @@ export default async function SharedCapsPage(props: {
 				data={processedVideoData}
 				count={totalCount}
 				spaceData={space}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				spaceMembers={spaceMembersData}
 				organizationMembers={organizationMembersData}
@@ -206,7 +213,7 @@ export default async function SharedCapsPage(props: {
 		const { organization } = spaceOrOrg;
 
 		async function fetchOrganizationVideos(
-			orgId: string,
+			orgId: Organisation.OrganisationId,
 			page: number,
 			limit: number,
 		) {
@@ -236,7 +243,7 @@ export default async function SharedCapsPage(props: {
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
-							isNull(videos.folderId),
+							isNull(sharedVideos.folderId),
 						),
 					)
 					.groupBy(
@@ -278,7 +285,7 @@ export default async function SharedCapsPage(props: {
 			await Promise.all([
 				fetchOrganizationVideos(organization.id, page, limit),
 				fetchOrganizationMembers(organization.id),
-				fetchFolders(organization.id),
+				fetchFolders(organization.id, true),
 			]);
 
 		const { videos: orgVideoData, totalCount } = organizationVideos;
@@ -300,6 +307,7 @@ export default async function SharedCapsPage(props: {
 				count={totalCount}
 				hideSharedWith
 				organizationData={organization}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}

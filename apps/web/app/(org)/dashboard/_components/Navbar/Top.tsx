@@ -47,8 +47,7 @@ import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications, activeOrganization } =
-		useDashboardContext();
+	const { activeSpace, anyNewNotifications } = useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
 	const bellRef = useRef<HTMLDivElement>(null);
 	const { theme, setThemeHandler } = useTheme();
@@ -270,21 +269,12 @@ const User = () => {
 						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
 					>
 						<div className="flex items-center">
-							{user.image ? (
-								<Image
-									src={user.image}
-									alt={user.name ?? "User"}
-									width={24}
-									height={24}
-									className="rounded-full"
-								/>
-							) : (
-								<Avatar
-									letterClass="text-xs lg:text-md"
-									name={user.name ?? "User"}
-									className="size-[24px] text-gray-12"
-								/>
-							)}
+							<Avatar
+								letterClass="text-xs lg:text-md"
+								name={user.name ?? "User"}
+								imageUrl={user.image ?? undefined}
+								className="flex-shrink-0 size-[24px] text-gray-12"
+							/>
 							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">
 								{user.name ?? "User"}
 							</span>

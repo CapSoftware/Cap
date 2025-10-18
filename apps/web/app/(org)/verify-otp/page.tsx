@@ -1,4 +1,4 @@
-import { getSession } from "@cap/database/auth/session";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { VerifyOTPForm } from "./form";
@@ -11,9 +11,9 @@ export default async function VerifyOTPPage(props: {
 	searchParams: Promise<{ email?: string; next?: string; lastSent?: string }>;
 }) {
 	const searchParams = await props.searchParams;
-	const session = await getSession();
+	const user = await getCurrentUser();
 
-	if (session?.user) {
+	if (user) {
 		redirect(searchParams.next || "/dashboard");
 	}
 

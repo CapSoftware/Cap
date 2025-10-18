@@ -8,8 +8,6 @@ import type { NextRequest } from "next/server";
 import { runPromise } from "@/lib/server";
 import { getHeaders } from "@/utils/helpers";
 
-export const revalidate = 0;
-
 export async function GET(request: NextRequest) {
 	const { searchParams } = request.nextUrl;
 	const videoId = searchParams.get("videoId");

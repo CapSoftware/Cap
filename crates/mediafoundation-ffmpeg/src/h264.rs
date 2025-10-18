@@ -1,6 +1,6 @@
 use cap_mediafoundation_utils::*;
 use ffmpeg::{Rational, ffi::av_rescale_q, packet};
-use tracing::info;
+use tracing::{info, trace};
 use windows::Win32::Media::MediaFoundation::{IMFSample, MFSampleExtension_CleanPoint};
 
 /// Configuration for H264 muxing

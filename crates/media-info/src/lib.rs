@@ -24,7 +24,7 @@ pub enum AudioInfoError {
 }
 
 impl AudioInfo {
-    pub const MAX_AUDIO_CHANNELS: u16 = 2;
+    pub const MAX_AUDIO_CHANNELS: u16 = 8;
 
     pub const fn new(
         sample_format: Sample,
@@ -55,14 +55,26 @@ impl AudioInfo {
     }
 
     pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
+        Self::from_stream_config_with_buffer(config, None)
+    }
+
+    pub fn from_stream_config_with_buffer(
+        config: &SupportedStreamConfig,
+        buffer_size_override: Option<u32>,
+    ) -> Self {
         let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
-        let buffer_size = match config.buffer_size() {
+        let buffer_size = buffer_size_override.unwrap_or_else(|| match config.buffer_size() {
             SupportedBufferSize::Range { max, .. } => *max,
             // TODO: Different buffer sizes for different contexts?
             SupportedBufferSize::Unknown => 1024,
-        };
+        });
 
-        let channels = config.channels().clamp(1, Self::MAX_AUDIO_CHANNELS);
+        let raw_channels = config.channels();
+        let channels = if Self::channel_layout_raw(raw_channels).is_some() {
+            raw_channels
+        } else {
+            raw_channels.min(Self::MAX_AUDIO_CHANNELS).max(1)
+        };
 
         Self {
             sample_format,
@@ -92,6 +104,12 @@ impl AudioInfo {
         Some(match channels {
             1 => ChannelLayout::MONO,
             2 => ChannelLayout::STEREO,
+            3 => ChannelLayout::SURROUND,
+            4 => ChannelLayout::QUAD,
+            5 => ChannelLayout::_5POINT0,
+            6 => ChannelLayout::_5POINT1,
+            7 => ChannelLayout::_6POINT1,
+            8 => ChannelLayout::_7POINT1,
             _ => return None,
         })
     }

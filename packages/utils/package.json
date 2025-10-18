@@ -3,11 +3,12 @@
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
-	"exports": {
-		".": "./src/index.ts"
-	},
 	"scripts": {
-		"typecheck": "tsc -b"
+		"typecheck": "tsc -b",
+		"build": "tsdown"
+	},
+	"publishConfig": {
+		"main": "./dist/index.js"
 	},
 	"devDependencies": {
 		"react": "^19.1.1",
@@ -20,6 +21,7 @@
 		"@aws-sdk/client-s3": "^3.485.0",
 		"@cap/env": "workspace:*",
 		"clsx": "^2.0.0",
+		"dub": "^0.64.0",
 		"stripe": "^14.24.0",
 		"tailwind-merge": "^2.1.0",
 		"zod": "^3"

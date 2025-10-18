@@ -10,6 +10,7 @@ import {
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import { Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -34,12 +35,12 @@ export async function createOrganization(formData: FormData) {
 		throw new Error("Organization with this name already exists");
 	}
 
-	const organizationId = nanoId();
+	const organizationId = Organisation.OrganisationId.make(nanoId());
 
 	// Create the organization first
 	const orgValues: {
-		id: string;
-		ownerId: string;
+		id: Organisation.OrganisationId;
+		ownerId: User.UserId;
 		name: string;
 		iconUrl?: string;
 	} = {

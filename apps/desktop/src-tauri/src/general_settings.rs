@@ -1,9 +1,10 @@
+use crate::window_exclusion::WindowExclusion;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -37,6 +38,24 @@ impl MainWindowRecordingStartBehaviour {
             Self::Minimise => window.minimize(),
         }
     }
+}
+
+const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
+    "Cap",
+    "Cap Settings",
+    "Cap Recording Controls",
+    "Cap Camera",
+];
+
+pub fn default_excluded_windows() -> Vec<WindowExclusion> {
+    DEFAULT_EXCLUDED_WINDOW_TITLES
+        .iter()
+        .map(|title| WindowExclusion {
+            bundle_identifier: None,
+            owner_name: None,
+            window_title: Some((*title).to_string()),
+        })
+        .collect()
 }
 
 // When adding fields here, #[serde(default)] defines the value to use for existing configurations,
@@ -95,6 +114,10 @@ pub struct GeneralSettingsStore {
     pub enable_new_recording_flow: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
+    #[serde(default = "default_excluded_windows")]
+    pub excluded_windows: Vec<WindowExclusion>,
+    #[serde(default)]
+    pub delete_instant_recordings_after_upload: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -152,6 +175,8 @@ impl Default for GeneralSettingsStore {
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
+            excluded_windows: default_excluded_windows(),
+            delete_instant_recordings_after_upload: false,
         }
     }
 }
@@ -220,4 +245,11 @@ pub fn init(app: &AppHandle) {
     store.save(app).unwrap();
 
     println!("GeneralSettingsState managed");
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
+    default_excluded_windows()
 }

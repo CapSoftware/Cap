@@ -64,15 +64,29 @@ const avatarTextPalette = [
 
 export interface AvatarProps {
 	name: string | null | undefined;
+	imageUrl?: string | null;
 	className?: string;
 	letterClass?: string;
 }
 
 export const Avatar: React.FC<AvatarProps> = ({
 	name,
+	imageUrl,
 	className = "",
 	letterClass = "text-xs",
 }) => {
+	if (imageUrl) {
+		return (
+			<img
+				src={imageUrl}
+				alt={name ?? "Avatar"}
+				className={clsx("rounded-full object-cover size-4", className)}
+				loading="lazy"
+				referrerPolicy="no-referrer"
+			/>
+		);
+	}
+
 	const initial = name?.[0]?.toUpperCase() || "A";
 	const charCode = initial.charCodeAt(0);
 	const isAlpha = charCode >= 65 && charCode <= 90;

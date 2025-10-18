@@ -1,23 +1,24 @@
+mod audio_buffer;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;
 pub mod instant_recording;
-pub mod pipeline;
+mod output_pipeline;
 pub mod sources;
 pub mod studio_recording;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
-pub use sources::{camera, screen_capture};
+pub use output_pipeline::*;
+pub use sources::screen_capture;
 
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;
-use scap_targets::bounds::LogicalBounds;
+use scap_targets::{WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
-use sources::*;
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::feeds::camera::CameraFeedLock;
+use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptureTarget};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +46,10 @@ pub struct RecordingBaseInputs {
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,
+    #[cfg(target_os = "macos")]
+    pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    #[cfg(target_os = "macos")]
+    pub excluded_windows: Vec<WindowId>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

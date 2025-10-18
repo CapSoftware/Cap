@@ -1,4 +1,5 @@
 import { Button, Input, Label } from "@cap/ui";
+import type { Organisation } from "@cap/web-domain";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -18,7 +19,8 @@ export const AccessEmailDomain = () => {
 			setSaveLoading(true);
 			await updateOrganizationDetails({
 				allowedEmailDomain: emailDomain,
-				organizationId: activeOrganization?.organization.id as string,
+				organizationId: activeOrganization?.organization
+					.id as Organisation.OrganisationId,
 			});
 			toast.success("Settings updated successfully");
 			router.refresh();

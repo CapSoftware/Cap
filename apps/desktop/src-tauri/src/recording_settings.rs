@@ -1,4 +1,6 @@
-use cap_recording::{RecordingMode, feeds::camera::DeviceOrModelID, sources::ScreenCaptureTarget};
+use cap_recording::{
+    RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
+};
 use serde_json::json;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;

@@ -1,4 +1,4 @@
-import { Policy } from "@cap/web-domain";
+import { Policy, type Space } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
@@ -11,14 +11,25 @@ export class SpacesPolicy extends Effect.Service<SpacesPolicy>()(
 		effect: Effect.gen(function* () {
 			const repo = yield* SpacesRepo;
 
-			const isMember = (spaceId: string) =>
+			const hasMembership = (spaceId: Space.SpaceIdOrOrganisationId) =>
+				Policy.policy((user) =>
+					repo.membership(user.id, spaceId).pipe(Effect.map(Option.isSome)),
+				);
+
+			const isOwner = (spaceId: Space.SpaceIdOrOrganisationId) =>
 				Policy.policy(
 					Effect.fn(function* (user) {
-						return Option.isSome(yield* repo.membership(user.id, spaceId));
+						const space = yield* repo.getById(spaceId);
+						if (Option.isNone(space)) return false;
+
+						return space.value.createdById === user.id;
 					}),
 				);
 
-			return { isMember };
+			const isMember = (spaceId: Space.SpaceIdOrOrganisationId) =>
+				Policy.any(isOwner(spaceId), hasMembership(spaceId));
+
+			return { isMember, isOwner };
 		}),
 		dependencies: [
 			OrganisationsRepo.Default,

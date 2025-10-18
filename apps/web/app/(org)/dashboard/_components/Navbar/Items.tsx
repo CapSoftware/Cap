@@ -49,13 +49,13 @@ interface Props {
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
-	const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-	const { user, sidebarCollapsed } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const manageNavigation = [
 		{
 			name: "My Caps",
 			href: `/dashboard/caps`,
+			extraText: userCapsCount,
 			icon: <CapIcon />,
 			subNav: [],
 		},
@@ -66,16 +66,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
-			? [
-					{
-						name: "Admin Dev",
-						href: "/dashboard/admin",
-						icon: <CogIcon />,
-						subNav: [],
-					},
-				]
-			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -104,7 +94,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					position="right"
 					content={activeOrg?.organization.name ?? "No organization found"}
 				>
-					<PopoverTrigger asChild>
+					<PopoverTrigger suppressHydrationWarning asChild>
 						<motion.div
 							transition={{
 								type: "easeInOut",
@@ -230,7 +220,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 															? "pointer-events-none"
 															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 													)}
-													key={`${organization.organization.name}-organization`}
+													key={`${organization.organization.name}-organization-${organization.organization.id}`}
 													onSelect={async () => {
 														await updateActiveOrganization(
 															organization.organization.id,
@@ -332,23 +322,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									/>
 								)}
 
-								{hoveredItem === item.name && !isPathActive(item.href) && (
-									<motion.div
-										layoutId="hoverIndicator"
-										className={clsx(
-											"absolute bg-transparent rounded-xl",
-											sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0",
-										)}
-										initial={{ opacity: 0 }}
-										animate={{ opacity: 1 }}
-										exit={{ opacity: 0 }}
-										transition={{
-											type: "spring",
-											bounce: 0.2,
-											duration: 0.2,
-										}}
-									/>
-								)}
 								<NavItem
 									name={item.name}
 									href={item.href}
@@ -356,6 +329,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									sidebarCollapsed={sidebarCollapsed}
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
+									extraText={item.extraText}
 								/>
 							</div>
 						))}
@@ -364,7 +338,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && (
+						{!sidebarCollapsed && !userIsSubscribed && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}
@@ -445,6 +419,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
+	extraText,
 }: {
 	name: string;
 	href: string;
@@ -456,6 +431,7 @@ const NavItem = ({
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
 	isPathActive: (path: string) => boolean;
+	extraText: number | null | undefined;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -497,6 +473,11 @@ const NavItem = ({
 				>
 					{name}
 				</p>
+				{extraText !== null && !sidebarCollapsed && (
+					<p className="ml-auto text-xs font-medium text-gray-11">
+						{extraText}
+					</p>
+				)}
 			</Link>
 		</Tooltip>
 	);

@@ -4,8 +4,6 @@ const octokit = new Octokit();
 
 export const runtime = "edge";
 
-export const revalidate = 0;
-
 export async function GET(
 	req: Request,
 	props: RouteContext<"/api/releases/tauri/[version]/[target]/[arch]">,

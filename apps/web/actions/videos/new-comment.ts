@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import { Comment, type Video } from "@cap/web-domain";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
 
@@ -12,7 +12,7 @@ export async function newComment(data: {
 	content: string;
 	videoId: Video.VideoId;
 	type: "text" | "emoji";
-	parentCommentId: string;
+	parentCommentId: Comment.CommentId;
 	timestamp: number;
 }) {
 	const user = await getCurrentUser();
@@ -35,7 +35,7 @@ export async function newComment(data: {
 	if (!content || !videoId) {
 		throw new Error("Content and videoId are required");
 	}
-	const id = nanoId();
+	const id = Comment.CommentId.make(nanoId());
 
 	const newComment = {
 		id: id,
@@ -67,6 +67,7 @@ export async function newComment(data: {
 	const commentWithAuthor = {
 		...newComment,
 		authorName: user.name,
+		authorImage: user.image ?? null,
 		sending: false,
 	};
 

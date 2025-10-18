@@ -8,6 +8,7 @@ pub mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::*;
+use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +32,7 @@ pub enum HapticPerformanceTime {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub fn perform_haptic_feedback(
     _pattern: Option<HapticPattern>,
     _time: Option<HapticPerformanceTime>,

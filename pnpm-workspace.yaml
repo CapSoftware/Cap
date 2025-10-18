@@ -3,3 +3,4 @@ packages:
   - "packages/*"
   - "crates/tauri-plugin-*"
   - "infra"
+  - "scripts/orgIdBackfill"

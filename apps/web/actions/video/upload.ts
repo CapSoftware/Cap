@@ -9,14 +9,13 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
-import { S3Buckets } from "@cap/web-backend";
-import { type Folder, Video } from "@cap/web-domain";
+import { dub, userIsPro } from "@cap/utils";
+import { AwsCredentials, S3Buckets } from "@cap/web-backend";
+import { type Folder, type Organisation, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
-import { dub } from "@/utils/dub";
 
 async function getVideoUploadPresignedUrl({
 	fileKey,
@@ -61,10 +60,9 @@ async function getVideoUploadPresignedUrl({
 			if (distributionId) {
 				const cloudfront = new CloudFrontClient({
 					region: serverEnv().CAP_AWS_REGION || "us-east-1",
-					credentials: {
-						accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
-						secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
-					},
+					credentials: await runPromise(
+						Effect.map(AwsCredentials, (c) => c.credentials),
+					),
 				});
 
 				const pathToInvalidate = "/" + fileKey;
@@ -131,21 +129,6 @@ async function getVideoUploadPresignedUrl({
 			return presignedPostData;
 		}).pipe(runPromise);
 
-		const videoId = fileKey.split("/")[1];
-		if (videoId) {
-			try {
-				await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify({ videoId }),
-				});
-			} catch (revalidateError) {
-				console.error("Failed to revalidate page:", revalidateError);
-			}
-		}
-
 		return { presignedPostData };
 	} catch (error) {
 		console.error("Error getting presigned URL:", error);
@@ -164,6 +147,8 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot = false,
 	isUpload = false,
 	folderId,
+	orgId,
+	supportsUploadProgress = false,
 }: {
 	videoId?: Video.VideoId;
 	duration?: number;
@@ -173,17 +158,17 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot?: boolean;
 	isUpload?: boolean;
 	folderId?: Folder.FolderId;
+	orgId: Organisation.OrganisationId;
+	// TODO: Remove this once we are happy with it's stability
+	supportsUploadProgress?: boolean;
 }) {
 	const user = await getCurrentUser();
 
-	if (!user) {
-		throw new Error("Unauthorized");
-	}
+	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300) {
+		if (!userIsPro(user) && duration && duration > 300)
 			throw new Error("upgrade_required");
-		}
 
 		const [customBucket] = await db()
 			.select()
@@ -228,6 +213,7 @@ export async function createVideoAndGetUploadUrl({
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
+			orgId,
 			source: { type: "desktopMP4" as const },
 			isScreenshot,
 			bucket: customBucket?.id,
@@ -237,9 +223,10 @@ export async function createVideoAndGetUploadUrl({
 
 		await db().insert(videos).values(videoData);
 
-		await db().insert(videoUploads).values({
-			videoId: idToUse,
-		});
+		if (supportsUploadProgress)
+			await db().insert(videoUploads).values({
+				videoId: idToUse,
+			});
 
 		const fileKey = `${user.id}/${idToUse}/${
 			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"

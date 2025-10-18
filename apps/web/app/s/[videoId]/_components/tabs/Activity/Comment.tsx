@@ -1,5 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Avatar, Button } from "@cap/ui";
+import type { Comment } from "@cap/web-domain";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
@@ -12,14 +13,17 @@ import type { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
-const Comment: React.FC<{
+const CommentComponent: React.FC<{
 	comment: CommentType;
 	replies: CommentType[];
-	onReply: (commentId: string) => void;
-	replyingToId: string | null;
+	onReply: (commentId: Comment.CommentId) => void;
+	replyingToId: Comment.CommentId | null;
 	handleReply: (content: string) => void;
 	onCancelReply: () => void;
-	onDelete: (commentId: string, parentId?: string) => void;
+	onDelete: (
+		commentId: Comment.CommentId,
+		parentId: Comment.CommentId | null,
+	) => void;
 	user: typeof userSelectProps | null;
 	level?: number;
 	onSeek?: (time: number) => void;
@@ -74,6 +78,7 @@ const Comment: React.FC<{
 					className="size-6"
 					letterClass="text-sm"
 					name={comment.authorName}
+					imageUrl={comment.authorImage ?? undefined}
 				/>
 				<motion.div
 					viewport={{
@@ -167,7 +172,7 @@ const Comment: React.FC<{
 			{nestedReplies.length > 0 && (
 				<div className="mt-3 space-y-3">
 					{nestedReplies.map((reply) => (
-						<Comment
+						<CommentComponent
 							key={reply.id}
 							comment={reply}
 							replies={replies}
@@ -187,4 +192,4 @@ const Comment: React.FC<{
 	);
 };
 
-export default Comment;
+export default CommentComponent;

@@ -2,7 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createResizeObserver } from "@solid-primitives/resize-observer";
 import { useSearchParams } from "@solidjs/router";
-import { createQuery } from "@tanstack/solid-query";
+import { createQuery, useMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -32,6 +32,7 @@ import Cropper, {
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
@@ -72,48 +73,16 @@ function Inner() {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const selectedWindow = createQuery(() => ({
-		queryKey: ["selectedWindow", rawOptions.captureTarget],
-		queryFn: async () => {
-			if (rawOptions.captureTarget.variant !== "window") return null;
-			const windowId = rawOptions.captureTarget.id;
-
-			const windows = await commands.listCaptureWindows();
-			const window = windows.find((w) => w.id === windowId);
-
-			if (!window) return null;
-
-			return {
-				id: window.id,
-				app_name: window.owner_name || window.name || "Unknown",
-				bounds: window.bounds,
-			};
-		},
-		enabled:
-			rawOptions.captureTarget.variant === "window" &&
-			rawOptions.targetMode === "window",
-		staleTime: 5 * 1000,
-	}));
-
-	const windowToShow = () => {
-		const hoveredWindow = targetUnderCursor.window;
-		if (hoveredWindow) return hoveredWindow;
-		if (rawOptions.captureTarget.variant === "window") {
-			const selected = selectedWindow.data;
-			if (selected) return selected;
-		}
-		return hoveredWindow;
-	};
-
 	const windowIcon = createQuery(() => ({
-		queryKey: ["windowIcon", windowToShow()?.id],
+		queryKey: ["windowIcon", targetUnderCursor.window?.id],
 		queryFn: async () => {
-			const window = windowToShow();
-			if (!window?.id) return null;
-			return await commands.getWindowIcon(window.id.toString());
+			if (!targetUnderCursor.window?.id) return null;
+			return await commands.getWindowIcon(
+				targetUnderCursor.window.id.toString(),
+			);
 		},
-		enabled: !!windowToShow()?.id,
-		staleTime: 5 * 60 * 1000,
+		enabled: !!targetUnderCursor.window?.id,
+		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
 	}));
 
 	const displayInformation = createQuery(() => ({
@@ -138,9 +107,10 @@ function Inner() {
 		CropBounds | undefined
 	>(undefined);
 
-	const unsubOnEscapePress = events.onEscapePress.listen(() =>
-		setOptions("targetMode", null),
-	);
+	const unsubOnEscapePress = events.onEscapePress.listen(() => {
+		setOptions("targetMode", null);
+		commands.closeTargetSelectOverlays();
+	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
 	// This prevents browser keyboard shortcuts from firing.
@@ -197,12 +167,10 @@ function Inner() {
 			<Match
 				when={
 					rawOptions.targetMode === "window" &&
-					(targetUnderCursor.display_id === params.displayId ||
-						(rawOptions.captureTarget.variant === "window" &&
-							selectedWindow.data))
+					targetUnderCursor.display_id === params.displayId
 				}
 			>
-				<Show when={windowToShow()} keyed>
+				<Show when={targetUnderCursor.window} keyed>
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
@@ -258,6 +226,7 @@ function Inner() {
 										setOptions({
 											targetMode: "area",
 										});
+										commands.openTargetSelectOverlays(null);
 									}}
 								>
 									Adjust recording area
@@ -477,50 +446,69 @@ function RecordingControls(props: {
 		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
 	}
 
+	const startRecording = useMutation(() => ({
+		mutationFn: () =>
+			handleRecordingResult(
+				commands.startRecording({
+					capture_target: props.target,
+					mode: rawOptions.mode,
+					capture_system_audio: rawOptions.captureSystemAudio,
+				}),
+				setOptions,
+			),
+	}));
+
 	return (
 		<>
 			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 shadow-sm border-gray-4">
 				<div
-					onClick={() => setOptions("targetMode", null)}
+					onClick={() => {
+						setOptions("targetMode", null);
+						commands.closeTargetSelectOverlays();
+					}}
 					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 				>
 					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
 				</div>
 				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+					data-inactive={
+						(rawOptions.mode === "instant" && !auth.data) ||
+						startRecording.isPending
+					}
+					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
 					onClick={() => {
 						if (rawOptions.mode === "instant" && !auth.data) {
 							emit("start-sign-in");
 							return;
 						}
+						if (startRecording.isPending) return;
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
+						startRecording.mutate();
 					}}
 				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
+					<div
+						class="flex items-center py-1 pl-4 transition-colors"
+						classList={{ "hover:bg-blue-10": !startRecording.isPending }}
+					>
 						{rawOptions.mode === "studio" ? (
 							<IconCapFilmCut class="size-4" />
 						) : (
 							<IconCapInstant class="size-4" />
 						)}
 						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
+							<span class="text-sm font-medium text-nowrap">
 								{rawOptions.mode === "instant" && !auth.data
 									? "Sign In To Use"
 									: "Start Recording"}
 							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
+							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
 								{`${capitalize(rawOptions.mode)} Mode`}
 							</span>
 						</div>
 					</div>
 					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
+						class="pl-2.5 transition-colors pr-3 py-1.5 flex items-center"
+						classList={{ "group-hover:bg-blue-10": !startRecording.isPending }}
 						onMouseDown={(e) => showMenu(menuModes(), e)}
 						onClick={(e) => showMenu(menuModes(), e)}
 					>
@@ -555,7 +543,7 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	return (
 		<Suspense>
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
+				<p class="text-sm text-center text-white max-w-64">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
 						class="underline"

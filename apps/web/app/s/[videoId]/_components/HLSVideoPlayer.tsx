@@ -37,6 +37,7 @@ interface Props {
 	captionsSrc: string;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
+	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 }
@@ -50,6 +51,7 @@ export function HLSVideoPlayer({
 	mediaPlayerClassName,
 	autoplay = false,
 	hasActiveUpload,
+	disableCaptions,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -58,18 +60,6 @@ export function HLSVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
-	const [isMobile, setIsMobile] = useState(false);
-
-	useEffect(() => {
-		const checkMobile = () => {
-			setIsMobile(window.innerWidth < 640);
-		};
-
-		checkMobile();
-		window.addEventListener("resize", checkMobile);
-
-		return () => window.removeEventListener("resize", checkMobile);
-	}, []);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -280,7 +270,12 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc]);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	// if the video comes back from S3, just ignore the upload progress.
+	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 
@@ -363,8 +358,15 @@ export function HLSVideoPlayer({
 				playsInline
 				autoPlay={autoplay}
 			>
-				<track default kind="chapters" src={chaptersSrc} />
-				<track label="English" kind="captions" srcLang="en" src={captionsSrc} />
+				{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
+				{captionsSrc && (
+					<track
+						label="English"
+						kind="captions"
+						srcLang="en"
+						src={captionsSrc}
+					/>
+				)}
 			</MediaPlayerVideo>
 			{currentCue && toggleCaptions && (
 				<div
@@ -397,10 +399,12 @@ export function HLSVideoPlayer({
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
+						{!disableCaptions && (
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
+							/>
+						)}
 						<MediaPlayerSettings />
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />

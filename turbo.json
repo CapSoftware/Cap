@@ -35,7 +35,8 @@
 			"cache": false
 		},
 		"db:push": {
-			"cache": false
+			"cache": false,
+			"interactive": true
 		},
 		"dev": {
 			"dependsOn": ["db:push"],

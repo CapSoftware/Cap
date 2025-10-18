@@ -1,7 +1,7 @@
 import "@/app/globals.css";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { buildEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
+import { buildEnv, serverEnv } from "@cap/env";
+import { STRIPE_PLAN_IDS } from "@cap/utils";
 import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
@@ -20,6 +20,7 @@ import {
 	ReactQueryProvider,
 	SessionProvider,
 } from "./Layout/providers";
+import { StripeContextProvider } from "./Layout/StripeContext";
 //@ts-expect-error
 import { script } from "./themeScript";
 
@@ -112,20 +113,28 @@ export default async function RootLayout({ children }: PropsWithChildren) {
 					<PostHogProvider bootstrapData={bootstrapData}>
 						<AuthContextProvider user={userPromise}>
 							<SessionProvider>
-								<PublicEnvContext
-									value={{
-										webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-									}}
+								<StripeContextProvider
+									plans={
+										serverEnv().VERCEL_ENV === "production"
+											? STRIPE_PLAN_IDS.production
+											: STRIPE_PLAN_IDS.development
+									}
 								>
-									<ReactQueryProvider>
-										<SonnerToaster />
-										<main className="w-full">{children}</main>
-										<PosthogIdentify />
-										<MetaPixel />
-										<GTag />
-										<PurchaseTracker />
-									</ReactQueryProvider>
-								</PublicEnvContext>
+									<PublicEnvContext
+										value={{
+											webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+										}}
+									>
+										<ReactQueryProvider>
+											<SonnerToaster />
+											<main className="w-full">{children}</main>
+											<PosthogIdentify />
+											<MetaPixel />
+											<GTag />
+											<PurchaseTracker />
+										</ReactQueryProvider>
+									</PublicEnvContext>
+								</StripeContextProvider>
 							</SessionProvider>
 						</AuthContextProvider>
 					</PostHogProvider>

@@ -1,8 +1,7 @@
-use cap_recording::{feeds::microphone, screen_capture::ScreenCaptureTarget, *};
-use kameo::Actor;
+use cap_recording::{screen_capture::ScreenCaptureTarget, *};
 use scap_targets::Display;
 use std::time::Duration;
-use tracing::info;
+use tracing::*;
 
 #[tokio::main]
 pub async fn main() {
@@ -25,9 +24,7 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    // let camera_info = cap_camera::list_cameras()
-    //     .find(|c| c.display_name().contains("NVIDIA"))
-    //     .unwrap();
+    // let camera_info = cap_camera::list_cameras().next().unwrap();
 
     // let camera_feed = CameraFeed::spawn(CameraFeed::default());
 
@@ -60,7 +57,7 @@ pub async fn main() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let (handle, _ready_rx) = instant_recording::Actor::builder(
+    let handle = instant_recording::Actor::builder(
         dir.path().into(),
         ScreenCaptureTarget::Display {
             id: Display::primary().id(),
@@ -70,13 +67,23 @@ pub async fn main() {
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
-    .build()
+    .build(
+        #[cfg(target_os = "macos")]
+        cidre::sc::ShareableContent::current().await.unwrap(),
+    )
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let _ = handle.stop().await;
+    handle.pause().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle.resume().await.unwrap();
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    handle.stop().await.unwrap();
+    info!("Recording finished");
 
     std::mem::forget(dir);
 }

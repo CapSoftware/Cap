@@ -1,11 +1,13 @@
+import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Context, Effect, Option, Schema } from "effect";
-
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
+import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
+import { UserId } from "./User.ts";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
@@ -13,8 +15,8 @@ export type VideoId = typeof VideoId.Type;
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
-	ownerId: Schema.String,
-	orgId: Schema.OptionFromNullOr(Schema.String),
+	ownerId: UserId,
+	orgId: OrganisationId,
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
@@ -26,7 +28,7 @@ export class Video extends Schema.Class<Video>("Video")({
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
-		Schema.Literal("PROCESSING", "COMPLETE", "ERROR"),
+		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "SKIPPED"),
 	),
 	width: Schema.OptionFromNullOr(Schema.Number),
 	height: Schema.OptionFromNullOr(Schema.Number),
@@ -35,8 +37,6 @@ export class Video extends Schema.Class<Video>("Video")({
 	updatedAt: Schema.Date,
 }) {
 	static decodeSync = Schema.decodeSync(Video);
-
-	static toJS = (self: Video) => Schema.encode(Video)(self).pipe(Effect.orDie);
 
 	static getSource(self: Video) {
 		if (self.source.type === "MediaConvert")
@@ -135,6 +135,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"VideoNotFoundError",
 	{},
+	HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
 export class VideoRpcs extends RpcGroup.make(
@@ -167,5 +168,39 @@ export class VideoRpcs extends RpcGroup.make(
 			PolicyDeniedError,
 			VerifyVideoPasswordError,
 		),
+	}),
+	Rpc.make("VideosGetThumbnails", {
+		payload: Schema.Array(VideoId).pipe(
+			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
+		),
+		success: Schema.Array(
+			Schema.Exit({
+				success: Schema.Option(Schema.String),
+				failure: Schema.Union(
+					NotFoundError,
+					PolicyDeniedError,
+					VerifyVideoPasswordError,
+				),
+				defect: Schema.Unknown,
+			}),
+		),
+		error: InternalError,
+	}),
+	Rpc.make("VideosGetAnalytics", {
+		payload: Schema.Array(VideoId).pipe(
+			Schema.filter((a) => a.length <= 50 || "Maximum of 50 videos at a time"),
+		),
+		success: Schema.Array(
+			Schema.Exit({
+				success: Schema.Struct({ count: Schema.Int }),
+				failure: Schema.Union(
+					NotFoundError,
+					PolicyDeniedError,
+					VerifyVideoPasswordError,
+				),
+				defect: Schema.Unknown,
+			}),
+		),
+		error: InternalError,
 	}),
 ) {}

@@ -2,18 +2,29 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	s3Buckets,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { userIsPro } from "@cap/utils";
+import { dub, userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { Organisation, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
+import { and, count, eq, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
-import { dub } from "@/utils/dub";
+import {
+	isAtLeastSemver,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -34,6 +45,12 @@ app.get(
 			width: stringOrNumberOptional,
 			height: stringOrNumberOptional,
 			fps: stringOrNumberOptional,
+			orgId: z
+				.string()
+				.optional()
+				.transform((v) =>
+					v ? Organisation.OrganisationId.make(v) : undefined,
+				),
 		}),
 	),
 	async (c) => {
@@ -47,6 +64,7 @@ app.get(
 				width,
 				height,
 				fps,
+				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
 
@@ -71,8 +89,6 @@ app.get(
 				.from(s3Buckets)
 				.where(eq(s3Buckets.ownerId, user.id));
 
-			console.log("User bucket:", customBucket ? "found" : "not found");
-
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
 				"default",
@@ -85,7 +101,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,7 +109,58 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
+			}
+
+			const userOrganizations = await db()
+				.select({
+					id: organizations.id,
+					name: organizations.name,
+				})
+				.from(organizations)
+				.leftJoin(
+					organizationMembers,
+					eq(organizations.id, organizationMembers.organizationId),
+				)
+				.where(
+					or(
+						// User owns the organization
+						eq(organizations.ownerId, user.id),
+						// User is a member of the organization
+						eq(organizationMembers.userId, user.id),
+					),
+				)
+				// Remove duplicates if user is both owner and member
+				.groupBy(organizations.id, organizations.name)
+				.orderBy(organizations.createdAt);
+			const userOrgIds = userOrganizations.map((org) => org.id);
+
+			let videoOrgId: Organisation.OrganisationId;
+			if (orgId) {
+				// Hard error if the user requested org is non-existent or they don't have access.
+				if (!userOrgIds.includes(orgId))
+					return c.json({ error: "forbidden_org" }, { status: 403 });
+				videoOrgId = orgId;
+			} else if (user.defaultOrgId) {
+				// User's defaultOrgId is no longer valid, switch to first available org
+				if (!userOrgIds.includes(user.defaultOrgId)) {
+					if (!userOrganizations[0])
+						return c.json({ error: "no_valid_org" }, { status: 403 });
+
+					videoOrgId = userOrganizations[0].id;
+
+					// Update user's defaultOrgId to the new valid org
+					await db()
+						.update(users)
+						.set({
+							defaultOrgId: videoOrgId,
+						})
+						.where(eq(users.id, user.id));
+				} else videoOrgId = user.defaultOrgId;
+			} else {
+				// No orgId provided and no defaultOrgId, use first available org
+				if (!userOrganizations[0])
+					return c.json({ error: "no_valid_org" }, { status: 403 });
+				videoOrgId = userOrganizations[0].id;
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
@@ -108,6 +175,7 @@ app.get(
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
+					orgId: videoOrgId,
 					source:
 						recordingMode === "hls"
 							? { type: "local" as const }
@@ -123,10 +191,10 @@ app.get(
 					fps,
 				});
 
-			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
-			const clientSupportsUploadProgress = xCapVersion
-				? isAtLeastSemver(xCapVersion, 0, 3, 68)
-				: false;
+			const clientSupportsUploadProgress = isFromDesktopSemver(
+				c.req,
+				UPLOAD_PROGRESS_VERSION,
+			);
 
 			if (clientSupportsUploadProgress)
 				await db().insert(videoUploads).values({
@@ -146,12 +214,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.ownerId, user.id));
 
-				if (
-					videoCount &&
-					videoCount[0] &&
-					videoCount[0].count === 1 &&
-					user.email
-				) {
+				if (videoCount?.[0] && videoCount[0].count === 1 && user.email) {
 					console.log(
 						"[SendFirstShareableLinkEmail] Sending first shareable link email with 5-minute delay",
 					);
@@ -276,41 +339,44 @@ app.post(
 
 		try {
 			const [video] = await db()
-				.select({ id: videos.id })
+				.select({ id: videos.id, upload: videoUploads })
 				.from(videos)
-				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId));
 			if (!video)
 				return c.json(
 					{ error: true, message: "Video not found" },
 					{ status: 404 },
 				);
 
-			const result = await db()
-				.update(videoUploads)
-				.set({
-					uploaded,
-					total,
-					updatedAt,
-				})
-				.where(
-					and(
-						eq(videoUploads.videoId, videoId),
-						lte(videoUploads.updatedAt, updatedAt),
-					),
-				);
-
-			if (result.rowsAffected === 0)
+			if (video.upload) {
+				if (uploaded === total && video.upload.mode === "singlepart") {
+					await db()
+						.delete(videoUploads)
+						.where(eq(videoUploads.videoId, videoId));
+				} else {
+					await db()
+						.update(videoUploads)
+						.set({
+							uploaded,
+							total,
+							updatedAt,
+						})
+						.where(
+							and(
+								eq(videoUploads.videoId, videoId),
+								lte(videoUploads.updatedAt, updatedAt),
+							),
+						);
+				}
+			} else {
 				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
-
-			if (uploaded === total)
-				await db()
-					.delete(videoUploads)
-					.where(eq(videoUploads.videoId, videoId));
+			}
 
 			return c.json(true);
 		} catch (error) {
@@ -319,27 +385,3 @@ app.post(
 		}
 	},
 );
-
-function isAtLeastSemver(
-	versionString: string,
-	major: number,
-	minor: number,
-	patch: number,
-): boolean {
-	const match = versionString
-		.replace(/^v/, "")
-		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
-	if (!match) return false;
-	const [, vMajor, vMinor, vPatch, prerelease] = match;
-	const M = vMajor ? parseInt(vMajor, 10) || 0 : 0;
-	const m = vMinor ? parseInt(vMinor, 10) || 0 : 0;
-	const p = vPatch ? parseInt(vPatch, 10) || 0 : 0;
-	if (M > major) return true;
-	if (M < major) return false;
-	if (m > minor) return true;
-	if (m < minor) return false;
-	if (p > patch) return true;
-	if (p < patch) return false;
-	// Equal triplet: accept only non-prerelease
-	return !prerelease;
-}

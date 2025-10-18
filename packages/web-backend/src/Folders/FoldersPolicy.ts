@@ -1,47 +1,52 @@
-import * as Db from "@cap/database/schema";
 import { type Folder, Policy } from "@cap/web-domain";
-import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
 import { Database } from "../Database.ts";
+import { OrganisationsPolicy } from "../Organisations/OrganisationsPolicy.ts";
+import { Spaces } from "../Spaces/index.ts";
+import { SpacesPolicy } from "../Spaces/SpacesPolicy.ts";
+import { FoldersRepo } from "./FoldersRepo.ts";
 
 export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 	"FoldersPolicy",
 	{
 		effect: Effect.gen(function* () {
-			const db = yield* Database;
+			const repo = yield* FoldersRepo;
+			const spacesPolicy = yield* SpacesPolicy;
+			const orgsPolicy = yield* OrganisationsPolicy;
+			const spaces = yield* Spaces;
 
 			const canEdit = (id: Folder.FolderId) =>
 				Policy.policy((user) =>
 					Effect.gen(function* () {
-						const [folder] = yield* db.execute((db) =>
-							db.select().from(Db.folders).where(Dz.eq(Db.folders.id, id)),
+						const folder = yield* (yield* repo.getById(id)).pipe(
+							Effect.catchTag(
+								"NoSuchElementException",
+								() => new Policy.PolicyDeniedError(),
+							),
 						);
 
-						// All space members can edit space properties
-						if (!folder?.spaceId) {
-							return folder?.createdById === user.id;
-						}
+						if (folder.spaceId === null) return folder.createdById === user.id;
 
-						const { spaceId } = folder;
-						const [spaceMember] = yield* db.execute((db) =>
-							db
-								.select()
-								.from(Db.spaceMembers)
-								.where(
-									Dz.and(
-										Dz.eq(Db.spaceMembers.userId, user.id),
-										Dz.eq(Db.spaceMembers.spaceId, spaceId),
-									),
-								),
-						);
+						const spaceOrOrg = yield* spaces.getSpaceOrOrg(folder.spaceId);
+						if (!spaceOrOrg) return false;
 
-						return spaceMember !== undefined;
+						if (spaceOrOrg.variant === "space")
+							yield* spacesPolicy.isMember(spaceOrOrg.space.id);
+						else yield* orgsPolicy.isOwner(spaceOrOrg.organization.id);
+
+						return true;
 					}),
 				);
 
 			return { canEdit };
 		}),
-		dependencies: [Database.Default],
+		dependencies: [
+			FoldersRepo.Default,
+			Database.Default,
+			Spaces.Default,
+			SpacesPolicy.Default,
+			OrganisationsPolicy.Default,
+		],
 	},
 ) {}

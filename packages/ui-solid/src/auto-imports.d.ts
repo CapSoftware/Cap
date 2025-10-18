@@ -95,4 +95,6 @@ declare global {
   const IconMdiLoading: typeof import("~icons/mdi/loading.jsx")["default"]
   const IconMdiMonitor: typeof import('~icons/mdi/monitor.jsx')['default']
   const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
+  const IconPhRecordFill: typeof import('~icons/ph/record-fill.jsx')['default']
+  const IconPhWarningBold: typeof import('~icons/ph/warning-bold.jsx')['default']
 }

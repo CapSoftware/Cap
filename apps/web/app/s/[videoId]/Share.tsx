@@ -17,24 +17,20 @@ import {
 	getVideoStatus,
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
+import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
-
-const formatTime = (time: number) => {
-	const minutes = Math.floor(time / 60);
-	const seconds = Math.floor(time % 60);
-	return `${minutes.toString().padStart(2, "0")}:${seconds
-		.toString()
-		.padStart(2, "0")}`;
-};
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
+	authorImage: string | null;
 };
 
 export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
+	authorImage?: string | null;
 	sending?: boolean;
 };
 
@@ -44,6 +40,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
+	orgSettings?: OrganizationSettings | null;
 };
 
 interface ShareProps {
@@ -53,6 +50,7 @@ interface ShareProps {
 	views: MaybePromise<number>;
 	customDomain: string | null;
 	domainVerified: boolean;
+	videoSettings?: OrganizationSettings | null;
 	userOrganizations?: { id: string; name: string }[];
 	initialAiData?: {
 		title?: string | null;
@@ -146,6 +144,7 @@ export const Share = ({
 	views,
 	initialAiData,
 	aiGenerationEnabled,
+	videoSettings,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -271,6 +270,19 @@ export const Share = ({
 		}, 100);
 	}, []);
 
+	const isDisabled = (setting: keyof NonNullable<OrganizationSettings>) =>
+		videoSettings?.[setting] ?? data.orgSettings?.[setting] ?? false;
+
+	const areChaptersDisabled = isDisabled("disableChapters");
+	const isSummaryDisabled = isDisabled("disableSummary");
+	const areCaptionsDisabled = isDisabled("disableCaptions");
+	const areCommentStampsDisabled = isDisabled("disableComments");
+	const areReactionStampsDisabled = isDisabled("disableReactions");
+	const allSettingsDisabled =
+		isDisabled("disableComments") &&
+		isDisabled("disableSummary") &&
+		isDisabled("disableTranscript");
+
 	return (
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
@@ -281,6 +293,10 @@ export const Share = ({
 								data={{ ...data, transcriptionStatus }}
 								user={user}
 								comments={comments}
+								areChaptersDisabled={areChaptersDisabled}
+								areCaptionsDisabled={areCaptionsDisabled}
+								areCommentStampsDisabled={areCommentStampsDisabled}
+								areReactionStampsDisabled={areReactionStampsDisabled}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
 								ref={playerRef}
@@ -297,27 +313,30 @@ export const Share = ({
 					</div>
 				</div>
 
-				<div className="flex flex-col lg:w-80">
-					<Sidebar
-						data={{
-							...data,
-							createdAt: effectiveDate,
-							transcriptionStatus,
-						}}
-						user={user}
-						commentsData={commentsData}
-						setCommentsData={setCommentsData}
-						optimisticComments={optimisticComments}
-						setOptimisticComments={setOptimisticComments}
-						handleCommentSuccess={handleCommentSuccess}
-						views={views}
-						onSeek={handleSeek}
-						videoId={data.id}
-						aiData={aiData}
-						aiGenerationEnabled={aiGenerationEnabled}
-						ref={activityRef}
-					/>
-				</div>
+				{!allSettingsDisabled && (
+					<div className="flex flex-col lg:w-80">
+						<Sidebar
+							data={{
+								...data,
+								createdAt: effectiveDate,
+								transcriptionStatus,
+							}}
+							videoSettings={videoSettings}
+							user={user}
+							commentsData={commentsData}
+							setCommentsData={setCommentsData}
+							optimisticComments={optimisticComments}
+							setOptimisticComments={setOptimisticComments}
+							handleCommentSuccess={handleCommentSuccess}
+							views={views}
+							onSeek={handleSeek}
+							videoId={data.id}
+							aiData={aiData}
+							aiGenerationEnabled={aiGenerationEnabled}
+							ref={activityRef}
+						/>
+					</div>
+				)}
 			</div>
 
 			<div className="hidden mt-4 lg:block">
@@ -325,6 +344,10 @@ export const Share = ({
 					<Toolbar
 						onOptimisticComment={handleOptimisticComment}
 						onCommentSuccess={handleCommentSuccess}
+						disableReactions={
+							videoSettings?.disableReactions ??
+							data.orgSettings?.disableReactions
+						}
 						data={data}
 						user={user}
 					/>
@@ -364,45 +387,13 @@ export const Share = ({
 						</div>
 					)}
 
-				{!aiLoading &&
-					(aiData?.summary ||
-						(aiData?.chapters && aiData.chapters.length > 0)) && (
-						<div className="p-4 bg-white rounded-2xl border border-gray-3">
-							{aiData?.summary && (
-								<>
-									<h3 className="text-lg font-medium">Summary</h3>
-									<div className="mb-2">
-										<span className="text-xs font-semibold text-gray-8">
-											Generated by Cap AI
-										</span>
-									</div>
-									<p className="text-sm whitespace-pre-wrap">
-										{aiData.summary}
-									</p>
-								</>
-							)}
-
-							{aiData?.chapters && aiData.chapters.length > 0 && (
-								<div className={aiData?.summary ? "mt-6" : ""}>
-									<h3 className="mb-2 text-lg font-medium">Chapters</h3>
-									<div className="divide-y">
-										{aiData.chapters.map((chapter) => (
-											<div
-												key={chapter.start}
-												className="flex items-center p-2 rounded transition-colors cursor-pointer hover:bg-gray-100"
-												onClick={() => handleSeek(chapter.start)}
-											>
-												<span className="w-16 text-xs text-gray-500">
-													{formatTime(chapter.start)}
-												</span>
-												<span className="ml-2 text-sm">{chapter.title}</span>
-											</div>
-										))}
-									</div>
-								</div>
-							)}
-						</div>
-					)}
+				<SummaryChapters
+					isSummaryDisabled={isSummaryDisabled}
+					areChaptersDisabled={areChaptersDisabled}
+					handleSeek={handleSeek}
+					aiData={aiData}
+					aiLoading={aiLoading}
+				/>
 			</div>
 		</div>
 	);
