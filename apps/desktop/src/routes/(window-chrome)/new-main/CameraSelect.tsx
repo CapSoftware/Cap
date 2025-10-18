@@ -38,7 +38,7 @@ export default function CameraSelect(props: {
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
 				disabled={!!currentRecording.data || props.disabled}
-				class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+				class="flex flex-row gap-2 items-center px-2 w-full h-11 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 				onClick={() => {
 					Promise.all([
 						CheckMenuItem.new({
