@@ -129,7 +129,7 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isVideoOwnerPro = user && data.ownerId === user.id && userIsPro(user);
+	const isVideoOwnerPro: boolean = user && isOwner ? userIsPro(user) : false;
 
 	const handleSharingUpdated = () => {
 		refresh();
@@ -224,7 +224,7 @@ export const ShareHeader = ({
 									<h1
 										className="text-xl sm:text-2xl"
 										onClick={() => {
-											if (user && user.id.toString() === data.ownerId) {
+											if (isOwner) {
 												setIsEditing(true);
 											}
 										}}

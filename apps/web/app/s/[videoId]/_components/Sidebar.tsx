@@ -141,7 +141,8 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			setActiveTab(tabId);
 		};
 
-		const isVideoOwnerPro = user && data.ownerId === user.id && userIsPro(user);
+		const isOwner = user?.id === data.ownerId;
+		const isVideoOwnerPro = user && isOwner ? userIsPro(user) : false;
 
 		const renderTabContent = () => {
 			switch (activeTab) {
