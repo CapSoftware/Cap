@@ -391,7 +391,10 @@ pub enum CursorAnimationStyle {
 pub struct CursorConfiguration {
     #[serde(default)]
     pub hide: bool,
-    hide_when_idle: bool,
+    #[serde(default)]
+    pub hide_when_idle: bool,
+    #[serde(default = "CursorConfiguration::default_hide_when_idle_delay")]
+    pub hide_when_idle_delay: f32,
     pub size: u32,
     r#type: CursorType,
     pub animation_style: CursorAnimationStyle,
@@ -415,6 +418,7 @@ impl Default for CursorConfiguration {
         Self {
             hide: false,
             hide_when_idle: false,
+            hide_when_idle_delay: Self::default_hide_when_idle_delay(),
             size: 100,
             r#type: CursorType::default(),
             animation_style: CursorAnimationStyle::Regular,
@@ -430,6 +434,10 @@ impl Default for CursorConfiguration {
 impl CursorConfiguration {
     fn default_raw() -> bool {
         true
+    }
+
+    fn default_hide_when_idle_delay() -> f32 {
+        2.0
     }
 }
 

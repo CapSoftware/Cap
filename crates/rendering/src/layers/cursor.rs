@@ -14,6 +14,8 @@ use crate::{
 const CURSOR_CLICK_DURATION: f64 = 0.25;
 const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
+const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
+const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -212,6 +214,24 @@ impl CursorLayer {
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
+        let mut cursor_opacity = 1.0f32;
+        if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {
+            let hide_delay_secs = uniforms
+                .project
+                .cursor
+                .hide_when_idle_delay
+                .max((CURSOR_IDLE_MIN_DELAY_MS / 1000.0) as f32);
+            let hide_delay_ms = (hide_delay_secs as f64 * 1000.0).max(CURSOR_IDLE_MIN_DELAY_MS);
+            cursor_opacity = compute_cursor_idle_opacity(
+                cursor,
+                segment_frames.recording_time as f64 * 1000.0,
+                hide_delay_ms,
+            );
+            if cursor_opacity <= f32::EPSILON {
+                cursor_opacity = 0.0;
+            }
+        }
+
         // Remove all cursor assets if the svg configuration changes.
         // it might change the texture.
         //
@@ -336,20 +356,27 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
-        let uniforms = CursorUniforms {
-            position: [zoomed_position.x as f32, zoomed_position.y as f32],
-            size: [zoomed_size.x as f32, zoomed_size.y as f32],
-            output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+        let cursor_uniforms = CursorUniforms {
+            position_size: [
+                zoomed_position.x as f32,
+                zoomed_position.y as f32,
+                zoomed_size.x as f32,
+                zoomed_size.y as f32,
+            ],
+            output_size: [
+                uniforms.output_size.0 as f32,
+                uniforms.output_size.1 as f32,
+                0.0,
+                0.0,
+            ],
             screen_bounds: uniforms.display.target_bounds,
-            velocity,
-            motion_blur_amount,
-            _alignment: [0.0; 3],
+            velocity_blur_opacity: [velocity[0], velocity[1], motion_blur_amount, cursor_opacity],
         };
 
         constants.queue.write_buffer(
             &self.statics.uniform_buffer,
             0,
-            bytemuck::cast_slice(&[uniforms]),
+            bytemuck::cast_slice(&[cursor_uniforms]),
         );
 
         self.bind_group = Some(
@@ -367,16 +394,149 @@ impl CursorLayer {
     }
 }
 
-#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 pub struct CursorUniforms {
-    position: [f32; 2],
-    size: [f32; 2],
-    output_size: [f32; 2],
+    position_size: [f32; 4],
+    output_size: [f32; 4],
     screen_bounds: [f32; 4],
-    velocity: [f32; 2],
-    motion_blur_amount: f32,
-    _alignment: [f32; 3],
+    velocity_blur_opacity: [f32; 4],
+}
+
+fn compute_cursor_idle_opacity(
+    cursor: &CursorEvents,
+    current_time_ms: f64,
+    hide_delay_ms: f64,
+) -> f32 {
+    if cursor.moves.is_empty() {
+        return 0.0;
+    }
+
+    if current_time_ms <= cursor.moves[0].time_ms {
+        return 1.0;
+    }
+
+    let Some(last_index) = cursor
+        .moves
+        .iter()
+        .rposition(|event| event.time_ms <= current_time_ms)
+    else {
+        return 1.0;
+    };
+
+    let last_move = &cursor.moves[last_index];
+
+    let time_since_move = (current_time_ms - last_move.time_ms).max(0.0);
+
+    let mut opacity = compute_cursor_fade_in(cursor, current_time_ms, hide_delay_ms);
+
+    let fade_out = if time_since_move <= hide_delay_ms {
+        1.0
+    } else {
+        let delta = time_since_move - hide_delay_ms;
+        let fade = 1.0 - smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, delta);
+        fade.clamp(0.0, 1.0) as f32
+    };
+
+    opacity *= fade_out;
+    opacity.clamp(0.0, 1.0)
+}
+
+fn smoothstep64(edge0: f64, edge1: f64, x: f64) -> f64 {
+    if edge1 <= edge0 {
+        return if x < edge0 { 0.0 } else { 1.0 };
+    }
+
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_delay_ms: f64) -> f32 {
+    let resume_time = cursor
+        .moves
+        .windows(2)
+        .rev()
+        .find(|pair| {
+            let prev = &pair[0];
+            let next = &pair[1];
+            next.time_ms <= current_time_ms && next.time_ms - prev.time_ms > hide_delay_ms
+        })
+        .map(|pair| pair[1].time_ms);
+
+    let Some(resume_time_ms) = resume_time else {
+        return 1.0;
+    };
+
+    let time_since_resume = (current_time_ms - resume_time_ms).max(0.0);
+
+    smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, time_since_resume) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "pointer".into(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn cursor_events(times: &[(f64, f64, f64)]) -> CursorEvents {
+        CursorEvents {
+            moves: times
+                .iter()
+                .map(|(time, x, y)| move_event(*time, *x, *y))
+                .collect(),
+            clicks: vec![],
+        }
+    }
+
+    #[test]
+    fn opacity_stays_visible_with_recent_move() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (1500.0, 0.1, 0.1)]);
+
+        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0);
+
+        assert_eq!(opacity, 1.0);
+    }
+
+    #[test]
+    fn opacity_fades_once_past_delay() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
+
+        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0);
+
+        assert_eq!(opacity, 0.0);
+    }
+
+    #[test]
+    fn opacity_fades_in_after_long_inactivity() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
+
+        let hide_delay_ms = 2000.0;
+
+        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms);
+        assert_eq!(at_resume, 0.0);
+
+        let halfway = compute_cursor_idle_opacity(
+            &cursor,
+            5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
+            hide_delay_ms,
+        );
+        assert!((halfway - 0.5).abs() < 0.05);
+
+        let after_fade = compute_cursor_idle_opacity(
+            &cursor,
+            5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
+            hide_delay_ms,
+        );
+        assert_eq!(after_fade, 1.0);
+    }
 }
 
 fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {

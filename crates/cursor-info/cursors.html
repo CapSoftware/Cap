@@ -286,6 +286,13 @@
             hotspot: [0.52, 0.51],
           },
           {
+            name: "tahoe_disappearing_item",
+            hash: "f44a524d6fcfe5a1b1bebf23fcb12fbfeaea0ecf92beb7f69fdf586c319dd8ab",
+            svg: null,
+            hotspot: null,
+            todo: true,
+          },
+          {
             name: "tahoe_drag_copy",
             hash: "93d05bf80e702fdf5d6924447c91a0ab5fb196251d5758e98c5b6a5f08f0e960",
             svg: "assets/mac/drag_copy.svg",
@@ -500,8 +507,12 @@
         const svg = document.createElement("object");
         svg.className =
           platform === "macos" ? "cursor-svg macos" : "cursor-svg";
-        svg.data = cursor.svg;
-        svg.type = "image/svg+xml";
+        if (cursor.svg) {
+          svg.data = cursor.svg;
+          svg.type = "image/svg+xml";
+        } else {
+          svg.innerHTML = '<div class="todo-marker">TODO: SVG not available</div>';
+        }
 
         const hotspotDiv = document.createElement("div");
         hotspotDiv.className = "hotspot";
@@ -523,6 +534,11 @@
         } else {
           hotspotInfo.innerHTML =
             '<span class="todo-marker">TODO: Hotspot not defined</span>';
+        }
+
+        // Add todo class to the entire item if it's marked as todo
+        if (cursor.todo) {
+          item.classList.add("todo-marker");
         }
 
         container.appendChild(svg);
@@ -579,13 +595,15 @@
           }
         });
 
-        svg.addEventListener("load", () => {
-          if (cursor.hotspot) {
-            const rect = container.getBoundingClientRect();
-            hotspotDiv.style.left = cursor.hotspot[0] * 100 + "%";
-            hotspotDiv.style.top = cursor.hotspot[1] * 100 + "%";
-          }
-        });
+        if (cursor.svg) {
+          svg.addEventListener("load", () => {
+            if (cursor.hotspot) {
+              const rect = container.getBoundingClientRect();
+              hotspotDiv.style.left = cursor.hotspot[0] * 100 + "%";
+              hotspotDiv.style.top = cursor.hotspot[1] * 100 + "%";
+            }
+          });
+        }
 
         item.appendChild(name);
         item.appendChild(hash);

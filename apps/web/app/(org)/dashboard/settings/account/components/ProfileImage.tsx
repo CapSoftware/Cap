@@ -1,18 +1,21 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faImage } from "@fortawesome/free-solid-svg-icons";
+import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Tooltip } from "@/components/Tooltip";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: string | null;
 	onChange?: (file: File | null) => void;
 	onRemove?: () => void;
 	disabled?: boolean;
-	isLoading?: boolean;
+	isUploading?: boolean;
+	isRemoving?: boolean;
 }
 
 export function ProfileImage({
@@ -20,41 +23,52 @@ export function ProfileImage({
 	onChange,
 	onRemove,
 	disabled = false,
-	isLoading = false,
+	isUploading = false,
+	isRemoving = false,
 }: ProfileImageProps) {
 	const [previewUrl, setPreviewUrl] = useState<string | null>(
 		initialPreviewUrl || null,
 	);
 	const fileInputRef = useRef<HTMLInputElement>(null);
-	const [removingImage, setRemovingImage] = useState(false);
+
+	// Reset isRemoving when the parent confirms the operation completed
+	useEffect(() => {
+		if (initialPreviewUrl !== undefined) {
+			setPreviewUrl(initialPreviewUrl);
+		}
+	}, [initialPreviewUrl]);
 
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
-		if (file) {
-			const objectUrl = URL.createObjectURL(file);
-			setPreviewUrl(objectUrl);
-			onChange?.(file);
+		if (!file) return;
+		const sizeLimit = 1024 * 1024 * 1;
+		if (file.size > sizeLimit) {
+			toast.error("File size must be 1MB or less");
+			return;
 		}
+		if (previewUrl && previewUrl !== initialPreviewUrl) {
+			URL.revokeObjectURL(previewUrl);
+		}
+		const objectUrl = URL.createObjectURL(file);
+		setPreviewUrl(objectUrl);
+		onChange?.(file);
 	};
 
 	const handleRemove = () => {
-		setRemovingImage(true);
-		try {
-			setPreviewUrl(null);
-			if (fileInputRef.current) {
-				fileInputRef.current.value = "";
-			}
-			onRemove?.();
-		} finally {
-			setRemovingImage(false);
+		setPreviewUrl(null);
+		if (fileInputRef.current) {
+			fileInputRef.current.value = "";
 		}
+		onRemove?.();
 	};
 
 	const handleUploadClick = () => {
-		if (!disabled && !isLoading && !removingImage) {
+		if (!disabled && !isUploading && !isRemoving) {
 			fileInputRef.current?.click();
 		}
 	};
+
+	const isLoading = isUploading || isRemoving;
 
 	return (
 		<div className="rounded-xl border border-dashed bg-gray-2 h-fit border-gray-4">
@@ -87,28 +101,36 @@ export function ProfileImage({
 				/>
 				<div className="space-y-3">
 					<div className="flex gap-2">
-						{!removingImage && (
-							<Button
-								type="button"
-								variant="gray"
-								disabled={disabled || isLoading}
-								size="xs"
-								onClick={handleUploadClick}
-								spinner={isLoading}
-							>
-								{isLoading ? "Uploading..." : "Upload Image"}
-							</Button>
-						)}
-						{previewUrl && !removingImage && (
-							<Button
-								type="button"
-								variant="gray"
-								disabled={disabled || isLoading || removingImage}
-								size="xs"
-								onClick={handleRemove}
-							>
-								{removingImage ? "Removing..." : "Remove"}
-							</Button>
+						<Button
+							type="button"
+							variant="gray"
+							disabled={disabled || isLoading || isRemoving}
+							size="xs"
+							onClick={handleUploadClick}
+							spinner={isUploading}
+						>
+							{isUploading ? "Uploading..." : "Upload Image"}
+						</Button>
+						{(previewUrl || isRemoving) && (
+							<Tooltip content="Remove image">
+								<Button
+									type="button"
+									variant="outline"
+									className="p-0 size-8"
+									disabled={disabled || isLoading || isRemoving}
+									size="icon"
+									onClick={handleRemove}
+									spinnerClassName="mr-0"
+									spinner={isRemoving}
+								>
+									{isRemoving ? null : (
+										<FontAwesomeIcon
+											icon={faTrash}
+											className="size-2.5 text-gray-12 mx-auto"
+										/>
+									)}
+								</Button>
+							</Tooltip>
 						)}
 					</div>
 					<p className="text-xs text-gray-10">Recommended size: 120x120</p>

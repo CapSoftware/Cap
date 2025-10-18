@@ -70,7 +70,6 @@ const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	enableNewRecordingFlow: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
-	enableNewUploader: false,
 	excludedWindows: [],
 });
 

@@ -405,12 +405,25 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
 ) {
+    setup_ctx.tasks().spawn("capture-video", {
+        let stop_token = stop_token.clone();
+        async move {
+            video_source.start().await?;
+
+            stop_token.cancelled().await;
+
+            if let Err(e) = video_source.stop().await {
+                error!("Video source stop failed: {e:#}");
+            };
+
+            Ok(())
+        }
+    });
+
     setup_ctx.tasks().spawn("mux-video", async move {
         use futures::StreamExt;
 
         let mut first_tx = Some(first_tx);
-
-        video_source.start().await?;
 
         stop_token
             .run_until_cancelled(async {
@@ -431,8 +444,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 Ok::<(), anyhow::Error>(())
             })
             .await;
-
-        video_source.stop().await.context("video_source_stop")?;
 
         muxer.lock().await.stop();
 

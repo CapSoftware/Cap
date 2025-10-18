@@ -112,6 +112,7 @@ tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
 opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
+posthog-rs = "0.3.7"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

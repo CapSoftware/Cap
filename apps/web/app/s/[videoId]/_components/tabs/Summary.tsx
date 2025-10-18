@@ -1,8 +1,7 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
+import type { Video } from "@cap/web-domain";
 import { faRectangleList } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffect, useState } from "react";
@@ -13,7 +12,7 @@ interface Chapter {
 }
 
 interface SummaryProps {
-	videoId: string;
+	videoId: Video.VideoId;
 	onSeek?: (time: number) => void;
 	initialAiData?: {
 		title?: string | null;
@@ -22,8 +21,8 @@ interface SummaryProps {
 		processing?: boolean;
 	};
 	aiGenerationEnabled?: boolean;
-	user: typeof userSelectProps | null;
 	isSummaryDisabled?: boolean;
+	isVideoOwnerPro: boolean | null;
 }
 
 const formatTime = (time: number) => {
@@ -67,7 +66,7 @@ export const Summary: React.FC<SummaryProps> = ({
 	initialAiData,
 	isSummaryDisabled = false,
 	aiGenerationEnabled = false,
-	user,
+	isVideoOwnerPro,
 }) => {
 	const [aiData, setAiData] = useState<{
 		title?: string | null;
@@ -95,12 +94,10 @@ export const Summary: React.FC<SummaryProps> = ({
 		}
 	};
 
-	const hasProAccess = userIsPro(user);
-
 	const hasExistingAiData =
 		aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
 
-	if (!hasProAccess && !hasExistingAiData) {
+	if (!isVideoOwnerPro && !hasExistingAiData) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<div className="space-y-4 max-w-sm">

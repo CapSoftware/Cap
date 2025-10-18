@@ -17,6 +17,7 @@ mod logging;
 mod notifications;
 mod permissions;
 mod platform;
+mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
@@ -67,7 +68,6 @@ use serde_json::json;
 use specta::Type;
 use std::{
     collections::BTreeMap,
-    fmt,
     fs::File,
     future::Future,
     io::BufWriter,
@@ -1939,6 +1939,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         })
         .ok();
 
+    posthog::init();
+
     let tauri_context = tauri::generate_context!();
 
     let specta_builder = tauri_specta::Builder::new()
@@ -2214,21 +2216,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
-                        .map_err(|err| {
-                            error!(
-                                "Error checking status of new uploader flow from settings: {err}"
-                            )
-                        })
-                        .ok()
-                        .and_then(|v| v.map(|v| v.enable_new_uploader))
-                        .unwrap_or(false);
-                    if is_new_uploader_enabled {
-                        resume_uploads(app)
-                            .await
-                            .map_err(|err| warn!("Error resuming uploads: {err}"))
-                            .ok();
-                    }
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
                 }
             });
 
@@ -2384,10 +2375,34 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
+
+                                #[cfg(target_os = "windows")]
+                                if CapWindowId::Settings.get(&app).is_none() {
+                                    reopen_main_window(&app);
+                                }
                             }
-                            CapWindowId::Settings
-                            | CapWindowId::Upgrade
-                            | CapWindowId::ModeSelect => {
+                            CapWindowId::Settings => {
+                                for (label, window) in app.webview_windows() {
+                                    if let Ok(id) = CapWindowId::from_str(&label)
+                                        && matches!(
+                                            id,
+                                            CapWindowId::TargetSelectOverlay { .. }
+                                                | CapWindowId::Main
+                                                | CapWindowId::Camera
+                                        )
+                                    {
+                                        let _ = window.show();
+                                    }
+                                }
+
+                                #[cfg(target_os = "windows")]
+                                if !has_open_editor_window(&app) {
+                                    reopen_main_window(&app);
+                                }
+
+                                return;
+                            }
+                            CapWindowId::Upgrade | CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label)
                                         && matches!(
@@ -2504,6 +2519,30 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             }
             _ => {}
         });
+}
+
+#[cfg(target_os = "windows")]
+fn has_open_editor_window(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .keys()
+        .any(|label| matches!(CapWindowId::from_str(label), Ok(CapWindowId::Editor { .. })))
+}
+
+#[cfg(target_os = "windows")]
+fn reopen_main_window(app: &AppHandle) {
+    if let Some(main) = CapWindowId::Main.get(app) {
+        let _ = main.show();
+        let _ = main.set_focus();
+    } else {
+        let handle = app.clone();
+        tokio::spawn(async move {
+            let _ = ShowCapWindow::Main {
+                init_target_mode: None,
+            }
+            .show(&handle)
+            .await;
+        });
+    }
 }
 
 async fn resume_uploads(app: AppHandle) -> Result<(), String> {
