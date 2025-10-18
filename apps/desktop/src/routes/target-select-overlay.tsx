@@ -37,6 +37,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { createWritableMemo } from "@solid-primitives/memo";
 
 const EMPTY_BOUNDS = {
 	position: { x: 0, y: 0 },
@@ -281,8 +282,8 @@ function Inner() {
 					const [dragging, setDragging] = createSignal(false);
 					const [creating, setCreating] = createSignal(false);
 					// Initialize hasArea based on whether bounds have meaningful dimensions
-					const [hasArea, setHasArea] = createSignal(
-						bounds.size.width > 0 && bounds.size.height > 0,
+					const [hasArea, setHasArea] = createWritableMemo(
+						() => bounds.size.width > 0 && bounds.size.height > 0,
 					);
 					// Track whether the controls should be placed above the selection to avoid window bottom overflow
 					const [placeControlsAbove, setPlaceControlsAbove] =
