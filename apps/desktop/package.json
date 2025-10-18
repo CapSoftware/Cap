@@ -21,6 +21,7 @@
 		"@radix-ui/colors": "^3.0.0",
 		"@rive-app/canvas": "^2.26.7",
 		"@solid-primitives/bounds": "^0.0.122",
+		"@solid-primitives/broadcast-channel": "^0.1.1",
 		"@solid-primitives/context": "^0.2.3",
 		"@solid-primitives/date": "^2.0.23",
 		"@solid-primitives/deep": "^0.2.9",
