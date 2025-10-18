@@ -665,7 +665,7 @@ function AreaSelectButton(props: {
 	onMount(async () => {
 		const unlistenCaptureAreaWindow =
 			await getCurrentWebviewWindow().listen<boolean>(
-				"cap-window://capture-area/state/pending",
+				"setCaptureAreaPending",
 				(event) => setAreaSelection("pending", event.payload),
 			);
 		onCleanup(unlistenCaptureAreaWindow);
