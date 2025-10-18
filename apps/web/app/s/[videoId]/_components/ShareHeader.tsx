@@ -129,9 +129,7 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isUserPro = userIsPro(user);
-	const showUpgradeBanner =
-		user && data.ownerId === user.id && !userIsPro(user);
+	const isVideoOwnerPro = user && data.ownerId === user.id && userIsPro(user);
 
 	const handleSharingUpdated = () => {
 		refresh();
@@ -183,7 +181,7 @@ export const ShareHeader = ({
 
 	return (
 		<>
-			{showUpgradeBanner && (
+			{user !== null && !isVideoOwnerPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -282,7 +280,7 @@ export const ShareHeader = ({
 										)}
 									</Button>
 								</div>
-								{user !== null && !isUserPro && (
+								{!isVideoOwnerPro && (
 									<button
 										type="button"
 										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
