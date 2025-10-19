@@ -97,7 +97,7 @@ pub async fn get_export_estimates(
 ) -> Result<ExportEstimates, String> {
     let metadata = get_video_metadata(path.clone()).await?;
 
-    let meta = RecordingMeta::load_for_project(&path).unwrap();
+    let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
     let project_config = meta.project_config();
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
         timeline.segments.iter().map(|s| s.duration()).sum()
