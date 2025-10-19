@@ -438,7 +438,7 @@ impl Frame {
             Height: self.height,
             MipLevels: 1,
             ArraySize: 1,
-            Format: DXGI_FORMAT(DirectXPixelFormat::R8G8B8A8UIntNormalized.0), // (self.color_format as i32),
+            Format: self.pixel_format.as_dxgi(),
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 Quality: 0,
