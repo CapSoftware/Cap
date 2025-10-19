@@ -431,14 +431,20 @@ impl H264Encoder {
                             ..Default::default()
                         };
 
+                        // ProcessOutput may succeed but not populate pSample in some edge cases
+                        // (e.g., hardware encoder transient failures, specific MFT implementations).
+                        // This is a known contract violation by certain Media Foundation Transforms.
+                        // We handle this gracefully by skipping the frame instead of panicking.
                         let sample = {
                             let mut output_buffers = [output_buffer];
                             self.transform
                                 .ProcessOutput(0, &mut output_buffers, &mut status)?;
-                            output_buffers[0].pSample.as_ref().unwrap().clone()
+                            output_buffers[0].pSample.as_ref().cloned()
                         };
 
-                        on_sample(sample)?;
+                        if let Some(sample) = sample {
+                            on_sample(sample)?;
+                        }
                     }
                     _ => {
                         panic!("Unknown media event type: {}", event_type.0);
