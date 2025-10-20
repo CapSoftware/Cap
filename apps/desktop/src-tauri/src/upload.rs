@@ -236,13 +236,21 @@ pub async fn create_or_get_video(
             error: String,
         }
 
-        if let Ok(error) = response.json::<CreateErrorResponse>().await {
+        let status = response.status();
+        let body = response.text().await;
+
+        if let Some(error) = body
+            .as_ref()
+            .ok()
+            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(&*body).ok())
+            && status == StatusCode::FORBIDDEN
+        {
             if error.error == "upgrade_required" {
                 return Err(AuthedApiError::UpgradeRequired);
             }
         }
 
-        return Err("Unknown error uploading video".into());
+        return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
     }
 
     let response_text = response
