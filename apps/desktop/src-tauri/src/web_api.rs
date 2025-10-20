@@ -133,9 +133,9 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         let mut app_state = state.read().await;
 
         if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
-            return app_state.server_url == env_url;
+            return app_state.server_url != env_url;
         }
 
-        return true;
+        return false;
     }
 }

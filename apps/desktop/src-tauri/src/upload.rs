@@ -601,6 +601,17 @@ fn multipart_uploader(
 
         loop {
 	        let (item, mut presigned_url, md5_sum) = if use_md5_hashes {
+				let Some(item) = stream.next().await else {
+					break;
+				};
+				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+				let md5_sum = base64::encode(md5::compute(&item.chunk).0);
+				let presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number, Some(
+					&md5_sum
+				)).await?;
+
+				(item, presigned_url, Some(md5_sum))
+	        } else {
 				let (Some(item), presigned_url) = join(
 	                stream.next(),
 	                // We generate the presigned URL ahead of time for the part we expect to come next.
@@ -613,18 +624,7 @@ fn multipart_uploader(
 
 				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
 
-	            (item, presigned_url?, None)
-	        } else {
-				let Some(item) = stream.next().await else {
-					break;
-				};
-				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-				let md5_sum = base64::encode(md5::compute(&item.chunk).0);
-				let presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number, Some(
-					&md5_sum
-				)).await?;
-
-				(item, presigned_url, Some(md5_sum))
+				(item, presigned_url?, None)
 			};
 
             let Chunk { total_size, part_number, chunk } = item;
