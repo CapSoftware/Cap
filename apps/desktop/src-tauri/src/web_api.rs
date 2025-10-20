@@ -1,8 +1,5 @@
 use reqwest::StatusCode;
-use serde::Serialize;
-use specta::Type;
 use tauri::{Emitter, Manager, Runtime};
-use tauri_specta::Event;
 use thiserror::Error;
 use tracing::{error, warn};
 
@@ -20,11 +17,22 @@ pub enum AuthedApiError {
     #[error("AuthedApiError/AuthStore: {0}")]
     AuthStore(String),
     #[error("AuthedApiError/Request: {0}")]
-    Request(#[from] reqwest::Error),
+    Request(reqwest::Error),
     #[error("AuthedApiError/Deserialization: {0}")]
     Deserialization(#[from] serde_json::Error),
+    #[error("The request has timed out")]
+    Timeout,
     #[error("AuthedApiError/Other: {0}")]
     Other(String),
+}
+
+impl From<reqwest::Error> for AuthedApiError {
+    fn from(err: reqwest::Error) -> Self {
+        match err {
+            err if err.is_timeout() => AuthedApiError::Timeout,
+            err => AuthedApiError::Request(err),
+        }
+    }
 }
 
 impl From<&'static str> for AuthedApiError {

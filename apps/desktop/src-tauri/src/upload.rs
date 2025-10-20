@@ -645,7 +645,7 @@ fn multipart_uploader(
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
                 .header("Content-Length", chunk.len())
-                .timeout(Duration::from_secs(15 * 60))
+                .timeout(Duration::from_secs(5 * 60))
                 .body(chunk)
                 .send()
                 .await
