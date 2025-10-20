@@ -103,9 +103,10 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
 
-        Ok(())
+        Ok(metadata)
     };
 
     // TODO: We don't report progress on image upload
@@ -126,8 +127,15 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(()) => PostHogEvent::MultipartUploadComplete {
+        Ok(video) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
+            length: video
+                .as_ref()
+                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                .unwrap_or_default(),
+            size: std::fs::metadata(file_path)
+                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                .unwrap_or_default(),
         },
         Err(err) => PostHogEvent::MultipartUploadFailed {
             duration: start.elapsed(),
