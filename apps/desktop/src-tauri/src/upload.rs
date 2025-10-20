@@ -33,7 +33,7 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
-    time::{self, Instant},
+    time::{self, Instant, timeout},
 };
 use tokio_util::io::ReaderStream;
 use tracing::{Span, debug, error, info, info_span, instrument, trace};
@@ -474,7 +474,17 @@ pub fn from_pending_file_to_chunks(
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
-        let mut file = tokio::fs::File::open(&path).await?;
+        let mut file = timeout(Duration::from_secs(20), async move {
+            loop {
+                if let Ok(file) = tokio::fs::File::open(&path).await.map_err(|err| error!("from_pending_file_to_chunks/open: {err:?}")) {
+                    break file;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to open file. The recording pipeline may have crashed?"))?;
+
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
@@ -488,10 +498,10 @@ pub fn from_pending_file_to_chunks(
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
-                        Err(_) => yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
-                            "Realtime generation failed"
-                        ))?,
+                        // This means all senders where dropped.
+                        // This can assume this means realtime is done.
+                        // It possibly means something has gone wrong but that's not the uploader's problem.
+                        Err(_) => realtime_is_done = Some(true),
                     }
                 }
             }
