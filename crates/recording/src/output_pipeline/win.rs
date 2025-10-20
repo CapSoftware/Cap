@@ -130,7 +130,7 @@ impl Muxer for WindowsMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder");
                         let mut first_timestamp = None;
-                        encoder
+                        if let Err(e) = encoder
                             .run(
                                 Arc::new(AtomicBool::default()),
                                 || {
@@ -157,7 +157,13 @@ impl Muxer for WindowsMuxer {
                                     Ok(())
                                 },
                             )
-                            .unwrap();
+                        {
+                            error!(
+                                "Hardware encoder failed with error: {} (code: {:?}). This may be due to hardware limitations or driver issues.",
+                                e.message(),
+                                e.code()
+                            );
+                        }
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
