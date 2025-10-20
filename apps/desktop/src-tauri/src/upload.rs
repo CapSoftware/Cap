@@ -413,7 +413,8 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
         info!("Multipart upload complete for {video_id}.");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -644,7 +645,7 @@ fn multipart_uploader(
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
                 .header("Content-Length", chunk.len())
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(15 * 60))
                 .body(chunk)
                 .send()
                 .await
@@ -691,7 +692,6 @@ pub async fn singlepart_uploader(
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
-        .timeout(Duration::from_secs(120))
         .body(reqwest::Body::wrap_stream(stream))
         .send()
         .await
