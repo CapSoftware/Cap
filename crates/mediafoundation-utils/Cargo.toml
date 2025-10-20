@@ -11,6 +11,7 @@ windows = { workspace = true, features = [
     "Win32_Media_MediaFoundation",
     "Win32_Media_DirectShow",
     "Win32_System_Com",
+    "Win32_System_LibraryLoader",
 ] }
 
 [lints]

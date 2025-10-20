@@ -64,7 +64,19 @@ impl Muxer for WindowsMuxer {
             let output = output.clone();
 
             tasks.spawn_thread("windows-encoder", move || {
-                cap_mediafoundation_utils::thread_init();
+                // Check for incompatible third-party software before initializing
+                if let Err(e) = cap_mediafoundation_utils::check_compatibility() {
+                    error!("Third-party software conflict detected: {}", e);
+                    let _ = ready_tx.send(Err(anyhow!("{}", e)));
+                    return;
+                }
+                
+                // Initialize Windows Runtime and Media Foundation with error handling
+                if let Err(e) = cap_mediafoundation_utils::thread_init_checked() {
+                    error!("Failed to initialize encoder thread: {}", e);
+                    let _ = ready_tx.send(Err(anyhow!("{}", e)));
+                    return;
+                }
 
                 let encoder = (|| {
                     let mut output = output.lock().unwrap();

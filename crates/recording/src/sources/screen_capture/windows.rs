@@ -185,7 +185,19 @@ impl output_pipeline::VideoSource for VideoSource {
         let tokio_rt = tokio::runtime::Handle::current();
 
         ctx.tasks().spawn_thread("d3d-capture-thread", move || {
-            cap_mediafoundation_utils::thread_init();
+            // Check for incompatible third-party software before initializing
+            if let Err(e) = cap_mediafoundation_utils::check_compatibility() {
+                error!("Third-party software conflict detected: {}", e);
+                let _ = error_tx.send(anyhow!("{}", e));
+                return;
+            }
+            
+            // Initialize Windows Runtime and Media Foundation with error handling
+            if let Err(e) = cap_mediafoundation_utils::thread_init_checked() {
+                error!("Failed to initialize capture thread: {}", e);
+                let _ = error_tx.send(anyhow!("{}", e));
+                return;
+            }
 
             // Look up the display and create the GraphicsCaptureItem on this thread to avoid COM threading issues
             let capture_item = match Display::from_id(&display_id) {

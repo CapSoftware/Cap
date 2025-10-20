@@ -288,7 +288,13 @@ pub async fn spawn_instant_recording_actor(
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
     #[cfg(windows)]
-    cap_mediafoundation_utils::thread_init();
+    {
+        // Check for incompatible third-party software before initializing
+        cap_mediafoundation_utils::check_compatibility()?;
+        
+        // Initialize Windows Runtime and Media Foundation with error handling
+        cap_mediafoundation_utils::thread_init_checked()?;
+    }
 
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
