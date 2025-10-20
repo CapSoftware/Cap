@@ -9,12 +9,12 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Search } from "lucide-react";
-import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { getImageUrl } from "@/lib/get-image-url";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import SpaceDialog from "../../_components/Navbar/SpaceDialog";
 import { useDashboardContext } from "../../Contexts";
@@ -132,21 +132,12 @@ export default function BrowseSpacesPage() {
 										className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
 									>
 										<td className="flex gap-3 items-center px-6 py-4">
-											{space.iconUrl ? (
-												<Image
-													src={space.iconUrl}
-													alt={space.name}
-													width={24}
-													height={24}
-													className="object-cover flex-shrink-0 w-7 h-7 rounded-full"
-												/>
-											) : (
-												<Avatar
-													className="relative flex-shrink-0 size-7"
-													letterClass="text-sm"
-													name={space.name}
-												/>
-											)}
+											<Avatar
+												className="relative flex-shrink-0 size-7"
+												letterClass="text-sm"
+												name={space.name}
+												imageUrl={getImageUrl(space.iconUrlOrKey) ?? undefined}
+											/>
 											<span className="text-sm font-semibold text-gray-12">
 												{space.name}
 											</span>
@@ -177,7 +168,7 @@ export default function BrowseSpacesPage() {
 																members: (trueActiveOrgMembers || []).map(
 																	(m: { user: { id: string } }) => m.user.id,
 																),
-																iconUrl: space.iconUrl,
+																iconUrlOrKey: space.iconUrlOrKey,
 															});
 															setShowSpaceDialog(true);
 														}}

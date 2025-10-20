@@ -99,7 +99,7 @@ export const MembersIndicator = ({
 				.map((m) => ({
 					value: m.userId,
 					label: m.name || m.email,
-					image: m.image || undefined,
+					image: m.imageUrlOrKey || undefined,
 				}));
 		},
 		[organizationMembers, user],
@@ -167,7 +167,7 @@ export const MembersIndicator = ({
 										>
 											<Avatar
 												name={member.name || member.email}
-												imageUrl={member.image || undefined}
+												imageUrl={member.imageUrlOrKey || undefined}
 												className="size-8"
 												letterClass="text-sm"
 											/>

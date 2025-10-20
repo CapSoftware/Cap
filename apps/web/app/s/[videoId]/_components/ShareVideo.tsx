@@ -29,7 +29,7 @@ declare global {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImage: string | null;
+	authorImageUrlOrKey: string | null;
 };
 
 export const ShareVideo = forwardRef<
@@ -203,6 +203,7 @@ export const ShareVideo = forwardRef<
 								timestamp: comment.timestamp,
 								content: comment.content,
 								authorName: comment.authorName,
+								authorImageUrlOrKey: comment.authorImageUrlOrKey ?? undefined,
 							}))}
 							onSeek={handleSeek}
 						/>

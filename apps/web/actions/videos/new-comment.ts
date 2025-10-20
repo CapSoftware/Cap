@@ -67,7 +67,7 @@ export async function newComment(data: {
 	const commentWithAuthor = {
 		...newComment,
 		authorName: user.name,
-		authorImage: user.image ?? null,
+		authorImageUrlOrKey: user.imageUrlOrKey ?? null,
 		sending: false,
 	};
 

@@ -17,7 +17,6 @@ import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -33,6 +32,7 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
@@ -101,22 +101,14 @@ const Top = () => {
 			<div className="flex flex-col gap-0.5">
 				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
 				<div className="flex gap-1.5 items-center">
-					{activeSpace &&
-						(activeSpace.iconUrl ? (
-							<Image
-								src={activeSpace?.iconUrl}
-								alt={activeSpace?.name || "Space"}
-								width={20}
-								height={20}
-								className="rounded-full"
-							/>
-						) : (
-							<Avatar
-								letterClass="text-xs"
-								className="relative flex-shrink-0 size-5"
-								name={activeSpace?.name}
-							/>
-						))}
+					{activeSpace && (
+						<Avatar
+							letterClass="text-xs"
+							className="relative flex-shrink-0 size-5"
+							name={activeSpace?.name}
+							imageUrl={getImageUrl(activeSpace.iconUrlOrKey) ?? undefined}
+						/>
+					)}
 					<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
 						{title}
 					</p>
@@ -272,7 +264,7 @@ const User = () => {
 							<Avatar
 								letterClass="text-xs lg:text-md"
 								name={user.name ?? "User"}
-								imageUrl={user.image ?? undefined}
+								imageUrl={getImageUrl(user.imageUrlOrKey) ?? undefined}
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>
 							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">

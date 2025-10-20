@@ -40,7 +40,7 @@ export type VideoData = {
 	sharedSpaces?: {
 		id: string;
 		name: string;
-		iconUrl: string;
+		iconUrlOrKey: string;
 		isOrg: boolean;
 		organizationId: string;
 	}[];

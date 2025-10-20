@@ -4,7 +4,6 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import { Space } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
@@ -17,7 +16,7 @@ interface CreateSpaceResponse {
 	success: boolean;
 	spaceId?: string;
 	name?: string;
-	iconUrl?: string | null;
+	iconUrlOrKey?: string | null;
 	error?: string;
 }
 
@@ -66,7 +65,7 @@ export async function createSpace(
 		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
-		let iconUrl = null;
+		let iconUrlOrKey = null;
 
 		if (iconFile) {
 			// Validate file type
@@ -100,20 +99,7 @@ export async function createSpace(
 						yield* Effect.promise(() => iconFile.bytes()),
 						{ contentType: iconFile.type },
 					);
-
-					// Construct the icon URL
-					if (serverEnv().CAP_AWS_BUCKET_URL) {
-						// If a custom bucket URL is defined, use it
-						iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-					} else if (serverEnv().CAP_AWS_ENDPOINT) {
-						// For custom endpoints like MinIO
-						iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-					} else {
-						// Default AWS S3 URL format
-						iconUrl = `https://${bucket.bucketName}.s3.${
-							serverEnv().CAP_AWS_REGION || "us-east-1"
-						}.amazonaws.com/${fileKey}`;
-					}
+					iconUrlOrKey = fileKey;
 				}).pipe(runPromise);
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
@@ -131,8 +117,10 @@ export async function createSpace(
 				name,
 				organizationId: user.activeOrganizationId,
 				createdById: user.id,
-				iconUrl,
-				description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
+				iconUrlOrKey,
+				description: iconUrlOrKey
+					? `Space with custom icon: ${iconUrlOrKey}`
+					: null,
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
@@ -198,7 +186,7 @@ export async function createSpace(
 			success: true,
 			spaceId,
 			name,
-			iconUrl,
+			iconUrlOrKey,
 		};
 	} catch (error) {
 		console.error("Error creating space:", error);

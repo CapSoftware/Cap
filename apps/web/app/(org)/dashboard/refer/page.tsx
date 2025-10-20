@@ -54,7 +54,7 @@ export default async function ReferPage() {
 		user.id,
 		user.name,
 		user.email,
-		user.image,
+		user.imageUrlOrKey,
 	);
 
 	return <ReferClient token={token} />;

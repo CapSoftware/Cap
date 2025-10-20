@@ -17,12 +17,14 @@ import {
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
-import React, { useRef, useState } from "react";
+import type React from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
 import { updateSpace } from "@/actions/organization/update-space";
 import { FileInput } from "@/components/FileInput";
+import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext } from "../../Contexts";
 import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";
 import { createSpace } from "./server";
@@ -35,7 +37,7 @@ interface SpaceDialogProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrl?: string;
+		iconUrlOrKey?: string;
 	} | null;
 	onSpaceUpdated?: () => void;
 }
@@ -51,10 +53,9 @@ const SpaceDialog = ({
 	const formRef = useRef<HTMLFormElement | null>(null);
 	const [spaceName, setSpaceName] = useState(space?.name || "");
 
-	// Reset spaceName when dialog opens or space changes
-	React.useEffect(() => {
+	useEffect(() => {
 		setSpaceName(space?.name || "");
-	}, [space, open]);
+	}, [space]);
 
 	return (
 		<Dialog open={open} onOpenChange={(open) => !open && onClose()}>
@@ -117,7 +118,7 @@ export interface NewSpaceFormProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrl?: string;
+		iconUrlOrKey?: string;
 	} | null;
 }
 
@@ -141,7 +142,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 		mode: "onChange",
 	});
 
-	React.useEffect(() => {
+	useEffect(() => {
 		if (space) {
 			form.reset({
 				name: space.name,
@@ -184,7 +185,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						if (edit && space?.id) {
 							formData.append("id", space.id);
 							// If the user removed the icon, send a removeIcon flag
-							if (selectedFile === null && space.iconUrl) {
+							if (selectedFile === null && space.iconUrlOrKey) {
 								formData.append("removeIcon", "true");
 							}
 							await updateSpace(formData);
@@ -255,7 +256,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 											.map((m) => ({
 												value: m.user.id,
 												label: m.user.name || m.user.email,
-												image: m.user.image || undefined,
+												image: getImageUrl(m.user.imageUrlOrKey) ?? undefined,
 											}))}
 										onSelect={(selected) =>
 											field.onChange(selected.map((opt) => opt.value))
@@ -275,9 +276,9 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 
 					<div className="relative mt-2">
 						<FileInput
-							id="icon"
+							id="space-icon"
 							name="icon"
-							initialPreviewUrl={space?.iconUrl || null}
+							initialPreviewUrl={space?.iconUrlOrKey || null}
 							notDraggingClassName="hover:bg-gray-3"
 							onChange={setSelectedFile}
 							disabled={isUploading}

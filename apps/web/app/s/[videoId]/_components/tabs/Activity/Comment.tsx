@@ -78,7 +78,7 @@ const CommentComponent: React.FC<{
 					className="size-6"
 					letterClass="text-sm"
 					name={comment.authorName}
-					imageUrl={comment.authorImage ?? undefined}
+					imageUrl={comment.authorImageUrlOrKey ?? undefined}
 				/>
 				<motion.div
 					viewport={{

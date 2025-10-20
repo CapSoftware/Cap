@@ -5,7 +5,6 @@ import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,6 +15,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext } from "../Contexts";
 import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
@@ -76,22 +76,14 @@ const Orgs = ({
 			ref={containerRef}
 			className="flex gap-1.5 items-center p-2 rounded-full border bg-gray-3 border-gray-5"
 		>
-			{activeOrg?.organization.iconUrl ? (
-				<div className="overflow-hidden relative flex-shrink-0 rounded-full size-[24px]">
-					<Image
-						src={activeOrg.organization.iconUrl}
-						alt={activeOrg.organization.name || "Organization icon"}
-						fill
-						className="object-cover"
-					/>
-				</div>
-			) : (
-				<Avatar
-					letterClass="text-xs"
-					className="relative flex-shrink-0 mx-auto size-6"
-					name={activeOrg?.organization.name ?? "No organization found"}
-				/>
-			)}
+			<Avatar
+				letterClass="text-xs"
+				className="relative flex-shrink-0 mx-auto size-6"
+				name={activeOrg?.organization.name ?? "No organization found"}
+				imageUrl={
+					getImageUrl(activeOrg?.organization.iconUrlOrKey) ?? undefined
+				}
+			/>
 			<p className="text-sm mr-2 text-gray-12 truncate w-fit max-w-[90px]">
 				{activeOrg?.organization.name}
 			</p>
@@ -145,22 +137,20 @@ const OrgsMenu = ({
 						}}
 					>
 						<div className="flex gap-2 items-center w-full">
-							{organization.organization.iconUrl ? (
-								<div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-									<Image
-										src={organization.organization.iconUrl}
-										alt={organization.organization.name || "Organization icon"}
-										fill
-										className="object-cover"
+							<IconImage
+								iconUrlOrKey={organization.organization.iconUrlOrKey}
+								alt={organization.organization.name || "Organization icon"}
+								width={20}
+								height={20}
+								className="object-cover rounded-full"
+								fallback={
+									<Avatar
+										letterClass="text-xs"
+										className="relative flex-shrink-0 size-5"
+										name={organization.organization.name}
 									/>
-								</div>
-							) : (
-								<Avatar
-									letterClass="text-xs"
-									className="relative flex-shrink-0 size-5"
-									name={organization.organization.name}
-								/>
-							)}
+								}
+							/>
 							<p
 								className={clsx(
 									"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",

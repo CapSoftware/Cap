@@ -12,6 +12,7 @@ import Image from "next/image";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { getImageUrl } from "@/lib/get-image-url";
 import { Tooltip } from "./Tooltip";
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
@@ -54,20 +55,36 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const [previewUrl, setPreviewUrl] = useState<string | null>(
 		initialPreviewUrl,
 	);
+	const [isLocalPreview, setIsLocalPreview] = useState(false);
+	const previousPreviewRef = useRef<{
+		url: string | null;
+		isLocal: boolean;
+	}>({ url: null, isLocal: false });
 
 	// Update preview URL when initialPreviewUrl changes
 	useEffect(() => {
+		// Clean up old blob URL if it exists
+		if (previousPreviewRef.current.url && previousPreviewRef.current.isLocal) {
+			URL.revokeObjectURL(previousPreviewRef.current.url);
+		}
+
 		setPreviewUrl(initialPreviewUrl);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: initialPreviewUrl,
+			isLocal: false,
+		};
 	}, [initialPreviewUrl]);
 
 	// Clean up the preview URL when component unmounts
 	useEffect(() => {
 		return () => {
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 		};
-	}, [previewUrl, initialPreviewUrl]);
+	}, [previewUrl, isLocalPreview]);
 
 	const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -144,14 +161,20 @@ export const FileInput: React.FC<FileInputProps> = ({
 				return;
 			}
 
-			// Clean up previous preview URL if it's not the initial preview URL
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			// Clean up previous preview URL if it's a local blob URL
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 
 			// Create a new preview URL for immediate feedback
 			const newPreviewUrl = URL.createObjectURL(file);
 			setPreviewUrl(newPreviewUrl);
+			setIsLocalPreview(true);
+
+			previousPreviewRef.current = {
+				url: newPreviewUrl,
+				isLocal: true,
+			};
 
 			// Call the onChange callback
 			if (onChange) {
@@ -163,12 +186,18 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const handleRemove = (e: React.MouseEvent) => {
 		e.stopPropagation();
 
-		// Clean up preview URL if it's not the initial preview URL
-		if (previewUrl && previewUrl !== initialPreviewUrl) {
+		// Clean up preview URL if it's a local blob URL
+		if (previewUrl && isLocalPreview) {
 			URL.revokeObjectURL(previewUrl);
 		}
 
 		setPreviewUrl(null);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: null,
+			isLocal: false,
+		};
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -210,12 +239,14 @@ export const FileInput: React.FC<FileInputProps> = ({
 										className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
 									>
 										{previewUrl && (
-											<Image
-												src={previewUrl}
+											<img
+												src={getImageUrl(previewUrl) ?? ""}
+												alt="File preview"
 												width={32}
 												height={32}
-												alt="File preview"
-												className="object-cover rounded-full"
+												loading="eager"
+												referrerPolicy="no-referrer"
+												className="object-cover rounded-full size-8"
 											/>
 										)}
 									</div>

@@ -25,12 +25,12 @@ import { Toolbar } from "./_components/Toolbar";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImage: string | null;
+	authorImageUrlOrKey: string | null;
 };
 
 export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
-	authorImage?: string | null;
+	authorImageUrlOrKey?: string | null;
 	sending?: boolean;
 };
 

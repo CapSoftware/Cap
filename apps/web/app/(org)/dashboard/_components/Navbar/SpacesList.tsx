@@ -11,7 +11,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
@@ -19,6 +18,7 @@ import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { deleteSpace } from "@/actions/organization/delete-space";
 import { Tooltip } from "@/components/Tooltip";
+import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
 import { LayersIcon } from "../AnimatedIcons";
@@ -279,26 +279,17 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 											space.primary ? "h-10" : "h-fit",
 										)}
 									>
-										{space.iconUrl ? (
-											<Image
-												src={space.iconUrl}
-												alt={space.name}
-												className="relative flex-shrink-0 rounded-full"
-												width={sidebarCollapsed ? 24 : 20}
-												height={sidebarCollapsed ? 24 : 20}
-											/>
-										) : (
-											<Avatar
-												letterClass={clsx(
-													sidebarCollapsed ? "text-sm" : "text-[11px]",
-												)}
-												className={clsx(
-													"relative flex-shrink-0",
-													sidebarCollapsed ? "size-6" : "size-5",
-												)}
-												name={space.name}
-											/>
-										)}
+										<Avatar
+											letterClass={clsx(
+												sidebarCollapsed ? "text-sm" : "text-[11px]",
+											)}
+											className={clsx(
+												"relative flex-shrink-0",
+												sidebarCollapsed ? "size-6" : "size-5",
+											)}
+											name={space.name}
+											imageUrl={getImageUrl(space.iconUrlOrKey) ?? undefined}
+										/>
 										{!sidebarCollapsed && (
 											<>
 												<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
@@ -358,6 +349,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			<SpaceDialog
 				open={showSpaceDialog}
 				onClose={() => setShowSpaceDialog(false)}
+				onSpaceUpdated={() => {
+					router.refresh();
+					setShowSpaceDialog(false);
+				}}
 			/>
 		</div>
 	);

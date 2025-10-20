@@ -35,7 +35,7 @@ export const Settings = ({
 	const firstNameId = useId();
 	const lastNameId = useId();
 	const contactEmailId = useId();
-	const initialProfileImage = user?.image ?? null;
+	const initialProfileImage = user?.imageUrlOrKey ?? null;
 	const [profileImageOverride, setProfileImageOverride] = useState<
 		string | null | undefined
 	>(undefined);
@@ -174,6 +174,7 @@ export const Settings = ({
 						disabled={isProfileImageMutating}
 						isUploading={uploadProfileImageMutation.isPending}
 						isRemoving={removeProfileImageMutation.isPending}
+						userName={user?.name}
 					/>
 				</Card>
 				<Card className="space-y-4">
