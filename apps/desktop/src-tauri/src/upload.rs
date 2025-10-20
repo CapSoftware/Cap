@@ -65,7 +65,6 @@ pub async fn upload_video(
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
-    println!("Uploading video {video_id}...");
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
