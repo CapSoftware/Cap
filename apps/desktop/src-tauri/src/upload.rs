@@ -127,9 +127,9 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(video) => PostHogEvent::MultipartUploadComplete {
+        Ok(meta) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
-            length: video
+            length: meta
                 .as_ref()
                 .map(|v| Duration::from_secs(v.duration_in_secs as u64))
                 .unwrap_or_default(),
@@ -334,15 +334,22 @@ impl InstantMultipartUpload {
                 let start = Instant::now();
                 let result = Self::run(
                     app,
-                    file_path,
+                    file_path.clone(),
                     pre_created_video,
                     realtime_upload_done,
                     recording_dir,
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(()) => PostHogEvent::MultipartUploadComplete {
+                    Ok(meta) => PostHogEvent::MultipartUploadComplete {
                         duration: start.elapsed(),
+                        length: meta
+                            .as_ref()
+                            .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                            .unwrap_or_default(),
+                        size: std::fs::metadata(file_path)
+                            .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                            .unwrap_or_default(),
                     },
                     Err(err) => PostHogEvent::MultipartUploadFailed {
                         duration: start.elapsed(),
@@ -361,7 +368,7 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<(), AuthedApiError> {
+    ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
@@ -419,7 +426,7 @@ impl InstantMultipartUpload {
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        Ok(())
+        Ok(metadata)
     }
 }
 
