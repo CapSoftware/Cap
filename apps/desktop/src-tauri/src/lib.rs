@@ -25,7 +25,6 @@ mod target_select_overlay;
 mod thumbnails;
 mod tray;
 mod upload;
-mod upload_legacy;
 mod web_api;
 mod window_exclusion;
 mod windows;
