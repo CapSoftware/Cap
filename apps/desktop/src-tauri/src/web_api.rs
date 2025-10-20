@@ -84,6 +84,8 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
     ) -> Result<reqwest::Response, reqwest::Error>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
+
+    async fn is_server_url_custom(&self) -> bool;
 }
 
 impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
@@ -124,5 +126,16 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         let app_state = self.state::<ArcLock<crate::App>>();
         let server_url = &app_state.read().await.server_url;
         format!("{}{}", server_url, pathname.as_ref())
+    }
+
+    async fn is_server_url_custom(&self) -> bool {
+        let mut state = self.state::<ArcLock<crate::App>>();
+        let mut app_state = state.read().await;
+
+        if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
+            return app_state.server_url == env_url;
+        }
+
+        return true;
     }
 }
