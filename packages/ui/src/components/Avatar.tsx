@@ -67,6 +67,7 @@ export interface AvatarProps {
 	imageUrl?: string | null;
 	className?: string;
 	letterClass?: string;
+	noFallback?: boolean;
 }
 
 export const Avatar: React.FC<AvatarProps> = ({

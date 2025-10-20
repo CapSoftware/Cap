@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faTrash } from "@fortawesome/free-solid-svg-icons";
+import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
@@ -88,11 +88,21 @@ export function ProfileImage({
 						previewUrl ? "border-solid" : "border-dashed",
 					)}
 				>
-					<SignedImageUrl
-						imageKeyOrUrl={previewUrl}
-						name={userName || "User"}
-						className="size-14"
-					/>
+					{previewUrl ? (
+						<SignedImageUrl
+							imageKeyOrUrl={previewUrl}
+							name={userName || "User"}
+							letterClass="text-lg"
+							className="size-full"
+						/>
+					) : (
+						<div className="flex justify-center items-center rounded-full size-full bg-gray-5">
+							<FontAwesomeIcon
+								icon={faImage}
+								className="mx-auto size-5 text-gray-8"
+							/>
+						</div>
+					)}
 				</div>
 				<input
 					type="file"

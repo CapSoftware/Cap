@@ -9,6 +9,7 @@ interface SignedImageUrlProps {
 	name: string;
 	className?: string;
 	letterClass?: string;
+	noFallback?: boolean;
 }
 
 /**
