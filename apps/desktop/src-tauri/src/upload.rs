@@ -36,7 +36,7 @@ use tokio::{
     time::{self, Instant},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{Span, debug, error, info, instrument, trace};
+use tracing::{Span, debug, error, info, info_span, instrument, trace};
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -670,6 +670,7 @@ fn multipart_uploader(
 
             let resp = req
                 .send()
+                .instrument(info_span!("send", size = size))
                 .await
                 .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
 
