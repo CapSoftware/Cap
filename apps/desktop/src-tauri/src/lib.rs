@@ -2597,8 +2597,8 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                 app.clone(),
                                 file_path,
                                 pre_created_video,
-                                None,
                                 recording_dir,
+                                None,
                             );
                         }
                         UploadMeta::SinglePartUpload {

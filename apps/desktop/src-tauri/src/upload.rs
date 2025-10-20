@@ -325,8 +325,8 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_upload_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
+        realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
         Self {
             handle: spawn_actor(async move {
@@ -335,8 +335,8 @@ impl InstantMultipartUpload {
                     app,
                     file_path.clone(),
                     pre_created_video,
-                    realtime_upload_done,
                     recording_dir,
+                    realtime_upload_done,
                 )
                 .await;
                 async_capture_event(match &result {
@@ -365,8 +365,8 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
+        realtime_video_done: Option<Receiver<()>>,
     ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");

@@ -137,8 +137,8 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     }
 
     async fn is_server_url_custom(&self) -> bool {
-        let mut state = self.state::<ArcLock<crate::App>>();
-        let mut app_state = state.read().await;
+        let state = self.state::<ArcLock<crate::App>>();
+        let app_state = state.read().await;
 
         if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
             return app_state.server_url != env_url;
