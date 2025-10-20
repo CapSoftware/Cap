@@ -287,7 +287,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 									Dz.eq(Db.organizations.id, currentUser.activeOrganizationId),
 								);
 
-							if (!existingOrg || !user.onboardingSteps?.organizationSetup) {
+							if (!existingOrg) {
 								const newOrgId = Organisation.OrganisationId.make(nanoId());
 								await tx.insert(Db.organizations).values({
 									id: newOrgId,

@@ -1,12 +1,14 @@
 export const LoadingSpinner = ({
 	size = 36,
 	color = "white",
+	borderColor = "rgba(255, 255, 255, 0.2)",
 	thickness = 3,
 	speed = 1.5,
 	className,
 }: {
 	size?: number;
 	color?: string;
+	borderColor?: string;
 	thickness?: number;
 	speed?: number;
 	className?: string;
@@ -16,7 +18,7 @@ export const LoadingSpinner = ({
 		minWidth: `${size}px`,
 		height: `${size}px`,
 		minHeight: `${size}px`,
-		border: `${thickness}px solid rgba(255, 255, 255, 0.2)`,
+		border: `${thickness}px solid ${borderColor}`,
 		borderTop: `${thickness}px solid ${color}`,
 		borderRadius: "50%",
 		animation: `spin ${1 / speed}s linear infinite`,
