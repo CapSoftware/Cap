@@ -50,7 +50,7 @@ export interface ButtonProps
 	spinner?: boolean;
 	href?: string;
 	spinnerColor?: string;
-	spinnerBorderColor?: string;
+	spinnerBorderColor?: `rgba(${number},${number},${number},${number})`;
 	spinnerClassName?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
