@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
 import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
@@ -17,8 +17,8 @@ import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
-import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
 import { LayersIcon } from "../AnimatedIcons";
@@ -279,7 +279,9 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 											space.primary ? "h-10" : "h-fit",
 										)}
 									>
-										<Avatar
+										<SignedImageUrl
+											imageKeyOrUrl={space.iconUrlOrKey}
+											name={space.name}
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[11px]",
 											)}
@@ -287,8 +289,6 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 												"relative flex-shrink-0",
 												sidebarCollapsed ? "size-6" : "size-5",
 											)}
-											name={space.name}
-											imageUrl={getImageUrl(space.iconUrlOrKey) ?? undefined}
 										/>
 										{!sidebarCollapsed && (
 											<>

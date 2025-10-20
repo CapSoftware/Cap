@@ -2,7 +2,6 @@
 
 import { buildEnv } from "@cap/env";
 import {
-	Avatar,
 	Command,
 	CommandGroup,
 	CommandItem,
@@ -31,8 +30,8 @@ import {
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,
@@ -102,11 +101,11 @@ const Top = () => {
 				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
 				<div className="flex gap-1.5 items-center">
 					{activeSpace && (
-						<Avatar
+						<SignedImageUrl
+							imageKeyOrUrl={activeSpace.iconUrlOrKey}
+							name={activeSpace?.name}
 							letterClass="text-xs"
 							className="relative flex-shrink-0 size-5"
-							name={activeSpace?.name}
-							imageUrl={getImageUrl(activeSpace.iconUrlOrKey) ?? undefined}
 						/>
 					)}
 					<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
@@ -261,10 +260,10 @@ const User = () => {
 						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
 					>
 						<div className="flex items-center">
-							<Avatar
-								letterClass="text-xs lg:text-md"
+							<SignedImageUrl
+								imageKeyOrUrl={user.imageUrlOrKey}
 								name={user.name ?? "User"}
-								imageUrl={getImageUrl(user.imageUrlOrKey) ?? undefined}
+								letterClass="text-xs lg:text-md"
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>
 							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">

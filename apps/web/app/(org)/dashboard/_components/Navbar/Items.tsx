@@ -32,9 +32,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cloneElement, type RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
-import { getImageUrl } from "@/lib/get-image-url";
 import { useDashboardContext } from "../../Contexts";
 import { CapIcon, CogIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
@@ -122,7 +122,11 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									)}
 								>
 									<div className="flex items-center">
-										<Avatar
+										<SignedImageUrl
+											imageKeyOrUrl={activeOrg?.organization.iconUrlOrKey}
+											name={
+												activeOrg?.organization.name ?? "No organization found"
+											}
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
@@ -130,13 +134,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 												"relative flex-shrink-0 mx-auto",
 												sidebarCollapsed ? "size-6" : "size-7",
 											)}
-											name={
-												activeOrg?.organization.name ?? "No organization found"
-											}
-											imageUrl={
-												getImageUrl(activeOrg?.organization.iconUrlOrKey) ??
-												undefined
-											}
 										/>
 									</div>
 									<div className="flex flex-col flex-1 items-center h-10">
@@ -215,15 +212,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													}}
 												>
 													<div className="flex gap-2 items-center w-full">
-														<Avatar
+														<SignedImageUrl
+															imageKeyOrUrl={
+																organization.organization.iconUrlOrKey
+															}
+															name={organization.organization.name}
 															letterClass="text-xs"
 															className="relative flex-shrink-0 size-5"
-															name={organization.organization.name}
-															imageUrl={
-																getImageUrl(
-																	organization.organization.iconUrlOrKey,
-																) ?? undefined
-															}
 														/>
 														<p
 															className={clsx(

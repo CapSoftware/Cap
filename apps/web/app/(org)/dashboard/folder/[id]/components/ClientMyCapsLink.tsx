@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
-import { getImageUrl } from "@/lib/get-image-url";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
 
@@ -125,11 +125,11 @@ export function ClientMyCapsLink({
 			onDrop={handleDrop}
 		>
 			{activeSpace && (
-				<Avatar
+				<SignedImageUrl
+					imageKeyOrUrl={activeSpace.iconUrlOrKey}
+					name={activeSpace.name}
 					letterClass="text-xs"
 					className="relative flex-shrink-0 size-5"
-					name={activeSpace.name}
-					imageUrl={getImageUrl(activeSpace.iconUrlOrKey) ?? undefined}
 				/>
 			)}
 			{activeSpace ? activeSpace.name : "My Caps"}

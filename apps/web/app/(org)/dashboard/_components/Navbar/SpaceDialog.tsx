@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import * as z from "zod";
 import { updateSpace } from "@/actions/organization/update-space";
 import { FileInput } from "@/components/FileInput";
-import { getImageUrl } from "@/lib/get-image-url";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../Contexts";
 import { MemberSelect } from "../../spaces/[spaceId]/components/MemberSelect";
 import { createSpace } from "./server";
@@ -256,7 +256,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 											.map((m) => ({
 												value: m.user.id,
 												label: m.user.name || m.user.email,
-												image: getImageUrl(m.user.imageUrlOrKey) ?? undefined,
+												image: m.user.imageUrlOrKey ?? undefined,
 											}))}
 										onSelect={(selected) =>
 											field.onChange(selected.map((opt) => opt.value))

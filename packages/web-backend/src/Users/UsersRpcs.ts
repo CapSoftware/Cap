@@ -1,10 +1,12 @@
 import { InternalError, User } from "@cap/web-domain";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
+import { S3Buckets } from "../S3Buckets";
 import { UsersOnboarding } from "./UsersOnboarding";
 
 export const UsersRpcsLive = User.UserRpcs.toLayer(
 	Effect.gen(function* () {
 		const onboarding = yield* UsersOnboarding;
+		const s3Buckets = yield* S3Buckets;
 		return {
 			UserCompleteOnboardingStep: (payload) =>
 				Effect.gen(function* () {
@@ -36,6 +38,28 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						"DatabaseError",
 						() => new InternalError({ type: "database" }),
 					),
+				),
+			GetSignedImageUrl: (payload) =>
+				Effect.gen(function* () {
+					// Validate that the key is for a user or organization image
+					if (
+						!payload.key.startsWith("users/") &&
+						!payload.key.startsWith("organizations/")
+					) {
+						return yield* Effect.fail(new InternalError({ type: "unknown" }));
+					}
+
+					const [bucket] = yield* s3Buckets.getBucketAccess(Option.none());
+					const url = yield* bucket.getSignedObjectUrl(payload.key);
+
+					return { url };
+				}).pipe(
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchAll(() => new InternalError({ type: "unknown" })),
 				),
 		};
 	}),

@@ -21,8 +21,8 @@ import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
-import { getImageUrl } from "@/lib/get-image-url";
 
 interface SharingDialogProps {
 	isOpen: boolean;
@@ -416,11 +416,11 @@ const SpaceCard = ({
 				)}
 				onClick={() => handleToggleSpace(space.id)}
 			>
-				<Avatar
+				<SignedImageUrl
+					imageKeyOrUrl={space.iconUrlOrKey}
+					name={space.name}
 					letterClass="text-[11px]"
 					className="relative z-10 flex-shrink-0 size-5"
-					name={space.name}
-					imageUrl={getImageUrl(space.iconUrlOrKey) ?? undefined}
 				/>
 				<p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
 					{space.name}

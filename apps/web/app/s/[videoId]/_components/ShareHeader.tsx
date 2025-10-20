@@ -3,7 +3,7 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -16,6 +16,7 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 
@@ -235,9 +236,9 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									<Avatar
-										name={data.ownerName}
-										imageUrl={data.ownerImage ?? undefined}
+									<SignedImageUrl
+										name={data.ownerName ?? "User"}
+										imageKeyOrUrl={data.ownerImage}
 										className="size-8"
 										letterClass="text-base"
 									/>

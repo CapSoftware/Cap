@@ -1,6 +1,5 @@
 "use client";
 
-import { Avatar } from "@cap/ui";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { Check, ChevronDown } from "lucide-react";
@@ -15,7 +14,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { getImageUrl } from "@/lib/get-image-url";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../Contexts";
 import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
@@ -76,13 +75,11 @@ const Orgs = ({
 			ref={containerRef}
 			className="flex gap-1.5 items-center p-2 rounded-full border bg-gray-3 border-gray-5"
 		>
-			<Avatar
+			<SignedImageUrl
+				imageKeyOrUrl={activeOrg?.organization.iconUrlOrKey}
+				name={activeOrg?.organization.name ?? "No organization found"}
 				letterClass="text-xs"
 				className="relative flex-shrink-0 mx-auto size-6"
-				name={activeOrg?.organization.name ?? "No organization found"}
-				imageUrl={
-					getImageUrl(activeOrg?.organization.iconUrlOrKey) ?? undefined
-				}
 			/>
 			<p className="text-sm mr-2 text-gray-12 truncate w-fit max-w-[90px]">
 				{activeOrg?.organization.name}
@@ -137,19 +134,11 @@ const OrgsMenu = ({
 						}}
 					>
 						<div className="flex gap-2 items-center w-full">
-							<IconImage
-								iconUrlOrKey={organization.organization.iconUrlOrKey}
-								alt={organization.organization.name || "Organization icon"}
-								width={20}
-								height={20}
-								className="object-cover rounded-full"
-								fallback={
-									<Avatar
-										letterClass="text-xs"
-										className="relative flex-shrink-0 size-5"
-										name={organization.organization.name}
-									/>
-								}
+							<SignedImageUrl
+								imageKeyOrUrl={organization.organization.iconUrlOrKey}
+								name={organization.organization.name}
+								letterClass="text-xs"
+								className="relative flex-shrink-0 size-5"
 							/>
 							<p
 								className={clsx(

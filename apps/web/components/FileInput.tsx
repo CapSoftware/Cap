@@ -12,7 +12,8 @@ import Image from "next/image";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { getImageUrl } from "@/lib/get-image-url";
+import { isS3Key } from "@/lib/get-image-url";
+import { useSignedImageUrl } from "@/lib/use-signed-image-url";
 import { Tooltip } from "./Tooltip";
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
@@ -56,6 +57,9 @@ export const FileInput: React.FC<FileInputProps> = ({
 		initialPreviewUrl,
 	);
 	const [isLocalPreview, setIsLocalPreview] = useState(false);
+
+	// Get signed URL for S3 keys
+	const { data: signedUrl } = useSignedImageUrl(previewUrl);
 	const previousPreviewRef = useRef<{
 		url: string | null;
 		isLocal: boolean;
@@ -240,7 +244,9 @@ export const FileInput: React.FC<FileInputProps> = ({
 									>
 										{previewUrl && (
 											<img
-												src={getImageUrl(previewUrl) ?? ""}
+												src={
+													isS3Key(previewUrl) ? (signedUrl ?? "") : previewUrl
+												}
 												alt="File preview"
 												width={32}
 												height={32}

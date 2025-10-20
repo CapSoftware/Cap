@@ -1,14 +1,13 @@
 "use client";
 
-import { Avatar, Button } from "@cap/ui";
-import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { Button } from "@cap/ui";
+import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
-import { getImageUrl } from "@/lib/get-image-url";
 
 interface ProfileImageProps {
 	initialPreviewUrl?: string | null;
@@ -89,9 +88,9 @@ export function ProfileImage({
 						previewUrl ? "border-solid" : "border-dashed",
 					)}
 				>
-					<Avatar
+					<SignedImageUrl
+						imageKeyOrUrl={previewUrl}
 						name={userName || "User"}
-						imageUrl={getImageUrl(previewUrl) ?? undefined}
 						className="size-14"
 					/>
 				</div>

@@ -68,10 +68,23 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 );
 
+export const GetSignedImageUrlPayload = Schema.Struct({
+	key: Schema.String,
+});
+
+export const GetSignedImageUrlResult = Schema.Struct({
+	url: Schema.String,
+});
+
 export class UserRpcs extends RpcGroup.make(
 	Rpc.make("UserCompleteOnboardingStep", {
 		payload: OnboardingStepPayload,
 		success: OnboardingStepResult,
+		error: InternalError,
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("GetSignedImageUrl", {
+		payload: GetSignedImageUrlPayload,
+		success: GetSignedImageUrlResult,
 		error: InternalError,
 	}).middleware(RpcAuthMiddleware),
 ) {}
