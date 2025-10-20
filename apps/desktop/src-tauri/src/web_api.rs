@@ -136,6 +136,6 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
             return app_state.server_url != env_url;
         }
 
-        return false;
+        false
     }
 }
