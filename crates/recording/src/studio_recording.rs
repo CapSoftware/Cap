@@ -7,6 +7,7 @@ use crate::{
     output_pipeline::{
         AudioFrame, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
     },
+    screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
@@ -683,7 +684,7 @@ async fn create_segment_pipeline(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
-    let screen_config = create_screen_capture(
+    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         &base_inputs.capture_target,
         !custom_cursor_capture,
         120,

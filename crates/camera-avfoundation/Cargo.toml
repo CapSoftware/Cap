@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre = { workspace = true, default-features = false }
 
 [lints]
 workspace = true

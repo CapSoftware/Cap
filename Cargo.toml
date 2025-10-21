@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
+ members = ["apps/cli", "apps/desktop/src-tauri", "apps/multi-recorder", "crates/*"]
 
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
@@ -40,9 +40,10 @@ sentry = { version = "0.42.0", features = [
     "debug-images",
 ] }
 tracing = "0.1.41"
-futures = "0.3.31"
-
-cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
+ futures = "0.3.31"
+ kameo = "0.17.2"
+ 
+ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
     "macos_13_0",
     "cv",
     "cf",

@@ -295,7 +295,7 @@ impl RecordableLayer for BackgroundLayer {
                             }
                         }
                         Err(e) => {
-                            tracing::error!("Failed to load image: {:?}, error: {}", path, e);
+                            tracing::error!("Failed to load image: {:?}, error: {:#}", path, e);
                             return Err(SkiaRenderingError::Other(anyhow::anyhow!(
                                 "Failed to load image: {}",
                                 e

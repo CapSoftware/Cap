@@ -165,7 +165,7 @@ impl AudioMixerBuilder {
         let mut mixer = match self.build(output) {
             Ok(mixer) => mixer,
             Err(e) => {
-                tracing::error!("Failed to build audio mixer: {}", e);
+                tracing::error!("Failed to build audio mixer: {:#}", e);
                 let _ = ready_tx.send(Err(e.into()));
                 return;
             }

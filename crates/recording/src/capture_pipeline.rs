@@ -126,29 +126,6 @@ pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 #[cfg(windows)]
 pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
 
-pub async fn create_screen_capture(
-    capture_target: &ScreenCaptureTarget,
-    force_show_cursor: bool,
-    max_fps: u32,
-    start_time: SystemTime,
-    system_audio: bool,
-    #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
-    Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-        capture_target,
-        force_show_cursor,
-        max_fps,
-        start_time,
-        system_audio,
-        #[cfg(windows)]
-        d3d_device,
-        #[cfg(target_os = "macos")]
-        shareable_content,
-    )
-    .await?)
-}
-
 #[cfg(windows)]
 pub fn create_d3d_device()
 -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {

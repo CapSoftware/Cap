@@ -184,31 +184,6 @@ pub struct CompletedRecording {
     pub meta: InstantRecordingMeta,
 }
 
-async fn create_pipeline(
-    output_path: PathBuf,
-    screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
-    mic_feed: Option<Arc<MicrophoneFeedLock>>,
-) -> anyhow::Result<Pipeline> {
-    if let Some(mic_feed) = &mic_feed {
-        debug!(
-            "mic audio info: {:#?}",
-            AudioInfo::from_stream_config(mic_feed.config())
-        );
-    };
-
-    let (screen_capture, system_audio) = screen_source.to_sources().await?;
-
-    let output = ScreenCaptureMethod::make_instant_mode_pipeline(
-        screen_capture,
-        system_audio,
-        mic_feed,
-        output_path.clone(),
-    )
-    .await?;
-
-    Ok(Pipeline { output })
-}
-
 impl Actor {
     pub fn builder(output: PathBuf, capture_target: ScreenCaptureTarget) -> ActorBuilder {
         ActorBuilder::new(output, capture_target)
@@ -280,7 +255,7 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 
-    let screen_source = create_screen_capture(
+    let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         &inputs.capture_target,
         true,
         30,
@@ -295,12 +270,24 @@ pub async fn spawn_instant_recording_actor(
 
     debug!("screen capture: {screen_source:#?}");
 
-    let pipeline = create_pipeline(
-        content_dir.join("output.mp4"),
-        screen_source.clone(),
+    if let Some(mic_feed) = &inputs.mic_feed {
+        debug!(
+            "mic audio info: {:#?}",
+            AudioInfo::from_stream_config(mic_feed.config())
+        );
+    };
+
+    let (screen_capture, system_audio) = screen_source.clone().to_sources().await?;
+
+    let output = ScreenCaptureMethod::make_instant_mode_pipeline(
+        screen_capture,
+        system_audio,
         inputs.mic_feed.clone(),
+        content_dir.join("output.mp4"),
     )
     .await?;
+
+    let pipelie = Pipeline { output };
 
     let segment_start_time = current_time_f64();
 

@@ -51,13 +51,13 @@ pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, CancellationT
                             frame.data.extend_from_slice(&frame.width.to_le_bytes());
 
                             if let Err(e) = socket.send(Message::Binary(frame.data)).await {
-                                tracing::error!("Failed to send frame to socket: {:?}", e);
+                                tracing::error!("Failed to send frame to socket: {:#}", e);
                                 break;
                             }
                         }
                         Err(e) => {
                             tracing::error!(
-                                "Connection has been lost! Shutting down websocket server: {:?}",
+                                "Connection has been lost! Shutting down websocket server: {:#}",
                                 e
                             );
                             break;

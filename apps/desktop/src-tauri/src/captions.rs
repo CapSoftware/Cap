@@ -270,27 +270,27 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to resample chunk {chunk_idx}: {e}");
+                        log::error!("Failed to resample chunk {chunk_idx}: {:#}", e);
                         continue;
                     }
                 }
 
                 if let Err(e) = encoder.send_frame(&output_frame) {
-                    log::error!("Failed to send frame to encoder: {e}");
+                    log::error!("Failed to send frame to encoder: {:#}", e);
                     continue;
                 }
 
                 // Process each encoded packet
                 loop {
                     let mut packet = ffmpeg::Packet::empty();
-                    match encoder.receive_packet(&mut packet) {
-                        Ok(_) => {
-                            if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {e}");
-                            }
-                        }
-                        Err(_) => break,
-                    }
+                     match encoder.receive_packet(&mut packet) {
+                         Ok(_) => {
+                             if let Err(e) = packet.write_interleaved(&mut output) {
+                                 log::error!("Failed to write packet: {:#}", e);
+                             }
+                         }
+                         Err(_) => break,
+                     }
                 }
             }
         }
