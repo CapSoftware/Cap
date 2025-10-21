@@ -38,7 +38,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 */
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
-			getById: getByIdForViewer,
+			getByIdForViewer,
 
 			/*
 			 * Get a video by ID. Will fail if the user isn't the owner.

@@ -232,13 +232,13 @@ app.post(
 				]),
 			),
 	),
-	(c) =>
-		Effect.gen(function* () {
+	(c) => {
+		const { uploadId, parts, ...body } = c.req.valid("json");
+		const user = c.get("user");
+
+		return Effect.gen(function* () {
 			const videos = yield* Videos;
 			const db = yield* Database;
-
-			const { uploadId, parts, ...body } = c.req.valid("json");
-			const user = c.get("user");
 
 			const fileKey = parseVideoIdOrFileKey(user.id, {
 				...body,
@@ -249,7 +249,9 @@ app.post(
 			const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
 			if (!videoId) throw new Error("Video ID is required");
 
-			const maybeVideo = yield* videos.getById(Video.VideoId.make(videoId));
+			const maybeVideo = yield* videos.getByIdForOwner(
+				Video.VideoId.make(videoId),
+			);
 			if (Option.isNone(maybeVideo)) {
 				c.status(404);
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
@@ -469,5 +471,10 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(provideOptionalAuth, runPromise),
+		}).pipe(
+			provideOptionalAuth,
+			Effect.provideService(CurrentUser, user),
+			runPromise,
+		);
+	},
 );

@@ -29,7 +29,7 @@ export async function generateMetadata(
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
-	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+	return Effect.flatMap(Videos, (v) => v.getByIdForViewer(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
