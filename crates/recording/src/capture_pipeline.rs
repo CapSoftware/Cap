@@ -196,8 +196,7 @@ pub fn target_to_display_and_crop(
                     .ok_or_else(|| anyhow!("No display bounds"))?;
                 let logical_display_size = display
                     .logical_size()
-                    .ok_or_else(|| anyhow!("No window bounds"))?;
-
+                    .ok_or_else(|| anyhow!("No display logical size"))?;
                 Some(PhysicalBounds::new(
                     PhysicalPosition::new(
                         (relative_bounds.position().x() / logical_display_size.width())
