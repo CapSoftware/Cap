@@ -1,12 +1,13 @@
 "use client";
 
 import { CardDescription, Label } from "@cap/ui";
+import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
-import { removeImage } from "@/actions/images/remove-image";
-import { uploadImage } from "@/actions/images/upload-image";
 import { FileInput } from "@/components/FileInput";
+import * as EffectRuntime from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 
 export const OrganizationIcon = () => {
@@ -25,17 +26,29 @@ export const OrganizationIcon = () => {
 		// Upload the file to the server immediately
 		try {
 			setIsUploading(true);
-			const result = await uploadImage(
-				file,
-				"organization",
-				organizationId,
-				existingIconUrl,
-			);
 
-			if (result.success) {
-				toast.success("Organization icon updated successfully");
-				router.refresh();
-			}
+			const arrayBuffer = await file.arrayBuffer();
+			const data = new Uint8Array(arrayBuffer);
+
+			await EffectRuntime.EffectRuntime.runPromise(
+				withRpc((rpc) =>
+					rpc.UploadImage({
+						data,
+						contentType: file.type,
+						fileName: file.name,
+						type: "organization" as const,
+						entityId: organizationId,
+						oldImageKey: existingIconUrl,
+					}),
+				).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							toast.success("Organization icon updated successfully");
+							router.refresh();
+						}),
+					),
+				),
+			);
 		} catch (error) {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to upload icon",
@@ -49,16 +62,22 @@ export const OrganizationIcon = () => {
 		if (!organizationId) return;
 
 		try {
-			const result = await removeImage(
-				existingIconUrl || "",
-				"organization",
-				organizationId,
+			await EffectRuntime.EffectRuntime.runPromise(
+				withRpc((rpc) =>
+					rpc.RemoveImage({
+						imageKey: existingIconUrl || "",
+						type: "organization" as const,
+						entityId: organizationId,
+					}),
+				).pipe(
+					Effect.tap(() =>
+						Effect.sync(() => {
+							toast.success("Organization icon removed successfully");
+							router.refresh();
+						}),
+					),
+				),
 			);
-
-			if (result?.success) {
-				toast.success("Organization icon removed successfully");
-				router.refresh();
-			}
 		} catch (error) {
 			console.error("Error removing organization icon:", error);
 			toast.error(
