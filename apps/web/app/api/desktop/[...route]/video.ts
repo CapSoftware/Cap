@@ -291,7 +291,7 @@ app.delete(
 					prefix: `${user.id}/${videoId}/`,
 				});
 
-				if (listedObjects.Contents && listedObjects.Contents.length > 1)
+				if (listedObjects.Contents)
 					yield* bucket.deleteObjects(
 						listedObjects.Contents.map((content: any) => ({
 							Key: content.Key,

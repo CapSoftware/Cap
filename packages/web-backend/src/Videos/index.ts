@@ -16,7 +16,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
 
-		const getByIdForViewer = (id: Video.VideoId) =>
+		const getByIdForViewing = (id: Video.VideoId) =>
 			repo
 				.getById(id)
 				.pipe(
@@ -38,7 +38,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 */
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
-			getByIdForViewer,
+			getByIdForViewing,
 
 			/*
 			 * Get a video by ID. Will fail if the user isn't the owner.
@@ -69,7 +69,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
 
-				if (listedObjects.Contents && listedObjects.Contents.length > 1) {
+				if (listedObjects.Contents) {
 					yield* bucket.deleteObjects(
 						listedObjects.Contents.map((content) => ({
 							Key: content.Key,
@@ -212,7 +212,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* getByIdForViewer(videoId).pipe(
+				const [video] = yield* getByIdForViewing(videoId).pipe(
 					Effect.flatten,
 					Effect.catchTag(
 						"NoSuchElementException",
