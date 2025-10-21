@@ -1,6 +1,10 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { organizationMembers, organizations } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	users,
+} from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -20,9 +24,12 @@ export default async function OrganizationPage() {
 	const [member] = await db()
 		.select({
 			role: organizationMembers.role,
+			ownerId: organizations.ownerId,
+			userId: users.id,
 		})
 		.from(organizationMembers)
 		.limit(1)
+		.leftJoin(users, eq(organizationMembers.userId, users.id))
 		.leftJoin(
 			organizations,
 			eq(organizationMembers.organizationId, organizations.id),
@@ -34,9 +41,10 @@ export default async function OrganizationPage() {
 			),
 		);
 
-	if (member?.role !== "owner") {
-		redirect("/dashboard/caps");
-	}
+	if (member)
+		if (member.role !== "owner") {
+			redirect("/dashboard/caps");
+		}
 
 	return <Organization />;
 }

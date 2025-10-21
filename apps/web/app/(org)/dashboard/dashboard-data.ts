@@ -47,6 +47,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				organization: organizations,
 				settings: organizations.settings,
 				member: organizationMembers,
+				iconUrl: organizations.iconUrl,
 				user: {
 					id: users.id,
 					name: users.name,
@@ -131,11 +132,11 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					createdById: spaces.createdById,
 					iconUrl: spaces.iconUrl,
 					memberCount: sql<number>`(
-            SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
-          )`,
+          SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
+        )`,
 					videoCount: sql<number>`(
-            SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
-          )`,
+          SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
+        )`,
 				})
 				.from(spaces)
 				.leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
@@ -203,7 +204,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					name: `All ${activeOrgInfo.organization.name}`,
 					description: `View all content in ${activeOrgInfo.organization.name}`,
 					organizationId: activeOrgInfo.organization.id,
-					iconUrl: null,
+					iconUrl: activeOrgInfo.organization.iconUrl,
 					memberCount: orgMemberCount,
 					createdById: activeOrgInfo.organization.ownerId,
 					videoCount: orgVideoCount,

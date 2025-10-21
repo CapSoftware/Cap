@@ -1,5 +1,5 @@
 use crate::editor;
-use crate::playback::{self, PlaybackHandle};
+use crate::playback::{self, PlaybackHandle, PlaybackStartError};
 use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
@@ -10,7 +10,7 @@ use cap_rendering::{
 use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
-use tracing::trace;
+use tracing::{trace, warn};
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -145,15 +145,22 @@ impl EditorInstance {
 
             let start_frame_number = state.playhead_position;
 
-            let playback_handle = playback::Playback {
+            let playback_handle = match (playback::Playback {
                 segments: self.segments.clone(),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
-            }
+            })
             .start(fps, resolution_base)
-            .await;
+            .await
+            {
+                Ok(handle) => handle,
+                Err(PlaybackStartError::InvalidFps) => {
+                    warn!(fps, "Skipping playback start due to invalid FPS");
+                    return;
+                }
+            };
 
             let prev = state.playback_task.replace(playback_handle.clone());
 

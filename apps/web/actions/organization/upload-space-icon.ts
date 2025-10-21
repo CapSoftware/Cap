@@ -65,8 +65,10 @@ export async function uploadSpaceIcon(
 	try {
 		// Remove previous icon if exists
 		if (space.iconUrl) {
-			// Try to extract the previous S3 key from the URL
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+			// Extract the S3 key (it might already be a key or could be a legacy URL)
+			const key = space.iconUrl.startsWith("organizations/")
+				? space.iconUrl
+				: space.iconUrl.match(/organizations\/.+/)?.[0];
 			if (key) {
 				try {
 					await bucket.deleteObject(key).pipe(runPromise);
@@ -87,20 +89,8 @@ export async function uploadSpaceIcon(
 			)
 			.pipe(runPromise);
 
-		let iconUrl: string | undefined;
+		const iconUrl = fileKey;
 
-		// Construct the icon URL
-		if (serverEnv().CAP_AWS_BUCKET_URL) {
-			iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-		} else if (serverEnv().CAP_AWS_ENDPOINT) {
-			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-		} else {
-			iconUrl = `https://${bucket.bucketName}.s3.${
-				serverEnv().CAP_AWS_REGION || "us-east-1"
-			}.amazonaws.com/${fileKey}`;
-		}
-
-		// Update space with new icon URL
 		await db().update(spaces).set({ iconUrl }).where(eq(spaces.id, spaceId));
 
 		revalidatePath("/dashboard");

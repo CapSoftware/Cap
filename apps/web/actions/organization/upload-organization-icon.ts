@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -52,16 +51,38 @@ export async function uploadOrganizationIcon(
 		throw new Error("File size must be less than 1MB");
 	}
 
+	// Get the old icon to delete it later
+	const oldIconUrlOrKey = organization[0]?.iconUrl;
+
 	// Create a unique file key
 	const fileExtension = file.name.split(".").pop();
 	const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
 
 	try {
 		const sanitizedFile = await sanitizeFile(file);
-		let iconUrl: string | undefined;
 
 		await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+
+			// Delete old icon if it exists
+			if (oldIconUrlOrKey) {
+				try {
+					// Extract the S3 key - handle both old URL format and new key format
+					let oldS3Key = oldIconUrlOrKey;
+					if (oldIconUrlOrKey.includes("amazonaws.com")) {
+						const url = new URL(oldIconUrlOrKey);
+						oldS3Key = url.pathname.substring(1); // Remove leading slash
+					}
+
+					// Only delete if it looks like an organization icon key
+					if (oldS3Key.startsWith("organizations/")) {
+						yield* bucket.deleteObject(oldS3Key);
+					}
+				} catch (error) {
+					console.error("Error deleting old organization icon from S3:", error);
+					// Continue with upload even if deletion fails
+				}
+			}
 
 			const bodyBytes = yield* Effect.promise(async () => {
 				const buf = await sanitizedFile.arrayBuffer();
@@ -69,22 +90,10 @@ export async function uploadOrganizationIcon(
 			});
 
 			yield* bucket.putObject(fileKey, bodyBytes, { contentType: file.type });
-			// Construct the icon URL
-			if (serverEnv().CAP_AWS_BUCKET_URL) {
-				// If a custom bucket URL is defined, use it
-				iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-			} else if (serverEnv().CAP_AWS_ENDPOINT) {
-				// For custom endpoints like MinIO
-				iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-			} else {
-				// Default AWS S3 URL format
-				iconUrl = `https://${bucket.bucketName}.s3.${
-					serverEnv().CAP_AWS_REGION || "us-east-1"
-				}.amazonaws.com/${fileKey}`;
-			}
 		}).pipe(runPromise);
 
-		// Update organization with new icon URL
+		const iconUrl = fileKey;
+
 		await db()
 			.update(organizations)
 			.set({ iconUrl })

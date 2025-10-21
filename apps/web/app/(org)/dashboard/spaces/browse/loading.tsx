@@ -75,7 +75,7 @@ export default function Loading() {
 										.fill(0)
 										.map((_, index) => (
 											<div
-												key={index}
+												key={index.toString()}
 												className="border-t border-gray-3 hover:bg-gray-2"
 											>
 												<div className="flex items-center">

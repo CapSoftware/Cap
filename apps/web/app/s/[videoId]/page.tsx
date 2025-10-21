@@ -272,6 +272,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					ownerId: videos.ownerId,
 					ownerName: users.name,
 					ownerImage: users.image,
+					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -366,7 +367,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
 		ownerName?: string | null;
-		ownerImage?: string | null;
+		ownerImageUrlOrKey?: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -471,7 +472,7 @@ async function AuthorizedContent({
 				name: videos.name,
 				ownerId: videos.ownerId,
 				ownerName: users.name,
-				ownerImage: users.image,
+				ownerImageUrlOrKey: users.image,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -661,7 +662,7 @@ async function AuthorizedContent({
 				updatedAt: comments.updatedAt,
 				parentCommentId: comments.parentCommentId,
 				authorName: users.name,
-				authorImage: users.image,
+				authorImageUrlOrKey: users.image,
 			})
 			.from(comments)
 			.leftJoin(users, eq(comments.authorId, users.id))

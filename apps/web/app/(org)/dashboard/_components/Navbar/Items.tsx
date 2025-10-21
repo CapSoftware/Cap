@@ -28,11 +28,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cloneElement, type RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
@@ -122,37 +122,20 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									)}
 								>
 									<div className="flex items-center">
-										{activeOrg?.organization.iconUrl ? (
-											<div
-												className={clsx(
-													"overflow-hidden relative flex-shrink-0 rounded-full",
-													sidebarCollapsed ? "size-6" : "size-7",
-												)}
-											>
-												<Image
-													src={activeOrg.organization.iconUrl}
-													alt={
-														activeOrg.organization.name || "Organization icon"
-													}
-													fill
-													className="object-cover"
-												/>
-											</div>
-										) : (
-											<Avatar
-												letterClass={clsx(
-													sidebarCollapsed ? "text-sm" : "text-[13px]",
-												)}
-												className={clsx(
-													"relative flex-shrink-0 mx-auto",
-													sidebarCollapsed ? "size-6" : "size-7",
-												)}
-												name={
-													activeOrg?.organization.name ??
-													"No organization found"
-												}
-											/>
-										)}
+										<SignedImageUrl
+											image={activeOrg?.organization.iconUrl}
+											name={
+												activeOrg?.organization.name ?? "No organization found"
+											}
+											type="organization"
+											letterClass={clsx(
+												sidebarCollapsed ? "text-sm" : "text-[13px]",
+											)}
+											className={clsx(
+												"relative flex-shrink-0 mx-auto",
+												sidebarCollapsed ? "size-6" : "size-7",
+											)}
+										/>
 									</div>
 									<div className="flex flex-col flex-1 items-center h-10">
 										<div className="flex justify-between items-center w-full">
@@ -230,25 +213,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													}}
 												>
 													<div className="flex gap-2 items-center w-full">
-														{organization.organization.iconUrl ? (
-															<div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-																<Image
-																	src={organization.organization.iconUrl}
-																	alt={
-																		organization.organization.name ||
-																		"Organization icon"
-																	}
-																	fill
-																	className="object-cover"
-																/>
-															</div>
-														) : (
-															<Avatar
-																letterClass="text-xs"
-																className="relative flex-shrink-0 size-5"
-																name={organization.organization.name}
-															/>
-														)}
+														<SignedImageUrl
+															image={organization.organization.iconUrl}
+															name={organization.organization.name}
+															type="organization"
+															letterClass="text-xs"
+															className="relative flex-shrink-0 size-5"
+														/>
 														<p
 															className={clsx(
 																"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",

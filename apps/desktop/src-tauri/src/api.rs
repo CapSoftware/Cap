@@ -52,6 +52,7 @@ pub async fn upload_multipart_presign_part(
     video_id: &str,
     upload_id: &str,
     part_number: u32,
+    md5_sum: Option<&str>,
 ) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -59,15 +60,21 @@ pub async fn upload_multipart_presign_part(
         presigned_url: String,
     }
 
+    let mut body = serde_json::Map::from_iter([
+        ("videoId".to_string(), json!(video_id)),
+        ("uploadId".to_string(), json!(upload_id)),
+        ("partNumber".to_string(), json!(part_number)),
+    ]);
+
+    if let Some(md5_sum) = md5_sum {
+        body.insert("md5Sum".to_string(), json!(md5_sum));
+    }
+
     let resp = app
         .authed_api_request("/api/upload/multipart/presign-part", |c, url| {
             c.post(url)
                 .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "videoId": video_id,
-                    "uploadId": upload_id,
-                    "partNumber": part_number,
-                }))
+                .json(&serde_json::json!(body))
         })
         .await
         .map_err(|err| format!("api/upload_multipart_presign_part/request: {err}"))?;

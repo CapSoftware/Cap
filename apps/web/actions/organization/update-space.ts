@@ -52,7 +52,10 @@ export async function updateSpace(formData: FormData) {
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
 		const space = spaceArr[0];
 		if (space?.iconUrl) {
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+			// Extract the S3 key (it might already be a key or could be a legacy URL)
+			const key = space.iconUrl.startsWith("organizations/")
+				? space.iconUrl
+				: space.iconUrl.match(/organizations\/.+/)?.[0];
 
 			if (key) {
 				try {
