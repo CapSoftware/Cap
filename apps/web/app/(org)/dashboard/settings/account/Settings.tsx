@@ -116,13 +116,16 @@ export const Settings = ({
 	});
 
 	const removeProfileImageMutation = useMutation({
-		mutationFn: () => removeImage(user?.image || "", "user", user?.id || ""),
-		onSuccess: (result) => {
-			if (result?.success) {
-				setProfileImageOverride(null);
-				toast.success("Profile image removed");
-				router.refresh();
+		mutationFn: () => {
+			if (!user?.id) {
+				throw new Error("User ID is required");
 			}
+			return removeImage(user.image || "", "user", user.id);
+		},
+		onSuccess: () => {
+			setProfileImageOverride(null);
+			toast.success("Profile image removed");
+			router.refresh();
 		},
 		onError: (error) => {
 			console.error("Error removing profile image:", error);
