@@ -181,11 +181,12 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								);
 
 								yield* bucket.putObject(fileKey, fileData, { contentType });
+								const iconUrl = yield* bucket.getSignedObjectUrl(fileKey);
 
 								yield* db.use((db) =>
 									db
 										.update(Db.organizations)
-										.set({ iconUrlOrKey: fileKey })
+										.set({ iconUrl })
 										.where(Dz.eq(Db.organizations.id, finalOrganizationId)),
 								);
 							}).pipe(
@@ -286,7 +287,7 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 									Dz.eq(Db.organizations.id, currentUser.activeOrganizationId),
 								);
 
-							if (!existingOrg || !user.onboardingSteps?.organizationSetup) {
+							if (!existingOrg) {
 								const newOrgId = Organisation.OrganisationId.make(nanoId());
 								await tx.insert(Db.organizations).values({
 									id: newOrgId,

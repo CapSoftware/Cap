@@ -49,6 +49,8 @@ export interface ButtonProps
 	asChild?: boolean;
 	spinner?: boolean;
 	href?: string;
+	spinnerColor?: string;
+	spinnerBorderColor?: `rgba(${number},${number},${number},${number})`;
 	spinnerClassName?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
@@ -63,6 +65,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			size,
 			asChild = false,
 			spinner = false,
+			spinnerColor = "white",
+			spinnerBorderColor = "rgba(255, 255, 255, 0.2)",
 			spinnerClassName,
 			href,
 			kbd,
@@ -84,6 +88,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 				{spinner && (
 					<LoadingSpinner
 						className={classNames("mr-1", spinnerClassName)}
+						color={spinnerColor}
+						borderColor={spinnerBorderColor}
 						size={16}
 					/>
 				)}
