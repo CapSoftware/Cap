@@ -16,6 +16,7 @@ import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { removeProfileImage } from "@/actions/account/remove-profile-image";
 import { uploadProfileImage } from "@/actions/account/upload-profile-image";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings } from "./server";
@@ -243,6 +244,14 @@ export const Settings = ({
 						options={(organizationData || []).map((org) => ({
 							value: org.organization.id,
 							label: org.organization.name,
+							image: (
+								<SignedImageUrl
+									className="size-5"
+									image={org.organization.iconUrl}
+									name={org.organization.name}
+									type="organization"
+								/>
+							),
 						}))}
 					/>
 				</Card>
