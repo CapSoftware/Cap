@@ -5,7 +5,6 @@ import {
 import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { HttpApiError } from "@effect/platform";
 import {
 	AwsCredentials,
 	Database,
@@ -13,8 +12,9 @@ import {
 	S3Buckets,
 	Videos,
 	VideosRepo,
+	VideosPolicy,
 } from "@cap/web-backend";
-import { CurrentUser, Video } from "@cap/web-domain";
+import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
@@ -54,14 +54,14 @@ app.post(
 		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
-			const user = yield* CurrentUser;
 			const repo = yield* VideosRepo;
+			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
-			const video = yield* repo.getById(videoId);
+			const video = yield* repo
+				.getById(videoId)
+				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
-			if (video.value[0].ownerId !== user.id)
-				return yield* new HttpApiError.Unauthorized();
 
 			yield* db.use((db) =>
 				db
@@ -76,10 +76,8 @@ app.post(
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
 
-				if (e._tag === "Unauthorized")
-					return Effect.succeed<Response>(
-						c.text("User not authenticated", 401),
-					);
+				// if (e._tag === "DatabaseError")
+				// 	return Effect.succeed<Response>(c.text("Video not found", 404));
 
 				return Effect.succeed<Response>(
 					c.json({ error: "Error initiating multipart upload" }, 500),
