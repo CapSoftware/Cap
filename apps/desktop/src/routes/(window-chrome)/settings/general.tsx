@@ -29,7 +29,6 @@ import {
 	commands,
 	events,
 	type GeneralSettingsStore,
-	type InstantModeResolution,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
@@ -62,9 +61,7 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
-type ExtendedGeneralSettingsStore = GeneralSettingsStore & {
-	instantModeResolution?: InstantModeResolution;
-};
+type ExtendedGeneralSettingsStore = GeneralSettingsStore;
 
 const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	uploadIndividualFiles: false,
@@ -76,7 +73,7 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	excludedWindows: [],
-	instantModeResolution: "fhd1080",
+	instantModeMaxResolution: 1920,
 });
 
 const deriveInitialSettings = (
@@ -92,12 +89,12 @@ const deriveInitialSettings = (
 };
 
 const INSTANT_MODE_RESOLUTION_OPTIONS = [
-	{ value: "hd720", label: "720p", height: 720 },
-	{ value: "fhd1080", label: "1080p", height: 1080 },
-	{ value: "qhd1440", label: "1440p", height: 1440 },
-	{ value: "uhd2160", label: "4K", height: 2160 },
+	{ value: 1280, label: "720p", height: 720 },
+	{ value: 1920, label: "1080p", height: 1080 },
+	{ value: 2560, label: "1440p", height: 1440 },
+	{ value: 3840, label: "4K", height: 2160 },
 ] satisfies {
-	value: InstantModeResolution;
+	value: number;
 	label: string;
 	height: number;
 }[];
@@ -267,9 +264,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		return data.filter(isWindowAvailable);
 	});
 
-	const instantResolutionDescription =
-		"Choose the resolution for Instant Mode recordings.";
-
 	const refreshAvailableWindows = async (): Promise<CaptureWindow[]> => {
 		try {
 			const refreshed = (await refetchWindows()) ?? windows() ?? [];
@@ -324,7 +318,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
-			| InstantModeResolution
 			| number,
 	>(props: {
 		label: string;
@@ -439,17 +432,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 				<SettingGroup title="Recording">
 					<SelectSettingItem
-						label="Instant mode resolution"
-						description={instantResolutionDescription}
-						value={
-							settings.instantModeResolution ??
-							("fhd1080" as InstantModeResolution)
-						}
+						label="Instant mode max resolution"
+						description="Choose the maximum resolution for Instant Mode recordings."
+						value={settings.instantModeMaxResolution ?? 1920}
 						onChange={(value) =>
-							handleChange(
-								"instantModeResolution",
-								value as InstantModeResolution,
-							)
+							handleChange("instantModeMaxResolution", value)
 						}
 						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
 							text: option.label,
@@ -460,9 +447,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						label="Recording countdown"
 						description="Countdown before recording starts"
 						value={settings.recordingCountdown ?? 0}
-						onChange={(value) =>
-							handleChange("recordingCountdown", value as number)
-						}
+						onChange={(value) => handleChange("recordingCountdown", value)}
 						options={[
 							{ text: "Off", value: 0 },
 							{ text: "3 seconds", value: 3 },
@@ -475,10 +460,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						description="The main window recording start behaviour"
 						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
 						onChange={(value) =>
-							handleChange(
-								"mainWindowRecordingStartBehaviour",
-								value as MainWindowRecordingStartBehaviour,
-							)
+							handleChange("mainWindowRecordingStartBehaviour", value)
 						}
 						options={[
 							{ text: "Close", value: "close" },
@@ -490,10 +472,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						description="The studio recording finish behaviour"
 						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
 						onChange={(value) =>
-							handleChange(
-								"postStudioRecordingBehaviour",
-								value as PostStudioRecordingBehaviour,
-							)
+							handleChange("postStudioRecordingBehaviour", value)
 						}
 						options={[
 							{ text: "Open editor", value: "openEditor" },
@@ -507,12 +486,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						label="After deleting recording behaviour"
 						description="Should Cap reopen after deleting an in progress recording?"
 						value={settings.postDeletionBehaviour ?? "doNothing"}
-						onChange={(value) =>
-							handleChange(
-								"postDeletionBehaviour",
-								value as PostDeletionBehaviour,
-							)
-						}
+						onChange={(value) => handleChange("postDeletionBehaviour", value)}
 						options={[
 							{ text: "Do Nothing", value: "doNothing" },
 							{

@@ -403,7 +403,6 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
-                output_height: None,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]

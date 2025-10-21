@@ -193,7 +193,7 @@ async fn create_pipeline(
     output_path: PathBuf,
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    output_height: Option<u32>,
+    max_output_size: Option<u32>,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
@@ -204,31 +204,37 @@ async fn create_pipeline(
 
     let base_video_info = screen_source.info();
 
-    let scaled_output = output_height.and_then(|target| {
-        if target >= base_video_info.height {
-            return None;
-        }
+    let output_resolution = max_output_size
+        .map(|max_size| {
+            if base_video_info.width >= base_video_info.height {
+                let mut width = max_size.min(base_video_info.width);
+                if width % 2 != 0 {
+                    width -= 1;
+                }
 
-        let mut height = target.max(2);
-        if height % 2 != 0 {
-            height -= 1;
-        }
-        if height < 2 {
-            return None;
-        }
+                let height_ratio = base_video_info.height as f64 / base_video_info.width as f64;
+                let mut height = (height_ratio * width as f64).round() as u32;
+                if height % 2 != 0 {
+                    height -= 1;
+                }
 
-        let width_ratio = base_video_info.width as f64 / base_video_info.height as f64;
-        let mut width = (width_ratio * height as f64).round() as u32;
-        if width % 2 != 0 {
-            width -= 1;
-        }
-        if width < 2 {
-            return None;
-        }
+                (width, height)
+            } else {
+                let mut height = max_size.min(base_video_info.height);
+                if height % 2 != 0 {
+                    height -= 1;
+                }
 
-        let max_width = (base_video_info.width / 2) * 2;
-        Some((width.min(max_width), height))
-    });
+                let width_ratio = base_video_info.width as f64 / base_video_info.height as f64;
+                let mut width = (width_ratio * height as f64).round() as u32;
+                if width % 2 != 0 {
+                    width -= 1;
+                }
+
+                (width, height)
+            }
+        })
+        .unwrap_or((base_video_info.width, base_video_info.height));
 
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
@@ -237,24 +243,18 @@ async fn create_pipeline(
         system_audio,
         mic_feed,
         output_path.clone(),
-        scaled_output,
+        output_resolution,
     )
     .await?;
 
-    let final_video_info = scaled_output
-        .map(|(width, height)| {
-            VideoInfo::from_raw_ffmpeg(
-                base_video_info.pixel_format,
-                width,
-                height,
-                base_video_info.fps(),
-            )
-        })
-        .unwrap_or(base_video_info);
-
     Ok(Pipeline {
         output,
-        video_info: final_video_info,
+        video_info: VideoInfo::from_raw_ffmpeg(
+            base_video_info.pixel_format,
+            output_resolution.0,
+            output_resolution.1,
+            base_video_info.fps(),
+        ),
     })
 }
 
@@ -269,7 +269,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    output_height: Option<u32>,
+    max_output_size: Option<u32>,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<WindowId>,
 }
@@ -281,7 +281,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
-            output_height: None,
+            max_output_size: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -297,8 +297,8 @@ impl ActorBuilder {
         self
     }
 
-    pub fn with_output_height(mut self, output_height: u32) -> Self {
-        self.output_height = Some(output_height);
+    pub fn with_max_output_size(mut self, max_output_size: u32) -> Self {
+        self.max_output_size = Some(max_output_size);
         self
     }
 
@@ -319,12 +319,12 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: None,
-                output_height: self.output_height,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
+            self.max_output_size,
         )
         .await
     }
@@ -334,6 +334,7 @@ impl ActorBuilder {
 pub async fn spawn_instant_recording_actor(
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,
+    max_output_size: Option<u32>,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -375,7 +376,7 @@ pub async fn spawn_instant_recording_actor(
         content_dir.join("output.mp4"),
         screen_source.clone(),
         inputs.mic_feed.clone(),
-        inputs.output_height,
+        max_output_size,
     )
     .await?;
 

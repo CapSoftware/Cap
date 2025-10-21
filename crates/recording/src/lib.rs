@@ -46,7 +46,6 @@ pub struct RecordingBaseInputs {
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,
-    pub output_height: Option<u32>,
     #[cfg(target_os = "macos")]
     pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
     #[cfg(target_os = "macos")]

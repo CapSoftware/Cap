@@ -46,8 +46,7 @@ use crate::{
     auth::AuthStore,
     create_screenshot,
     general_settings::{
-        self, GeneralSettingsStore, InstantModeResolution, PostDeletionBehaviour,
-        PostStudioRecordingBehaviour,
+        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
     },
     open_external_link,
     presets::PresetsStore,
@@ -467,6 +466,7 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
+
                 #[cfg(target_os = "macos")]
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
@@ -539,13 +539,11 @@ pub async fn start_recording(
                             inputs.capture_target.clone(),
                         )
                         .with_system_audio(inputs.capture_system_audio)
-                        .with_output_height(
+                        .with_max_output_size(
                             general_settings
                                 .as_ref()
-                                .map(|settings| settings.instant_mode_resolution.target_height())
-                                .unwrap_or_else(|| {
-                                    InstantModeResolution::default().target_height()
-                                }),
+                                .map(|settings| settings.instant_mode_max_resolution)
+                                .unwrap_or_else(|| 1920),
                         );
 
                         #[cfg(target_os = "macos")]
