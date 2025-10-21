@@ -34,7 +34,7 @@ export default async function OrganizationPage() {
 			),
 		);
 
-	if (member?.role !== "owner") {
+	if (!member || member.role !== "owner") {
 		redirect("/dashboard/caps");
 	}
 

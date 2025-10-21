@@ -43,7 +43,7 @@ export const Bottom = () => {
 			<Button
 				className="px-0 w-fit"
 				variant="transparent"
-				spinner={true}
+				spinner={skipToDashboard.isPending}
 				spinnerColor="black"
 				spinnerBorderColor="rgba(0, 0, 0, 0.2)"
 				disabled={skipToDashboard.isPending || skipToDashboard.isSuccess}

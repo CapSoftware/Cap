@@ -1,6 +1,7 @@
 "use client";
 
 import { CardDescription, Label } from "@cap/ui";
+import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { removeOrganizationIcon } from "@/actions/organization/remove-icon";
@@ -9,10 +10,11 @@ import { FileInput } from "@/components/FileInput";
 import { useDashboardContext } from "../../../Contexts";
 
 export const OrganizationIcon = () => {
+	const router = useRouter();
 	const iconInputId = useId();
 	const { activeOrganization } = useDashboardContext();
 	const organizationId = activeOrganization?.organization.id;
-	const existingIconUrl = activeOrganization?.organization.iconUrl;
+	const existingIconUrl = activeOrganization?.organization.iconUrl ?? null;
 
 	const [isUploading, setIsUploading] = useState(false);
 
@@ -29,6 +31,7 @@ export const OrganizationIcon = () => {
 
 			if (result.success) {
 				toast.success("Organization icon updated successfully");
+				router.refresh();
 			}
 		} catch (error) {
 			toast.error(
@@ -45,8 +48,9 @@ export const OrganizationIcon = () => {
 		try {
 			const result = await removeOrganizationIcon(organizationId);
 
-			if (result.success) {
+			if (result?.success) {
 				toast.success("Organization icon removed successfully");
+				router.refresh();
 			}
 		} catch (error) {
 			console.error("Error removing organization icon:", error);
@@ -69,10 +73,11 @@ export const OrganizationIcon = () => {
 				previewIconSize={20}
 				id={iconInputId}
 				name="icon"
+				type="organization"
 				onChange={handleFileChange}
 				disabled={isUploading}
 				isLoading={isUploading}
-				initialPreviewUrl={existingIconUrl || null}
+				initialPreviewUrl={existingIconUrl}
 				onRemove={handleRemoveIcon}
 				maxFileSizeBytes={1 * 1024 * 1024} // 1MB
 			/>

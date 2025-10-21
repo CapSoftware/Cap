@@ -8,6 +8,7 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
@@ -74,12 +75,15 @@ const CommentComponent: React.FC<{
 			)}
 		>
 			<div className="flex items-start space-x-2.5">
-				<Avatar
-					className="size-6"
-					letterClass="text-sm"
-					name={comment.authorName}
-					imageUrl={comment.authorImage ?? undefined}
-				/>
+				{comment.authorName && (
+					<SignedImageUrl
+						image={comment.authorImageUrlOrKey}
+						name={comment.authorName}
+						type="user"
+						className="size-6"
+						letterClass="text-sm"
+					/>
+				)}
 				<motion.div
 					viewport={{
 						once: true,

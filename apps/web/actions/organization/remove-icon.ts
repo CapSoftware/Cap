@@ -3,9 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import { S3Buckets } from "@cap/web-backend";
 import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { runPromise } from "@/lib/server";
 
 export async function removeOrganizationIcon(
 	organizationId: Organisation.OrganisationId,
@@ -27,6 +30,39 @@ export async function removeOrganizationIcon(
 
 	if (organization[0]?.ownerId !== user.id) {
 		throw new Error("Only the owner can remove the organization icon");
+	}
+
+	const iconUrl = organization[0]?.iconUrl;
+
+	// Delete the icon from S3 if it exists
+	if (iconUrl) {
+		try {
+			// Extract the S3 key - handle both old URL format and new key format
+			let s3Key = iconUrl;
+			if (iconUrl.startsWith("http://") || iconUrl.startsWith("https://")) {
+				const url = new URL(iconUrl);
+				// Only extract key from URLs with amazonaws.com hostname
+				if (
+					url.hostname.endsWith(".amazonaws.com") ||
+					url.hostname === "amazonaws.com"
+				) {
+					s3Key = url.pathname.substring(1); // Remove leading slash
+				} else {
+					s3Key = "";
+				}
+			}
+
+			// Only delete if it looks like an organization icon key
+			if (s3Key.startsWith("organizations/")) {
+				await Effect.gen(function* () {
+					const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+					yield* bucket.deleteObject(s3Key);
+				}).pipe(runPromise);
+			}
+		} catch (error) {
+			console.error("Error deleting organization icon from S3:", error);
+			// Continue with database update even if S3 deletion fails
+		}
 	}
 
 	// Update organization to remove icon URL

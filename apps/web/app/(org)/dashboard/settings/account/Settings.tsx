@@ -116,7 +116,7 @@ export const Settings = ({
 	const removeProfileImageMutation = useMutation({
 		mutationFn: removeProfileImage,
 		onSuccess: (result) => {
-			if (result.success) {
+			if (result?.success) {
 				setProfileImageOverride(null);
 				toast.success("Profile image removed");
 				router.refresh();
@@ -174,6 +174,7 @@ export const Settings = ({
 						disabled={isProfileImageMutating}
 						isUploading={uploadProfileImageMutation.isPending}
 						isRemoving={removeProfileImageMutation.isPending}
+						userName={user?.name}
 					/>
 				</Card>
 				<Card className="space-y-4">

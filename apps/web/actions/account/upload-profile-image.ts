@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -43,14 +42,49 @@ export async function uploadProfileImage(formData: FormData) {
 		throw new Error("File size must be 3MB or less");
 	}
 
+	// Get the old profile image to delete it later
+	const oldImageUrlOrKey = user.image;
+
 	const fileKey = `users/${user.id}/profile-${Date.now()}-${randomUUID()}.${fileExtension}`;
 
 	try {
 		const sanitizedFile = await sanitizeFile(file);
-		let imageUrl: string | undefined;
+		let image: string | null = null;
 
 		await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+
+			// Delete old profile image if it exists
+			if (oldImageUrlOrKey) {
+				try {
+					// Extract the S3 key - handle both old URL format and new key format
+					let oldS3Key = oldImageUrlOrKey;
+					if (
+						oldImageUrlOrKey.startsWith("http://") ||
+						oldImageUrlOrKey.startsWith("https://")
+					) {
+						const url = new URL(oldImageUrlOrKey);
+						// Only extract key from URLs with amazonaws.com hostname
+						if (
+							url.hostname.endsWith(".amazonaws.com") ||
+							url.hostname === "amazonaws.com"
+						) {
+							oldS3Key = url.pathname.substring(1); // Remove leading slash
+						} else {
+							// Not an S3 URL, skip deletion
+							return;
+						}
+					}
+
+					// Only delete if it looks like a user profile image key
+					if (oldS3Key.startsWith("users/")) {
+						yield* bucket.deleteObject(oldS3Key);
+					}
+				} catch (error) {
+					console.error("Error deleting old profile image from S3:", error);
+					// Continue with upload even if deletion fails
+				}
+			}
 
 			const bodyBytes = yield* Effect.promise(async () => {
 				const buf = await sanitizedFile.arrayBuffer();
@@ -61,32 +95,23 @@ export async function uploadProfileImage(formData: FormData) {
 				contentType: file.type,
 			});
 
-			if (serverEnv().CAP_AWS_BUCKET_URL) {
-				imageUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-			} else if (serverEnv().CAP_AWS_ENDPOINT) {
-				imageUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-			} else {
-				imageUrl = `https://${bucket.bucketName}.s3.${
-					serverEnv().CAP_AWS_REGION || "us-east-1"
-				}.amazonaws.com/${fileKey}`;
-			}
+			image = fileKey;
 		}).pipe(runPromise);
 
-		if (typeof imageUrl !== "string" || imageUrl.length === 0) {
-			throw new Error("Failed to resolve uploaded profile image URL");
+		if (!image) {
+			throw new Error("Failed to resolve uploaded profile image key");
 		}
 
-		const finalImageUrl = imageUrl;
+		const finalImageUrlOrKey = image;
 
 		await db()
 			.update(users)
-			.set({ image: finalImageUrl })
+			.set({ image: finalImageUrlOrKey })
 			.where(eq(users.id, user.id));
 
 		revalidatePath("/dashboard/settings/account");
-		revalidatePath("/dashboard", "layout");
 
-		return { success: true, imageUrl: finalImageUrl } as const;
+		return { success: true, image: finalImageUrlOrKey } as const;
 	} catch (error) {
 		console.error("Error uploading profile image:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");
