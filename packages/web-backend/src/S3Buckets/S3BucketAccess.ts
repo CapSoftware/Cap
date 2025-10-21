@@ -256,6 +256,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									UploadId: uploadId,
 									PartNumber: partNumber,
 								}),
+								{ expiresIn: 3600 },
 							),
 						),
 					),
