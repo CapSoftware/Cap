@@ -68,7 +68,7 @@ impl output_pipeline::VideoFrame for VideoFrame {
 
 impl ScreenCaptureConfig<CMSampleBufferCapture> {
     pub async fn to_sources(
-        &ScreenCaptureConfig::<ScreenCaptureMethod>::initself,
+        &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
         let (video_tx, video_rx) = flume::bounded(4);
