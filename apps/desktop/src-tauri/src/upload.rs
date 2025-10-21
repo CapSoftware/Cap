@@ -13,7 +13,10 @@ use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{Stream, StreamExt, TryStreamExt, stream};
+use futures::{
+    Stream, StreamExt, TryStreamExt,
+    stream::{self, FuturesOrdered},
+};
 use futures::{future::join, stream::FuturesUnordered};
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
@@ -632,107 +635,104 @@ fn multipart_uploader(
     	let use_md5_hashes = app.is_server_url_custom().await;
 
     	let mut stream = pin!(stream);
-        let mut futures = FuturesUnordered::new();
+        let mut futures = FuturesOrdered::new(); // Being ordered is important for progress tracking!
         let mut prev_part_number = None;
 
         loop {
-            // Fill up to MAX_CONCURRENT_UPLOADS concurrent uploads
-            while futures.len() < MAX_CONCURRENT_UPLOADS {
-                let expected_part_number = prev_part_number.map(|p| p + 1).unwrap_or(1);
-    	        let (expected_part_number, item, mut presigned_url, md5_sum) = if use_md5_hashes {
-    				let Some(item) = stream.next().await else {
-    					break;
-    				};
-    				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-    				let md5_sum = base64::encode(md5::compute(&item.chunk).0);
-    				let presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, item.part_number, Some(
-    					&md5_sum
-    				)).await?;
+            let expected_part_number = prev_part_number.map(|p| p + 1).unwrap_or(1);
+   	        let (expected_part_number, item, mut presigned_url, md5_sum) = if use_md5_hashes {
+				let Some(item) = stream.next().await else {
+   					break;
+				};
+				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+				let md5_sum = base64::encode(md5::compute(&item.chunk).0);
+				let presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, item.part_number, Some(
+   					&md5_sum
+				)).await?;
 
-                    // `expected_part_number` being `item.part_number` means it will never be wrong (and hence cause a second presigning later on).
-    				(item.part_number, item, presigned_url, Some(md5_sum))
-    	        } else {
-    				let (Some(item), presigned_url) = join(
-    	                stream.next(),
-    	                // We generate the presigned URL ahead of time for the part we expect to come next.
-    	                // If it's not the chunk that actually comes next we just throw it out.
-    	                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
-    	                api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number, None)
-    	            ).await else {
-    	                break;
-    	            };
+                // `expected_part_number` being `item.part_number` means it will never be wrong (and hence cause a second presigning later on).
+				(item.part_number, item, presigned_url, Some(md5_sum))
+   	        } else {
+				let (Some(item), presigned_url) = join(
+   	                stream.next(),
+   	                // We generate the presigned URL ahead of time for the part we expect to come next.
+   	                // If it's not the chunk that actually comes next we just throw it out.
+   	                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
+   	                api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number, None)
+   	            ).await else {
+   	                break;
+   	            };
 
-    				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+				let item = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
 
-    				(expected_part_number, item, presigned_url?, None)
-    			};
+				(expected_part_number, item, presigned_url?, None)
+ 			};
 
-                let app = app.clone();
-                let video_id = video_id.clone();
-                let upload_id = upload_id.clone();
+             // Stop processing new chunks until we have space for more concurrent uploads
+             while futures.len() >= MAX_CONCURRENT_UPLOADS {
+                 futures.next().await?;
+             }
 
-                let Chunk { total_size, part_number, chunk } = item;
-                trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
-                prev_part_number = Some(part_number);
+            let app = app.clone();
+            let video_id = video_id.clone();
+            let upload_id = upload_id.clone();
 
-    			let upload_future = async move {
-                    let size = chunk.len();
+            let Chunk { total_size, part_number, chunk } = item;
+            trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
+            prev_part_number = Some(part_number);
 
-          		    // We prefetched for the wrong chunk. Let's try again with the correct part number now that we know it.
-                    if expected_part_number != part_number {
-                        presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, md5_sum.as_deref())
-                            .await?
-                    }
+ 			let upload_future = async move {
+                let size = chunk.len();
 
-                    trace!("Uploading part {part_number}");
+      		    // We prefetched for the wrong chunk. Let's try again with the correct part number now that we know it.
+                if expected_part_number != part_number {
+                    presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, md5_sum.as_deref())
+                        .await?
+                }
 
-                    let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
-                    let mut req = retryable_client(url.host().unwrap_or("<unknown>").to_string())
-                        .build()
-                        .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
-                        .put(&presigned_url)
-                        .header("Content-Length", chunk.len())
-                        .timeout(Duration::from_secs(5 * 60)).body(chunk);
+                trace!("Uploading part {part_number}");
 
-                    if let Some(md5_sum) = &md5_sum {
-                    	req = req.header("Content-MD5", md5_sum);
-                    }
+                let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
+                let mut req = retryable_client(url.host().unwrap_or("<unknown>").to_string())
+                    .build()
+                    .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
+                    .put(&presigned_url)
+                    .header("Content-Length", chunk.len())
+                    .timeout(Duration::from_secs(5 * 60)).body(chunk);
 
-                    let resp = req
-                        .send()
-                        .instrument(info_span!("s3_put", size = size))
-                        .await
-                        .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
+                if let Some(md5_sum) = &md5_sum {
+                   	req = req.header("Content-MD5", md5_sum);
+                }
 
-                    let etag = resp.headers().get("ETag").as_ref().and_then(|etag| etag.to_str().ok()).map(|v| v.trim_matches('"').to_string());
+                let resp = req
+                    .send()
+                    .instrument(info_span!("s3_put", size = size))
+                    .await
+                    .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
 
-                    match !resp.status().is_success() {
-                        true => Err(format!("uploader/part/{part_number}/error: {}", resp.text().await.unwrap_or_default())),
-                        false => Ok(()),
-                    }?;
+                let etag = resp.headers().get("ETag").as_ref().and_then(|etag| etag.to_str().ok()).map(|v| v.trim_matches('"').to_string());
 
-                    trace!("Completed upload of part {part_number}");
+                match !resp.status().is_success() {
+                    true => Err(format!("uploader/part/{part_number}/error: {}", resp.text().await.unwrap_or_default())),
+                    false => Ok(()),
+                }?;
 
-                    Ok::<_, AuthedApiError>(UploadedPart {
-                        etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
-                        part_number,
-                        size,
-                        total_size
-                    })
-    			}.instrument(info_span!("upload_part", part_number = part_number));
+                trace!("Completed upload of part {part_number}");
 
-    			futures.push(upload_future);
-            }
+                Ok::<_, AuthedApiError>(UploadedPart {
+                    etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
+                    part_number,
+                    size,
+                    total_size
+                })
+ 			}.instrument(info_span!("upload_part", part_number = part_number));
 
-            // If all futures are done, the upload is complete
-            if futures.is_empty() {
-                break;
-            }
+ 			futures.push(upload_future);
+        }
 
-            // Wait for one more future, then we will have a free future slot for the next chunk
-            if let Some(result) = futures.next().await {
-                yield result?;
-            }
+        // Wait for everything to complete
+        while !futures.is_empty(){
+            futures.next().await?;
         }
 
         debug!("Completed multipart upload for {video_id:?} in {:?}", start.elapsed());
