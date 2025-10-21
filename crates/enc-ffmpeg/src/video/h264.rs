@@ -12,6 +12,13 @@ use tracing::{debug, error};
 
 use crate::base::EncoderBase;
 
+fn is_420(format: ffmpeg::format::Pixel) -> bool {
+    format
+        .descriptor()
+        .map(|desc| desc.log2_chroma_w() == 1 && desc.log2_chroma_h() == 1)
+        .unwrap_or(false)
+}
+
 pub struct H264EncoderBuilder {
     bpp: f32,
     input_config: VideoInfo,
@@ -86,6 +93,13 @@ impl H264EncoderBuilder {
             output_height = input_config.height;
         }
 
+        if output_width == 0 || output_height == 0 {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
+
         let encoder_supports_input_format = codec
             .video()
             .ok()
@@ -108,11 +122,8 @@ impl H264EncoderBuilder {
             format
         };
 
-        if output_format == ffmpeg::format::Pixel::NV12
-            && (output_width == 0
-                || output_height == 0
-                || output_width % 2 != 0
-                || output_height % 2 != 0)
+        if is_420(output_format)
+            && (output_width % 2 != 0 || output_height % 2 != 0)
         {
             return Err(H264EncoderError::InvalidOutputDimensions {
                 width: output_width,
