@@ -187,7 +187,7 @@ export const ShareVideo = forwardRef<
 					{data.source.type === "desktopMP4" ? (
 						<CapVideoPlayer
 							videoId={data.id}
-							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"
 							videoSrc={videoSrc}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}

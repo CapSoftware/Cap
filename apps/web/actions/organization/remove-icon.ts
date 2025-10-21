@@ -48,8 +48,7 @@ export async function removeOrganizationIcon(
 				) {
 					s3Key = url.pathname.substring(1); // Remove leading slash
 				} else {
-					// Not an S3 URL, skip deletion
-					return;
+					s3Key = "";
 				}
 			}
 

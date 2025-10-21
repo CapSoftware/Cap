@@ -1,5 +1,6 @@
 "use server";
 
+import path from "node:path";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
@@ -30,10 +31,17 @@ export async function removeProfileImage() {
 					url.hostname.endsWith(".amazonaws.com") ||
 					url.hostname === "amazonaws.com"
 				) {
-					s3Key = url.pathname.substring(1); // Remove leading slash
+					const raw = url.pathname.startsWith("/")
+						? url.pathname.slice(1)
+						: url.pathname;
+					const decoded = decodeURIComponent(raw);
+					const normalized = path.posix.normalize(decoded);
+					if (normalized.includes("..")) {
+						throw new Error("Invalid S3 key path");
+					}
+					s3Key = normalized;
 				} else {
-					// Not an S3 URL, skip deletion
-					return;
+					// Not an S3 URL, skip deletion of S3 object; continue with DB update below
 				}
 			}
 
