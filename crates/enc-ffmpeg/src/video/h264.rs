@@ -68,7 +68,7 @@ impl H264EncoderBuilder {
     }
 
     pub fn with_output_size(mut self, width: u32, height: u32) -> Result<Self, H264EncoderError> {
-        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+        if width == 0 || height == 0 {
             return Err(H264EncoderError::InvalidOutputDimensions { width, height });
         }
 
