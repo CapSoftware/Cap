@@ -683,11 +683,6 @@ async fn create_segment_pipeline(
     custom_cursor_capture: bool,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
-    let cursor_crop_bounds = base_inputs
-        .capture_target
-        .cursor_crop()
-        .ok_or(CreateSegmentPipelineError::NoBounds)?;
-
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
@@ -761,21 +756,28 @@ async fn create_segment_pipeline(
     .transpose()
     .context("microphone pipeline setup")?;
 
-    let cursor = custom_cursor_capture.then(move || {
-        let cursor = spawn_cursor_recorder(
-            cursor_crop_bounds,
-            display,
-            cursors_dir.to_path_buf(),
-            prev_cursors,
-            next_cursors_id,
-            start_time,
-        );
+    let cursor = custom_cursor_capture
+        .then(move || {
+            let cursor_crop_bounds = base_inputs
+                .capture_target
+                .cursor_crop()
+                .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
-        CursorPipeline {
-            output_path: dir.join("cursor.json"),
-            actor: cursor,
-        }
-    });
+            let cursor = spawn_cursor_recorder(
+                cursor_crop_bounds,
+                display,
+                cursors_dir.to_path_buf(),
+                prev_cursors,
+                next_cursors_id,
+                start_time,
+            );
+
+            Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
+                output_path: dir.join("cursor.json"),
+                actor: cursor,
+            })
+        })
+        .transpose()?;
 
     info!("pipeline playing");
 
