@@ -12,7 +12,7 @@ import {
 	S3Buckets,
 	Videos,
 } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
@@ -75,6 +75,7 @@ app.post(
 					c.json({ error: "Error initiating multipart upload" }, 500),
 				);
 			}),
+			Effect.provideService(CurrentUser, user),
 			runPromise,
 		);
 		if (resp) return resp;

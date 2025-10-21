@@ -16,7 +16,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
 
-		const getById = (id: Video.VideoId) =>
+		const getByIdForViewer = (id: Video.VideoId) =>
 			repo
 				.getById(id)
 				.pipe(
@@ -38,8 +38,11 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 */
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
-			getById,
+			getById: getByIdForViewer,
 
+			/*
+			 * Get a video by ID. Will fail if the user isn't the owner.
+			 */
 			getByIdForOwner,
 
 			/*
@@ -209,7 +212,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* getById(videoId).pipe(
+				const [video] = yield* getByIdForViewer(videoId).pipe(
 					Effect.flatten,
 					Effect.catchTag(
 						"NoSuchElementException",
