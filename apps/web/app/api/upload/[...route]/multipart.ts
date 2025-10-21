@@ -50,7 +50,7 @@ app.post(
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
 		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
-		if (!videoIdRaw) throw new Error("Video ID is required");
+		if (!videoIdRaw) return c.text("Video id not found", 400);
 		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
@@ -75,9 +75,6 @@ app.post(
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
-
-				// if (e._tag === "DatabaseError")
-				// 	return Effect.succeed<Response>(c.text("Video not found", 404));
 
 				return Effect.succeed<Response>(
 					c.json({ error: "Error initiating multipart upload" }, 500),
@@ -245,7 +242,8 @@ app.post(
 		const user = c.get("user");
 
 		return Effect.gen(function* () {
-			const videos = yield* Videos;
+			const repo = yield* VideosRepo;
+			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
 			const fileKey = parseVideoIdOrFileKey(user.id, {
@@ -254,12 +252,13 @@ app.post(
 			});
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
-			const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
-			if (!videoId) throw new Error("Video ID is required");
+			const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+			if (!videoIdRaw) return c.text("Video id not found", 400);
+			const videoId = Video.VideoId.make(videoIdRaw);
 
-			const maybeVideo = yield* videos.getByIdForOwner(
-				Video.VideoId.make(videoId),
-			);
+			const maybeVideo = yield* repo
+				.getById(videoId)
+				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 			if (Option.isNone(maybeVideo)) {
 				c.status(404);
 				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
