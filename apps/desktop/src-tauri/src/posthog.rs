@@ -54,6 +54,12 @@ impl From<PostHogEvent> for posthog_rs::Event {
         e.insert_prop("cap_version", env!("CARGO_PKG_VERSION"))
             .map_err(|err| error!("Error adding PostHog property: {err:?}"))
             .ok();
+        e.insert_prop("os", std::env::consts::OS)
+            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+            .ok();
+        e.insert_prop("arch", std::env::consts::ARCH)
+            .map_err(|err| error!("Error adding PostHog property: {err:?}"))
+            .ok();
 
         e
     }
