@@ -2,9 +2,9 @@ import * as Db from "@cap/database/schema";
 import { InternalError, Organisation, User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
-import * as path from "path";
 import { Database } from "../Database";
 import { S3Buckets } from "../S3Buckets";
+import { parseImageKey } from "./helpers";
 import { UsersOnboarding } from "./UsersOnboarding";
 
 export const UsersRpcsLive = User.UserRpcs.toLayer(
@@ -62,42 +62,15 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 				),
 			UploadImage: (payload) =>
 				Effect.gen(function* () {
+					const oldS3KeyOption = yield* parseImageKey(
+						payload.oldImageKey,
+						payload.type,
+					);
 					const [bucket] = yield* s3Buckets.getBucketAccess(Option.none());
 
-					// Delete old image if it exists
-					if (payload.oldImageKey) {
-						try {
-							// Extract the S3 key - handle both old URL format and new key format
-							let oldS3Key = payload.oldImageKey;
-							if (
-								payload.oldImageKey.startsWith("http://") ||
-								payload.oldImageKey.startsWith("https://")
-							) {
-								const url = new URL(payload.oldImageKey);
-								const raw = url.pathname.startsWith("/")
-									? url.pathname.slice(1)
-									: url.pathname;
-								const decoded = decodeURIComponent(raw);
-								const normalized = path.posix.normalize(decoded);
-								if (normalized.includes("..")) {
-									yield* Effect.fail(new InternalError({ type: "unknown" }));
-								}
-								oldS3Key = normalized;
-							}
-
-							// Only delete if it looks like the correct type of image key
-							const expectedPrefix =
-								payload.type === "user" ? "users/" : "organizations/";
-							if (oldS3Key.startsWith(expectedPrefix)) {
-								yield* bucket.deleteObject(oldS3Key);
-							}
-						} catch (error) {
-							// Continue with upload even if deletion fails
-							console.error(
-								`Error deleting old ${payload.type} image from S3:`,
-								error,
-							);
-						}
+					// Delete old image if it exists and is valid
+					if (Option.isSome(oldS3KeyOption)) {
+						yield* bucket.deleteObject(oldS3KeyOption.value);
 					}
 
 					// Generate new S3 key
@@ -144,31 +117,15 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 				),
 			RemoveImage: (payload) =>
 				Effect.gen(function* () {
+					const s3KeyOption = yield* parseImageKey(
+						payload.imageKey,
+						payload.type,
+					);
 					const [bucket] = yield* s3Buckets.getBucketAccess(Option.none());
 
-					// Extract the S3 key - handle both old URL format and new key format
-					let s3Key = payload.imageKey;
-					if (
-						payload.imageKey.startsWith("http://") ||
-						payload.imageKey.startsWith("https://")
-					) {
-						const url = new URL(payload.imageKey);
-						const raw = url.pathname.startsWith("/")
-							? url.pathname.slice(1)
-							: url.pathname;
-						const decoded = decodeURIComponent(raw);
-						const normalized = path.posix.normalize(decoded);
-						if (normalized.includes("..")) {
-							yield* Effect.fail(new InternalError({ type: "unknown" }));
-						}
-						s3Key = normalized;
-					}
-
-					// Only delete if it looks like the correct type of image key
-					const expectedPrefix =
-						payload.type === "user" ? "users/" : "organizations/";
-					if (s3Key.startsWith(expectedPrefix)) {
-						yield* bucket.deleteObject(s3Key);
+					// Only delete if we have a valid S3 key
+					if (Option.isSome(s3KeyOption)) {
+						yield* bucket.deleteObject(s3KeyOption.value);
 					}
 
 					// Update database
