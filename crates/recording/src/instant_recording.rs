@@ -313,7 +313,8 @@ pub async fn spawn_instant_recording_actor(
         #[cfg(target_os = "macos")]
         inputs.excluded_windows,
     )
-    .await?;
+    .await
+    .context("screen capture init")?;
 
     debug!("screen capture: {screen_source:#?}");
 

@@ -709,7 +709,7 @@ async fn create_segment_pipeline(
         base_inputs.excluded_windows,
     )
     .await
-    .unwrap();
+    .context("screen capture init")?;
 
     let (capture_source, system_audio) = screen_config.to_sources().await?;
 
