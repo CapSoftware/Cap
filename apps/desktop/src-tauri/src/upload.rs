@@ -694,6 +694,7 @@ fn multipart_uploader(
                             {
                                 url
                             } else if part_number == 1
+                                && !use_md5_hashes
                                 // We have a presigned URL left around from the first chunk
                                 && let Some((url, expiry)) = first_chunk_presigned_url
                                     .lock()
