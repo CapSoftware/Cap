@@ -205,84 +205,14 @@ async fn create_pipeline(
     let screen_info = screen_source.info();
 
     let output_resolution = max_output_size
-        .map(|max_output_width| {
-            (
-                max_output_width,
-                (max_output_width as f64 / 16.0 * 9.0) as u32,
+        .map(|max_output_size| {
+            clamp_size(
+                (screen_info.width, screen_info.height),
+                (
+                    max_output_size,
+                    (max_output_size as f64 / 16.0 * 9.0) as u32,
+                ),
             )
-        })
-        .map(|(max_width, max_height)| {
-            // 16/9-ish
-            if screen_info.width >= screen_info.height
-                && (screen_info.width as f64 / screen_info.height as f64) <= 16.0 / 9.0
-            {
-                let mut width = max_width.min(screen_info.width);
-                if width % 2 != 0 {
-                    width -= 1;
-                }
-
-                let height_ratio = screen_info.height as f64 / screen_info.width as f64;
-                let mut height = (height_ratio * width as f64).round() as u32;
-                if height % 2 != 0 {
-                    height -= 1;
-                }
-
-                (width, height)
-            }
-            // 9/16-ish
-            else if screen_info.width <= screen_info.height
-                && (screen_info.width as f64 / screen_info.height as f64) >= 9.0 / 16.0
-            {
-                let mut height = max_height.min(screen_info.height);
-                if height % 2 != 0 {
-                    height -= 1;
-                }
-
-                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
-                let mut width = (width_ratio * height as f64).round() as u32;
-                if width % 2 != 0 {
-                    width -= 1;
-                }
-
-                (width, height)
-            }
-            // ultrawide
-            else if screen_info.width >= screen_info.height
-                && (screen_info.width as f64 / screen_info.height as f64) > 16.0 / 9.0
-            {
-                let mut height = max_height.min(screen_info.height);
-                if height % 2 != 0 {
-                    height -= 1;
-                }
-
-                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
-                let mut width = (width_ratio * height as f64).round() as u32;
-                if width % 2 != 0 {
-                    width -= 1;
-                }
-
-                (width, height)
-            }
-            // ultratall
-            else if screen_info.width < screen_info.height
-                && (screen_info.width as f64 / screen_info.height as f64) <= 9.0 / 16.0
-            {
-                // swapped since max_width/height assume horizontal
-                let mut width = max_height.min(screen_info.width);
-                if width % 2 != 0 {
-                    width -= 1;
-                }
-
-                let height_ratio = screen_info.height as f64 / screen_info.width as f64;
-                let mut height = (height_ratio * width as f64).round() as u32;
-                if height % 2 != 0 {
-                    height -= 1;
-                }
-
-                (width, height)
-            } else {
-                unreachable!()
-            }
         })
         .unwrap_or((screen_info.width, screen_info.height));
 
