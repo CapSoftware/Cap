@@ -333,8 +333,9 @@ fn get_codec_and_options(
 
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     // higher frame rates don't really need double the bitrate lets be real
-    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.6 + 30.0;
-    let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
+    let frame_rate_multiplier = ((frame_rate as f64 - 30.0).max(0.0) * 0.6) + 30.0;
+    let area = (width as f64) * (height as f64);
+    let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp) as usize
+    (pixels_per_second * bpp as f64) as usize
 }
