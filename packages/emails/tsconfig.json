@@ -1,0 +1,20 @@
+{
+	"extends": "../config/base.tsconfig.json",
+	"exclude": ["node_modules", "dist"],
+	"include": [
+		"next-env.d.ts",
+		".next/types/**/*.ts",
+		"**/*.ts",
+		"**/*.tsx",
+		"./package.json"
+	],
+	"compilerOptions": {
+		"composite": true,
+		"outDir": "dist",
+		"noEmit": false,
+		"emitDeclarationOnly": true,
+		"paths": {
+			"@/emails/*": ["./emails/*"]
+		}
+	}
+}

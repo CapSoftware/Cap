@@ -23,9 +23,6 @@
 		"@mattrax/mysql-planetscale": "^0.0.3",
 		"@paralleldrive/cuid2": "^2.2.2",
 		"@planetscale/database": "^1.19.0",
-		"@react-email/components": "^0.1.0",
-		"@react-email/render": "1.1.2",
-		"@react-email/tailwind": "^1.0.5",
 		"drizzle-orm": "0.44.6",
 		"dub": "^0.64.0",
 		"effect": "^3.18.4",
@@ -33,22 +30,13 @@
 		"nanoid": "^5.0.4",
 		"next": "15.5.4",
 		"next-auth": "^4.24.5",
-		"react-email": "^4.0.16",
-		"resend": "4.6.0",
 		"zod": "^3"
 	},
 	"devDependencies": {
 		"@cap/ui": "workspace:*",
 		"@cap/utils": "workspace:*",
-		"@types/node": "^20.10.0",
-		"@types/react": "^19.1.13",
-		"@types/react-dom": "19.1.9",
 		"dotenv-cli": "latest",
 		"drizzle-kit": "0.31.0",
-		"nodemailer": "^6.9.8",
-		"react": "^19.1.1",
-		"react-dom": "^19.1.1",
-		"react-router-dom": "^6.18.0",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3"
 	},
@@ -62,18 +50,6 @@
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",
-		"./emails/config": "./emails/config.ts",
-		"./emails/*": "./emails/*.tsx",
 		"./types": "./types/index.ts"
-	},
-	"publishConfig": {
-		"exports": {
-			".": "./dist/index.js",
-			"./auth/auth-options": "./dist/auth/auth-options.js",
-			"./auth/session": "./dist/auth/session.js",
-			"./schema": "./dist/schema.js",
-			"./crypto": "./dist/crypto.js",
-			"./helpers": "./dist/helpers.js"
-		}
 	}
 }
