@@ -20,11 +20,7 @@ import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { runPromise } from "@/lib/server";
-import {
-	isAtLeastSemver,
-	isFromDesktopSemver,
-	UPLOAD_PROGRESS_VERSION,
-} from "@/utils/desktop";
+import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -295,7 +291,7 @@ app.delete(
 					prefix: `${user.id}/${videoId}/`,
 				});
 
-				if (listedObjects.Contents?.length)
+				if (listedObjects.Contents && listedObjects.Contents.length > 1)
 					yield* bucket.deleteObjects(
 						listedObjects.Contents.map((content: any) => ({
 							Key: content.Key,
