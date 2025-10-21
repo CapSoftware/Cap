@@ -193,10 +193,10 @@ pub fn target_to_display_and_crop(
             {
                 let raw_display_size = display
                     .physical_size()
-                    .ok_or(ScreenCaptureInitError::NoBounds)?;
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
                 let logical_display_size = display
                     .logical_size()
-                    .ok_or(ScreenCaptureInitError::NoBounds)?;
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
 
                 Some(PhysicalBounds::new(
                     PhysicalPosition::new(
