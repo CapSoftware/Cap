@@ -13,18 +13,14 @@ use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{
-    FutureExt, Stream, StreamExt, TryStreamExt,
-    stream::{self, FuturesOrdered},
-};
-use futures::{future::join, stream::FuturesUnordered};
+use futures::future::join;
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
     collections::HashMap,
-    future::Ready,
     io,
     path::{Path, PathBuf},
     pin::pin,
@@ -58,8 +54,8 @@ pub struct UploadProgressEvent {
     total: String,
 }
 
-// a typical recommended chunk size is 5MB (AWS min part size).
-const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+// The size of each S3 multipart upload chunk
+const CHUNK_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
 
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
@@ -764,12 +760,10 @@ fn multipart_uploader(
                         (stream, expected_part_number + 1),
                     ))
                 }
-                // .instrument(Span::current())
             },
         )
         .buffered(MAX_CONCURRENT_UPLOADS)
         .boxed()
-        // .instrument(Span::current())
     })
     .chain(stream::once(async move {
         debug!(
