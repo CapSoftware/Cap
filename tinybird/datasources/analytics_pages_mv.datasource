@@ -1,0 +1,14 @@
+SCHEMA >
+    `date` Date,
+    `tenant_id` String,
+    `domain` String,
+    `device` String,
+    `browser` String,
+    `location` String,
+    `pathname` String,
+    `visits` AggregateFunction(uniq, String),
+    `hits` AggregateFunction(count)
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY tenant_id, domain, date, device, browser, location, pathname

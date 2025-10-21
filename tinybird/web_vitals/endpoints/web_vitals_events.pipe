@@ -1,0 +1,136 @@
+DESCRIPTION >
+    Parsed `web_vital` events with metadata lookup, implementing metric extraction and domain/pathname parsing logic.
+
+TOKEN "dashboard" READ
+
+NODE web_vitals_metadata
+DESCRIPTION >
+    Static metadata lookup table for web vitals metrics with thresholds, units, and descriptions
+
+SQL >
+    SELECT
+        metric_name,
+        excellent_threshold,
+        good_threshold,
+        units,
+        description,
+        thresholds_text
+    FROM (
+        SELECT 'LCP' as metric_name, 2500 as excellent_threshold, 4000 as good_threshold, 'ms' as units, 
+               'Largest Contentful Paint - measures loading performance of the largest content element' as description,
+               'Excellent: ≤2500ms, Good: ≤4000ms, Poor: >4000ms' as thresholds_text
+        UNION ALL
+        SELECT 'TTFB' as metric_name, 500 as excellent_threshold, 1000 as good_threshold, 'ms' as units,
+               'Time to First Byte - measures server response time and network latency' as description,
+               'Excellent: ≤500ms, Good: ≤1000ms, Poor: >1000ms' as thresholds_text
+        UNION ALL
+        SELECT 'FCP' as metric_name, 1800 as excellent_threshold, 3000 as good_threshold, 'ms' as units,
+               'First Contentful Paint - measures time until first content appears on screen' as description,
+               'Excellent: ≤1800ms, Good: ≤3000ms, Poor: >3000ms' as thresholds_text
+        UNION ALL
+        SELECT 'INP' as metric_name, 200 as excellent_threshold, 500 as good_threshold, 'ms' as units,
+               'Interaction to Next Paint - measures responsiveness to user interactions' as description,
+               'Excellent: ≤200ms, Good: ≤500ms, Poor: >500ms' as thresholds_text
+        UNION ALL
+        SELECT 'CLS' as metric_name, 0.1 as excellent_threshold, 0.25 as good_threshold, 'score' as units,
+               'Cumulative Layout Shift - measures visual stability and unexpected layout shifts' as description,
+               'Excellent: ≤0.1, Good: ≤0.25, Poor: >0.25' as thresholds_text
+    )
+
+NODE parsed_vitals
+DESCRIPTION >
+    Parse raw web_vital events and extract metric data with validation
+
+SQL >
+%
+    SELECT
+        timestamp,
+        action,
+        version,
+        coalesce(session_id, '0') as session_id,
+        tenant_id,
+        multiIf(domain != '', domain, current_domain != '', current_domain, domain_from_payload) as domain,
+        if(domainWithoutWWW(href) = '' and href is not null and href != '', URLHierarchy(href)[1], domainWithoutWWW(href)) as current_domain,
+        JSONExtractString(payload, 'name') as metric_name,
+        JSONExtractFloat(payload, 'value') as value,
+        JSONExtractFloat(payload, 'delta') as delta,
+        JSONExtractString(payload, 'pathname') as pathname,
+        JSONExtractString(payload, 'domain') as domain_from_payload,
+        JSONExtractString(payload, 'href') as href
+    FROM analytics_events
+    WHERE action = 'web_vital'
+        {% if defined(from_date) %}
+            AND timestamp >= {{ Date(from_date, description="Starting date for filtering a date range", required=False) }}
+        {% end %}
+        {% if defined(to_date) %}
+            AND timestamp <= {{ Date(to_date, description="Finishing date for filtering a date range", required=False) }}
+        {% end %}
+        AND JSONExtractString(payload, 'name') IN ('LCP', 'TTFB', 'FCP', 'INP', 'CLS')
+        AND JSONExtractString(payload, 'pathname') != ''
+        -- Filter out unrealistic values that are clearly errors
+        AND JSONExtractFloat(payload, 'value') > 0
+        AND JSONExtractFloat(payload, 'value') < 60000  -- Max 60 seconds for any metric
+        -- Additional metric-specific validation
+        AND (
+            (JSONExtractString(payload, 'name') = 'LCP' AND JSONExtractFloat(payload, 'value') < 30000) OR
+            (JSONExtractString(payload, 'name') = 'TTFB' AND JSONExtractFloat(payload, 'value') < 30000) OR
+            (JSONExtractString(payload, 'name') = 'FCP' AND JSONExtractFloat(payload, 'value') < 30000) OR
+            (JSONExtractString(payload, 'name') = 'INP' AND JSONExtractFloat(payload, 'value') < 10000) OR
+            (JSONExtractString(payload, 'name') = 'CLS' AND JSONExtractFloat(payload, 'value') < 1)
+        )
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+
+NODE endpoint
+DESCRIPTION >
+    Clean and enrich web vitals data with computed fields and metadata
+
+SQL >
+    SELECT
+        pv.timestamp,
+        pv.action,
+        pv.version,
+        pv.session_id,
+        pv.tenant_id,
+        pv.domain,
+        pv.metric_name,
+        pv.value,
+        pv.delta,
+        pv.pathname,
+        pv.href,
+        -- Extract route (first part of pathname)
+        if(
+            pv.pathname = '/',
+            '/',
+            splitByChar('/', pv.pathname)[2] 
+        ) as route,
+        -- Calculate performance category using metadata
+        CASE 
+            WHEN pv.value <= md.excellent_threshold THEN 'excellent'
+            WHEN pv.value <= md.good_threshold THEN 'good'
+            ELSE 'poor'
+        END as performance_category,
+        -- Calculate performance score using metadata
+        CASE 
+            WHEN pv.value <= md.excellent_threshold THEN 100
+            WHEN pv.value <= md.good_threshold THEN 75
+            ELSE 25
+        END as score,
+        -- Include metadata fields
+        md.units,
+        md.description,
+        md.thresholds_text,
+        -- Calculate status using metadata
+        CASE 
+            WHEN pv.value <= md.excellent_threshold THEN 'Excellent'
+            WHEN pv.value <= md.good_threshold THEN 'Good'
+            ELSE 'Poor'
+        END as status
+    FROM parsed_vitals pv
+    INNER JOIN web_vitals_metadata md ON pv.metric_name = md.metric_name
+
+TYPE endpoint

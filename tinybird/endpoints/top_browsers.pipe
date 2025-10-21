@@ -1,0 +1,116 @@
+DESCRIPTION >
+    Top Browsers ordered by most visits.
+    Accepts `date_from` and `date_to` date filter. Defaults to last 7 days.
+    Set `include_previous_period=true` to get previous period metrics and growth percentage.
+    Also `skip` and `limit` parameters for pagination.
+
+TOKEN "dashboard" READ
+
+NODE date_calculations
+DESCRIPTION >
+    Calculate current and previous period date ranges
+
+SQL >
+    %
+    WITH
+        {% if defined(date_from) and defined(date_to) %}
+            toDate({{ String(date_from) }}) as current_start,
+            toDate({{ String(date_to) }}) as current_end,
+        {% else %}
+            toDate(timestampAdd(today(), interval -7 day)) as current_start,
+            toDate(today()) as current_end,
+        {% end %}
+        dateDiff('day', current_start, current_end) + 1 as period_days,
+        timestampAdd(current_start, interval -period_days day) as previous_start,
+        timestampAdd(current_end, interval -period_days day) as previous_end
+    SELECT
+        current_start,
+        current_end,
+        previous_start,
+        previous_end,
+        period_days
+
+NODE current_period_data
+DESCRIPTION >
+    Get browser metrics for the current period
+
+SQL >
+    %
+    SELECT 
+        browser, 
+        uniq(session_id) as current_visits, 
+        countMerge(hits) as current_hits
+    FROM analytics_sessions_mv
+    WHERE date >= (SELECT current_start FROM date_calculations)
+        AND date <= (SELECT current_end FROM date_calculations)
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+    GROUP BY browser
+
+NODE previous_period_data
+DESCRIPTION >
+    Get browser metrics for the previous period (only when include_previous_period is true)
+
+SQL >
+    %
+    {% if defined(include_previous_period) and include_previous_period == 'true' %}
+    SELECT 
+        browser, 
+        uniq(session_id) as previous_visits, 
+        countMerge(hits) as previous_hits
+    FROM analytics_sessions_mv
+    WHERE date >= (SELECT previous_start FROM date_calculations)
+        AND date <= (SELECT previous_end FROM date_calculations)
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+    GROUP BY browser
+    {% else %}
+    SELECT '' as browser, 0 as previous_visits, 0 as previous_hits WHERE 1=0
+    {% end %}
+
+NODE endpoint
+DESCRIPTION >
+    Combine current and previous period data with growth calculations
+
+SQL >
+    %
+    {% if defined(include_previous_period) and include_previous_period == 'true' %}
+    SELECT
+        c.browser,
+        c.current_visits as visits,
+        c.current_hits as hits,
+        coalesce(p.previous_visits, 0) as previous_visits,
+        coalesce(p.previous_hits, 0) as previous_hits,
+        CASE 
+            WHEN coalesce(p.previous_visits, 0) = 0 AND c.current_visits > 0 THEN 100.0
+            WHEN coalesce(p.previous_visits, 0) = 0 THEN 0.0
+            ELSE round(((c.current_visits - coalesce(p.previous_visits, 0)) * 100.0) / p.previous_visits, 2)
+        END as visits_growth_percentage,
+        CASE 
+            WHEN coalesce(p.previous_hits, 0) = 0 AND c.current_hits > 0 THEN 100.0
+            WHEN coalesce(p.previous_hits, 0) = 0 THEN 0.0
+            ELSE round(((c.current_hits - coalesce(p.previous_hits, 0)) * 100.0) / p.previous_hits, 2)
+        END as hits_growth_percentage
+    FROM current_period_data c
+    LEFT JOIN previous_period_data p ON c.browser = p.browser
+    ORDER BY c.current_visits DESC
+    LIMIT {{ Int32(skip, 0) }}, {{ Int32(limit, 50) }}
+    {% else %}
+    SELECT
+        browser,
+        current_visits as visits,
+        current_hits as hits
+    FROM current_period_data
+    ORDER BY current_visits DESC
+    LIMIT {{ Int32(skip, 0) }}, {{ Int32(limit, 50) }}
+    {% end %}
+
+TYPE endpoint

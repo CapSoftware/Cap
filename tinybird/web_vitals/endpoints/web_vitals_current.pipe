@@ -1,0 +1,89 @@
+DESCRIPTION >
+	Returns current web vitals metrics (LCP, TTFB, FCP, INP, CLS) with average values over a configurable time period (defaults to 1 day), calculated scores, and detailed metric descriptions with units and scoring ranges.
+
+TOKEN "dashboard" READ
+
+NODE daily_vitals
+DESCRIPTION >
+    Get web vital metrics aggregated over the specified time period with averages and metadata.
+    Note: Unrealistic values (>60s for timing metrics, >1 for CLS) are filtered out as they indicate measurement errors.
+
+SQL >
+
+    %
+    SELECT
+        metric_name,
+        avg(value) as avg_value,
+        quantile(0.75)(value) as p75,
+        quantile(0.90)(value) as p90,
+        quantile(0.95)(value) as p95,
+        quantile(0.99)(value) as p99,
+        avg(delta) as avg_delta,
+        count() as measurements,
+        any(units) as units,
+        any(description) as description,
+        any(thresholds_text) as thresholds_text,
+        domain,
+        tenant_id
+    FROM web_vitals_events
+    WHERE timestamp >= now() - interval {{Int32(days, 1, description="Number of days to analyze (defaults to 1 day)")}} day
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Domain to filter web vitals for") }}
+        {% end %}
+    GROUP BY metric_name, domain, tenant_id
+    HAVING measurements >= 1
+
+NODE endpoint
+DESCRIPTION >
+    Calculate scores and status using built-in metadata from web_vitals_events
+
+SQL >
+    SELECT
+        metric_name,
+        round(avg_value, 2) as avg_value,
+        round(p75, 2) as p75,
+        round(p90, 2) as p90,
+        round(p90, 2) as p90,
+        round(p95, 2) as p95,
+        round(p99, 2) as p99,
+        measurements,
+        -- Calculate score based on thresholds (using same logic as web_vitals_events)
+        CASE 
+            WHEN metric_name = 'LCP' AND avg_value <= 2500 THEN 100
+            WHEN metric_name = 'LCP' AND avg_value <= 4000 THEN 75
+            WHEN metric_name = 'TTFB' AND avg_value <= 500 THEN 100
+            WHEN metric_name = 'TTFB' AND avg_value <= 1000 THEN 75
+            WHEN metric_name = 'FCP' AND avg_value <= 1800 THEN 100
+            WHEN metric_name = 'FCP' AND avg_value <= 3000 THEN 75
+            WHEN metric_name = 'INP' AND avg_value <= 200 THEN 100
+            WHEN metric_name = 'INP' AND avg_value <= 500 THEN 75
+            WHEN metric_name = 'CLS' AND avg_value <= 0.1 THEN 100
+            WHEN metric_name = 'CLS' AND avg_value <= 0.25 THEN 75
+            ELSE 25
+        END as score,
+        -- Calculate status based on thresholds
+        CASE 
+            WHEN metric_name = 'LCP' AND avg_value <= 2500 THEN 'Excellent'
+            WHEN metric_name = 'LCP' AND avg_value <= 4000 THEN 'Good'
+            WHEN metric_name = 'TTFB' AND avg_value <= 500 THEN 'Excellent'
+            WHEN metric_name = 'TTFB' AND avg_value <= 1000 THEN 'Good'
+            WHEN metric_name = 'FCP' AND avg_value <= 1800 THEN 'Excellent'
+            WHEN metric_name = 'FCP' AND avg_value <= 3000 THEN 'Good'
+            WHEN metric_name = 'INP' AND avg_value <= 200 THEN 'Excellent'
+            WHEN metric_name = 'INP' AND avg_value <= 500 THEN 'Good'
+            WHEN metric_name = 'CLS' AND avg_value <= 0.1 THEN 'Excellent'
+            WHEN metric_name = 'CLS' AND avg_value <= 0.25 THEN 'Good'
+            ELSE 'Poor'
+        END as status,
+        units,
+        description,
+        thresholds_text as thresholds,
+        domain,
+        tenant_id
+    FROM daily_vitals
+    ORDER BY metric_name
+
+TYPE endpoint

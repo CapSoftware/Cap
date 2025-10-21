@@ -1,0 +1,22 @@
+DESCRIPTION >
+    Returns domains for a given tenant with first/last seen timestamps and total hits
+
+TOKEN "dashboard" READ
+
+NODE endpoint
+DESCRIPTION >
+    Get domains for a specific tenant
+
+SQL >
+    %
+    SELECT
+        domain,
+        minSimpleState(first_seen) AS first_seen,
+        maxSimpleState(last_seen) AS last_seen,
+        countMerge(total_hits) AS total_hits
+    FROM tenant_domains_mv
+    WHERE tenant_id = {{ String(tenant_id, description="Tenant ID to filter domains for", default="") }}
+    GROUP BY domain
+    ORDER BY total_hits DESC, domain ASC
+
+TYPE endpoint

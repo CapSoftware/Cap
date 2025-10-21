@@ -1,0 +1,40 @@
+DESCRIPTION >
+    Visits trend over time for the last 30 minutes, filling the blanks.
+    Works great for the realtime chart.
+
+TOKEN "dashboard" READ
+
+NODE timeseries
+DESCRIPTION >
+    Generate a timeseries for the last 30 minutes, so we call fill empty data points
+
+SQL >
+    with (now() - interval 30 minute) as start
+    select addMinutes(toStartOfMinute(start), number) as t
+    from (select arrayJoin(range(1, 31)) as number)
+
+NODE hits
+DESCRIPTION >
+    Get last 30 minutes metrics gropued by minute
+
+SQL >
+    %
+    select toStartOfMinute(timestamp) as t, uniq(session_id) as visits
+    from analytics_hits
+    where timestamp >= (now() - interval 30 minute)
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+    group by toStartOfMinute(timestamp)
+    order by toStartOfMinute(timestamp)
+
+NODE endpoint
+DESCRIPTION >
+    Join and generate timeseries with metrics for the last 30 minutes
+
+SQL >
+    select a.t, b.visits from timeseries a left join hits b on a.t = b.t order by a.t
+TYPE endpoint

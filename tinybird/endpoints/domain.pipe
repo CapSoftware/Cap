@@ -1,0 +1,22 @@
+TOKEN "dashboard" READ
+
+NODE get_current_domain
+SQL >
+
+    WITH (
+    SELECT nullif(domainWithoutWWW(href),'') as domain
+    FROM analytics_hits
+    WHERE timestamp >= now() - interval 1 hour
+    GROUP BY domain
+    ORDER BY count(1) DESC
+    LIMIT 1
+    ) AS top_domain,
+    (
+    SELECT domainWithoutWWW(href)
+    FROM analytics_hits
+    WHERE href NOT LIKE '%localhost%'
+    LIMIT 1
+    ) AS some_domain
+    SELECT coalesce(top_domain, some_domain) AS domain
+
+TYPE endpoint

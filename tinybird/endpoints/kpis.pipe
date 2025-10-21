@@ -1,0 +1,250 @@
+DESCRIPTION >
+    Summary with general KPIs per date, including visits, page views, bounce rate and average session duration.
+    Accepts `date_from` and `date_to` date filter, all historical data if not passed.
+    Set `include_previous_period=true` to get previous period metrics and growth percentage.
+    Daily granularity, except when filtering one single day (hourly)
+
+TOKEN "dashboard" READ
+
+NODE date_calculations
+DESCRIPTION >
+    Calculate current and previous period date ranges
+
+SQL >
+    %
+    WITH
+        {% if defined(date_from) %}
+            toStartOfDay(
+                toDate({{ String(date_from, description="Starting day for filtering a date range") }})
+            ) as current_start,
+        {% else %} toStartOfDay(timestampAdd(today(), interval -7 day)) as current_start,
+        {% end %}
+        {% if defined(date_to) %}
+            toStartOfDay(
+                toDate({{ String(date_to, description="Finishing day for filtering a date range") }})
+            ) as current_end
+        {% else %} toStartOfDay(today()) as current_end
+        {% end %}
+    SELECT
+        current_start,
+        current_end,
+        dateDiff('day', current_start, current_end) + 1 as period_days,
+        timestampAdd(current_start, interval -dateDiff('day', current_start, current_end) - 1 day) as previous_start,
+        timestampAdd(current_end, interval -dateDiff('day', current_start, current_end) - 1 day) as previous_end
+
+NODE timeseries
+DESCRIPTION >
+    Generate a timeseries for the specified time range, so we call fill empty data points.
+    Filters "future" data points.
+
+SQL >
+    %
+    with
+        (SELECT current_start FROM date_calculations) as start,
+        (SELECT current_end FROM date_calculations) as end,
+        (SELECT period_days FROM date_calculations) as days_count
+    {% if defined(date_from) and defined(date_to) and date_from == date_to %}
+        select
+            arrayJoin(
+                arrayMap(
+                    x -> toDateTime(x),
+                    range(
+                        toUInt32(toDateTime(start)), toUInt32(timestampAdd(end, interval 1 day)), 3600
+                    )
+                )
+            ) as date
+    {% else %}
+        select
+            arrayJoin(
+                arrayMap(
+                    x -> toDate(x),
+                    range(toUInt32(start), toUInt32(timestampAdd(end, interval 1 day)), 24 * 3600)
+                )
+            ) as date
+    {% end %}
+    where date <= now()
+
+NODE hits
+DESCRIPTION >
+    Group by sessions and calculate metrics at that level
+
+SQL >
+    %
+    {% if defined(date_from) and defined(date_to) and date_from == date_to %}
+        select
+            toStartOfHour(timestamp) as date,
+            session_id,
+            uniq(session_id) as visits,
+            count() as pageviews,
+            case when min(timestamp) = max(timestamp) then 1 else 0 end as is_bounce,
+            max(timestamp) as latest_hit_aux,
+            min(timestamp) as first_hit_aux
+        from analytics_hits
+        where toDate(timestamp) = toDate({{ String(date_from) }})
+            {% if defined(tenant_id) %}
+            AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+            {% end %}
+            {% if defined(domain) %}
+            AND domain = {{ String(domain, description="Filter by domain") }}
+            {% end %}
+        group by toStartOfHour(timestamp), session_id, tenant_id, domain
+    {% else %}
+        select
+            date,
+            session_id,
+            uniq(session_id) as visits,
+            countMerge(hits) as pageviews,
+            case when min(first_hit) = max(latest_hit) then 1 else 0 end as is_bounce,
+            max(latest_hit) as latest_hit_aux,
+            min(first_hit) as first_hit_aux
+        from analytics_sessions_mv
+        where
+            date >= (SELECT current_start FROM date_calculations)
+            and date <= (SELECT current_end FROM date_calculations)
+            {% if defined(tenant_id) %}
+            AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+            {% end %}
+            {% if defined(domain) %}
+            AND domain = {{ String(domain, description="Filter by domain") }}
+            {% end %}
+        group by date, session_id, tenant_id, domain
+    {% end %}
+
+NODE current_period_data
+DESCRIPTION >
+    General KPIs per date for current period
+
+SQL >
+    select
+        date,
+        uniq(session_id) as current_visits,
+        sum(pageviews) as current_pageviews,
+        sum(case when latest_hit_aux = first_hit_aux then 1 end) / uniq(session_id) as current_bounce_rate,
+        avg(latest_hit_aux - first_hit_aux) as current_avg_session_sec
+    from hits
+    group by date
+
+NODE previous_period_hits
+DESCRIPTION >
+    Group by sessions and calculate metrics for previous period (only when include_previous_period is true)
+
+SQL >
+    %
+    {% if defined(include_previous_period) and include_previous_period == 'true' %}
+        {% if defined(date_from) and defined(date_to) and date_from == date_to %}
+            select
+                toStartOfHour(timestamp) as date,
+                session_id,
+                uniq(session_id) as visits,
+                count() as pageviews,
+                case when min(timestamp) = max(timestamp) then 1 else 0 end as is_bounce,
+                max(timestamp) as latest_hit_aux,
+                min(timestamp) as first_hit_aux
+            from analytics_hits
+            where toDate(timestamp) = timestampAdd(toDate({{ String(date_from) }}), interval -1 day)
+                {% if defined(tenant_id) %}
+                AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+                {% end %}
+                {% if defined(domain) %}
+                AND domain = {{ String(domain, description="Filter by domain") }}
+                {% end %}
+            group by toStartOfHour(timestamp), session_id, tenant_id, domain
+        {% else %}
+            select
+                date,
+                session_id,
+                uniq(session_id) as visits,
+                countMerge(hits) as pageviews,
+                case when min(first_hit) = max(latest_hit) then 1 else 0 end as is_bounce,
+                max(latest_hit) as latest_hit_aux,
+                min(first_hit) as first_hit_aux
+            from analytics_sessions_mv
+            where
+                date >= (SELECT previous_start FROM date_calculations)
+                and date <= (SELECT previous_end FROM date_calculations)
+                {% if defined(tenant_id) %}
+                AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+                {% end %}
+                {% if defined(domain) %}
+                AND domain = {{ String(domain, description="Filter by domain") }}
+                {% end %}
+            group by date, session_id, tenant_id, domain
+        {% end %}
+    {% else %}
+        SELECT toDate('1900-01-01') as date, '' as session_id, 0 as visits, 0 as pageviews, 0 as is_bounce, 
+               toDateTime('1900-01-01') as latest_hit_aux, toDateTime('1900-01-01') as first_hit_aux WHERE 1=0
+    {% end %}
+
+NODE previous_period_data
+DESCRIPTION >
+    General KPIs per date for previous period
+
+SQL >
+    %
+    {% if defined(include_previous_period) and include_previous_period == 'true' %}
+    select
+        date,
+        uniq(session_id) as previous_visits,
+        sum(pageviews) as previous_pageviews,
+        sum(case when latest_hit_aux = first_hit_aux then 1 end) / uniq(session_id) as previous_bounce_rate,
+        avg(latest_hit_aux - first_hit_aux) as previous_avg_session_sec
+    from previous_period_hits
+    group by date
+    {% else %}
+    SELECT toDate('1900-01-01') as date, 0 as previous_visits, 0 as previous_pageviews, 
+           0 as previous_bounce_rate, 0 as previous_avg_session_sec WHERE 1=0
+    {% end %}
+
+NODE endpoint
+DESCRIPTION >
+    Join and generate timeseries with metrics and growth calculations
+
+SQL >
+    %
+    {% if defined(include_previous_period) and include_previous_period == 'true' %}
+    SELECT 
+        a.date date, 
+        coalesce(b.current_visits, 0) as visits,
+        coalesce(b.current_pageviews, 0) as pageviews, 
+        coalesce(b.current_bounce_rate, 0) as bounce_rate, 
+        coalesce(b.current_avg_session_sec, 0) as avg_session_sec,
+        coalesce(p.previous_visits, 0) as previous_visits,
+        coalesce(p.previous_pageviews, 0) as previous_pageviews,
+        coalesce(p.previous_bounce_rate, 0) as previous_bounce_rate,
+        coalesce(p.previous_avg_session_sec, 0) as previous_avg_session_sec,
+        CASE 
+            WHEN coalesce(p.previous_visits, 0) = 0 AND coalesce(b.current_visits, 0) > 0 THEN 100.0
+            WHEN coalesce(p.previous_visits, 0) = 0 THEN 0.0
+            ELSE round(((coalesce(b.current_visits, 0) - coalesce(p.previous_visits, 0)) * 100.0) / p.previous_visits, 2)
+        END as visits_growth_percentage,
+        CASE 
+            WHEN coalesce(p.previous_pageviews, 0) = 0 AND coalesce(b.current_pageviews, 0) > 0 THEN 100.0
+            WHEN coalesce(p.previous_pageviews, 0) = 0 THEN 0.0
+            ELSE round(((coalesce(b.current_pageviews, 0) - coalesce(p.previous_pageviews, 0)) * 100.0) / p.previous_pageviews, 2)
+        END as pageviews_growth_percentage,
+        CASE 
+            WHEN coalesce(p.previous_bounce_rate, 0) = 0 AND coalesce(b.current_bounce_rate, 0) > 0 THEN 100.0
+            WHEN coalesce(p.previous_bounce_rate, 0) = 0 THEN 0.0
+            ELSE round(((coalesce(b.current_bounce_rate, 0) - coalesce(p.previous_bounce_rate, 0)) * 100.0) / p.previous_bounce_rate, 2)
+        END as bounce_rate_growth_percentage,
+        CASE 
+            WHEN coalesce(p.previous_avg_session_sec, 0) = 0 AND coalesce(b.current_avg_session_sec, 0) > 0 THEN 100.0
+            WHEN coalesce(p.previous_avg_session_sec, 0) = 0 THEN 0.0
+            ELSE round(((coalesce(b.current_avg_session_sec, 0) - coalesce(p.previous_avg_session_sec, 0)) * 100.0) / p.previous_avg_session_sec, 2)
+        END as avg_session_sec_growth_percentage
+    FROM timeseries a
+    LEFT JOIN current_period_data b ON a.date = b.date
+    LEFT JOIN previous_period_data p ON a.date = timestampAdd(p.date, interval (SELECT period_days FROM date_calculations) day)
+    WHERE a.date >= (SELECT current_start FROM date_calculations) AND a.date <= (SELECT current_end FROM date_calculations)
+    {% else %}
+    SELECT 
+        a.date date, 
+        coalesce(b.current_visits, 0) as visits,
+        coalesce(b.current_pageviews, 0) as pageviews, 
+        coalesce(b.current_bounce_rate, 0) as bounce_rate, 
+        coalesce(b.current_avg_session_sec, 0) as avg_session_sec
+    FROM timeseries a
+    LEFT JOIN current_period_data b USING date
+    {% end %}
+
+TYPE endpoint

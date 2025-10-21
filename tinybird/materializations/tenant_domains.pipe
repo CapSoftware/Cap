@@ -1,0 +1,19 @@
+DESCRIPTION >
+    Materializes domain data from analytics hits
+
+NODE tenant_domains_node
+DESCRIPTION >
+    Aggregate domains per tenant with first/last seen timestamps
+
+SQL >
+    SELECT
+        tenant_id,
+        domain,
+        minSimpleState(timestamp) AS first_seen,
+        maxSimpleState(timestamp) AS last_seen,
+        countState() AS total_hits
+    FROM analytics_hits
+    GROUP BY tenant_id, domain
+
+TYPE MATERIALIZED
+DATASOURCE tenant_domains_mv

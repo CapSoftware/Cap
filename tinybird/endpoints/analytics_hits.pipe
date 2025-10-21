@@ -1,0 +1,95 @@
+DESCRIPTION >
+    Parsed `page_hit` events, implementing `browser` and `device` detection logic.
+    Use always with a limit and date_from, date_to filters
+    Use like_filter for arbitrary text filter over the payload column which contains information about each page_hit
+    Use the SQL of this endpoint to extract information from analytics_events for other actions
+    Use the actions tool for a list of available action types, filter by 'action_filter' for arbitrary actions
+
+TOKEN "dashboard" READ
+
+NODE parsed_hits
+DESCRIPTION >
+    Parse raw page_hit events
+
+SQL >
+    %
+    SELECT
+        timestamp,
+        action,
+        version,
+        coalesce(session_id, '0') as session_id,
+        tenant_id,
+        multiIf(domain != '', domain, current_domain != '', current_domain, domain_from_payload) as domain,
+        JSONExtractString(payload, 'domain') as domain_from_payload,
+        JSONExtractString(payload, 'locale') as locale,
+        JSONExtractString(payload, 'location') as location,
+        JSONExtractString(payload, 'referrer') as referrer,
+        JSONExtractString(payload, 'pathname') as pathname,
+        JSONExtractString(payload, 'href') as href,
+        if(domainWithoutWWW(href) = '' and href is not null and href != '', URLHierarchy(href)[1], domainWithoutWWW(href)) as current_domain,
+        lower(JSONExtractString(payload, 'user-agent')) as user_agent
+    FROM analytics_events
+    WHERE action = 'page_hit'
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+        {% if defined(from_date) %}
+            AND timestamp
+            >=
+            {{ Date(from_date, description="Starting date for filtering a date range", required=False) }}
+        {% end %}
+        {% if defined(to_date) %}
+            AND timestamp
+            <=
+            {{ Date(to_date, description="Finishing date for filtering a date range", required=False) }}
+        {% end %}
+        {% if defined(like_filter) %}
+            AND payload like {{String(filter, description="Filter to apply to the payload JSON string", example="%utm_%")}}
+        {% end %}
+    {% if defined(limit) %}
+        LIMIT {{Int32(limit, 20)}}
+        OFFSET {{Int32(page, 0) * Int32(limit, 20)}}
+    {% end %}
+
+NODE endpoint
+SQL >
+    SELECT
+        timestamp,
+        action,
+        version,
+        session_id,
+        tenant_id,
+        domain,
+        location,
+        referrer,
+        pathname,
+        href,
+        current_domain,
+        case
+            when match(user_agent, 'wget|ahrefsbot|curl|urllib|bitdiscovery|\+https://|googlebot')
+            then 'bot'
+            when match(user_agent, 'android')
+            then 'mobile-android'
+            when match(user_agent, 'ipad|iphone|ipod')
+            then 'mobile-ios'
+            else 'desktop'
+        END as device,
+        case
+            when match(user_agent, 'firefox')
+            then 'firefox'
+            when match(user_agent, 'chrome|crios')
+            then 'chrome'
+            when match(user_agent, 'opera')
+            then 'opera'
+            when match(user_agent, 'msie|trident')
+            then 'ie'
+            when match(user_agent, 'iphone|ipad|safari')
+            then 'safari'
+            else 'Unknown'
+        END as browser
+    FROM parsed_hits
+
+TYPE endpoint

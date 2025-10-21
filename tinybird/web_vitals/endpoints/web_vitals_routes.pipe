@@ -1,0 +1,146 @@
+DESCRIPTION >
+	Returns routes with web vitals scores, sortable by best/worst performance. Supports both route-based analysis (first part of pathname) and full pathname analysis. Includes detailed metric descriptions, units, and scoring ranges. Accepts sort_order parameter ('asc' for best scores, 'desc' for worst scores), days parameter for time range (defaults to 1 day), optional domain filter, analysis_type parameter ('routes' for route-based, 'pathnames' for full pathnames), optional route filter for both analysis types, and skip/limit parameters for pagination (defaults to limit 10).
+
+TOKEN "dashboard" READ
+
+NODE filtered_vitals
+DESCRIPTION >
+    Filter web vitals data and apply route/pathname filtering
+
+SQL >
+
+    %
+    SELECT
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+            pathname as path_key,
+            pathname as full_pathname,
+            route
+        {% else %}
+            -- Default: route-based analysis
+            route as path_key,
+            pathname as full_pathname,
+            route
+        {% end %},
+        metric_name,
+        value,
+        score,
+        domain
+    FROM web_vitals_events
+    WHERE timestamp >= now() - interval {{Int32(days, 1, description="Number of days to analyze (defaults to 1 day)")}} day
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Domain to filter web vitals for") }}
+        {% end %}
+        {% if defined(route) %}
+        AND route = {{ String(route, description="Route to filter by (works for both routes and pathnames analysis)") }}
+        {% end %}
+
+NODE route_metrics
+DESCRIPTION >
+    Calculate average metrics per route/pathname with measurement counts
+
+SQL >
+
+    %
+    SELECT
+        path_key,
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+            full_pathname,
+            route,
+        {% end %}
+        metric_name,
+        avg(value) as avg_value,
+        avg(score) as avg_score,
+        count() as measurements,
+        domain
+    FROM filtered_vitals
+    WHERE path_key != ''
+    GROUP BY path_key, metric_name, domain
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+        , full_pathname, route
+        {% end %}
+    HAVING measurements >= 3
+
+NODE route_summary
+DESCRIPTION >
+    Aggregate all metrics and scores per route to create final summary
+
+SQL >
+
+    %
+    SELECT
+        path_key,
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+            full_pathname,
+            route as route_part,
+        {% end %}
+        round(avg(avg_score), 2) as overall_score,
+        round(avgIf(avg_value, metric_name = 'LCP'), 2) as lcp_avg,
+        round(avgIf(avg_value, metric_name = 'TTFB'), 2) as ttfb_avg,
+        round(avgIf(avg_value, metric_name = 'FCP'), 2) as fcp_avg,
+        round(avgIf(avg_value, metric_name = 'INP'), 2) as inp_avg,
+        round(avgIf(avg_value, metric_name = 'CLS'), 4) as cls_avg,
+        round(avgIf(avg_score, metric_name = 'LCP'), 0) as lcp_score,
+        round(avgIf(avg_score, metric_name = 'TTFB'), 0) as ttfb_score,
+        round(avgIf(avg_score, metric_name = 'FCP'), 0) as fcp_score,
+        round(avgIf(avg_score, metric_name = 'INP'), 0) as inp_score,
+        round(avgIf(avg_score, metric_name = 'CLS'), 0) as cls_score,
+        count(DISTINCT metric_name) as metrics_count,
+        domain
+    FROM route_metrics
+    GROUP BY path_key, domain
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+        , full_pathname, route
+        {% end %}
+
+NODE endpoint
+DESCRIPTION >
+    Final sorting and formatting with pagination
+
+SQL >
+
+    %
+    SELECT
+        path_key as {% if defined(analysis_type) and analysis_type == 'pathnames' %}pathname{% else %}route{% end %},
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+            full_pathname,
+            route_part,
+        {% end %}
+        overall_score,
+        lcp_avg,
+        ttfb_avg,
+        fcp_avg,
+        inp_avg,
+        cls_avg,
+        lcp_score,
+        ttfb_score,
+        fcp_score,
+        inp_score,
+        cls_score,
+        'LCP=ms, TTFB=ms, FCP=ms, INP=ms, CLS=score' as metric_units,
+        domain,
+        {% if defined(analysis_type) and analysis_type == 'pathnames' %}
+            'pathnames' as analysis_type
+        {% else %}
+            'routes' as analysis_type
+        {% end %}
+    FROM route_summary
+    ORDER BY 
+        {% if defined(sort_order) and sort_order == 'desc' %}
+            overall_score DESC,
+            lcp_score DESC,
+            fcp_score DESC,
+            ttfb_score DESC,
+            {% if defined(analysis_type) and analysis_type == 'pathnames' %}pathname{% else %}route{% end %} ASC
+        {% else %}
+            overall_score ASC,
+            lcp_score ASC,
+            fcp_score ASC,
+            ttfb_score ASC,
+            {% if defined(analysis_type) and analysis_type == 'pathnames' %}pathname{% else %}route{% end %} ASC
+        {% end %}
+    LIMIT {{ Int32(skip, 0) }}, {{ Int32(limit, 10) }}
+
+TYPE endpoint

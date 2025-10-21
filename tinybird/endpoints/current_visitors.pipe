@@ -1,0 +1,16 @@
+TOKEN "dashboard" READ
+
+NODE get_current_visitors
+SQL >
+    %
+    SELECT uniq(session_id) AS visits
+    FROM analytics_hits
+    WHERE timestamp >= (now() - interval 5 minute)
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Filter by domain") }}
+        {% end %}
+
+TYPE endpoint

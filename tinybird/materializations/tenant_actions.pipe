@@ -1,0 +1,24 @@
+DESCRIPTION >
+    Materializes distinct actions by tenant and domain from analytics events
+
+NODE tenant_actions_node
+DESCRIPTION >
+    Aggregate distinct actions per tenant/domain with last payload sample
+
+SQL >
+    with multiIf(domain != '', domain, current_domain != '', current_domain, domain_from_payload) as domain,
+        JSONExtractString(payload, 'domain') as domain_from_payload,
+        if(domainWithoutWWW(href) = '' and href is not null and href != '', URLHierarchy(href)[1], domainWithoutWWW(href)) as current_domain,
+        JSONExtractString(payload, 'href') as href
+    SELECT
+        tenant_id,
+        domain,
+        action,
+        anySimpleState(payload) AS last_payload,
+        maxSimpleState(timestamp) AS last_seen,
+        countState() AS total_occurrences
+    FROM analytics_events
+    GROUP BY tenant_id, domain, action
+
+TYPE MATERIALIZED
+DATASOURCE tenant_actions_mv

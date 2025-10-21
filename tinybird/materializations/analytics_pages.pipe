@@ -1,0 +1,20 @@
+NODE analytics_pages_1
+DESCRIPTION >
+    Aggregate by pathname and calculate session and hits
+
+SQL >
+    SELECT
+        toDate(timestamp) AS date,
+        tenant_id,
+        domain,
+        device,
+        browser,
+        location,
+        pathname,
+        uniqState(session_id) AS visits,
+        countState() AS hits
+    FROM analytics_hits
+    GROUP BY date, tenant_id, domain, device, browser, location, pathname
+
+TYPE MATERIALIZED
+DATASOURCE analytics_pages_mv

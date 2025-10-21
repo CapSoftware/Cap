@@ -1,0 +1,27 @@
+DESCRIPTION >
+    Use to understand the different action types (page_hit, web_vital, etc.) and a sample payload for each tenant and domain
+    Filter by action_filter to not get the whole table, it's a SQL like filter (e.g. "%web_%")
+
+TOKEN "dashboard" READ
+
+NODE endpoint
+DESCRIPTION >
+    Get distinct actions for a specific tenant across all domains
+
+SQL >
+    %
+    SELECT
+        domain,
+        action,
+        anySimpleState(last_payload) AS last_payload,
+        maxSimpleState(last_seen) AS last_seen,
+        countMerge(total_occurrences) AS total_occurrences
+    FROM tenant_actions_mv
+    WHERE tenant_id = {{ String(tenant_id, description="Tenant ID to filter actions for", default="") }}
+    {% if defined(action_filter) %}
+        AND action like {{String(action_filter, description="A like filter to search for actions", example="%cli_%")}}
+    {% end %}
+    GROUP BY domain, action
+    ORDER BY last_seen DESC, domain ASC, action ASC
+
+TYPE endpoint

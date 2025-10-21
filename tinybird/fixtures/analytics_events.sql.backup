@@ -1,0 +1,68 @@
+SELECT
+    now() - INTERVAL rand() % (18 * 30) DAY - INTERVAL rand() % 24 HOUR - INTERVAL rand() % 60 MINUTE - INTERVAL rand() % 60 SECOND AS timestamp,
+    if(rand() % 10 > 0, concat(
+        lower(hex(rand())), lower(hex(rand())), '-',
+        lower(hex(rand())), '-',
+        lower(hex(rand())), '-',
+        lower(hex(rand())), '-',
+        lower(hex(rand())), lower(hex(rand()))
+    ), NULL) AS session_id,
+    ['page_hit', 'web_vital'][1 + (rand() % 2)] AS action,
+    concat('v', toString(1 + rand() % 3), '.', toString(rand() % 3), '.', toString(rand() % 9)) AS version,
+    if(
+        ['page_hit', 'web_vital'][1 + (rand() % 2)] = 'page_hit',
+        /* PAGE_HIT payload */
+        CAST(concat('{
+            "pathname": "', ['/', '/home', '/about', '/pricing', '/contact', '/blog', '/login', '/product'][1 + rand() % 8], '",
+            "href": "https://', domain, ['/', '/home', '/about', '/pricing', '/contact', '/blog', '/login', '/product'][1 + rand() % 8], '",
+            "referrer": "', ['https://google.com', 'https://facebook.com', 'https://twitter.com', ''][1 + rand() % 4], '",
+            "userAgent": "Mozilla/5.0 (', ['Windows NT 10.0', 'Macintosh', 'Linux', 'iPhone', 'Android'][1 + rand() % 5], ')",
+            "locale": "', ['en-US', 'fr-FR', 'de-DE', 'es-ES', 'it-IT', 'zh-CN'][1 + rand() % 6], '",
+            "location": {
+                "country": "', ['United States', 'Canada', 'United Kingdom', 'Germany', 'France', 'Spain', 'Italy', 'Japan', 'China'][1 + rand() % 9], '",
+                "city": "', ['New York', 'London', 'Paris', 'Berlin', 'Madrid', 'Tokyo', 'Beijing', 'Los Angeles', 'Boston'][1 + rand() % 9], '"
+            }
+        }'), 'String'),
+        /* WEB_VITAL payload */
+        CAST(concat('{
+            "name": "', ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5], '",
+            "value": ', 
+            case 
+                when ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5] = 'LCP' then toString(1500 + rand() % 3000)
+                when ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5] = 'TTFB' then toString(200 + rand() % 1000)
+                when ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5] = 'FCP' then toString(800 + rand() % 2400)
+                when ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5] = 'INP' then toString(100 + rand() % 500)
+                when ['LCP', 'TTFB', 'FCP', 'INP', 'CLS'][1 + rand() % 5] = 'CLS' then toString(round(0.05 + rand() % 30 / 100, 2))
+                else toString(1000 + rand() % 2000)
+            end, ',
+            "delta": ', toString(50 + rand() % 150), ',
+            "pathname": "', ['/', '/home', '/about', '/pricing', '/contact', '/blog', '/login', '/product'][1 + rand() % 8], '",
+            "domain": "', domain, '"
+        }'), 'String')
+    ) AS payload,
+    tenant_id,
+    domain
+FROM (
+    SELECT
+        multiIf(
+            rand() % 100 < 5, '',  /* 5% events with empty tenant_id */
+            rand() % 100 < 14, 'tenant_1',
+            rand() % 100 < 28, 'tenant_2',
+            rand() % 100 < 42, 'tenant_3',
+            rand() % 100 < 56, 'tenant_8',
+            rand() % 100 < 70, 'tenant_14',
+            rand() % 100 < 84, 'tenant_18',
+            'tenant_' || toString(rand() % 5 + 4)  /* other random tenants */
+        ) AS tenant_id,
+        multiIf(
+            tenant_id = '', '',  /* empty domain for empty tenant_id */
+            tenant_id = 'tenant_1', ['example.com', 'demo.site'][1 + rand() % 2],
+            tenant_id = 'tenant_2', ['myapp.com', 'test.org'][1 + rand() % 2],
+            tenant_id = 'tenant_3', ['app.demo.io', 'business.net'][1 + rand() % 2],
+            tenant_id = 'tenant_8', 'test.org',
+            tenant_id = 'tenant_14', 'app.demo.io',
+            tenant_id = 'tenant_18', 'test.org',
+            ['other.com', 'example.org', 'test.com'][1 + rand() % 3]  /* random domains for other tenants */
+        ) AS domain
+    FROM numbers(10000)
+)

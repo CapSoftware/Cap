@@ -1,0 +1,13 @@
+DESCRIPTION >
+    Materialized datasource for tracking domains per tenant
+
+SCHEMA >
+    `tenant_id` String,
+    `domain` String,
+    `first_seen` SimpleAggregateFunction(min, DateTime),
+    `last_seen` SimpleAggregateFunction(max, DateTime),
+    `total_hits` AggregateFunction(count)
+
+ENGINE "AggregatingMergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(last_seen)"
+ENGINE_SORTING_KEY "tenant_id, domain"

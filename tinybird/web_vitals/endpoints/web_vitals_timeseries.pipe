@@ -1,0 +1,52 @@
+DESCRIPTION >
+	Hourly time series of web vitals quantile values (0.75, 0.9, 0.95, 0.99) for each metric. Shows performance distribution over time with configurable time period and optional domain/tenant filtering.
+
+TOKEN "dashboard" READ
+
+NODE filtered_vitals
+DESCRIPTION >
+    Filter web vitals data for the specified period
+
+SQL >
+    %
+    SELECT
+        toStartOfHour(timestamp) as hour,
+        metric_name,
+        value,
+        domain,
+        tenant_id
+    FROM web_vitals_events
+    WHERE 1=1
+        {% if defined(date_from) %}
+        AND timestamp >= toDateTime(concat(toString({{ Date(date_from) }}), ' 00:00:00'))
+        {% end %}
+        {% if defined(date_to) %}
+        AND timestamp <= toDateTime(concat(toString({{ Date(date_to) }}), ' 23:59:59'))
+        {% end %}
+        {% if defined(tenant_id) %}
+        AND tenant_id = {{ String(tenant_id, description="Filter by tenant ID") }}
+        {% end %}
+        {% if defined(domain) %}
+        AND domain = {{ String(domain, description="Domain to filter web vitals for") }}
+        {% end %}
+
+NODE endpoint
+DESCRIPTION >
+    Calculate quantiles for each metric per hour
+
+SQL >
+    SELECT
+        hour,
+        metric_name,
+        quantile(0.75)(value) as p75,
+        quantile(0.90)(value) as p90,
+        quantile(0.95)(value) as p95,
+        quantile(0.99)(value) as p99,
+        count() as measurements,
+        domain
+    FROM filtered_vitals
+    GROUP BY hour, metric_name, domain
+    HAVING measurements >= 5
+    ORDER BY hour ASC, metric_name ASC
+
+TYPE endpoint

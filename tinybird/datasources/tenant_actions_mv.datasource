@@ -1,0 +1,14 @@
+DESCRIPTION >
+    Materialized datasource for storing distinct actions by tenant and domain with last payload sample
+
+SCHEMA >
+    `tenant_id` String,
+    `domain` String,
+    `action` String,
+    `last_payload` SimpleAggregateFunction(any, String),
+    `last_seen` SimpleAggregateFunction(max, DateTime),
+    `total_occurrences` AggregateFunction(count)
+
+ENGINE "AggregatingMergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(last_seen)"
+ENGINE_SORTING_KEY "tenant_id, domain, action"
