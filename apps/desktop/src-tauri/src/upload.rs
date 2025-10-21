@@ -691,7 +691,7 @@ fn multipart_uploader(
                             let md5_sum =
                                 use_md5_hashes.then(|| base64::encode(md5::compute(&chunk).0));
                             let presigned_url = if let Some(url) = presigned_url?
-                                && (part_number == expected_part_number || md5_sum.is_some())
+                                && part_number == expected_part_number
                             {
                                 url
                             } else if part_number == 1
