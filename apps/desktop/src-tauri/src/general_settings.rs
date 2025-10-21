@@ -31,6 +31,27 @@ pub enum PostDeletionBehaviour {
     ReopenRecordingWindow,
 }
 
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum InstantModeResolution {
+    #[default]
+    Fhd1080,
+    Hd720,
+    Qhd1440,
+    Uhd2160,
+}
+
+impl InstantModeResolution {
+    pub fn target_height(self) -> u32 {
+        match self {
+            Self::Hd720 => 720,
+            Self::Fhd1080 => 1080,
+            Self::Qhd1440 => 1440,
+            Self::Uhd2160 => 2160,
+        }
+    }
+}
+
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
@@ -120,6 +141,8 @@ pub struct GeneralSettingsStore {
     pub excluded_windows: Vec<WindowExclusion>,
     #[serde(default)]
     pub delete_instant_recordings_after_upload: bool,
+    #[serde(default)]
+    pub instant_mode_resolution: InstantModeResolution,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -180,6 +203,7 @@ impl Default for GeneralSettingsStore {
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
+            instant_mode_resolution: InstantModeResolution::default(),
         }
     }
 }

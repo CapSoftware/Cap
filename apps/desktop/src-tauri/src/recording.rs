@@ -46,7 +46,8 @@ use crate::{
     auth::AuthStore,
     create_screenshot,
     general_settings::{
-        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
+        self, GeneralSettingsStore, InstantModeResolution, PostDeletionBehaviour,
+        PostStudioRecordingBehaviour,
     },
     open_external_link,
     presets::PresetsStore,
@@ -537,7 +538,15 @@ pub async fn start_recording(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio);
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_output_height(
+                            general_settings
+                                .as_ref()
+                                .map(|settings| settings.instant_mode_resolution.target_height())
+                                .unwrap_or_else(|| {
+                                    InstantModeResolution::default().target_height()
+                                }),
+                        );
 
                         #[cfg(target_os = "macos")]
                         {

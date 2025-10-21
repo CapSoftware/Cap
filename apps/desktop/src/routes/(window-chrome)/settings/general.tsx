@@ -29,6 +29,7 @@ import {
 	commands,
 	events,
 	type GeneralSettingsStore,
+	type InstantModeResolution,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
 	type PostStudioRecordingBehaviour,
@@ -61,7 +62,11 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
-const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
+type ExtendedGeneralSettingsStore = GeneralSettingsStore & {
+	instantModeResolution?: InstantModeResolution;
+};
+
+const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	uploadIndividualFiles: false,
 	hideDockIcon: false,
 	autoCreateShareableLink: false,
@@ -71,11 +76,12 @@ const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	excludedWindows: [],
+	instantModeResolution: "fhd1080",
 });
 
 const deriveInitialSettings = (
 	store: GeneralSettingsStore | null,
-): GeneralSettingsStore => {
+): ExtendedGeneralSettingsStore => {
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
@@ -84,6 +90,17 @@ const deriveInitialSettings = (
 		...store,
 	};
 };
+
+const INSTANT_MODE_RESOLUTION_OPTIONS = [
+	{ value: "hd720", label: "720p", height: 720 },
+	{ value: "fhd1080", label: "1080p", height: 1080 },
+	{ value: "qhd1440", label: "1440p", height: 1440 },
+	{ value: "uhd2160", label: "4K", height: 2160 },
+] satisfies {
+	value: InstantModeResolution;
+	label: string;
+	height: number;
+}[];
 
 export default function GeneralSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -167,7 +184,7 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
-	const [settings, setSettings] = createStore<GeneralSettingsStore>(
+	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveInitialSettings(props.initialStore),
 	);
 
@@ -250,6 +267,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		return data.filter(isWindowAvailable);
 	});
 
+	const instantResolutionDescription =
+		"Choose the resolution for Instant Mode recordings.";
+
 	const refreshAvailableWindows = async (): Promise<CaptureWindow[]> => {
 		try {
 			const refreshed = (await refetchWindows()) ?? windows() ?? [];
@@ -304,6 +324,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
+			| InstantModeResolution
 			| number,
 	>(props: {
 		label: string;
@@ -417,6 +438,24 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				)}
 
 				<SettingGroup title="Recording">
+					<SelectSettingItem
+						label="Instant mode resolution"
+						description={instantResolutionDescription}
+						value={
+							settings.instantModeResolution ??
+							("fhd1080" as InstantModeResolution)
+						}
+						onChange={(value) =>
+							handleChange(
+								"instantModeResolution",
+								value as InstantModeResolution,
+							)
+						}
+						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
+							text: option.label,
+							value: option.value,
+						}))}
+					/>
 					<SelectSettingItem
 						label="Recording countdown"
 						description="Countdown before recording starts"

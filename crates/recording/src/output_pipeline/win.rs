@@ -32,6 +32,7 @@ pub struct WindowsMuxerConfig {
     pub d3d_device: ID3D11Device,
     pub frame_rate: u32,
     pub bitrate_multiplier: f32,
+    pub output_size: Option<SizeInt32>,
 }
 
 impl Muxer for WindowsMuxer {
@@ -50,6 +51,11 @@ impl Muxer for WindowsMuxer {
     {
         let video_config =
             video_config.ok_or_else(|| anyhow!("invariant: video config expected"))?;
+        let input_size = SizeInt32 {
+            Width: video_config.width as i32,
+            Height: video_config.height as i32,
+        };
+        let output_size = config.output_size.unwrap_or(input_size);
         let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
 
         let mut output = ffmpeg::format::output(&output_path)?;
@@ -73,14 +79,8 @@ impl Muxer for WindowsMuxer {
                         cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                             &config.d3d_device,
                             config.pixel_format,
-                            SizeInt32 {
-                                Width: video_config.width as i32,
-                                Height: video_config.height as i32,
-                            },
-                            SizeInt32 {
-                                Width: video_config.width as i32,
-                                Height: video_config.height as i32,
-                            },
+                            input_size,
+                            output_size,
                             config.frame_rate,
                             config.bitrate_multiplier,
                         );
@@ -89,8 +89,8 @@ impl Muxer for WindowsMuxer {
                         Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
                             &mut output,
                             cap_mediafoundation_ffmpeg::MuxerConfig {
-                                width: video_config.width,
-                                height: video_config.height,
+                                width: output_size.Width as u32,
+                                height: output_size.Height as u32,
                                 fps: config.frame_rate,
                                 bitrate: encoder.bitrate(),
                             },

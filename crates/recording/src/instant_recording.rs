@@ -22,6 +22,7 @@ use tracing::*;
 
 struct Pipeline {
     output: OutputPipeline,
+    video_info: VideoInfo,
 }
 
 enum ActorState {
@@ -192,6 +193,7 @@ async fn create_pipeline(
     output_path: PathBuf,
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    output_height: Option<u32>,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
@@ -200,6 +202,34 @@ async fn create_pipeline(
         );
     };
 
+    let base_video_info = screen_source.info();
+
+    let scaled_output = output_height.and_then(|target| {
+        if target >= base_video_info.height {
+            return None;
+        }
+
+        let mut height = target.max(2);
+        if height % 2 != 0 {
+            height -= 1;
+        }
+        if height < 2 {
+            return None;
+        }
+
+        let width_ratio = base_video_info.width as f64 / base_video_info.height as f64;
+        let mut width = (width_ratio * height as f64).round() as u32;
+        if width % 2 != 0 {
+            width -= 1;
+        }
+        if width < 2 {
+            return None;
+        }
+
+        let max_width = (base_video_info.width / 2) * 2;
+        Some((width.min(max_width), height))
+    });
+
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
     let output = ScreenCaptureMethod::make_instant_mode_pipeline(
@@ -207,10 +237,25 @@ async fn create_pipeline(
         system_audio,
         mic_feed,
         output_path.clone(),
+        scaled_output,
     )
     .await?;
 
-    Ok(Pipeline { output })
+    let final_video_info = scaled_output
+        .map(|(width, height)| {
+            VideoInfo::from_raw_ffmpeg(
+                base_video_info.pixel_format,
+                width,
+                height,
+                base_video_info.fps(),
+            )
+        })
+        .unwrap_or(base_video_info);
+
+    Ok(Pipeline {
+        output,
+        video_info: final_video_info,
+    })
 }
 
 impl Actor {
@@ -224,6 +269,7 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    output_height: Option<u32>,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<WindowId>,
 }
@@ -235,6 +281,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
+            output_height: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -247,6 +294,11 @@ impl ActorBuilder {
 
     pub fn with_mic_feed(mut self, mic_feed: Arc<MicrophoneFeedLock>) -> Self {
         self.mic_feed = Some(mic_feed);
+        self
+    }
+
+    pub fn with_output_height(mut self, output_height: u32) -> Self {
+        self.output_height = Some(output_height);
         self
     }
 
@@ -267,6 +319,7 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: None,
+                output_height: self.output_height,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
@@ -296,12 +349,12 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 
-    let (display, crop) =
+    let (display, crop_bounds) =
         target_to_display_and_crop(&inputs.capture_target).context("target_display_crop")?;
 
     let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         display,
-        crop,
+        crop_bounds,
         true,
         30,
         start_time,
@@ -322,9 +375,11 @@ pub async fn spawn_instant_recording_actor(
         content_dir.join("output.mp4"),
         screen_source.clone(),
         inputs.mic_feed.clone(),
+        inputs.output_height,
     )
     .await?;
 
+    let video_info = pipeline.video_info;
     let segment_start_time = current_time_f64();
 
     trace!("spawning recording actor");
@@ -333,7 +388,7 @@ pub async fn spawn_instant_recording_actor(
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         capture_target: inputs.capture_target.clone(),
-        video_info: screen_source.info(),
+        video_info,
         state: ActorState::Recording {
             pipeline,
             // pipeline_done_rx,
