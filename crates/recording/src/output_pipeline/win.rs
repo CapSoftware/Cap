@@ -103,7 +103,19 @@ impl Muxer for WindowsMuxer {
                             error!("Failed to create native encoder: {e}");
                             info!("Falling back to software H264 encoder");
 
+                            let fallback_width = if output_size.Width > 0 {
+                                output_size.Width as u32
+                            } else {
+                                video_config.width
+                            };
+                            let fallback_height = if output_size.Height > 0 {
+                                output_size.Height as u32
+                            } else {
+                                video_config.height
+                            };
+
                             cap_enc_ffmpeg::H264Encoder::builder(video_config)
+                                .with_output_size(fallback_width, fallback_height)
                                 .build(&mut output)
                                 .map(either::Right)
                                 .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
