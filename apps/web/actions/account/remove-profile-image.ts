@@ -2,7 +2,7 @@
 
 import path from "node:path";
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser } from "@cap/web-backend/auth/session";
 import { users } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
 import { eq } from "drizzle-orm";
