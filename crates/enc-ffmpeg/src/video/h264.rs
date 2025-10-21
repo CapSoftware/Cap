@@ -117,9 +117,7 @@ impl H264EncoderBuilder {
             format
         };
 
-        if is_420(output_format)
-            && (output_width % 2 != 0 || output_height % 2 != 0)
-        {
+        if is_420(output_format) && (output_width % 2 != 0 || output_height % 2 != 0) {
             return Err(H264EncoderError::InvalidOutputDimensions {
                 width: output_width,
                 height: output_height,
