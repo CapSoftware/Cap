@@ -25,7 +25,6 @@ mod target_select_overlay;
 mod thumbnails;
 mod tray;
 mod upload;
-mod upload_legacy;
 mod web_api;
 mod window_exclusion;
 mod windows;
@@ -2598,8 +2597,8 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                 app.clone(),
                                 file_path,
                                 pre_created_video,
-                                None,
                                 recording_dir,
+                                None,
                             );
                         }
                         UploadMeta::SinglePartUpload {
