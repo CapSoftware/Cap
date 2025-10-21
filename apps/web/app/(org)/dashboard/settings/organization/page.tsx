@@ -24,12 +24,9 @@ export default async function OrganizationPage() {
 	const [member] = await db()
 		.select({
 			role: organizationMembers.role,
-			ownerId: organizations.ownerId,
-			userId: users.id,
 		})
 		.from(organizationMembers)
 		.limit(1)
-		.leftJoin(users, eq(organizationMembers.userId, users.id))
 		.leftJoin(
 			organizations,
 			eq(organizationMembers.organizationId, organizations.id),
@@ -41,10 +38,9 @@ export default async function OrganizationPage() {
 			),
 		);
 
-	if (member)
-		if (member.role !== "owner") {
-			redirect("/dashboard/caps");
-		}
+	if (!member || member.role !== "owner") {
+		redirect("/dashboard/caps");
+	}
 
 	return <Organization />;
 }

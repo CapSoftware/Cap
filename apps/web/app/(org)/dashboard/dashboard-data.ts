@@ -131,6 +131,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					organizationId: spaces.organizationId,
 					createdById: spaces.createdById,
 					iconUrl: spaces.iconUrl,
+					memberImage: users.image,
 					memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
@@ -140,6 +141,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				})
 				.from(spaces)
 				.leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+				.leftJoin(users, eq(spaceMembers.userId, users.id))
 				.where(
 					and(
 						eq(spaces.organizationId, activeOrganizationId),
@@ -153,7 +155,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 						),
 					),
 				)
-				.groupBy(spaces.id);
+				.groupBy(spaces.id, users.image);
 
 			// Add a single 'All spaces' entry for the active organization
 			const activeOrgInfo = organizationsWithMembers.find(

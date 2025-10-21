@@ -59,9 +59,21 @@ export async function uploadProfileImage(formData: FormData) {
 				try {
 					// Extract the S3 key - handle both old URL format and new key format
 					let oldS3Key = oldImageUrlOrKey;
-					if (oldImageUrlOrKey.includes("amazonaws.com")) {
+					if (
+						oldImageUrlOrKey.startsWith("http://") ||
+						oldImageUrlOrKey.startsWith("https://")
+					) {
 						const url = new URL(oldImageUrlOrKey);
-						oldS3Key = url.pathname.substring(1); // Remove leading slash
+						// Only extract key from URLs with amazonaws.com hostname
+						if (
+							url.hostname.endsWith(".amazonaws.com") ||
+							url.hostname === "amazonaws.com"
+						) {
+							oldS3Key = url.pathname.substring(1); // Remove leading slash
+						} else {
+							// Not an S3 URL, skip deletion
+							return;
+						}
 					}
 
 					// Only delete if it looks like a user profile image key

@@ -110,18 +110,15 @@ export async function createSpace(
 			}
 		}
 
-		await db()
-			.insert(spaces)
-			.values({
-				id: spaceId,
-				name,
-				organizationId: user.activeOrganizationId,
-				createdById: user.id,
-				iconUrl,
-				description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			});
+		await db().insert(spaces).values({
+			id: spaceId,
+			name,
+			organizationId: user.activeOrganizationId,
+			createdById: user.id,
+			iconUrl,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
 
 		// --- Member Management Logic ---
 		// Collect member emails from formData

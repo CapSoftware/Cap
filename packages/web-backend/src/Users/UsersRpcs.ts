@@ -39,11 +39,13 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 						() => new InternalError({ type: "database" }),
 					),
 				),
-			GetSignedImageUrl: (payload) =>
+			GetSignedImageUrl: (payload: {
+				key: string;
+				type: "user" | "organization";
+			}) =>
 				Effect.gen(function* () {
 					const [bucket] = yield* s3Buckets.getBucketAccess(Option.none());
 					const url = yield* bucket.getSignedObjectUrl(payload.key);
-
 					return { url };
 				}).pipe(
 					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),

@@ -23,9 +23,18 @@ export async function removeProfileImage() {
 		try {
 			// Extract the S3 key - handle both old URL format and new key format
 			let s3Key = image;
-			if (image.includes("amazonaws.com")) {
+			if (image.startsWith("http://") || image.startsWith("https://")) {
 				const url = new URL(image);
-				s3Key = url.pathname.substring(1); // Remove leading slash
+				// Only extract key from URLs with amazonaws.com hostname
+				if (
+					url.hostname.endsWith(".amazonaws.com") ||
+					url.hostname === "amazonaws.com"
+				) {
+					s3Key = url.pathname.substring(1); // Remove leading slash
+				} else {
+					// Not an S3 URL, skip deletion
+					return;
+				}
 			}
 
 			// Only delete if it looks like a user profile image key

@@ -69,9 +69,20 @@ export async function uploadOrganizationIcon(
 				try {
 					// Extract the S3 key - handle both old URL format and new key format
 					let oldS3Key = oldIconUrlOrKey;
-					if (oldIconUrlOrKey.includes("amazonaws.com")) {
+					if (
+						oldIconUrlOrKey.startsWith("http://") ||
+						oldIconUrlOrKey.startsWith("https://")
+					) {
 						const url = new URL(oldIconUrlOrKey);
-						oldS3Key = url.pathname.substring(1); // Remove leading slash
+						// Only extract key from URLs with amazonaws.com hostname
+						if (
+							url.hostname.endsWith(".amazonaws.com") ||
+							url.hostname === "amazonaws.com"
+						) {
+							oldS3Key = url.pathname.substring(1); // Remove leading slash
+						} else {
+							return;
+						}
 					}
 
 					// Only delete if it looks like an organization icon key
