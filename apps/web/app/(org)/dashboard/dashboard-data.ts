@@ -122,7 +122,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			organizationSettings = organizationSetting?.settings || null;
 
 			spacesData = await db()
-				.select({
+				.selectDistinct({
 					id: spaces.id,
 					primary: spaces.primary,
 					privacy: spaces.privacy,
@@ -154,8 +154,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							eq(spaces.privacy, "Public"),
 						),
 					),
-				)
-				.groupBy(spaces.id, users.image);
+				);
 
 			// Add a single 'All spaces' entry for the active organization
 			const activeOrgInfo = organizationsWithMembers.find(
