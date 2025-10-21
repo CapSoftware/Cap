@@ -25,6 +25,7 @@ use std::{
     path::{Path, PathBuf},
     pin::pin,
     str::FromStr,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 use tauri::{AppHandle, ipc::Channel};
@@ -631,6 +632,7 @@ fn multipart_uploader(
 
     stream::once(async move {
         let use_md5_hashes = app.is_server_url_custom().await;
+        let first_chunk_presigned_url = Arc::new(Mutex::new(None::<(String, Instant)>));
 
         stream::unfold(
             (Box::pin(stream), 1),
@@ -638,6 +640,7 @@ fn multipart_uploader(
                 let app = app.clone();
                 let video_id = video_id.clone();
                 let upload_id = upload_id.clone();
+                let first_chunk_presigned_url = first_chunk_presigned_url.clone();
 
                 async move {
                     let (Some(item), presigned_url) = join(stream.next(), async {
@@ -690,6 +693,16 @@ fn multipart_uploader(
                                 && (part_number == expected_part_number || md5_sum.is_some())
                             {
                                 url
+                            } else if part_number == 1
+                                // We have a presigned URL left around from the first chunk
+                                && let Some((url, expiry)) = first_chunk_presigned_url
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .clone()
+                                // The URL hasn't expired
+                                && expiry.elapsed() < Duration::from_secs(60 * 50)
+                            {
+                                url
                             } else {
                                 api::upload_multipart_presign_part(
                                     &app,
@@ -700,8 +713,17 @@ fn multipart_uploader(
                                 )
                                 .await?
                             };
-                            let size = chunk.len();
 
+                            // We cache the presigned URL for the first chunk,
+                            // as for instant mode we upload the first chunk at the end again to include the updated video metadata.
+                            if part_number == 1 {
+                                *first_chunk_presigned_url
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner) =
+                                    Some((presigned_url.clone(), Instant::now()));
+                            }
+
+                            let size = chunk.len();
                             let url = Uri::from_str(&presigned_url).map_err(|err| {
                                 format!("uploader/part/{part_number}/invalid_url: {err:?}")
                             })?;
