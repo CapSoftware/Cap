@@ -205,15 +205,70 @@ async fn create_pipeline(
     let screen_info = screen_source.info();
 
     let output_resolution = max_output_size
-        .map(|max_size| {
-            // restrict width if more square-y and w > h, or excessively tall
-            // we don't just uniformly restrict width or height as this massively squashes ultrawide/ultratall captures
+        .map(|max_output_width| {
+            (
+                max_output_width,
+                (max_output_width as f64 / 16.0 * 9.0) as u32,
+            )
+        })
+        .map(|(max_width, max_height)| {
+            // 16/9-ish
             if screen_info.width >= screen_info.height
-                && (screen_info.width as f64 / screen_info.height as f64) <= 16.9
-                || (screen_info.width < screen_info.height
-                    && (screen_info.width as f64 / screen_info.height as f64) >= 16.9)
+                && (screen_info.width as f64 / screen_info.height as f64) <= 16.0 / 9.0
             {
-                let mut width = max_size.min(screen_info.width);
+                let mut width = max_width.min(screen_info.width);
+                if width % 2 != 0 {
+                    width -= 1;
+                }
+
+                let height_ratio = screen_info.height as f64 / screen_info.width as f64;
+                let mut height = (height_ratio * width as f64).round() as u32;
+                if height % 2 != 0 {
+                    height -= 1;
+                }
+
+                (width, height)
+            }
+            // 9/16-ish
+            else if screen_info.width <= screen_info.height
+                && (screen_info.width as f64 / screen_info.height as f64) >= 9.0 / 16.0
+            {
+                let mut height = max_height.min(screen_info.height);
+                if height % 2 != 0 {
+                    height -= 1;
+                }
+
+                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
+                let mut width = (width_ratio * height as f64).round() as u32;
+                if width % 2 != 0 {
+                    width -= 1;
+                }
+
+                (width, height)
+            }
+            // ultrawide
+            else if screen_info.width >= screen_info.height
+                && (screen_info.width as f64 / screen_info.height as f64) > 16.0 / 9.0
+            {
+                let mut height = max_height.min(screen_info.height);
+                if height % 2 != 0 {
+                    height -= 1;
+                }
+
+                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
+                let mut width = (width_ratio * height as f64).round() as u32;
+                if width % 2 != 0 {
+                    width -= 1;
+                }
+
+                (width, height)
+            }
+            // ultratall
+            else if screen_info.width < screen_info.height
+                && (screen_info.width as f64 / screen_info.height as f64) <= 9.0 / 16.0
+            {
+                // swapped since max_width/height assume horizontal
+                let mut width = max_height.min(screen_info.width);
                 if width % 2 != 0 {
                     width -= 1;
                 }
@@ -226,18 +281,7 @@ async fn create_pipeline(
 
                 (width, height)
             } else {
-                let mut height = max_size.min(screen_info.height);
-                if height % 2 != 0 {
-                    height -= 1;
-                }
-
-                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
-                let mut width = (width_ratio * height as f64).round() as u32;
-                if width % 2 != 0 {
-                    width -= 1;
-                }
-
-                (width, height)
+                unreachable!()
             }
         })
         .unwrap_or((screen_info.width, screen_info.height));
@@ -422,4 +466,176 @@ fn current_time_f64() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
+}
+
+fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
+    // 16/9-ish
+    if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) <= 16.0 / 9.0 {
+        let mut width = max.0.min(input.0);
+        if width % 2 != 0 {
+            width -= 1;
+        }
+
+        let height_ratio = input.1 as f64 / input.0 as f64;
+        let mut height = (height_ratio * width as f64).round() as u32;
+        if height % 2 != 0 {
+            height -= 1;
+        }
+
+        (width, height)
+    }
+    // 9/16-ish
+    else if input.0 <= input.1 && (input.0 as f64 / input.1 as f64) >= 9.0 / 16.0 {
+        let mut height = max.0.min(input.1);
+        if height % 2 != 0 {
+            height -= 1;
+        }
+
+        let width_ratio = input.0 as f64 / input.1 as f64;
+        let mut width = (width_ratio * height as f64).round() as u32;
+        if width % 2 != 0 {
+            width -= 1;
+        }
+
+        (width, height)
+    }
+    // ultrawide
+    else if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) > 16.0 / 9.0 {
+        let mut height = max.1.min(input.1);
+        if height % 2 != 0 {
+            height -= 1;
+        }
+
+        let width_ratio = input.0 as f64 / input.1 as f64;
+        let mut width = (width_ratio * height as f64).round() as u32;
+        if width % 2 != 0 {
+            width -= 1;
+        }
+
+        (width, height)
+    }
+    // ultratall
+    else if input.0 < input.1 && (input.0 as f64 / input.1 as f64) <= 9.0 / 16.0 {
+        // swapped since max_width/height assume horizontal
+        let mut width = max.1.min(input.0);
+        if width % 2 != 0 {
+            width -= 1;
+        }
+
+        let height_ratio = input.1 as f64 / input.0 as f64;
+        let mut height = (height_ratio * width as f64).round() as u32;
+        if height % 2 != 0 {
+            height -= 1;
+        }
+
+        (width, height)
+    } else {
+        unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clamp_size_16_9_ish_landscape() {
+        // Test 16:9 aspect ratio (boundary case)
+        let result = clamp_size((1920, 1080), (1920, 1080));
+        assert_eq!(result, (1920, 1080));
+
+        // Test aspect ratio less than 16:9 (wider than tall, but not ultrawide)
+        let result = clamp_size((1600, 1200), (1920, 1080)); // 4:3 ratio
+        assert_eq!(result, (1600, 1200));
+
+        // Test scaling down when input exceeds max width
+        let result = clamp_size((2560, 1440), (1920, 1080)); // 16:9 ratio, needs scaling
+        assert_eq!(result, (1920, 1080));
+    }
+
+    #[test]
+    fn test_clamp_size_9_16_ish_portrait() {
+        // Test 9:16 aspect ratio (boundary case)
+        let result = clamp_size((1080, 1920), (1920, 1080));
+        assert_eq!(result, (1080, 1920));
+
+        // Test aspect ratio greater than 9:16 but still portrait
+        let result = clamp_size((1200, 1600), (1920, 1080)); // 3:4 ratio
+        assert_eq!(result, (1200, 1600));
+
+        // Test square format (1:1 ratio) - should use portrait path when width <= height
+        let result = clamp_size((1080, 1080), (1920, 1080));
+        assert_eq!(result, (1080, 1080));
+    }
+
+    #[test]
+    fn test_clamp_size_ultrawide() {
+        // Test ultrawide aspect ratio (> 16:9)
+        let result = clamp_size((2560, 1080), (1920, 1080)); // ~2.37:1 ratio
+        assert_eq!(result, (2560, 1080));
+
+        // Test very ultrawide
+        let result = clamp_size((3440, 1440), (1920, 1080)); // ~2.39:1 ratio
+        assert_eq!(result, (2580, 1080));
+
+        // Test when height constraint is the limiting factor
+        let result = clamp_size((3840, 1600), (1920, 1080)); // 2.4:1 ratio
+        assert_eq!(result, (2592, 1080));
+
+        // Test even number enforcement for height
+        let result = clamp_size((2561, 1080), (1920, 1081)); // Odd max height
+        assert_eq!(result, (2560, 1080)); // Height should be made even
+
+        // Test even number enforcement for calculated width
+        let result = clamp_size((2561, 1080), (1920, 1080)); // Results in odd width calculation
+        assert_eq!(result, (2560, 1080)); // Width should be made even
+    }
+
+    #[test]
+    fn test_clamp_size_ultratall() {
+        // Test ultratall aspect ratio (< 9:16)
+        let result = clamp_size((1080, 2560), (1920, 1920)); // ~9:21.3 ratio
+        assert_eq!(result, (1080, 2560));
+
+        // Test very ultratall that needs scaling
+        let result = clamp_size((800, 3200), (1920, 2000)); // 1:4 ratio
+        assert_eq!(result, (800, 3200));
+
+        // Test when width constraint is the limiting factor (using max.1 as width limit)
+        let result = clamp_size((500, 3000), (1920, 1000)); // Very tall, width limited by max.1
+        assert_eq!(result, (500, 3000));
+
+        // Test even number enforcement for width (using max.1)
+        let result = clamp_size((500, 3000), (1920, 1001)); // Odd max.1 used as width
+        assert_eq!(result, (500, 3000)); // Width should be made even
+
+        // Test even number enforcement for calculated height
+        let result = clamp_size((500, 3000), (1920, 1000)); // Results in odd height calculation
+        assert_eq!(result, (500, 3000)); // Height should be made even
+    }
+
+    #[test]
+    fn test_clamp_size_edge_cases() {
+        // Test minimum sizes
+        let result = clamp_size((2, 2), (1920, 1080));
+        assert_eq!(result, (2, 2));
+
+        // Test when input is smaller than max in all dimensions
+        let result = clamp_size((800, 600), (1920, 1080));
+        assert_eq!(result, (800, 600));
+
+        // Test exact 16:9 boundary
+        let sixteen_nine = 16.0 / 9.0;
+        let width = 1920;
+        let height = (width as f64 / sixteen_nine) as u32; // Should be exactly 1080
+        let result = clamp_size((width, height), (1920, 1080));
+        assert_eq!(result, (1920, 1080));
+
+        // Test exact 9:16 boundary
+        let nine_sixteen = 9.0 / 16.0;
+        let height = 1920;
+        let width = (height as f64 * nine_sixteen) as u32; // Should be exactly 1080
+        let result = clamp_size((width, height), (1920, 1080));
+        assert_eq!(result, (1080, 1920));
+    }
 }

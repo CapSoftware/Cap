@@ -85,7 +85,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                 d3d_device,
-                bitrate_multiplier: 0.1f32,
+                bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
                 output_size: None,
             })
@@ -115,7 +115,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_builder
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                bitrate_multiplier: 0.08f32,
+                bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
                 d3d_device,
                 output_size: Some(windows::Graphics::SizeInt32 {
