@@ -56,7 +56,8 @@ pub struct UploadProgressEvent {
 }
 
 // The size of each S3 multipart upload chunk
-const CHUNK_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
+const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
+const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
 
 #[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
@@ -459,7 +460,7 @@ pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk
         let total_size = file.metadata().await?.len();
         let mut file = BufReader::new(file);
 
-        let mut buf = vec![0u8; CHUNK_SIZE as usize];
+        let mut buf = vec![0u8; MAX_CHUNK_SIZE as usize];
         let mut part_number = 0;
         loop {
             part_number += 1;
@@ -499,7 +500,7 @@ pub fn from_pending_file_to_chunks(
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
         let mut first_chunk_size: Option<u64> = None;
-        let mut chunk_buffer = vec![0u8; CHUNK_SIZE as usize];
+        let mut chunk_buffer = vec![0u8; MAX_CHUNK_SIZE as usize];
 
         loop {
             // Check if realtime recording is done
@@ -529,13 +530,13 @@ pub fn from_pending_file_to_chunks(
 
             // Determine if we should read a chunk
             let should_read_chunk = if let Some(is_done) = realtime_is_done {
-                (new_data_size >= CHUNK_SIZE) || (is_done && new_data_size > 0)
+                (new_data_size >= MIN_CHUNK_SIZE) || (is_done && new_data_size > 0)
             } else {
                 new_data_size > 0
             };
 
             if should_read_chunk {
-                let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE) as usize;
+                let chunk_size = std::cmp::min(new_data_size, MAX_CHUNK_SIZE) as usize;
 
                 file.seek(std::io::SeekFrom::Start(last_read_position)).await?;
 
