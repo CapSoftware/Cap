@@ -142,7 +142,7 @@ fn default_true() -> bool {
 }
 
 fn default_instant_mode_max_resolution() -> u32 {
-    1080
+    1920
 }
 
 fn default_server_url() -> String {
