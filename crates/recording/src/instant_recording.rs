@@ -202,17 +202,23 @@ async fn create_pipeline(
         );
     };
 
-    let base_video_info = screen_source.info();
+    let screen_info = screen_source.info();
 
     let output_resolution = max_output_size
         .map(|max_size| {
-            if base_video_info.width >= base_video_info.height {
-                let mut width = max_size.min(base_video_info.width);
+            // restrict width if more square-y and w > h, or excessively tall
+            // we don't just uniformly restrict width or height as this massively squashes ultrawide/ultratall captures
+            if screen_info.width >= screen_info.height
+                && (screen_info.width as f64 / screen_info.height as f64) <= 16.9
+                || (screen_info.width < screen_info.height
+                    && (screen_info.width as f64 / screen_info.height as f64) >= 16.9)
+            {
+                let mut width = max_size.min(screen_info.width);
                 if width % 2 != 0 {
                     width -= 1;
                 }
 
-                let height_ratio = base_video_info.height as f64 / base_video_info.width as f64;
+                let height_ratio = screen_info.height as f64 / screen_info.width as f64;
                 let mut height = (height_ratio * width as f64).round() as u32;
                 if height % 2 != 0 {
                     height -= 1;
@@ -220,12 +226,12 @@ async fn create_pipeline(
 
                 (width, height)
             } else {
-                let mut height = max_size.min(base_video_info.height);
+                let mut height = max_size.min(screen_info.height);
                 if height % 2 != 0 {
                     height -= 1;
                 }
 
-                let width_ratio = base_video_info.width as f64 / base_video_info.height as f64;
+                let width_ratio = screen_info.width as f64 / screen_info.height as f64;
                 let mut width = (width_ratio * height as f64).round() as u32;
                 if width % 2 != 0 {
                     width -= 1;
@@ -234,7 +240,7 @@ async fn create_pipeline(
                 (width, height)
             }
         })
-        .unwrap_or((base_video_info.width, base_video_info.height));
+        .unwrap_or((screen_info.width, screen_info.height));
 
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
@@ -250,10 +256,10 @@ async fn create_pipeline(
     Ok(Pipeline {
         output,
         video_info: VideoInfo::from_raw_ffmpeg(
-            base_video_info.pixel_format,
+            screen_info.pixel_format,
             output_resolution.0,
             output_resolution.1,
-            base_video_info.fps(),
+            screen_info.fps(),
         ),
     })
 }
