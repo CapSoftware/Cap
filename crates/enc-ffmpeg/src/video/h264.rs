@@ -34,6 +34,8 @@ pub enum H264EncoderError {
     CodecNotFound,
     #[error("Pixel format {0:?} not supported")]
     PixFmtNotSupported(Pixel),
+    #[error("Invalid output dimensions {width}x{height}; expected non-zero even width and height")]
+    InvalidOutputDimensions { width: u32, height: u32 },
 }
 
 impl H264EncoderBuilder {
@@ -58,13 +60,13 @@ impl H264EncoderBuilder {
         self
     }
 
-    pub fn with_output_size(mut self, width: u32, height: u32) -> Self {
-        if width == 0 || height == 0 {
-            self.output_size = None;
-        } else {
-            self.output_size = Some((width, height));
+    pub fn with_output_size(mut self, width: u32, height: u32) -> Result<Self, H264EncoderError> {
+        if width == 0 || height == 0 || width % 2 != 0 || height % 2 != 0 {
+            return Err(H264EncoderError::InvalidOutputDimensions { width, height });
         }
-        self
+
+        self.output_size = Some((width, height));
+        Ok(self)
     }
 
     pub fn build(
@@ -103,6 +105,18 @@ impl H264EncoderBuilder {
             );
             format
         };
+
+        if output_format == ffmpeg::format::Pixel::NV12
+            && (output_width == 0
+                || output_height == 0
+                || output_width % 2 != 0
+                || output_height % 2 != 0)
+        {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
 
         let needs_scaling =
             output_width != input_config.width || output_height != input_config.height;

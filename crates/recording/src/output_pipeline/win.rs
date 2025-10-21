@@ -116,7 +116,7 @@ impl Muxer for WindowsMuxer {
 
                             cap_enc_ffmpeg::H264Encoder::builder(video_config)
                                 .with_output_size(fallback_width, fallback_height)
-                                .build(&mut output)
+                                .and_then(|builder| builder.build(&mut output))
                                 .map(either::Right)
                                 .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                         }
