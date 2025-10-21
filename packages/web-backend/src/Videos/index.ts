@@ -56,7 +56,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
 
-				if (listedObjects.Contents?.length) {
+				if (listedObjects.Contents && listedObjects.Contents.length > 1) {
 					yield* bucket.deleteObjects(
 						listedObjects.Contents.map((content) => ({
 							Key: content.Key,
