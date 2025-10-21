@@ -5,12 +5,14 @@ import {
 import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { HttpApiError } from "@effect/platform";
 import {
 	AwsCredentials,
 	Database,
 	provideOptionalAuth,
 	S3Buckets,
 	Videos,
+	VideosRepo,
 } from "@cap/web-backend";
 import { CurrentUser, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
@@ -52,11 +54,14 @@ app.post(
 		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
-			const videos = yield* Videos;
+			const user = yield* CurrentUser;
+			const repo = yield* VideosRepo;
 			const db = yield* Database;
 
-			const video = yield* videos.getByIdForOwner(videoId);
+			const video = yield* repo.getById(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
+			if (video.value[0].ownerId !== user.id)
+				return yield* new HttpApiError.Unauthorized();
 
 			yield* db.use((db) =>
 				db
@@ -70,6 +75,11 @@ app.post(
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
 					return Effect.succeed<Response>(c.text("Video not found", 404));
+
+				if (e._tag === "Unauthorized")
+					return Effect.succeed<Response>(
+						c.text("User not authenticated", 401),
+					);
 
 				return Effect.succeed<Response>(
 					c.json({ error: "Error initiating multipart upload" }, 500),
@@ -471,10 +481,6 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(
-			provideOptionalAuth,
-			Effect.provideService(CurrentUser, user),
-			runPromise,
-		);
+		}).pipe(Effect.provideService(CurrentUser, user), runPromise);
 	},
 );
