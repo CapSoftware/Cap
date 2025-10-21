@@ -32,6 +32,7 @@ export const ShareHeader = ({
 	data: typeof videos.$inferSelect & {
 		ownerName?: string | null;
 		ownerImage?: string | null;
+		ownerIsPro?: boolean;
 	};
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
@@ -63,7 +64,7 @@ export const ShareHeader = ({
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-	const isOwner = user && user.id.toString() === data.ownerId;
+	const isOwner = user && user.id === data.ownerId;
 
 	const { webUrl } = usePublicEnv();
 
@@ -130,7 +131,7 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isVideoOwnerPro: boolean = user && isOwner ? userIsPro(user) : false;
+	const isVideoOwnerPro: boolean = data.ownerIsPro ?? false;
 
 	const handleSharingUpdated = () => {
 		refresh();

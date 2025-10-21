@@ -33,10 +33,10 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
-    time::{self, Instant},
+    time::{self, Instant, timeout},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{Span, debug, error, info, instrument, trace};
+use tracing::{Span, debug, error, info, info_span, instrument, trace};
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -65,7 +65,6 @@ pub async fn upload_video(
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
-    println!("Uploading video {video_id}...");
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
@@ -103,9 +102,10 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
 
-        Ok(())
+        Ok(metadata)
     };
 
     // TODO: We don't report progress on image upload
@@ -126,8 +126,15 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(()) => PostHogEvent::MultipartUploadComplete {
+        Ok(meta) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
+            length: meta
+                .as_ref()
+                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                .unwrap_or_default(),
+            size: std::fs::metadata(file_path)
+                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                .unwrap_or_default(),
         },
         Err(err) => PostHogEvent::MultipartUploadFailed {
             duration: start.elapsed(),
@@ -229,13 +236,21 @@ pub async fn create_or_get_video(
             error: String,
         }
 
-        if let Ok(error) = response.json::<CreateErrorResponse>().await {
+        let status = response.status();
+        let body = response.text().await;
+
+        if let Some(error) = body
+            .as_ref()
+            .ok()
+            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(&*body).ok())
+            && status == StatusCode::FORBIDDEN
+        {
             if error.error == "upgrade_required" {
                 return Err(AuthedApiError::UpgradeRequired);
             }
         }
 
-        return Err("Unknown error uploading video".into());
+        return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
     }
 
     let response_text = response
@@ -318,23 +333,30 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_upload_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
+        realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
         Self {
             handle: spawn_actor(async move {
                 let start = Instant::now();
                 let result = Self::run(
                     app,
-                    file_path,
+                    file_path.clone(),
                     pre_created_video,
-                    realtime_upload_done,
                     recording_dir,
+                    realtime_upload_done,
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(()) => PostHogEvent::MultipartUploadComplete {
+                    Ok(meta) => PostHogEvent::MultipartUploadComplete {
                         duration: start.elapsed(),
+                        length: meta
+                            .as_ref()
+                            .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                            .unwrap_or_default(),
+                        size: std::fs::metadata(file_path)
+                            .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                            .unwrap_or_default(),
                     },
                     Err(err) => PostHogEvent::MultipartUploadFailed {
                         duration: start.elapsed(),
@@ -351,9 +373,9 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<(), AuthedApiError> {
+        realtime_video_done: Option<Receiver<()>>,
+    ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
@@ -398,7 +420,8 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
         info!("Multipart upload complete for {video_id}.");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -411,7 +434,7 @@ impl InstantMultipartUpload {
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        Ok(())
+        Ok(metadata)
     }
 }
 
@@ -459,7 +482,17 @@ pub fn from_pending_file_to_chunks(
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
-        let mut file = tokio::fs::File::open(&path).await?;
+        let mut file = timeout(Duration::from_secs(20), async move {
+            loop {
+                if let Ok(file) = tokio::fs::File::open(&path).await.map_err(|err| error!("from_pending_file_to_chunks/open: {err:?}")) {
+                    break file;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to open file. The recording pipeline may have crashed?"))?;
+
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
@@ -473,10 +506,10 @@ pub fn from_pending_file_to_chunks(
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
-                        Err(_) => yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
-                            "Realtime generation failed"
-                        ))?,
+                        // This means all senders where dropped.
+                        // This can assume this means realtime is done.
+                        // It possibly means something has gone wrong but that's not the uploader's problem.
+                        Err(_) => realtime_is_done = Some(true),
                     }
                 }
             }
@@ -646,7 +679,7 @@ fn multipart_uploader(
                 .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
                 .header("Content-Length", chunk.len())
-                .timeout(Duration::from_secs(120)).body(chunk);
+                .timeout(Duration::from_secs(5 * 60)).body(chunk);
 
             if let Some(md5_sum) = &md5_sum {
             	req = req.header("Content-MD5", md5_sum);
@@ -654,6 +687,7 @@ fn multipart_uploader(
 
             let resp = req
                 .send()
+                .instrument(info_span!("send", size = size))
                 .await
                 .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
 
@@ -698,7 +732,6 @@ pub async fn singlepart_uploader(
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
-        .timeout(Duration::from_secs(120))
         .body(reqwest::Body::wrap_stream(stream))
         .send()
         .await

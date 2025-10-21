@@ -80,7 +80,7 @@ pub async fn upload_multipart_presign_part(
         .map_err(|err| format!("api/upload_multipart_presign_part/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -155,7 +155,7 @@ pub async fn upload_multipart_complete(
         .map_err(|err| format!("api/upload_multipart_complete/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -211,7 +211,7 @@ pub async fn upload_signed(
         .map_err(|err| format!("api/upload_signed/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -245,7 +245,7 @@ pub async fn desktop_video_progress(
         .map_err(|err| format!("api/desktop_video_progress/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await

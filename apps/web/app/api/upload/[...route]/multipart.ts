@@ -250,7 +250,7 @@ app.post(
 			const maybeVideo = yield* videos.getById(Video.VideoId.make(videoId));
 			if (Option.isNone(maybeVideo)) {
 				c.status(404);
-				return c.text("Video not found");
+				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 			}
 			const [video] = maybeVideo.value;
 
