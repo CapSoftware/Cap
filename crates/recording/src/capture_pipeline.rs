@@ -2,13 +2,12 @@ use crate::{
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::*,
     sources,
-    sources::screen_capture::{
-        self, ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget,
-    },
+    sources::screen_capture::{self, CropBounds, ScreenCaptureFormat, ScreenCaptureTarget},
 };
+use anyhow::anyhow;
 use cap_timestamp::Timestamps;
-use scap_targets::WindowId;
-use std::{path::PathBuf, sync::Arc, time::SystemTime};
+use scap_targets::bounds::LogicalBounds;
+use std::{path::PathBuf, sync::Arc};
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     async fn make_studio_mode_pipeline(
@@ -127,30 +126,96 @@ pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 #[cfg(windows)]
 pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
 
-pub async fn create_screen_capture(
-    capture_target: &ScreenCaptureTarget,
-    force_show_cursor: bool,
-    max_fps: u32,
-    start_time: SystemTime,
-    system_audio: bool,
-    #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-    #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
-) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
-    Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
-        capture_target,
-        force_show_cursor,
-        max_fps,
-        start_time,
-        system_audio,
-        #[cfg(windows)]
-        d3d_device,
-        #[cfg(target_os = "macos")]
-        shareable_content,
-        #[cfg(target_os = "macos")]
-        excluded_windows,
-    )
-    .await?)
+pub fn target_to_display_and_crop(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(scap_targets::Display, Option<CropBounds>)> {
+    use scap_targets::{bounds::*, *};
+
+    let display = target
+        .display()
+        .ok_or_else(|| anyhow!("Display not found"))?;
+
+    let crop_bounds = match target {
+        ScreenCaptureTarget::Display { .. } => None,
+        ScreenCaptureTarget::Window { id } => {
+            let window = Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
+
+            #[cfg(target_os = "macos")]
+            {
+                let raw_display_bounds = display
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(LogicalBounds::new(
+                    LogicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                        raw_window_bounds.position().y() - raw_display_bounds.position().y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+
+            #[cfg(windows)]
+            {
+                let raw_display_position = display
+                    .raw_handle()
+                    .physical_position()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .physical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_position.x(),
+                        raw_window_bounds.position().y() - raw_display_position.y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+        }
+        ScreenCaptureTarget::Area {
+            bounds: relative_bounds,
+            ..
+        } => {
+            #[cfg(target_os = "macos")]
+            {
+                Some(*relative_bounds)
+            }
+
+            #[cfg(windows)]
+            {
+                let raw_display_size = display
+                    .physical_size()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let logical_display_size = display
+                    .logical_size()
+                    .ok_or_else(|| anyhow!("No display logical size"))?;
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        (relative_bounds.position().x() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.position().y() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                    PhysicalSize::new(
+                        (relative_bounds.size().width() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.size().height() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                ))
+            }
+        }
+    };
+
+    Ok((display, crop_bounds))
 }
 
 #[cfg(windows)]
