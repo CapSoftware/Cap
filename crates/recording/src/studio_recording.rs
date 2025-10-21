@@ -1,10 +1,13 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
+    },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
+    screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
@@ -680,11 +683,7 @@ async fn create_segment_pipeline(
     custom_cursor_capture: bool,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
-    let display = base_inputs
-        .capture_target
-        .display()
-        .ok_or(CreateSegmentPipelineError::NoDisplay)?;
-    let crop_bounds = base_inputs
+    let cursor_crop_bounds = base_inputs
         .capture_target
         .cursor_crop()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
@@ -692,8 +691,12 @@ async fn create_segment_pipeline(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
-    let screen_config = create_screen_capture(
-        &base_inputs.capture_target,
+    let (display, crop) =
+        target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
+
+    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+        display,
+        crop,
         !custom_cursor_capture,
         120,
         start_time.system_time(),
@@ -760,7 +763,7 @@ async fn create_segment_pipeline(
 
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
-            crop_bounds,
+            cursor_crop_bounds,
             display,
             cursors_dir.to_path_buf(),
             prev_cursors,

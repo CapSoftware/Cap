@@ -1,10 +1,13 @@
 use crate::{
     RecordingBaseInputs,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
+    },
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
+use anyhow::Context as _;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
@@ -293,8 +296,12 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 
-    let screen_source = create_screen_capture(
-        &inputs.capture_target,
+    let (display, crop) =
+        target_to_display_and_crop(&inputs.capture_target).context("target_display_crop")?;
+
+    let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+        display,
+        crop,
         true,
         30,
         start_time,
