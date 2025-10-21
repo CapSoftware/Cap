@@ -14,8 +14,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
-import { removeProfileImage } from "@/actions/account/remove-profile-image";
-import { uploadProfileImage } from "@/actions/account/upload-profile-image";
+import { removeImage } from "@/actions/images/remove-image";
+import { uploadImage } from "@/actions/images/upload-image";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
@@ -92,9 +92,10 @@ export const Settings = ({
 
 	const uploadProfileImageMutation = useMutation({
 		mutationFn: async (file: File) => {
-			const formData = new FormData();
-			formData.append("image", file);
-			return uploadProfileImage(formData);
+			if (!user?.id) {
+				throw new Error("User ID is required");
+			}
+			return uploadImage(file, "user", user.id, user.image);
 		},
 		onSuccess: (result) => {
 			if (result.success) {
@@ -115,7 +116,7 @@ export const Settings = ({
 	});
 
 	const removeProfileImageMutation = useMutation({
-		mutationFn: removeProfileImage,
+		mutationFn: () => removeImage(user?.image || "", "user", user?.id || ""),
 		onSuccess: (result) => {
 			if (result?.success) {
 				setProfileImageOverride(null);

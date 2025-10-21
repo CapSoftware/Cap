@@ -14,4 +14,5 @@ export * as S3Bucket from "./S3Bucket.ts";
 export { S3Error } from "./S3Bucket.ts";
 export * as Space from "./Space.ts";
 export * as User from "./User.ts";
+export { UserId } from "./User.ts";
 export * as Video from "./Video.ts";

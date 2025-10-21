@@ -4,8 +4,8 @@ import { CardDescription, Label } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
-import { removeOrganizationIcon } from "@/actions/organization/remove-icon";
-import { uploadOrganizationIcon } from "@/actions/organization/upload-organization-icon";
+import { removeImage } from "@/actions/images/remove-image";
+import { uploadImage } from "@/actions/images/upload-image";
 import { FileInput } from "@/components/FileInput";
 import { useDashboardContext } from "../../../Contexts";
 
@@ -25,9 +25,12 @@ export const OrganizationIcon = () => {
 		// Upload the file to the server immediately
 		try {
 			setIsUploading(true);
-			const fd = new FormData();
-			fd.append("icon", file);
-			const result = await uploadOrganizationIcon(fd, organizationId);
+			const result = await uploadImage(
+				file,
+				"organization",
+				organizationId,
+				existingIconUrl,
+			);
 
 			if (result.success) {
 				toast.success("Organization icon updated successfully");
@@ -46,7 +49,11 @@ export const OrganizationIcon = () => {
 		if (!organizationId) return;
 
 		try {
-			const result = await removeOrganizationIcon(organizationId);
+			const result = await removeImage(
+				existingIconUrl || "",
+				"organization",
+				organizationId,
+			);
 
 			if (result?.success) {
 				toast.success("Organization icon removed successfully");
