@@ -89,11 +89,6 @@ impl H264EncoderBuilder {
             .unwrap_or((input_config.width, input_config.height));
 
         if output_width == 0 || output_height == 0 {
-            output_width = input_config.width;
-            output_height = input_config.height;
-        }
-
-        if output_width == 0 || output_height == 0 {
             return Err(H264EncoderError::InvalidOutputDimensions {
                 width: output_width,
                 height: output_height,
