@@ -86,13 +86,13 @@ impl H264EncoderBuilder {
             output_height = input_config.height;
         }
 
-        let encoder_supports_input_format = match codec.video() {
-            Some(codec_video) => match codec_video.formats() {
-                Some(mut formats) => formats.any(|f| f == input_config.pixel_format),
-                None => false,
-            },
-            None => false,
-        };
+        let encoder_supports_input_format = codec
+            .video()
+            .ok()
+            .and_then(|codec_video| codec_video.formats())
+            .map_or(false, |mut formats| {
+                formats.any(|f| f == input_config.pixel_format)
+            });
 
         let mut needs_pixel_conversion = false;
 
