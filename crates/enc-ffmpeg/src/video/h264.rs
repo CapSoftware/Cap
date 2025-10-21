@@ -84,7 +84,7 @@ impl H264EncoderBuilder {
         let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
             .ok_or(H264EncoderError::CodecNotFound)?;
 
-        let (mut output_width, mut output_height) = self
+        let (output_width, output_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
 
