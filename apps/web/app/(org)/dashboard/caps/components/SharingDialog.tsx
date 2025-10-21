@@ -32,7 +32,7 @@ interface SharingDialogProps {
 	sharedSpaces: {
 		id: string;
 		name: string;
-		iconUrlOrKey?: string | null;
+		iconUrl?: string | null;
 		organizationId: string;
 	}[];
 	onSharingUpdated: (updatedSharedSpaces: string[]) => void;
@@ -388,7 +388,7 @@ const SpaceCard = ({
 	space: {
 		id: string;
 		name: string;
-		iconUrlOrKey?: string | null;
+		iconUrl?: string | null;
 		organizationId: string;
 	};
 	selectedSpaces: Set<string>;
@@ -417,8 +417,9 @@ const SpaceCard = ({
 				onClick={() => handleToggleSpace(space.id)}
 			>
 				<SignedImageUrl
-					imageKeyOrUrl={space.iconUrlOrKey}
+					image={space.iconUrl}
 					name={space.name}
+					type="organization"
 					letterClass="text-[11px]"
 					className="relative z-10 flex-shrink-0 size-5"
 				/>

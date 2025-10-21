@@ -16,15 +16,15 @@ export async function removeProfileImage() {
 		throw new Error("Unauthorized");
 	}
 
-	const imageUrlOrKey = user.imageUrlOrKey;
+	const image = user.image;
 
 	// Delete the profile image from S3 if it exists
-	if (imageUrlOrKey) {
+	if (image) {
 		try {
 			// Extract the S3 key - handle both old URL format and new key format
-			let s3Key = imageUrlOrKey;
-			if (imageUrlOrKey.includes("amazonaws.com")) {
-				const url = new URL(imageUrlOrKey);
+			let s3Key = image;
+			if (image.includes("amazonaws.com")) {
+				const url = new URL(image);
 				s3Key = url.pathname.substring(1); // Remove leading slash
 			}
 
@@ -41,10 +41,7 @@ export async function removeProfileImage() {
 		}
 	}
 
-	await db()
-		.update(users)
-		.set({ imageUrlOrKey: null })
-		.where(eq(users.id, user.id));
+	await db().update(users).set({ image: null }).where(eq(users.id, user.id));
 
 	revalidatePath("/dashboard/settings/account");
 

@@ -90,8 +90,9 @@ export function ProfileImage({
 				>
 					{previewUrl ? (
 						<SignedImageUrl
-							imageKeyOrUrl={previewUrl}
+							image={previewUrl}
 							name={userName || "User"}
+							type="user"
 							letterClass="text-lg"
 							className="size-full"
 						/>

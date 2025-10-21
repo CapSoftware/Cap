@@ -70,6 +70,7 @@ export const OnboardingStepResult = Schema.Union(
 
 export const GetSignedImageUrlPayload = Schema.Struct({
 	key: Schema.String,
+	type: Schema.Literal("user", "organization"),
 });
 
 export const GetSignedImageUrlResult = Schema.Struct({

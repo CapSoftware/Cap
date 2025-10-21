@@ -102,8 +102,9 @@ const Top = () => {
 				<div className="flex gap-1.5 items-center">
 					{activeSpace && (
 						<SignedImageUrl
-							imageKeyOrUrl={activeSpace.iconUrlOrKey}
+							image={activeSpace.iconUrl}
 							name={activeSpace?.name}
+							type="organization"
 							letterClass="text-xs"
 							className="relative flex-shrink-0 size-5"
 						/>
@@ -261,8 +262,9 @@ const User = () => {
 					>
 						<div className="flex items-center">
 							<SignedImageUrl
-								imageKeyOrUrl={user.imageUrlOrKey}
+								image={user.image}
 								name={user.name ?? "User"}
+								type="user"
 								letterClass="text-xs lg:text-md"
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>

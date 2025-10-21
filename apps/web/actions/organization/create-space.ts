@@ -16,7 +16,7 @@ interface CreateSpaceResponse {
 	success: boolean;
 	spaceId?: string;
 	name?: string;
-	iconUrlOrKey?: string | null;
+	iconUrl?: string | null;
 	error?: string;
 }
 
@@ -65,7 +65,7 @@ export async function createSpace(
 		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
-		let iconUrlOrKey = null;
+		let iconUrl = null;
 
 		if (iconFile) {
 			// Validate file type
@@ -99,7 +99,7 @@ export async function createSpace(
 						yield* Effect.promise(() => iconFile.bytes()),
 						{ contentType: iconFile.type },
 					);
-					iconUrlOrKey = fileKey;
+					iconUrl = fileKey;
 				}).pipe(runPromise);
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
@@ -117,10 +117,8 @@ export async function createSpace(
 				name,
 				organizationId: user.activeOrganizationId,
 				createdById: user.id,
-				iconUrlOrKey,
-				description: iconUrlOrKey
-					? `Space with custom icon: ${iconUrlOrKey}`
-					: null,
+				iconUrl,
+				description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
 				createdAt: new Date(),
 				updatedAt: new Date(),
 			});
@@ -186,7 +184,7 @@ export async function createSpace(
 			success: true,
 			spaceId,
 			name,
-			iconUrlOrKey,
+			iconUrl,
 		};
 	} catch (error) {
 		console.error("Error creating space:", error);

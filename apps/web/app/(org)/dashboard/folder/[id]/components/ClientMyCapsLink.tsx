@@ -126,8 +126,9 @@ export function ClientMyCapsLink({
 		>
 			{activeSpace && (
 				<SignedImageUrl
-					imageKeyOrUrl={activeSpace.iconUrlOrKey}
+					image={activeSpace.iconUrl}
 					name={activeSpace.name}
+					type="organization"
 					letterClass="text-xs"
 					className="relative flex-shrink-0 size-5"
 				/>

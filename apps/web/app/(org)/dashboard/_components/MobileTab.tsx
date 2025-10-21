@@ -76,8 +76,9 @@ const Orgs = ({
 			className="flex gap-1.5 items-center p-2 rounded-full border bg-gray-3 border-gray-5"
 		>
 			<SignedImageUrl
-				imageKeyOrUrl={activeOrg?.organization.iconUrlOrKey}
+				image={activeOrg?.organization.iconUrl}
 				name={activeOrg?.organization.name ?? "No organization found"}
+				type="organization"
 				letterClass="text-xs"
 				className="relative flex-shrink-0 mx-auto size-6"
 			/>
@@ -135,8 +136,9 @@ const OrgsMenu = ({
 					>
 						<div className="flex gap-2 items-center w-full">
 							<SignedImageUrl
-								imageKeyOrUrl={organization.organization.iconUrlOrKey}
+								image={organization.organization.iconUrl}
 								name={organization.organization.name}
+								type="organization"
 								letterClass="text-xs"
 								className="relative flex-shrink-0 size-5"
 							/>

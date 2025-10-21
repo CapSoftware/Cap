@@ -101,7 +101,9 @@ export const OrganizationIndicator = ({
 											<p
 												className={clsx(
 													"px-2.5 py-1.5 text-xs font-medium capitalize text-white rounded-full",
-													member.role == "owner" ? "bg-blue-500" : "bg-gray-10",
+													member.role === "owner"
+														? "bg-blue-500"
+														: "bg-gray-10",
 												)}
 											>
 												{member.role}

@@ -18,7 +18,7 @@ export type Organization = {
 	members: (typeof organizationMembers.$inferSelect & {
 		user: Pick<
 			typeof users.$inferSelect,
-			"id" | "name" | "email" | "lastName" | "imageUrlOrKey"
+			"id" | "name" | "email" | "lastName" | "image"
 		>;
 	})[];
 	invites: (typeof organizationInvites.$inferSelect)[];
@@ -47,14 +47,14 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				organization: organizations,
 				settings: organizations.settings,
 				member: organizationMembers,
-				iconUrlOrKey: organizations.iconUrlOrKey,
+				iconUrl: organizations.iconUrl,
 				user: {
 					id: users.id,
 					name: users.name,
 					lastName: users.lastName,
 					email: users.email,
 					inviteQuota: users.inviteQuota,
-					imageUrlOrKey: users.imageUrlOrKey,
+					image: users.image,
 					defaultOrgId: users.defaultOrgId,
 				},
 			})
@@ -130,7 +130,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					description: spaces.description,
 					organizationId: spaces.organizationId,
 					createdById: spaces.createdById,
-					iconUrlOrKey: spaces.iconUrlOrKey,
+					iconUrl: spaces.iconUrl,
 					memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
@@ -204,7 +204,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					name: `All ${activeOrgInfo.organization.name}`,
 					description: `View all content in ${activeOrgInfo.organization.name}`,
 					organizationId: activeOrgInfo.organization.id,
-					iconUrlOrKey: activeOrgInfo.organization.iconUrlOrKey,
+					iconUrl: activeOrgInfo.organization.iconUrl,
 					memberCount: orgMemberCount,
 					createdById: activeOrgInfo.organization.ownerId,
 					videoCount: orgVideoCount,
@@ -241,7 +241,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								name: users.name,
 								lastName: users.lastName,
 								email: users.email,
-								imageUrlOrKey: users.imageUrlOrKey,
+								image: users.image,
 							},
 						})
 						.from(organizationMembers)

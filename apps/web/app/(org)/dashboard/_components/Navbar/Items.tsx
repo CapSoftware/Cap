@@ -123,10 +123,11 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								>
 									<div className="flex items-center">
 										<SignedImageUrl
-											imageKeyOrUrl={activeOrg?.organization.iconUrlOrKey}
+											image={activeOrg?.organization.iconUrl}
 											name={
 												activeOrg?.organization.name ?? "No organization found"
 											}
+											type="organization"
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
@@ -213,10 +214,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 												>
 													<div className="flex gap-2 items-center w-full">
 														<SignedImageUrl
-															imageKeyOrUrl={
-																organization.organization.iconUrlOrKey
-															}
+															image={organization.organization.iconUrl}
 															name={organization.organization.name}
+															type="organization"
 															letterClass="text-xs"
 															className="relative flex-shrink-0 size-5"
 														/>

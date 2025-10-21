@@ -42,7 +42,7 @@ export async function createOrganization(formData: FormData) {
 		id: Organisation.OrganisationId;
 		ownerId: User.UserId;
 		name: string;
-		iconUrlOrKey?: string;
+		iconUrl?: string;
 	} = {
 		id: organizationId,
 		ownerId: user.id,
@@ -77,7 +77,7 @@ export async function createOrganization(formData: FormData) {
 				);
 			}).pipe(runPromise);
 
-			orgValues.iconUrlOrKey = fileKey;
+			orgValues.iconUrl = fileKey;
 		} catch (error) {
 			console.error("Error uploading organization icon:", error);
 			throw new Error(error instanceof Error ? error.message : "Upload failed");

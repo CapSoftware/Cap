@@ -133,8 +133,9 @@ export default function BrowseSpacesPage() {
 									>
 										<td className="flex gap-3 items-center px-6 py-4">
 											<SignedImageUrl
-												imageKeyOrUrl={space.iconUrlOrKey}
+												image={space.iconUrl}
 												name={space.name}
+												type="organization"
 												className="relative flex-shrink-0 size-7"
 												letterClass="text-sm"
 											/>
@@ -168,7 +169,7 @@ export default function BrowseSpacesPage() {
 																members: (trueActiveOrgMembers || []).map(
 																	(m: { user: { id: string } }) => m.user.id,
 																),
-																iconUrlOrKey: space.iconUrlOrKey,
+																iconUrl: space.iconUrl,
 															});
 															setShowSpaceDialog(true);
 														}}

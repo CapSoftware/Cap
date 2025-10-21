@@ -41,14 +41,6 @@ export const UsersRpcsLive = User.UserRpcs.toLayer(
 				),
 			GetSignedImageUrl: (payload) =>
 				Effect.gen(function* () {
-					// Validate that the key is for a user or organization image
-					if (
-						!payload.key.startsWith("users/") &&
-						!payload.key.startsWith("organizations/")
-					) {
-						return yield* Effect.fail(new InternalError({ type: "unknown" }));
-					}
-
 					const [bucket] = yield* s3Buckets.getBucketAccess(Option.none());
 					const url = yield* bucket.getSignedObjectUrl(payload.key);
 

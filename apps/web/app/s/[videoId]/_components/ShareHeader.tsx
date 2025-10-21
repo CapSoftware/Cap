@@ -238,7 +238,8 @@ export const ShareHeader = ({
 								<div className="flex gap-2 items-center">
 									<SignedImageUrl
 										name={data.ownerName ?? "User"}
-										imageKeyOrUrl={data.ownerImage}
+										image={data.ownerImage}
+										type="user"
 										className="size-8"
 										letterClass="text-base"
 									/>

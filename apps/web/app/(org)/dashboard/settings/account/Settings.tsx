@@ -35,7 +35,7 @@ export const Settings = ({
 	const firstNameId = useId();
 	const lastNameId = useId();
 	const contactEmailId = useId();
-	const initialProfileImage = user?.imageUrlOrKey ?? null;
+	const initialProfileImage = user?.image ?? null;
 	const [profileImageOverride, setProfileImageOverride] = useState<
 		string | null | undefined
 	>(undefined);

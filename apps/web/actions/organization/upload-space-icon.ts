@@ -64,11 +64,11 @@ export async function uploadSpaceIcon(
 
 	try {
 		// Remove previous icon if exists
-		if (space.iconUrlOrKey) {
+		if (space.iconUrl) {
 			// Extract the S3 key (it might already be a key or could be a legacy URL)
-			const key = space.iconUrlOrKey.startsWith("organizations/")
-				? space.iconUrlOrKey
-				: space.iconUrlOrKey.match(/organizations\/.+/)?.[0];
+			const key = space.iconUrl.startsWith("organizations/")
+				? space.iconUrl
+				: space.iconUrl.match(/organizations\/.+/)?.[0];
 			if (key) {
 				try {
 					await bucket.deleteObject(key).pipe(runPromise);
@@ -89,15 +89,12 @@ export async function uploadSpaceIcon(
 			)
 			.pipe(runPromise);
 
-		const iconUrlOrKey = fileKey;
+		const iconUrl = fileKey;
 
-		await db()
-			.update(spaces)
-			.set({ iconUrlOrKey })
-			.where(eq(spaces.id, spaceId));
+		await db().update(spaces).set({ iconUrl }).where(eq(spaces.id, spaceId));
 
 		revalidatePath("/dashboard");
-		return { success: true, iconUrlOrKey };
+		return { success: true, iconUrl };
 	} catch (error) {
 		console.error("Error uploading space icon:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");

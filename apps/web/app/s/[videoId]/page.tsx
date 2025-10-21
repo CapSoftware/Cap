@@ -51,7 +51,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: spaces.id,
 			name: spaces.name,
 			organizationId: spaces.organizationId,
-			iconUrlOrKey: organizations.iconUrlOrKey,
+			iconUrl: organizations.iconUrl,
 		})
 		.from(spaceVideos)
 		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -64,7 +64,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: organizations.id,
 			name: organizations.name,
 			organizationId: organizations.id,
-			iconUrlOrKey: organizations.iconUrlOrKey,
+			iconUrl: organizations.iconUrl,
 		})
 		.from(sharedVideos)
 		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
@@ -74,7 +74,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 		id: string;
 		name: string;
 		organizationId: string;
-		iconUrlOrKey?: string;
+		iconUrl?: string;
 	}> = [];
 
 	// Add space-level sharing
@@ -83,7 +83,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrlOrKey: space.iconUrlOrKey || undefined,
+			iconUrl: space.iconUrl || undefined,
 		});
 	});
 
@@ -93,7 +93,7 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrlOrKey: org.iconUrlOrKey || undefined,
+			iconUrl: org.iconUrl || undefined,
 		});
 	});
 
@@ -271,8 +271,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					name: videos.name,
 					ownerId: videos.ownerId,
 					ownerName: users.name,
-					ownerImage: users.imageUrlOrKey,
-					ownerImageUrlOrKey: users.imageUrlOrKey,
+					ownerImage: users.image,
+					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -472,7 +472,7 @@ async function AuthorizedContent({
 				name: videos.name,
 				ownerId: videos.ownerId,
 				ownerName: users.name,
-				ownerImageUrlOrKey: users.imageUrlOrKey,
+				ownerImageUrlOrKey: users.image,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -662,7 +662,7 @@ async function AuthorizedContent({
 				updatedAt: comments.updatedAt,
 				parentCommentId: comments.parentCommentId,
 				authorName: users.name,
-				authorImageUrlOrKey: users.imageUrlOrKey,
+				authorImageUrlOrKey: users.image,
 			})
 			.from(comments)
 			.leftJoin(users, eq(comments.authorId, users.id))

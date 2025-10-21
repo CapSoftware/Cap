@@ -76,7 +76,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 				id: spaces.id,
 				name: spaces.name,
 				organizationId: spaces.organizationId,
-				iconUrlOrKey: organizations.iconUrlOrKey,
+				iconUrl: organizations.iconUrl,
 			})
 			.from(spaceVideos)
 			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
@@ -97,7 +97,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 				id: organizations.id,
 				name: organizations.name,
 				organizationId: organizations.id,
-				iconUrlOrKey: organizations.iconUrlOrKey,
+				iconUrl: organizations.iconUrl,
 			})
 			.from(sharedVideos)
 			.innerJoin(
@@ -119,7 +119,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: string;
 			name: string;
 			organizationId: string;
-			iconUrlOrKey: string;
+			iconUrl: string;
 			isOrg: boolean;
 		}>
 	> = {};
@@ -132,7 +132,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrlOrKey: space.iconUrlOrKey || "",
+			iconUrl: space.iconUrl || "",
 			isOrg: false,
 		});
 	});
@@ -146,7 +146,7 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrlOrKey: org.iconUrlOrKey || "",
+			iconUrl: org.iconUrl || "",
 			isOrg: true,
 		});
 	});
@@ -177,14 +177,14 @@ export const getVideosByFolderId = Effect.fn(function* (
 				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 				sharedOrganizations: sql<
-					{ id: string; name: string; iconUrlOrKey: string }[]
+					{ id: string; name: string; iconUrl: string }[]
 				>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
               'id', ${organizations.id},
               'name', ${organizations.name},
-              'iconUrlOrKey', ${organizations.iconUrlOrKey}
+              'iconUrl', ${organizations.iconUrl}
             )
           ),
           JSON_ARRAY()

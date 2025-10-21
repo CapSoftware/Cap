@@ -37,7 +37,7 @@ interface SpaceDialogProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrlOrKey?: string;
+		iconUrl?: string;
 	} | null;
 	onSpaceUpdated?: () => void;
 }
@@ -118,7 +118,7 @@ export interface NewSpaceFormProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrlOrKey?: string;
+		iconUrl?: string;
 	} | null;
 }
 
@@ -185,7 +185,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						if (edit && space?.id) {
 							formData.append("id", space.id);
 							// If the user removed the icon, send a removeIcon flag
-							if (selectedFile === null && space.iconUrlOrKey) {
+							if (selectedFile === null && space.iconUrl) {
 								formData.append("removeIcon", "true");
 							}
 							await updateSpace(formData);
@@ -256,7 +256,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 											.map((m) => ({
 												value: m.user.id,
 												label: m.user.name || m.user.email,
-												image: m.user.imageUrlOrKey ?? undefined,
+												image: m.user.image ?? undefined,
 											}))}
 										onSelect={(selected) =>
 											field.onChange(selected.map((opt) => opt.value))
@@ -278,7 +278,8 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						<FileInput
 							id="space-icon"
 							name="icon"
-							initialPreviewUrl={space?.iconUrlOrKey || null}
+							type="organization"
+							initialPreviewUrl={space?.iconUrl || null}
 							notDraggingClassName="hover:bg-gray-3"
 							onChange={setSelectedFile}
 							disabled={isUploading}

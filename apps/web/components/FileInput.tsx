@@ -8,11 +8,9 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { isS3Key } from "@/lib/get-image-url";
 import { useSignedImageUrl } from "@/lib/use-signed-image-url";
 import { Tooltip } from "./Tooltip";
 
@@ -25,6 +23,7 @@ export interface FileInputProps {
 	disabled?: boolean;
 	id?: string;
 	name?: string;
+	type: "user" | "organization";
 	containerStyle?: React.CSSProperties;
 	className?: string;
 	notDraggingClassName?: string;
@@ -42,6 +41,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 	disabled = false,
 	id = "file",
 	name = "file",
+	type,
 	className = "",
 	notDraggingClassName = "",
 	initialPreviewUrl = null,
@@ -59,7 +59,15 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const [isLocalPreview, setIsLocalPreview] = useState(false);
 
 	// Get signed URL for S3 keys
-	const { data: signedUrl } = useSignedImageUrl(previewUrl);
+	const { data: signedUrl } = useSignedImageUrl(previewUrl, type);
+
+	function isS3Key(imageKeyOrUrl: string | null | undefined): boolean {
+		if (!imageKeyOrUrl) return false;
+		return (
+			imageKeyOrUrl.startsWith("users/") ||
+			imageKeyOrUrl.startsWith("organizations/")
+		);
+	}
 	const previousPreviewRef = useRef<{
 		url: string | null;
 		isLocal: boolean;

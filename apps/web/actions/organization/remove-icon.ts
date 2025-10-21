@@ -32,15 +32,15 @@ export async function removeOrganizationIcon(
 		throw new Error("Only the owner can remove the organization icon");
 	}
 
-	const iconUrlOrKey = organization[0]?.iconUrlOrKey;
+	const iconUrl = organization[0]?.iconUrl;
 
 	// Delete the icon from S3 if it exists
-	if (iconUrlOrKey) {
+	if (iconUrl) {
 		try {
 			// Extract the S3 key - handle both old URL format and new key format
-			let s3Key = iconUrlOrKey;
-			if (iconUrlOrKey.includes("amazonaws.com")) {
-				const url = new URL(iconUrlOrKey);
+			let s3Key = iconUrl;
+			if (iconUrl.includes("amazonaws.com")) {
+				const url = new URL(iconUrl);
 				s3Key = url.pathname.substring(1); // Remove leading slash
 			}
 
@@ -61,7 +61,7 @@ export async function removeOrganizationIcon(
 	await db()
 		.update(organizations)
 		.set({
-			iconUrlOrKey: null,
+			iconUrl: null,
 		})
 		.where(eq(organizations.id, organizationId));
 

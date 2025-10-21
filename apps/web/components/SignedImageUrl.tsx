@@ -1,12 +1,12 @@
 "use client";
 
 import { Avatar } from "@cap/ui";
-import { isS3Key } from "@/lib/get-image-url";
 import { useSignedImageUrl } from "@/lib/use-signed-image-url";
 
 interface SignedImageUrlProps {
-	imageKeyOrUrl: string | null | undefined;
+	image: string | null | undefined;
 	name: string;
+	type: "user" | "organization";
 	className?: string;
 	letterClass?: string;
 	noFallback?: boolean;
@@ -18,20 +18,27 @@ interface SignedImageUrlProps {
  * For direct URLs, it uses them as-is
  */
 export function SignedImageUrl({
-	imageKeyOrUrl,
+	image,
 	name,
+	type,
 	className,
 	letterClass,
 }: SignedImageUrlProps) {
-	const { data: signedUrl, isLoading } = useSignedImageUrl(imageKeyOrUrl);
+	const { data: signedUrl, isLoading } = useSignedImageUrl(image, type);
+
+	function isS3Key(imageKeyOrUrl: string | null | undefined): boolean {
+		if (!imageKeyOrUrl) return false;
+		return (
+			imageKeyOrUrl.startsWith("users/") ||
+			imageKeyOrUrl.startsWith("organizations/")
+		);
+	}
 
 	// If it's an S3 key, use the signed URL from RPC
 	// If it's a direct URL, use it as-is
-	const imageUrl = isS3Key(imageKeyOrUrl)
-		? (signedUrl as string | null)
-		: imageKeyOrUrl;
+	const imageUrl = isS3Key(image) ? (signedUrl as string | null) : image;
 
-	if (isS3Key(imageKeyOrUrl) && isLoading) {
+	if (isS3Key(image) && isLoading) {
 		return (
 			<div
 				className={className}

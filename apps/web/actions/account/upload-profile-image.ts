@@ -43,13 +43,13 @@ export async function uploadProfileImage(formData: FormData) {
 	}
 
 	// Get the old profile image to delete it later
-	const oldImageUrlOrKey = user.imageUrlOrKey;
+	const oldImageUrlOrKey = user.image;
 
 	const fileKey = `users/${user.id}/profile-${Date.now()}-${randomUUID()}.${fileExtension}`;
 
 	try {
 		const sanitizedFile = await sanitizeFile(file);
-		let imageUrlOrKey: string | null = null;
+		let image: string | null = null;
 
 		await Effect.gen(function* () {
 			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
@@ -83,23 +83,23 @@ export async function uploadProfileImage(formData: FormData) {
 				contentType: file.type,
 			});
 
-			imageUrlOrKey = fileKey;
+			image = fileKey;
 		}).pipe(runPromise);
 
-		if (!imageUrlOrKey) {
+		if (!image) {
 			throw new Error("Failed to resolve uploaded profile image key");
 		}
 
-		const finalImageUrlOrKey = imageUrlOrKey;
+		const finalImageUrlOrKey = image;
 
 		await db()
 			.update(users)
-			.set({ imageUrlOrKey: finalImageUrlOrKey })
+			.set({ image: finalImageUrlOrKey })
 			.where(eq(users.id, user.id));
 
 		revalidatePath("/dashboard/settings/account");
 
-		return { success: true, imageUrlOrKey: finalImageUrlOrKey } as const;
+		return { success: true, image: finalImageUrlOrKey } as const;
 	} catch (error) {
 		console.error("Error uploading profile image:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");

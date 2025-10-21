@@ -52,7 +52,7 @@ export async function uploadOrganizationIcon(
 	}
 
 	// Get the old icon to delete it later
-	const oldIconUrlOrKey = organization[0]?.iconUrlOrKey;
+	const oldIconUrlOrKey = organization[0]?.iconUrl;
 
 	// Create a unique file key
 	const fileExtension = file.name.split(".").pop();
@@ -92,16 +92,16 @@ export async function uploadOrganizationIcon(
 			yield* bucket.putObject(fileKey, bodyBytes, { contentType: file.type });
 		}).pipe(runPromise);
 
-		const iconUrlOrKey = fileKey;
+		const iconUrl = fileKey;
 
 		await db()
 			.update(organizations)
-			.set({ iconUrlOrKey })
+			.set({ iconUrl })
 			.where(eq(organizations.id, organizationId));
 
 		revalidatePath("/dashboard/settings/organization");
 
-		return { success: true, iconUrlOrKey };
+		return { success: true, iconUrl };
 	} catch (error) {
 		console.error("Error uploading organization icon:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");

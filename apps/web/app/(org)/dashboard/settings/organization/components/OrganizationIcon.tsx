@@ -14,7 +14,7 @@ export const OrganizationIcon = () => {
 	const iconInputId = useId();
 	const { activeOrganization } = useDashboardContext();
 	const organizationId = activeOrganization?.organization.id;
-	const existingIconUrl = activeOrganization?.organization.iconUrlOrKey ?? null;
+	const existingIconUrl = activeOrganization?.organization.iconUrl ?? null;
 
 	const [isUploading, setIsUploading] = useState(false);
 
@@ -73,6 +73,7 @@ export const OrganizationIcon = () => {
 				previewIconSize={20}
 				id={iconInputId}
 				name="icon"
+				type="organization"
 				onChange={handleFileChange}
 				disabled={isUploading}
 				isLoading={isUploading}
