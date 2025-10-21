@@ -12,7 +12,11 @@ function Select({
 	value,
 	...props
 }: React.ComponentProps<typeof SelectPrimitive.Root> & {
-	options: { value: string; label: string }[];
+	options: {
+		value: string;
+		label: string;
+		image?: React.ReactNode;
+	}[];
 	onValueChange: (value: string) => void;
 	placeholder: string;
 }) {
@@ -29,7 +33,10 @@ function Select({
 			<SelectContent>
 				{options.map((option) => (
 					<SelectItem key={option.value} value={option.value}>
-						{option.label}
+						<div className="flex gap-2 items-center">
+							{option.image}
+							{option.label}
+						</div>
 					</SelectItem>
 				))}
 			</SelectContent>
