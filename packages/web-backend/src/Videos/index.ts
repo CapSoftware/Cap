@@ -24,6 +24,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					Effect.withSpan("Videos.getById"),
 				);
 
+		const getByIdForOwner = (id: Video.VideoId) =>
+			repo
+				.getById(id)
+				.pipe(
+					Policy.withPublicPolicy(policy.isOwner(id)),
+					Effect.withSpan("Videos.getByIdForOwner"),
+				);
+
 		return {
 			/*
 			 * Get a video by ID. Will fail if the user does not have access.
@@ -31,6 +39,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
 			getById,
+
+			getByIdForOwner,
 
 			/*
 			 * Delete a video. Will fail if the user does not have access.

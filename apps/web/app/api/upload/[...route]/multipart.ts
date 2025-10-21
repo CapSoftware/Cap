@@ -47,14 +47,15 @@ app.post(
 		});
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
-		const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
-		if (!videoId) throw new Error("Video ID is required");
+		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+		if (!videoIdRaw) throw new Error("Video ID is required");
+		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
 			const videos = yield* Videos;
 			const db = yield* Database;
 
-			const video = yield* videos.getById(Video.VideoId.make(videoId));
+			const video = yield* videos.getByIdForOwner(videoId);
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
 			yield* db.use((db) =>
