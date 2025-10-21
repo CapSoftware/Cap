@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Avatar,
 	Button,
 	Dialog,
 	DialogContent,
@@ -21,6 +20,7 @@ import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { setSpaceMembers } from "../actions";
 import type { SpaceMemberData } from "../page";
@@ -165,9 +165,10 @@ export const MembersIndicator = ({
 											key={member.userId}
 											className="flex gap-2 items-center p-3 rounded-lg border bg-gray-3 border-gray-4"
 										>
-											<Avatar
+											<SignedImageUrl
 												name={member.name || member.email}
-												imageUrl={member.image || undefined}
+												image={member.image || undefined}
+												type="user"
 												className="size-8"
 												letterClass="text-sm"
 											/>
