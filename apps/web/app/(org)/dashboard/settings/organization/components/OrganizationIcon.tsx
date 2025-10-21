@@ -48,7 +48,7 @@ export const OrganizationIcon = () => {
 		try {
 			const result = await removeOrganizationIcon(organizationId);
 
-			if (result.success) {
+			if (result?.success) {
 				toast.success("Organization icon removed successfully");
 				router.refresh();
 			}

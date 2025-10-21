@@ -116,7 +116,7 @@ export const Settings = ({
 	const removeProfileImageMutation = useMutation({
 		mutationFn: removeProfileImage,
 		onSuccess: (result) => {
-			if (result.success) {
+			if (result?.success) {
 				setProfileImageOverride(null);
 				toast.success("Profile image removed");
 				router.refresh();
