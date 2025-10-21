@@ -64,7 +64,7 @@ export async function removeImage(
 
 		return { success: true } as const;
 	} catch (error) {
-		console.error(`Error removing ${type} image:`, error);
+		console.error(`Error removing %s image:`, type, error);
 		throw new Error(error instanceof Error ? error.message : "Remove failed");
 	}
 }

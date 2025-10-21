@@ -7,6 +7,7 @@ import { OrganisationId, UserId } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import * as path from "path";
 import { runPromise } from "@/lib/server";
 
 export async function uploadImage(
@@ -29,7 +30,15 @@ export async function uploadImage(
 						oldImageUrlOrKey.startsWith("https://")
 					) {
 						const url = new URL(oldImageUrlOrKey);
-						oldS3Key = url.pathname.substring(1);
+						const raw = url.pathname.startsWith("/")
+							? url.pathname.slice(1)
+							: url.pathname;
+						const decoded = decodeURIComponent(raw);
+						const normalized = path.posix.normalize(decoded);
+						if (normalized.includes("..")) {
+							throw new Error("Invalid S3 key path");
+						}
+						oldS3Key = normalized;
 					}
 
 					// Only delete if it looks like the correct type of image key
@@ -38,7 +47,7 @@ export async function uploadImage(
 						yield* bucket.deleteObject(oldS3Key);
 					}
 				} catch (error) {
-					console.error(`Error deleting old ${type} image from S3:`, error);
+					console.error(`Error deleting old %s image from S3:`, type, error);
 				}
 			}
 
@@ -77,7 +86,7 @@ export async function uploadImage(
 
 		return { success: true, image: s3Key } as const;
 	} catch (error) {
-		console.error(`Error uploading ${type} image:`, error);
+		console.error(`Error uploading %s image:`, type, error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");
 	}
 }
