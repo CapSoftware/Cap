@@ -181,7 +181,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						),
 					),
 				),
-			),
+			).pipe(Effect.when(() => objects.length > 0)),
 		getPresignedPutUrl: (
 			key: string,
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
@@ -256,6 +256,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									UploadId: uploadId,
 									PartNumber: partNumber,
 								}),
+								{ expiresIn: 3600 },
 							),
 						),
 					),
