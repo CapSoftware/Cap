@@ -26,6 +26,7 @@
 		"@smithy/types": "^4.3.1",
 		"@vercel/functions": "^3.1.0",
 		"drizzle-orm": "0.44.6",
+		"dub": "^0.64.0",
 		"effect": "^3.18.4",
 		"next": "15.5.4",
 		"server-only": "^0.0.1"

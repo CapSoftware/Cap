@@ -9,11 +9,9 @@ import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
-import { dub } from "../dub.ts";
 import { sendEmail } from "../emails/config.ts";
-import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
-import { organizationMembers, organizations, users } from "../schema.ts";
+import { users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 

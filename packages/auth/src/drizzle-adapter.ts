@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import type Stripe from "stripe";
-import { nanoId } from "../helpers.ts";
+import { nanoId } from "../helpers";
 import {
 	accounts,
 	organizationInvites,
@@ -13,7 +13,7 @@ import {
 	sessions,
 	users,
 	verificationTokens,
-} from "../schema.ts";
+} from "../schema";
 
 export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
