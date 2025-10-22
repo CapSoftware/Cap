@@ -864,7 +864,7 @@ function RecordingControls(props: {
 		<Show
 			when={!isAreaTooSmall()}
 			fallback={
-				<div class="flex flex-col gap-2 items-center p-4 my-2.5 rounded-xl border min-w-fit w-fit bg-red-500/80 border-red-500/60">
+				<div class="flex flex-col gap-2 items-center p-4 my-2.5 rounded-xl border w-60 bg-red-500/80 border-red-500/60">
 					<div class="flex gap-2 items-center">
 						<IconCapInfo class="will-change-transform size-4" />
 						<p class="text-sm font-medium">Area Too Small</p>
