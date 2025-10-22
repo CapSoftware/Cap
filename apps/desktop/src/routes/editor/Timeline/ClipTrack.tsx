@@ -8,6 +8,7 @@ import {
 	createEffect,
 	createMemo,
 	createRoot,
+	createSignal,
 	For,
 	Match,
 	mergeProps,
@@ -204,20 +205,33 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-					const prevDuration = () =>
-						segments()
-							.slice(0, i())
-							.reduce((t, s) => t + (s.end - s.start) / s.timescale, 0);
+				// Track drag state for visual feedback
+				const [isDragging, setIsDragging] = createSignal(false);
+				const [dragOffset, setDragOffset] = createSignal(0);
+				const [initialStart, setInitialStart] = createSignal(segment.start);
 
-					const relativeSegment = mergeProps(segment, () => ({
-						start: prevDuration(),
-						end: segment.end - segment.start + prevDuration(),
-					}));
+				const prevDuration = createMemo(() =>
+					segments()
+						.slice(0, i())
+						.reduce((t, s) => t + (s.end - s.start) / s.timescale, 0)
+				);
 
-					const segmentX = useSegmentTranslateX(() => relativeSegment);
-					const segmentWidth = useSegmentWidth(() => relativeSegment);
+				const relativeSegment = createMemo(() => {
+					// Only apply offset during drag for visual feedback
+					const offset = isDragging() ? dragOffset() : 0;
+					
+					return {
+						start: prevDuration() + offset,
+						end: prevDuration() + offset + (segment.end - segment.start) / segment.timescale,
+						timescale: segment.timescale,
+						recordingSegment: segment.recordingSegment,
+					};
+				});
 
-					const segmentRecording = (s = i()) =>
+				const segmentX = useSegmentTranslateX(() => relativeSegment());
+				const segmentWidth = useSegmentWidth(() => relativeSegment());
+
+				const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
 							segments()[s].recordingSegment ?? 0
 						];
@@ -358,7 +372,7 @@ export function ClipTrack(
 										: "border-transparent",
 								)}
 								innerClass="ring-blue-9"
-								segment={relativeSegment}
+								segment={relativeSegment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 
@@ -399,6 +413,8 @@ export function ClipTrack(
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										const start = segment.start;
+										setInitialStart(start);
+										setIsDragging(true);
 
 										if (split()) return;
 										const maxSegmentDuration =
@@ -434,6 +450,9 @@ export function ClipTrack(
 												start +
 												(event.clientX - downEvent.clientX) * secsPerPixel();
 
+											// Update visual offset for drag feedback
+											setDragOffset(newStart - initialStart());
+
 											setProject(
 												"timeline",
 												"segments",
@@ -458,6 +477,11 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
+													
+													// Reset drag state so segment snaps back
+													setIsDragging(false);
+													setDragOffset(0);
+													
 													onHandleReleased();
 												},
 											});
