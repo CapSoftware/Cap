@@ -1,29 +1,79 @@
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
+import { Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
+import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import type Stripe from "stripe";
-
 import { nanoId } from "../helpers.ts";
-import { accounts, sessions, users, verificationTokens } from "../schema.ts";
+import {
+	accounts,
+	organizationInvites,
+	organizationMembers,
+	organizations,
+	sessions,
+	users,
+	verificationTokens,
+} from "../schema.ts";
 
-export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
+export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
 		async createUser(userData: any) {
-			await db.insert(users).values({
-				id: nanoId(),
-				email: userData.email,
-				emailVerified: userData.emailVerified,
-				name: userData.name,
-				image: userData.image,
-				activeOrganizationId: "",
+			const userId = User.UserId.make(nanoId());
+			await db.transaction(async (tx) => {
+				const [pendingInvite] = await tx
+					.select({ id: organizationInvites.id })
+					.from(organizationInvites)
+					.where(
+						and(
+							eq(organizationInvites.invitedEmail, userData.email),
+							eq(organizationInvites.status, "pending"),
+						),
+					)
+					.limit(1);
+
+				await tx.insert(users).values({
+					id: userId,
+					email: userData.email,
+					emailVerified: userData.emailVerified,
+					name: userData.name,
+					image: userData.image,
+					activeOrganizationId: Organisation.OrganisationId.make(""),
+				});
+
+				if (pendingInvite) {
+					return;
+				}
+
+				const organizationId = Organisation.OrganisationId.make(nanoId());
+
+				await tx.insert(organizations).values({
+					id: organizationId,
+					ownerId: userId,
+					name: "My Organization",
+				});
+
+				await tx.insert(organizationMembers).values({
+					id: nanoId(),
+					organizationId,
+					userId,
+					role: "owner",
+				});
+
+				await tx
+					.update(users)
+					.set({
+						activeOrganizationId: organizationId,
+						defaultOrgId: organizationId,
+					})
+					.where(eq(users.id, userId));
 			});
+
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.email, userData.email))
+				.where(eq(users.id, userId))
 				.limit(1);
-			const row = rows[0];
+			let row = rows[0];
 			if (!row) throw new Error("User not found");
 
 			if (STRIPE_AVAILABLE()) {
@@ -80,6 +130,15 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 						}),
 					})
 					.where(eq(users.id, row.id));
+
+				const [updatedRow] = await db
+					.select()
+					.from(users)
+					.where(eq(users.id, row.id))
+					.limit(1);
+				if (updatedRow) {
+					row = updatedRow;
+				}
 			}
 
 			return row;
@@ -88,7 +147,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.id, id))
+				.where(eq(users.id, User.UserId.make(id)))
 				.limit(1);
 			const row = rows[0];
 			return row ?? null;
@@ -122,22 +181,25 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 		},
 		async updateUser({ id, ...userData }) {
 			if (!id) throw new Error("User not found");
-			await db.update(users).set(userData).where(eq(users.id, id));
+			await db
+				.update(users)
+				.set(userData)
+				.where(eq(users.id, User.UserId.make(id)));
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.id, id))
+				.where(eq(users.id, User.UserId.make(id)))
 				.limit(1);
 			const row = rows[0];
 			if (!row) throw new Error("User not found");
 			return row;
 		},
 		async deleteUser(userId) {
-			await db.delete(users).where(eq(users.id, userId));
+			await db.delete(users).where(eq(users.id, User.UserId.make(userId)));
 		},
 		async linkAccount(account: any) {
 			await db.insert(accounts).values({
-				id: nanoId(),
+				id: User.UserId.make(nanoId()),
 				userId: account.userId,
 				type: account.type,
 				provider: account.provider,
@@ -166,7 +228,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				id: nanoId(),
 				expires: data.expires,
 				sessionToken: data.sessionToken,
-				userId: data.userId,
+				userId: User.UserId.make(data.userId),
 			});
 			const rows = await db
 				.select()
@@ -199,16 +261,16 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				user,
 				session: {
 					id: session.id,
-					userId: session.userId,
+					userId: User.UserId.make(session.userId),
 					sessionToken: session.sessionToken,
 					expires: session.expires,
 				},
 			};
 		},
-		async updateSession(session) {
+		async updateSession(session: any) {
 			await db
 				.update(sessions)
-				.set(session)
+				.set(session as any)
 				.where(eq(sessions.sessionToken, session.sessionToken));
 			const rows = await db
 				.select()

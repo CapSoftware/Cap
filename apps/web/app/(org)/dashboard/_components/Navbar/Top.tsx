@@ -2,7 +2,6 @@
 
 import { buildEnv } from "@cap/env";
 import {
-	Avatar,
 	Command,
 	CommandGroup,
 	CommandItem,
@@ -17,7 +16,6 @@ import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
@@ -25,12 +23,14 @@ import {
 	cloneElement,
 	type MutableRefObject,
 	memo,
+	type RefObject,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
@@ -46,8 +46,7 @@ import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications, activeOrganization } =
-		useDashboardContext();
+	const { activeSpace, anyNewNotifications } = useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
 	const bellRef = useRef<HTMLDivElement>(null);
 	const { theme, setThemeHandler } = useTheme();
@@ -101,22 +100,15 @@ const Top = () => {
 			<div className="flex flex-col gap-0.5">
 				{activeSpace && <span className="text-xs text-gray-11">Space</span>}
 				<div className="flex gap-1.5 items-center">
-					{activeSpace &&
-						(activeSpace.iconUrl ? (
-							<Image
-								src={activeSpace?.iconUrl}
-								alt={activeSpace?.name || "Space"}
-								width={20}
-								height={20}
-								className="rounded-full"
-							/>
-						) : (
-							<Avatar
-								letterClass="text-xs"
-								className="relative flex-shrink-0 size-5"
-								name={activeSpace?.name}
-							/>
-						))}
+					{activeSpace && (
+						<SignedImageUrl
+							image={activeSpace.iconUrl}
+							name={activeSpace?.name}
+							type="organization"
+							letterClass="text-xs"
+							className="relative flex-shrink-0 size-5"
+						/>
+					)}
 					<p className="relative text-lg truncate text-gray-12 lg:text-2xl">
 						{title}
 					</p>
@@ -269,21 +261,13 @@ const User = () => {
 						className="flex gap-2 justify-between  items-center p-2 rounded-xl border data-[state=open]:border-gray-3 data-[state=open]:bg-gray-3 border-transparent transition-colors cursor-pointer group lg:gap-6 hover:border-gray-3"
 					>
 						<div className="flex items-center">
-							{user.image ? (
-								<Image
-									src={user.image}
-									alt={user.name ?? "User"}
-									width={24}
-									height={24}
-									className="rounded-full"
-								/>
-							) : (
-								<Avatar
-									letterClass="text-xs lg:text-md"
-									name={user.name ?? "User"}
-									className="size-[24px] text-gray-12"
-								/>
-							)}
+							<SignedImageUrl
+								image={user.image}
+								name={user.name ?? "User"}
+								type="user"
+								letterClass="text-xs lg:text-md"
+								className="flex-shrink-0 size-[24px] text-gray-12"
+							/>
 							<span className="ml-2 text-sm truncate lg:ml-2 lg:text-md text-gray-12">
 								{user.name ?? "User"}
 							</span>
@@ -318,7 +302,11 @@ const User = () => {
 };
 
 interface Props {
-	icon: React.ReactElement;
+	icon: React.ReactElement<{
+		ref: RefObject<DownloadIconHandle | null>;
+		className: string;
+		size: number;
+	}>;
 	name: string;
 	href?: string;
 	onClick: () => void;

@@ -1,3 +1,3 @@
 export * from "./metadata";
 
-import "./next-auth";
+import type * as _ from "./next-auth";

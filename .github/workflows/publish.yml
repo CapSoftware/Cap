@@ -132,6 +132,7 @@ jobs:
     if: ${{ needs.draft.outputs.needs_release == 'true' }}
     permissions:
       contents: write
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +142,7 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest-large
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest-l
+            runner: windows-latest
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
@@ -185,8 +186,6 @@ jobs:
           echo 'VITE_POSTHOG_KEY=${{ secrets.VITE_POSTHOG_KEY }}' >> .env
           echo 'VITE_POSTHOG_HOST=${{ secrets.VITE_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Build app
@@ -209,6 +208,52 @@ jobs:
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # - name: Upload unsigned Windows installer
+      #   if: ${{ runner.os == 'Windows' }}
+      #   id: upload_unsigned_windows_installer
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: unsigned-windows-installer
+      #     path: target/${{ matrix.settings.target }}/release/bundle/nsis/*.exe
+      #     if-no-files-found: error
+
+      # - name: Submit SignPath signing request
+      #   if: ${{ runner.os == 'Windows' }}
+      #   id: submit_signpath_signing_request
+      #   uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+      #     project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+      #     signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+      #     github-artifact-id: ${{ steps.upload_unsigned_windows_installer.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: signed-windows-installer
+
+      # - name: Restore signed Windows installer
+      #   if: ${{ runner.os == 'Windows' }}
+      #   shell: pwsh
+      #   run: |
+      #     $signedDir = "signed-windows-installer"
+      #     $bundleDir = "target/${{ matrix.settings.target }}/release/bundle/nsis"
+
+      #     if (-not (Test-Path $signedDir)) {
+      #       throw "Signed artifact directory '$signedDir' not found."
+      #     }
+
+      #     $executables = Get-ChildItem -Path $signedDir -Filter *.exe -Recurse
+      #     if (-not $executables) {
+      #       throw "No signed executables found in '$signedDir'."
+      #     }
+
+      #     # Copy signed executables back to the original bundle location for CrabNebula upload
+      #     Write-Host "Copying signed executables to: $bundleDir"
+      #     Copy-Item -Path (Join-Path $signedDir '*.exe') -Destination $bundleDir -Force
+
+      #     # List the files to verify
+      #     Write-Host "Files in bundle directory after signing:"
+      #     Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0

@@ -1,37 +1,51 @@
 import "server-only";
 
 import { decrypt } from "@cap/database/crypto";
+import { serverEnv } from "@cap/env";
 import {
+	AwsCredentials,
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
+	OrganisationsPolicy,
 	S3Buckets,
+	Spaces,
+	SpacesPolicy,
 	Videos,
 	VideosPolicy,
+	VideosRepo,
+	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
-import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,
+	Headers,
 	type HttpApi,
 	HttpApiBuilder,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
-import { isNotFoundError } from "next/dist/client/components/not-found";
+import { RpcClient, RpcMiddleware } from "@effect/rpc";
+import {
+	Cause,
+	Config,
+	Effect,
+	Exit,
+	Layer,
+	ManagedRuntime,
+	Option,
+	Redacted,
+} from "effect";
 import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
-import { getTracingConfig } from "./tracing";
-
-export const TracingLayer = NodeSdk.layer(getTracingConfig);
+import { layerTracer } from "./tracing";
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
 	Effect.gen(function* () {
 		const password = Option.fromNullable(
 			yield* Effect.promise(async () => {
-				const pw = cookies().get("x-cap-password")?.value;
+				const pw = (await cookies()).get("x-cap-password")?.value;
 				if (pw) return decrypt(pw);
 			}),
 		);
@@ -39,14 +53,68 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
+class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
+	"WorkflowRpcSecret",
+	{
+		sync: () => ({
+			authSecret: Redacted.make(serverEnv().WORKFLOWS_RPC_SECRET),
+		}),
+	},
+) {}
+
+const WorkflowRpcLive = Layer.scoped(
+	Workflows.RpcClient,
+	Effect.gen(function* () {
+		const url = Option.getOrElse(
+			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
+			() => "http://127.0.0.1:42169",
+		);
+
+		return yield* RpcClient.make(Workflows.RpcGroup).pipe(
+			Effect.provide(
+				RpcClient.layerProtocolHttp({ url }).pipe(
+					Layer.provide(Workflows.RpcSerialization),
+				),
+			),
+		);
+	}),
+).pipe(
+	Layer.provide(
+		RpcMiddleware.layerClient(Workflows.SecretAuthMiddleware, ({ request }) =>
+			Effect.gen(function* () {
+				const { authSecret } = yield* WorkflowRpcSecret;
+				return {
+					...request,
+					headers: Headers.set(
+						request.headers,
+						"authorization",
+						Redacted.value(authSecret),
+					),
+				};
+			}),
+		),
+	),
+);
+
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
 	VideosPolicy.Default,
+	VideosRepo.Default,
 	Folders.Default,
+	SpacesPolicy.Default,
+	OrganisationsPolicy.Default,
+	Spaces.Default,
+	AwsCredentials.Default,
+	WorkflowRpcLive,
+	layerTracer,
 ).pipe(
 	Layer.provideMerge(
-		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),
+		Layer.mergeAll(
+			Database.Default,
+			FetchHttpClient.layer,
+			WorkflowRpcSecret.Default,
+		),
 	),
 );
 
@@ -60,10 +128,7 @@ export const runPromise = <A, E>(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
 		if (Exit.isFailure(res)) {
-			if (Cause.isDieType(res.cause) && isNotFoundError(res.cause.defect)) {
-				throw res.cause.defect;
-			}
-
+			if (Cause.isDieType(res.cause)) throw res.cause.defect;
 			throw res;
 		}
 
@@ -76,14 +141,8 @@ export const runPromiseExit = <A, E>(
 	EffectRuntime.runPromiseExit(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
-		if (
-			Exit.isFailure(res) &&
-			Cause.isDieType(res.cause) &&
-			isNotFoundError(res.cause.defect)
-		) {
+		if (Exit.isFailure(res) && Cause.isDieType(res.cause))
 			throw res.cause.defect;
-		}
-
 		return res;
 	});
 
@@ -104,11 +163,13 @@ export const apiToHandler = (
 	api.pipe(
 		HttpMiddleware.withSpanNameGenerator((req) => `${req.method} ${req.url}`),
 		Layer.provideMerge(HttpAuthMiddlewareLive),
-		Layer.provideMerge(Dependencies),
 		Layer.merge(HttpServer.layerContext),
 		Layer.provide(cors),
 		Layer.provide(
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
+		Layer.provide(layerTracer),
+		Layer.provideMerge(Dependencies),
 		HttpApiBuilder.toWebHandler,
+		(v) => (req: Request) => v.handler(req),
 	);

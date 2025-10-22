@@ -1,18 +1,22 @@
 "use client";
 
 import { Avatar } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
 
-export function ClientMyCapsLink() {
+export function ClientMyCapsLink({
+	spaceId,
+}: {
+	spaceId?: Space.SpaceIdOrOrganisationId;
+}) {
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
 	const linkRef = useRef<HTMLAnchorElement>(null);
@@ -90,7 +94,7 @@ export function ClientMyCapsLink() {
 			await moveVideoToFolder({
 				videoId: capData.id,
 				folderId: null,
-				spaceId: activeSpace?.id,
+				spaceId: spaceId ?? null,
 			});
 			router.refresh();
 			if (activeSpace) {
@@ -109,9 +113,7 @@ export function ClientMyCapsLink() {
 	return (
 		<Link
 			ref={linkRef}
-			href={
-				activeSpace ? `/dashboard/spaces/${activeSpace.id}` : "/dashboard/caps"
-			}
+			href={spaceId ? `/dashboard/spaces/${spaceId}` : "/dashboard/caps"}
 			className={clsx(
 				"text-xl whitespace-nowrap flex items-center gap-1.5 transition-colors duration-200 hover:text-gray-12",
 				isDragOver ? "text-blue-10" : "text-gray-9",
@@ -122,23 +124,14 @@ export function ClientMyCapsLink() {
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 		>
-			{activeSpace && activeSpace.iconUrl ? (
-				<Image
-					src={activeSpace.iconUrl}
-					alt={activeSpace.name || "Space"}
-					width={20}
-					height={20}
-					className="rounded-full"
+			{activeSpace && (
+				<SignedImageUrl
+					image={activeSpace.iconUrl}
+					name={activeSpace.name}
+					type="organization"
+					letterClass="text-xs"
+					className="relative flex-shrink-0 size-5"
 				/>
-			) : (
-				activeSpace &&
-				!activeSpace.iconUrl && (
-					<Avatar
-						letterClass="text-xs"
-						className="relative flex-shrink-0 size-5"
-						name={activeSpace?.name}
-					/>
-				)
 			)}
 			{activeSpace ? activeSpace.name : "My Caps"}
 		</Link>

@@ -16,23 +16,22 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Search } from "lucide-react";
-import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
 
-interface AddVideosDialogBaseProps {
+interface AddVideosDialogBaseProp<T> {
 	open: boolean;
 	onClose: () => void;
-	entityId: string;
+	entityId: T;
 	entityName: string;
 	onVideosAdded?: () => void;
-	addVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
-	removeVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
-	getVideos: (limit?: number) => Promise<any>;
-	getEntityVideoIds: (entityId: string) => Promise<any>;
+	addVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
+	removeVideos: (entityId: T, videoIds: Video.VideoId[]) => Promise<any>;
+	getVideos: () => Promise<any>;
+	getEntityVideoIds: () => Promise<any>;
 }
 
 export interface VideoData {
@@ -43,6 +42,8 @@ export interface VideoData {
 	totalComments: number;
 	totalReactions: number;
 	ownerName: string;
+	folderName?: string | null;
+	folderColor?: "normal" | "blue" | "red" | "yellow" | null;
 	metadata?: {
 		customCreatedAt?: string;
 	};
@@ -52,7 +53,7 @@ const formSchema = z.object({
 	search: z.string(),
 });
 
-const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
+function AddVideosDialogBase<T>({
 	open,
 	onClose,
 	entityId,
@@ -62,7 +63,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 	removeVideos,
 	getVideos,
 	getEntityVideoIds,
-}) => {
+}: AddVideosDialogBaseProp<T>) {
 	const [selectedVideos, setSelectedVideos] = useState<Video.VideoId[]>([]);
 	const [searchTerm, setSearchTerm] = useState("");
 	const filterTabs = ["all", "added", "notAdded"];
@@ -91,9 +92,9 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 	});
 
 	const { data: entityVideoIds } = useQuery<Video.VideoId[]>({
-		queryKey: ["entity-video-ids", entityId],
+		queryKey: ["entity-video-ids", entityId, entityName],
 		queryFn: async () => {
-			const result = await getEntityVideoIds(entityId);
+			const result = await getEntityVideoIds();
 			if (!result.success) {
 				throw new Error(result.error);
 			}
@@ -101,7 +102,9 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 		},
 		enabled: open,
 		refetchOnWindowFocus: false,
-		gcTime: 1000 * 60 * 5,
+		refetchOnMount: true,
+		staleTime: 0, // Always fetch fresh data
+		gcTime: 0, // Don't cache
 	});
 
 	const updateVideosMutation = useMutation({
@@ -189,6 +192,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 		updateVideosMutation.mutate({ toAdd, toRemove });
 	};
 
+	// Reset state when dialog closes
 	useEffect(() => {
 		if (!open) {
 			setSelectedVideos([]);
@@ -203,7 +207,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 				<DialogHeader
 					icon={<FontAwesomeIcon icon={faVideo} />}
 					description={
-						"Find and add videos you have previously recorded to share with people in this " +
+						"Find and add videos you have previously recorded to share with people in " +
 						entityName +
 						"."
 					}
@@ -213,8 +217,9 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 				{/* Tabs for filtering */}
 				<div className="flex w-full h-12 border-b bg-gray-1 border-gray-4">
 					{filterTabs.map((tab) => (
-						<div
+						<button
 							key={tab}
+							type="button"
 							className={clsx(
 								"flex relative flex-1 justify-center items-center w-full min-w-0 text-sm font-medium transition-colors",
 								videoTab === tab
@@ -222,6 +227,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 									: "cursor-pointer",
 							)}
 							onClick={() => setVideoTab(tab as "all" | "added" | "notAdded")}
+							disabled={videoTab === tab}
 						>
 							<p
 								className={clsx(
@@ -237,7 +243,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 										? "Added"
 										: "Not Added"}
 							</p>
-						</div>
+						</button>
 					))}
 				</div>
 
@@ -294,7 +300,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 								entityVideoIds={entityVideoIds || []}
 								height={300}
 								columnCount={3}
-								rowHeight={200}
+								rowHeight={230}
 							/>
 						)}
 					</div>
@@ -334,6 +340,6 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 			</DialogContent>
 		</Dialog>
 	);
-};
+}
 
 export default AddVideosDialogBase;

@@ -1,4 +1,6 @@
-use cap_recording::{RecordingMode, feeds::camera::DeviceOrModelID, sources::ScreenCaptureTarget};
+use cap_recording::{
+    RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
@@ -136,7 +138,9 @@ impl DeepLinkAction {
                     mode,
                 };
 
-                crate::recording::start_recording(app.clone(), state, inputs).await
+                crate::recording::start_recording(app.clone(), state, inputs)
+                    .await
+                    .map(|_| ())
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await

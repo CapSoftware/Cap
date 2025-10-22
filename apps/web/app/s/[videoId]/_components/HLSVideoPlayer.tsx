@@ -35,8 +35,9 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
+	disableCaptions?: boolean;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
 }
@@ -50,6 +51,7 @@ export function HLSVideoPlayer({
 	mediaPlayerClassName,
 	autoplay = false,
 	hasActiveUpload,
+	disableCaptions,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -58,18 +60,6 @@ export function HLSVideoPlayer({
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
 	const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
-	const [isMobile, setIsMobile] = useState(false);
-
-	useEffect(() => {
-		const checkMobile = () => {
-			setIsMobile(window.innerWidth < 640);
-		};
-
-		checkMobile();
-		window.addEventListener("resize", checkMobile);
-
-		return () => window.removeEventListener("resize", checkMobile);
-	}, []);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -233,11 +223,37 @@ export function HLSVideoPlayer({
 			}
 		};
 
+		// Ensure all caption tracks remain hidden
+		const ensureTracksHidden = (): void => {
+			const tracks = video.textTracks;
+			for (let i = 0; i < tracks.length; i++) {
+				const track = tracks[i];
+				if (
+					track &&
+					(track.kind === "captions" || track.kind === "subtitles")
+				) {
+					if (track.mode !== "hidden") {
+						track.mode = "hidden";
+					}
+				}
+			}
+		};
+
 		const handleLoadedMetadata = (): void => {
 			setupTracks();
 		};
 
+		// Monitor for track changes and ensure they stay hidden
+		const handleTrackChange = () => {
+			ensureTracksHidden();
+		};
+
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+		// Add event listeners to monitor track changes
+		video.textTracks.addEventListener("change", handleTrackChange);
+		video.textTracks.addEventListener("addtrack", handleTrackChange);
+		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState >= 1) {
 			setupTracks();
@@ -245,13 +261,21 @@ export function HLSVideoPlayer({
 
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+			video.textTracks.removeEventListener("change", handleTrackChange);
+			video.textTracks.removeEventListener("addtrack", handleTrackChange);
+			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (captionTrack) {
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
 	}, [captionsSrc]);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
+	const uploadProgressRaw = useUploadProgress(
+		videoId,
+		hasActiveUpload || false,
+	);
+	// if the video comes back from S3, just ignore the upload progress.
+	const uploadProgress = videoLoaded ? null : uploadProgressRaw;
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 
@@ -334,14 +358,15 @@ export function HLSVideoPlayer({
 				playsInline
 				autoPlay={autoplay}
 			>
-				<track default kind="chapters" src={chaptersSrc} />
-				<track
-					label="English"
-					kind="captions"
-					srcLang="en"
-					src={captionsSrc}
-					default
-				/>
+				{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
+				{captionsSrc && (
+					<track
+						label="English"
+						kind="captions"
+						srcLang="en"
+						src={captionsSrc}
+					/>
+				)}
 			</MediaPlayerVideo>
 			{currentCue && toggleCaptions && (
 				<div
@@ -374,10 +399,12 @@ export function HLSVideoPlayer({
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
+						{!disableCaptions && (
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
+							/>
+						)}
 						<MediaPlayerSettings />
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />

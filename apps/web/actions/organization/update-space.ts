@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
+import { Space, type User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -16,9 +17,9 @@ export async function updateSpace(formData: FormData) {
 	const user = await getCurrentUser();
 	if (!user) return { success: false, error: "Unauthorized" };
 
-	const id = formData.get("id") as string;
+	const id = Space.SpaceId.make(formData.get("id") as string);
 	const name = formData.get("name") as string;
-	const members = formData.getAll("members[]") as string[];
+	const members = formData.getAll("members[]") as User.UserId[];
 	const iconFile = formData.get("icon") as File | null;
 
 	const [membership] = await db()
@@ -51,7 +52,10 @@ export async function updateSpace(formData: FormData) {
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
 		const space = spaceArr[0];
 		if (space?.iconUrl) {
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+			// Extract the S3 key (it might already be a key or could be a legacy URL)
+			const key = space.iconUrl.startsWith("organizations/")
+				? space.iconUrl
+				: space.iconUrl.match(/organizations\/.+/)?.[0];
 
 			if (key) {
 				try {

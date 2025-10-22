@@ -23,7 +23,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 		 */
 		const getById = (id: Video.VideoId) =>
 			Effect.gen(function* () {
-				const [video] = yield* db.execute((db) =>
+				const [video] = yield* db.use((db) =>
 					db.select().from(Db.videos).where(Dz.eq(Db.videos.id, id)),
 				);
 
@@ -45,20 +45,29 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			});
 
 		const delete_ = (id: Video.VideoId) =>
-			db.execute((db) => db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)));
+			db.use(async (db) => {
+				await db.transaction(async (db) => {
+					await Promise.all([
+						db.delete(Db.videos).where(Dz.eq(Db.videos.id, id)),
+						db
+							.delete(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, id)),
+					]);
+				});
+			});
 
 		const create = (data: CreateVideoInput) =>
 			Effect.gen(function* () {
 				const id = Video.VideoId.make(nanoId());
 
-				yield* db.execute((db) =>
+				yield* db.use((db) =>
 					db.transaction(async (db) => {
 						const promises: MySqlInsertBase<any, any, any>[] = [
 							db.insert(Db.videos).values([
 								{
 									...data,
 									id,
-									orgId: Option.getOrNull(data.orgId ?? Option.none()),
+									orgId: data.orgId,
 									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
 									metadata: Option.getOrNull(data.metadata ?? Option.none()),
 									transcriptionStatus: Option.getOrNull(
@@ -72,12 +81,12 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							]),
 						];
 
-						if (data.importSource && Option.isSome(data.orgId))
+						if (data.importSource)
 							promises.push(
 								db.insert(Db.importedVideos).values([
 									{
 										id,
-										orgId: data.orgId.value,
+										orgId: data.orgId,
 										source: data.importSource.source,
 										sourceId: data.importSource.id,
 									},

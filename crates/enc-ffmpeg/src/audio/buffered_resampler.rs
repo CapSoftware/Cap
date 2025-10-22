@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use cap_media_info::AudioInfo;
 use ffmpeg::software::resampling;
 
 /// Consumes audio frames, resmaples them, buffers the results,
@@ -16,13 +17,18 @@ pub struct BufferedResampler {
 }
 
 impl BufferedResampler {
-    pub fn new(resampler: ffmpeg::software::resampling::Context) -> Self {
-        Self {
+    pub fn new(from: AudioInfo, to: AudioInfo) -> Result<Self, ffmpeg::Error> {
+        let resampler = ffmpeg::software::resampler(
+            (from.sample_format, from.channel_layout(), from.sample_rate),
+            (to.sample_format, to.channel_layout(), to.sample_rate),
+        )?;
+
+        Ok(Self {
             resampler,
             buffer: VecDeque::new(),
             sample_index: 0,
             min_next_pts: None,
-        }
+        })
     }
 
     fn remaining_samples(&self) -> usize {
@@ -273,21 +279,15 @@ mod test {
     const IN_RATE: u32 = 100;
 
     fn create_resampler(out_rate: u32) -> BufferedResampler {
-        let resampler = ffmpeg::software::resampler(
-            (
+        BufferedResampler::new(
+            AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), IN_RATE, 1),
+            AudioInfo::new_raw(
                 format::Sample::U8(cap_media_info::Type::Packed),
-                ChannelLayout::MONO,
-                IN_RATE,
-            ),
-            (
-                format::Sample::U8(cap_media_info::Type::Packed),
-                ChannelLayout::MONO,
                 out_rate,
+                1,
             ),
         )
-        .unwrap();
-
-        BufferedResampler::new(resampler)
+        .unwrap()
     }
 
     fn make_input_frame(samples: usize, pts: i64) -> ffmpeg::frame::Audio {

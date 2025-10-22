@@ -6,6 +6,7 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const IconCapArrowLeft: typeof import('~icons/cap/arrow-left.jsx')['default']
   const IconCapArrows: typeof import('~icons/cap/arrows.jsx')['default']
   const IconCapAudioOn: typeof import('~icons/cap/audio-on.jsx')['default']
   const IconCapBgBlur: typeof import('~icons/cap/bg-blur.jsx')['default']
@@ -90,4 +91,6 @@ declare global {
   const IconMdiLoading: typeof import("~icons/mdi/loading.jsx")["default"]
   const IconMdiMonitor: typeof import('~icons/mdi/monitor.jsx')['default']
   const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
+  const IconPhRecordFill: typeof import('~icons/ph/record-fill.jsx')['default']
+  const IconPhWarningBold: typeof import('~icons/ph/warning-bold.jsx')['default']
 }

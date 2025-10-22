@@ -9,19 +9,19 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import { Space, type Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Globe2, Search } from "lucide-react";
-import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 
 interface SharingDialogProps {
@@ -69,7 +69,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			public: isPublic,
 		}: {
 			capId: Video.VideoId;
-			spaceIds: string[];
+			spaceIds: Space.SpaceIdOrOrganisationId[];
 			public: boolean;
 		}) => {
 			const result = await shareCap({ capId, spaceIds, public: isPublic });
@@ -262,9 +262,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 					{activeTab === "Share" ? (
 						<>
 							{/* Public sharing toggle */}
-							<div className="flex items-center justify-between p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
-								<div className="flex items-center gap-3">
-									<div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-3">
+							<div className="flex justify-between items-center p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
+								<div className="flex gap-3 items-center">
+									<div className="flex justify-center items-center w-8 h-8 rounded-full bg-gray-3">
 										<Globe2 className="w-4 h-4 text-gray-11" />
 									</div>
 									<div>
@@ -358,7 +358,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								onClick={() =>
 									updateSharing.mutate({
 										capId,
-										spaceIds: Array.from(selectedSpaces),
+										spaceIds: Array.from(selectedSpaces).map((v) =>
+											Space.SpaceId.make(v),
+										),
 										public: publicToggle,
 									})
 								}
@@ -414,23 +416,13 @@ const SpaceCard = ({
 				)}
 				onClick={() => handleToggleSpace(space.id)}
 			>
-				{space.iconUrl ? (
-					<div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-						<Image
-							src={space.iconUrl}
-							alt={space.name}
-							width={24}
-							height={24}
-							className="object-cover w-full h-full"
-						/>
-					</div>
-				) : (
-					<Avatar
-						letterClass="text-[11px]"
-						className="relative z-10 flex-shrink-0 size-5"
-						name={space.name}
-					/>
-				)}
+				<SignedImageUrl
+					image={space.iconUrl}
+					name={space.name}
+					type="organization"
+					letterClass="text-[11px]"
+					className="relative z-10 flex-shrink-0 size-5"
+				/>
 				<p className="max-w-full text-xs truncate transition-colors duration-200 text-gray-10">
 					{space.name}
 				</p>

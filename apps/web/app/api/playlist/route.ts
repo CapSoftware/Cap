@@ -17,7 +17,7 @@ import {
 	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
-export const revalidate = "force-dynamic";
+export const dynamic = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
@@ -47,13 +47,15 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 				return handlers.handle("getVideoSrc", ({ urlParams }) =>
 					Effect.gen(function* () {
-						const [video] = yield* videos.getById(urlParams.videoId).pipe(
-							Effect.flatten,
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new HttpApiError.NotFound(),
-							),
-						);
+						const [video] = yield* videos
+							.getByIdForViewing(urlParams.videoId)
+							.pipe(
+								Effect.flatten,
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new HttpApiError.NotFound(),
+								),
+							);
 
 						return yield* getPlaylistResponse(video, urlParams);
 					}).pipe(
@@ -228,7 +230,7 @@ const getPlaylistResponse = (
 		}).pipe(Effect.withSpan("generateUrls"));
 	});
 
-const { handler } = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
 
-export const GET = handler;
-export const HEAD = handler;
+export const GET = (r: Request) => handler(r);
+export const HEAD = (r: Request) => handler(r);

@@ -55,6 +55,7 @@ export function SegmentRoot(
 		) => void;
 	},
 ) {
+	const { editorState } = useEditorContext();
 	const translateX = useSegmentTranslateX(() => props.segment);
 	const width = useSegmentWidth(() => props.segment);
 
@@ -64,6 +65,8 @@ export function SegmentRoot(
 				{...props}
 				class={cx(
 					"absolute overflow-hidden border rounded-xl inset-y-0",
+					editorState.timeline.interactMode === "split" &&
+						"timeline-scissors-cursor",
 					props.class,
 				)}
 				style={{

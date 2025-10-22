@@ -1,6 +1,6 @@
 import type { Video } from "@cap/web-domain";
 import { Grid, useGrid } from "@virtual-grid/react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { type RefObject, useEffect, useRef, useState } from "react";
 import type { VideoData } from "./AddVideosDialogBase";
 import VideoCard from "./VideoCard";
 
@@ -50,7 +50,7 @@ const VirtualizedVideoGrid = ({
 
 	// Initialize the grid with responsive column count
 	const grid = useGrid({
-		scrollRef,
+		scrollRef: scrollRef as RefObject<HTMLDivElement>, // React typing version mismatch
 		count: videos.length,
 		columns: responsiveColumnCount,
 		gap: {
@@ -83,7 +83,7 @@ const VirtualizedVideoGrid = ({
 					return (
 						<div
 							key={video.id}
-							className="px-2 mx-auto md:mx-0 md:px-0 w-[96%]"
+							className="px-2 mx-auto md:mx-0 md:px-0 w-[96%] h-full"
 						>
 							<VideoCard
 								video={video}

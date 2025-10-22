@@ -1,7 +1,6 @@
 import { Effect, Store, useStore } from "@tanstack/react-store";
 
 const defaultFeatureFlags = {
-	enableUploadProgress: false,
 	enableEffectOnUploadButton: false,
 };
 

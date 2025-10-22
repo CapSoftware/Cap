@@ -19,6 +19,7 @@ import {
 	createCurrentRecordingQuery,
 	createOptionsQuery,
 } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import { commands, events } from "~/utils/tauri";
 
 type State =
@@ -128,7 +129,7 @@ export default function () {
 
 			if (!shouldRestart) return;
 
-			await commands.restartRecording();
+			await handleRecordingResult(commands.restartRecording(), undefined);
 
 			setState({ variant: "recording" });
 			setTime(Date.now());

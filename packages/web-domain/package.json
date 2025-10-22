@@ -4,10 +4,20 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"type": "module",
+	"publishConfig": {
+		"main": "./dist/index.js"
+	},
+	"scripts": {
+		"build": "tsdown",
+		"generate-openapi": "node scripts/generate-openapi.ts"
+	},
 	"dependencies": {
-		"@effect/platform": "^0.90.1",
-		"@effect/rpc": "^0.69.2",
-		"@effect/workflow": "^0.9.5",
-		"effect": "^3.17.13"
+		"@effect/platform": "^0.92.1",
+		"@effect/rpc": "^0.71.0",
+		"@effect/workflow": "^0.11.3",
+		"effect": "^3.18.4"
+	},
+	"devDependencies": {
+		"@effect/platform-node": "^0.98.3"
 	}
 }

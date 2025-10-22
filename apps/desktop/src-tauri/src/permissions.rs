@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use cidre::av;
+use tracing::instrument;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -11,7 +12,7 @@ unsafe extern "C" {
     -> bool;
 }
 
-#[derive(Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermission {
     ScreenRecording,
@@ -61,6 +62,7 @@ pub fn open_permission_settings(_permission: OSPermission) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn request_permission(_permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {

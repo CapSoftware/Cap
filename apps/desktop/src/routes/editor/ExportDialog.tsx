@@ -47,6 +47,8 @@ import {
 	topSlideAnimateClasses,
 } from "./ui";
 
+class SilentError extends Error {}
+
 export const COMPRESSION_OPTIONS: Array<{
 	label: string;
 	value: ExportCompression;
@@ -319,9 +321,9 @@ export function ExportDialog() {
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
 					await commands.showWindow("Upgrade");
-					throw new Error(
-						"Upgrade required to share recordings longer than 5 minutes",
-					);
+					// The window takes a little to show and this prevents the user seeing it glitch
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					throw new SilentError();
 				}
 			}
 
@@ -376,9 +378,11 @@ export function ExportDialog() {
 		},
 		onError: (error) => {
 			console.error(error);
-			commands.globalMessageDialog(
-				error instanceof Error ? error.message : "Failed to upload recording",
-			);
+			if (!(error instanceof SilentError)) {
+				commands.globalMessageDialog(
+					error instanceof Error ? error.message : "Failed to upload recording",
+				);
+			}
 
 			setExportState(reconcile({ type: "idle" }));
 		},

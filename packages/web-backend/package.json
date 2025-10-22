@@ -4,23 +4,30 @@
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
 	"type": "module",
+	"publishConfig": {
+		"main": "./dist/index.js"
+	},
+	"scripts": {
+		"build": "tsdown"
+	},
 	"dependencies": {
 		"@aws-sdk/client-s3": "^3.485.0",
 		"@aws-sdk/cloudfront-signer": "^3.821.0",
+		"@aws-sdk/credential-providers": "^3.908.0",
 		"@aws-sdk/s3-presigned-post": "^3.485.0",
 		"@aws-sdk/s3-request-presigner": "^3.485.0",
 		"@cap/database": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",
-		"@effect/cluster": "^0.48.6",
-		"@effect/platform": "^0.90.1",
-		"@effect/rpc": "^0.69.2",
-		"@effect/workflow": "^0.9.5",
+		"@effect/cluster": "^0.50.4",
+		"@effect/platform": "^0.92.1",
+		"@effect/rpc": "^0.71.0",
+		"@effect/workflow": "^0.11.3",
 		"@smithy/types": "^4.3.1",
 		"@vercel/functions": "^3.1.0",
-		"drizzle-orm": "0.44.5",
-		"effect": "^3.17.13",
-		"next": "^14",
+		"drizzle-orm": "0.44.6",
+		"effect": "^3.18.4",
+		"next": "15.5.4",
 		"server-only": "^0.0.1"
 	}
 }

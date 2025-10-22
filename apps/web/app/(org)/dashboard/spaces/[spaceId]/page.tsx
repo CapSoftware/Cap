@@ -4,37 +4,25 @@ import {
 	comments,
 	folders,
 	organizationMembers,
-	organizations,
 	sharedVideos,
 	spaceMembers,
-	spaces,
 	spaceVideos,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Video } from "@cap/web-domain";
+import { Spaces } from "@cap/web-backend";
+import { CurrentUser, type Organisation, Space, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { runPromise } from "@/lib/server";
 import { SharedCaps } from "./SharedCaps";
 
 export const metadata: Metadata = {
 	title: "Shared Caps — Cap",
-};
-
-type SpaceData = {
-	id: string;
-	name: string;
-	organizationId: string;
-	createdById: string;
-};
-
-type OrganizationData = {
-	id: string;
-	name: string;
-	ownerId: string;
 };
 
 export type SpaceMemberData = {
@@ -47,32 +35,11 @@ export type SpaceMemberData = {
 };
 
 // --- Helper functions ---
-async function fetchSpaceData(id: string) {
-	return db()
-		.select({
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			createdById: spaces.createdById,
-		})
-		.from(spaces)
-		.where(eq(spaces.id, id))
-		.limit(1);
-}
-
-async function fetchOrganizationData(id: string) {
-	return db()
-		.select({
-			id: organizations.id,
-			name: organizations.name,
-			ownerId: organizations.ownerId,
-		})
-		.from(organizations)
-		.where(eq(organizations.id, id))
-		.limit(1);
-}
-
-async function fetchFolders(spaceId: string) {
+async function fetchFolders(
+	spaceId: Space.SpaceIdOrOrganisationId,
+	allSpacesEntry: boolean,
+) {
+	const table = allSpacesEntry ? sharedVideos : spaceVideos;
 	return db()
 		.select({
 			id: folders.id,
@@ -81,14 +48,14 @@ async function fetchFolders(spaceId: string) {
 			parentId: folders.parentId,
 			spaceId: folders.spaceId,
 			videoCount: sql<number>`(
-          SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+          SELECT COUNT(*) FROM ${table} WHERE ${table}.folderId = folders.id
         )`,
 		})
 		.from(folders)
 		.where(and(eq(folders.spaceId, spaceId), isNull(folders.parentId)));
 }
 
-async function fetchSpaceMembers(spaceId: string) {
+async function fetchSpaceMembers(spaceId: Space.SpaceIdOrOrganisationId) {
 	return db()
 		.select({
 			id: spaceMembers.id,
@@ -103,7 +70,7 @@ async function fetchSpaceMembers(spaceId: string) {
 		.where(eq(spaceMembers.spaceId, spaceId));
 }
 
-async function fetchOrganizationMembers(orgId: string) {
+async function fetchOrganizationMembers(orgId: Organisation.OrganisationId) {
 	return db()
 		.select({
 			id: organizationMembers.id,
@@ -118,74 +85,40 @@ async function fetchOrganizationMembers(orgId: string) {
 		.where(eq(organizationMembers.organizationId, orgId));
 }
 
-export default async function SharedCapsPage({
-	params,
-	searchParams,
-}: {
-	params: { spaceId: string };
-	searchParams: { [key: string]: string | string[] | undefined };
+export default async function SharedCapsPage(props: {
+	params: Promise<{ spaceId: string }>;
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+	const searchParams = await props.searchParams;
+	const params = await props.params;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
 	const user = await getCurrentUser();
-	const userId = user?.id as string;
-	// this is just how it work atm
-	const spaceOrOrgId = params.spaceId;
+	if (!user) notFound();
 
-	// Parallelize fetching space and org data
-	const [spaceData, organizationData] = await Promise.all([
-		fetchSpaceData(spaceOrOrgId),
-		fetchOrganizationData(spaceOrOrgId),
-	]);
+	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
+		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
+	).pipe(
+		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
+		Effect.provideService(CurrentUser, user),
+		runPromise,
+	);
 
-	// organizationData assignment handled above
-	if (spaceData.length === 0 && organizationData.length === 0) {
-		notFound();
-	}
+	if (!spaceOrOrg) notFound();
 
-	const isSpace = spaceData.length > 0;
-
-	if (isSpace) {
-		const space = spaceData[0] as SpaceData;
-		const isSpaceCreator = space.createdById === userId;
-		let hasAccess = isSpaceCreator;
-		if (!isSpaceCreator) {
-			const [spaceMembership, orgMembership] = await Promise.all([
-				db()
-					.select({ id: spaceMembers.id })
-					.from(spaceMembers)
-					.where(
-						and(
-							eq(spaceMembers.userId, userId),
-							eq(spaceMembers.spaceId, spaceOrOrgId),
-						),
-					)
-					.limit(1),
-				db()
-					.select({ id: organizationMembers.id })
-					.from(organizationMembers)
-					.where(
-						and(
-							eq(organizationMembers.userId, userId),
-							eq(organizationMembers.organizationId, space.organizationId),
-						),
-					)
-					.limit(1),
-			]);
-			hasAccess = spaceMembership.length > 0 || orgMembership.length > 0;
-		}
-		if (!hasAccess) notFound();
+	if (spaceOrOrg.variant === "space") {
+		const { space } = spaceOrOrg;
 
 		// Fetch members in parallel
 		const [spaceMembersData, organizationMembersData, foldersData] =
 			await Promise.all([
-				fetchSpaceMembers(spaceOrOrgId),
+				fetchSpaceMembers(space.id),
 				fetchOrganizationMembers(space.organizationId),
-				fetchFolders(spaceOrOrgId),
+				fetchFolders(space.id, false),
 			]);
 
 		async function fetchSpaceVideos(
-			spaceId: string,
+			spaceId: Space.SpaceIdOrOrganisationId,
 			page: number,
 			limit: number,
 		) {
@@ -245,7 +178,7 @@ export default async function SharedCapsPage({
 
 		// Fetch videos and count in parallel
 		const { videos: spaceVideoData, totalCount } = await fetchSpaceVideos(
-			spaceOrOrgId,
+			space.id,
 			page,
 			limit,
 		);
@@ -266,36 +199,21 @@ export default async function SharedCapsPage({
 				data={processedVideoData}
 				count={totalCount}
 				spaceData={space}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				spaceMembers={spaceMembersData}
 				organizationMembers={organizationMembersData}
-				currentUserId={userId}
+				currentUserId={user.id}
 				folders={foldersData}
 			/>
 		);
-	} else {
-		const organization = organizationData[0] as OrganizationData;
-		const isOrgOwner = organization.ownerId === userId;
+	}
 
-		if (!isOrgOwner) {
-			const orgMembership = await db()
-				.select({ id: organizationMembers.id })
-				.from(organizationMembers)
-				.where(
-					and(
-						eq(organizationMembers.userId, userId),
-						eq(organizationMembers.organizationId, spaceOrOrgId),
-					),
-				)
-				.limit(1);
-
-			if (orgMembership.length === 0) {
-				notFound();
-			}
-		}
+	if (spaceOrOrg.variant === "organization") {
+		const { organization } = spaceOrOrg;
 
 		async function fetchOrganizationVideos(
-			orgId: string,
+			orgId: Organisation.OrganisationId,
 			page: number,
 			limit: number,
 		) {
@@ -325,7 +243,7 @@ export default async function SharedCapsPage({
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),
-							isNull(videos.folderId),
+							isNull(sharedVideos.folderId),
 						),
 					)
 					.groupBy(
@@ -365,9 +283,9 @@ export default async function SharedCapsPage({
 
 		const [organizationVideos, organizationMembersData, foldersData] =
 			await Promise.all([
-				fetchOrganizationVideos(spaceOrOrgId, page, limit),
-				fetchOrganizationMembers(spaceOrOrgId),
-				fetchFolders(spaceOrOrgId),
+				fetchOrganizationVideos(organization.id, page, limit),
+				fetchOrganizationMembers(organization.id),
+				fetchFolders(organization.id, true),
 			]);
 
 		const { videos: orgVideoData, totalCount } = organizationVideos;
@@ -389,9 +307,10 @@ export default async function SharedCapsPage({
 				count={totalCount}
 				hideSharedWith
 				organizationData={organization}
+				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 				organizationMembers={organizationMembersData}
-				currentUserId={userId}
+				currentUserId={user.id}
 				folders={foldersData}
 			/>
 		);

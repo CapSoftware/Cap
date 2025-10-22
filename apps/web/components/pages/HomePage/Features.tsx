@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
-import { memo } from "react";
+import { type JSX, memo } from "react";
 import { homepageCopy } from "../../../data/homepage-copy";
 
 type Feature = {
@@ -149,8 +149,10 @@ const features: Feature[] = homepageCopy.features.features.map(
 const Features = () => {
 	return (
 		<div className="text-center max-w-[1440px] mx-auto px-5">
-			<h2 className="mb-3">{homepageCopy.features.title}</h2>
-			<p className="text-lg leading-[1.75rem] w-full max-w-[600px] mx-auto">
+			<h1 className="mb-3 text-4xl font-medium text-gray-12">
+				{homepageCopy.features.title}
+			</h1>
+			<p className="text-lg text-gray-10 leading-[1.75rem] w-full max-w-[600px] mx-auto">
 				{homepageCopy.features.subtitle}
 			</p>
 			<div className="flex flex-col gap-4 mt-[52px]">

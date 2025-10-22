@@ -12,12 +12,13 @@ const { version } = packageJson;
 
 const nextConfig = {
 	reactStrictMode: true,
-	swcMinify: true,
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
 		"@cap/web-api-contract",
 		"@cap/web-domain",
+		"@cap/env",
+		"@cap/database",
 		"next-mdx-remote",
 	],
 	eslint: {
@@ -27,12 +28,13 @@ const nextConfig = {
 		ignoreBuildErrors: true,
 	},
 	experimental: {
-		instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",
-			"@cap/web-api-contract",
-			"@cap/web-domain",
+			// "@cap/web-api-contract",
+			// "@cap/web-domain",
+			// "@cap/web-backend",
+			"@cap/database",
 		],
 	},
 	images: {

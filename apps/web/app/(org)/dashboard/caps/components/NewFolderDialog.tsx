@@ -9,7 +9,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type RiveFile, useRiveFile } from "@rive-app/react-canvas";
@@ -31,7 +31,7 @@ import {
 interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	spaceId?: string;
+	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
 const FolderOptions = [
@@ -96,7 +96,7 @@ export const NewFolderDialog: React.FC<Props> = ({
 			},
 			{} as Record<
 				(typeof FolderOptions)[number]["value"],
-				React.RefObject<FolderHandle>
+				React.RefObject<FolderHandle | null>
 			>,
 		),
 	);

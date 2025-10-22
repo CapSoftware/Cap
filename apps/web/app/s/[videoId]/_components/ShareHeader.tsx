@@ -7,7 +7,6 @@ import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
@@ -17,6 +16,7 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 
@@ -29,7 +29,11 @@ export const ShareHeader = ({
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect;
+	data: typeof videos.$inferSelect & {
+		ownerName?: string | null;
+		ownerImage?: string | null;
+		ownerIsPro?: boolean;
+	};
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
@@ -60,7 +64,7 @@ export const ShareHeader = ({
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-	const isOwner = user && user.id.toString() === data.ownerId;
+	const isOwner = user && user.id === data.ownerId;
 
 	const { webUrl } = usePublicEnv();
 
@@ -70,7 +74,8 @@ export const ShareHeader = ({
 
 	const handleBlur = async () => {
 		setIsEditing(false);
-
+		const next = title.trim();
+		if (next === "" || next === data.name) return;
 		try {
 			await editTitle(data.id, title);
 			toast.success("Video title updated");
@@ -126,18 +131,13 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isUserPro = userIsPro(user);
-	const showUpgradeBanner =
-		user && data.ownerId === user.id && !userIsPro(user);
+	const isVideoOwnerPro: boolean = data.ownerIsPro ?? false;
 
 	const handleSharingUpdated = () => {
 		refresh();
 	};
 
 	const renderSharedStatus = () => {
-		const baseClassName =
-			"text-sm text-gray-10 transition-colors duration-200 flex items-center";
-
 		if (isOwner) {
 			const hasSpaceSharing =
 				sharedOrganizations?.length > 0 || effectiveSharedSpaces?.length > 0;
@@ -145,33 +145,45 @@ export const ShareHeader = ({
 
 			if (!hasSpaceSharing && !isPublic) {
 				return (
-					<p
-						className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
 						Not shared{" "}
 						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-					</p>
+					</Button>
 				);
 			} else {
 				return (
-					<p
-						className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
 						onClick={() => setIsSharingDialogOpen(true)}
 					>
 						Shared{" "}
 						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-					</p>
+					</Button>
 				);
 			}
 		} else {
-			return <p className={baseClassName}>Shared with you</p>;
+			return (
+				<Button
+					className="px-3 pointer-events-none w-fit"
+					size="xs"
+					variant="outline"
+				>
+					Shared with you
+				</Button>
+			);
 		}
 	};
 
 	return (
 		<>
-			{showUpgradeBanner && (
+			{user !== null && !isVideoOwnerPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -199,8 +211,8 @@ export const ShareHeader = ({
 			<div className="mt-8">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
 					<div className="items-center md:flex md:justify-between md:space-x-6">
-						<div className="mb-3 md:mb-0">
-							<div className="flex items-center space-x-3 lg:min-w-[400px]">
+						<div className="space-y-3">
+							<div className="flex flex-col lg:min-w-[400px]">
 								{isEditing ? (
 									<input
 										value={title}
@@ -208,13 +220,13 @@ export const ShareHeader = ({
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
 										autoFocus
-										className="w-full text-xl font-semibold sm:text-2xl"
+										className="w-full text-xl sm:text-2xl"
 									/>
 								) : (
 									<h1
 										className="text-xl sm:text-2xl"
 										onClick={() => {
-											if (user && user.id.toString() === data.ownerId) {
+											if (isOwner) {
 												setIsEditing(true);
 											}
 										}}
@@ -223,10 +235,24 @@ export const ShareHeader = ({
 									</h1>
 								)}
 							</div>
-							{user && renderSharedStatus()}
-							<p className="mt-1 text-sm text-gray-10">
-								{moment(data.createdAt).fromNow()}
-							</p>
+							<div className="flex gap-7 items-center">
+								<div className="flex gap-2 items-center">
+									<SignedImageUrl
+										name={data.ownerName ?? "User"}
+										image={data.ownerImage}
+										type="user"
+										className="size-8"
+										letterClass="text-base"
+									/>
+									<div className="flex flex-col text-left">
+										<p className="text-sm text-gray-12">{data.ownerName}</p>
+										<p className="text-xs text-gray-10">
+											{moment(data.createdAt).fromNow()}
+										</p>
+									</div>
+								</div>
+								{user && renderSharedStatus()}
+							</div>
 						</div>
 					</div>
 					{user !== null && (
@@ -257,7 +283,7 @@ export const ShareHeader = ({
 										)}
 									</Button>
 								</div>
-								{user !== null && !isUserPro && (
+								{!isVideoOwnerPro && (
 									<button
 										type="button"
 										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"

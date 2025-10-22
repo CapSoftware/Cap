@@ -14,8 +14,10 @@ import { generateAiMetadata } from "./generate-ai-metadata";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
+type TranscriptionStatus = "PROCESSING" | "COMPLETE" | "ERROR" | "SKIPPED";
+
 export interface VideoStatusResult {
-	transcriptionStatus: "PROCESSING" | "COMPLETE" | "ERROR" | null;
+	transcriptionStatus: TranscriptionStatus | null;
 	aiTitle: string | null;
 	aiProcessing: boolean;
 	summary: string | null;
@@ -124,10 +126,7 @@ export async function getVideoStatus(
 
 				return {
 					transcriptionStatus:
-						(updatedVideo.transcriptionStatus as
-							| "PROCESSING"
-							| "COMPLETE"
-							| "ERROR") || null,
+						(updatedVideo.transcriptionStatus as TranscriptionStatus) || null,
 					aiProcessing: false,
 					aiTitle: updatedMetadata.aiTitle || null,
 					summary: updatedMetadata.summary || null,
@@ -214,8 +213,7 @@ export async function getVideoStatus(
 
 			return {
 				transcriptionStatus:
-					(video.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
-					null,
+					(video.transcriptionStatus as TranscriptionStatus) || null,
 				aiProcessing: true,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
@@ -232,8 +230,7 @@ export async function getVideoStatus(
 
 	return {
 		transcriptionStatus:
-			(video.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
-			null,
+			(video.transcriptionStatus as TranscriptionStatus) || null,
 		aiProcessing: metadata.aiProcessing || false,
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,

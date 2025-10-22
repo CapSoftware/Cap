@@ -19,7 +19,7 @@ const buttonVariants = cva(
 				destructive:
 					"bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
 				outline:
-					"border border-gray-4 hover:border-gray-12 hover:bg-gray-12 hover:text-gray-1 text-gray-12 disabled:bg-gray-8",
+					"border border-gray-4 hover:border-gray-5 hover:bg-gray-3 text-gray-12 disabled:bg-gray-8",
 				white:
 					"bg-gray-1 border border-gray-5 text-gray-12 hover:bg-gray-3 disabled:bg-gray-8",
 				ghost: "hover:bg-white/20 hover:text-white",
@@ -29,6 +29,8 @@ const buttonVariants = cva(
 					"bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
 				radialblue:
 					"text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
+				transparent:
+					"bg-transparent text-gray-10 hover:underline transition-all duration-200 hover:text-gray-12",
 			},
 			size: {
 				xs: "text-xs h-[32px]",
@@ -47,8 +49,12 @@ export interface ButtonProps
 	asChild?: boolean;
 	spinner?: boolean;
 	href?: string;
+	spinnerColor?: string;
+	spinnerBorderColor?: `rgba(${number},${number},${number},${number})`;
+	spinnerClassName?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
+	target?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -59,9 +65,13 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			size,
 			asChild = false,
 			spinner = false,
+			spinnerColor = "white",
+			spinnerBorderColor = "rgba(255, 255, 255, 0.2)",
+			spinnerClassName,
 			href,
 			kbd,
 			icon,
+			target,
 			...props
 		},
 		ref,
@@ -71,10 +81,18 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			<Comp
 				className={classNames(buttonVariants({ variant, size, className }))}
 				ref={ref as any}
+				target={target || undefined}
 				href={href || undefined}
 				{...props}
 			>
-				{spinner && <LoadingSpinner className="mr-1" size={16} />}
+				{spinner && (
+					<LoadingSpinner
+						className={classNames("mr-1", spinnerClassName)}
+						color={spinnerColor}
+						borderColor={spinnerBorderColor}
+						size={16}
+					/>
+				)}
 				{icon && icon}
 				{props.children}
 				{kbd && (

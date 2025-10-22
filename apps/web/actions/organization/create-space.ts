@@ -4,8 +4,8 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
+import { Space } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -62,7 +62,7 @@ export async function createSpace(
 		}
 
 		// Generate the space ID early so we can use it in the file path
-		const spaceId = nanoId();
+		const spaceId = Space.SpaceId.make(nanoId());
 
 		const iconFile = formData.get("icon") as File | null;
 		let iconUrl = null;
@@ -99,20 +99,7 @@ export async function createSpace(
 						yield* Effect.promise(() => iconFile.bytes()),
 						{ contentType: iconFile.type },
 					);
-
-					// Construct the icon URL
-					if (serverEnv().CAP_AWS_BUCKET_URL) {
-						// If a custom bucket URL is defined, use it
-						iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-					} else if (serverEnv().CAP_AWS_ENDPOINT) {
-						// For custom endpoints like MinIO
-						iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-					} else {
-						// Default AWS S3 URL format
-						iconUrl = `https://${bucket.bucketName}.s3.${
-							serverEnv().CAP_AWS_REGION || "us-east-1"
-						}.amazonaws.com/${fileKey}`;
-					}
+					iconUrl = fileKey;
 				}).pipe(runPromise);
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
@@ -123,18 +110,15 @@ export async function createSpace(
 			}
 		}
 
-		await db()
-			.insert(spaces)
-			.values({
-				id: spaceId,
-				name,
-				organizationId: user.activeOrganizationId,
-				createdById: user.id,
-				iconUrl,
-				description: iconUrl ? `Space with custom icon: ${iconUrl}` : null,
-				createdAt: new Date(),
-				updatedAt: new Date(),
-			});
+		await db().insert(spaces).values({
+			id: spaceId,
+			name,
+			organizationId: user.activeOrganizationId,
+			createdById: user.id,
+			iconUrl,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
 
 		// --- Member Management Logic ---
 		// Collect member emails from formData
@@ -172,7 +156,9 @@ export async function createSpace(
 					if (!userId) return null;
 					// Creator is always Owner, others are Member
 					const role =
-						email.toLowerCase() === creatorEmail ? "Admin" : "Member";
+						email.toLowerCase() === creatorEmail
+							? ("Admin" as const)
+							: ("member" as const);
 					return {
 						id: uuidv4().substring(0, nanoIdLength),
 						spaceId,

@@ -1,18 +1,17 @@
-import * as WebSdk from "@effect/opentelemetry/WebSdk";
 import { FetchHttpClient } from "@effect/platform";
 import { Layer, ManagedRuntime } from "effect";
 import {
 	makeUseEffectMutation,
 	makeUseEffectQuery,
 } from "./effect-react-query";
+import { AnalyticsRequest } from "./Requests/AnalyticsRequest";
+import { ThumbnailRequest } from "./Requests/ThumbnailRequest";
 import { Rpc } from "./Rpcs";
-import { getTracingConfig } from "./tracing";
 
-const TracingLayer = WebSdk.layer(getTracingConfig);
-
-const RuntimeLayer = Layer.mergeAll(
+export const RuntimeLayer = Layer.mergeAll(
+	ThumbnailRequest.DataLoaderResolver.Default,
+	AnalyticsRequest.DataLoaderResolver.Default,
 	Rpc.Default,
-	TracingLayer,
 	FetchHttpClient.layer,
 );
 

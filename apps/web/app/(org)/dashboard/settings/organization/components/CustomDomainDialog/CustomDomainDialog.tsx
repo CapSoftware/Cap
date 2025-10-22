@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import { faGlobe, faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -20,7 +21,6 @@ import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
 import { useDashboardContext } from "../../../../Contexts";
 import DomainStep from "./DomainStep";
 import { Stepper } from "./Stepper";
-
 import SubscribeContent from "./SubscribeContent";
 import SuccesStep from "./SuccessStep";
 import {
@@ -139,7 +139,7 @@ const CustomDomainDialog = ({
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	const confettiRef = useRef<ConfettiRef>(null);
 
-	const pollInterval = useRef<NodeJS.Timeout>();
+	const pollInterval = useRef<NodeJS.Timeout | undefined>(undefined);
 
 	// Mutation for updating domain
 	const updateDomainMutation = useMutation({
@@ -151,9 +151,12 @@ const CustomDomainDialog = ({
 			orgId: string;
 		}) => {
 			if (activeOrganization?.organization.customDomain) {
-				await removeOrganizationDomain(orgId);
+				await removeOrganizationDomain(Organisation.OrganisationId.make(orgId));
 			}
-			return await updateDomain(domain, orgId);
+			return await updateDomain(
+				domain,
+				Organisation.OrganisationId.make(orgId),
+			);
 		},
 		onSuccess: (data) => {
 			handleNext();
@@ -181,7 +184,12 @@ const CustomDomainDialog = ({
 			orgId: string;
 			showToasts: boolean;
 		}) => {
-			return { data: await checkOrganizationDomain(orgId), showToasts };
+			return {
+				data: await checkOrganizationDomain(
+					Organisation.OrganisationId.make(orgId),
+				),
+				showToasts,
+			};
 		},
 		onSuccess: ({ data, showToasts }) => {
 			setIsVerified(data.verified);

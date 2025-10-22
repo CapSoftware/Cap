@@ -46,7 +46,7 @@ import {
 	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
-import { forwardRef } from "react";
+import { forwardRef, useCallback, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
@@ -776,7 +776,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				onKeyDown={onKeyDown}
 				onKeyUp={onKeyUp}
 				className={cn(
-					"dark relative isolate flex flex-col overflow-hidden bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
+					"dark relative isolate flex flex-col overflow-visible bg-background outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_video]:relative [&_video]:object-contain",
 					"data-[state=fullscreen]:[&_video]:size-full [:fullscreen_&]:flex [:fullscreen_&]:h-full [:fullscreen_&]:max-h-screen [:fullscreen_&]:flex-col [:fullscreen_&]:justify-between",
 					"[&_[data-slider]::before]:-top-4 [&_[data-slider]::before]:-bottom-2 [&_[data-slider]::before]:absolute [&_[data-slider]::before]:inset-x-0 [&_[data-slider]::before]:z-10 [&_[data-slider]::before]:h-8 [&_[data-slider]::before]:cursor-pointer [&_[data-slider]::before]:content-[''] [&_[data-slider]]:relative [&_[data-slot='media-player-seek']:not([data-hovering])::before]:cursor-default",
 					"[&_video::-webkit-media-text-track-display]:top-auto! [&_video::-webkit-media-text-track-display]:bottom-[4%]! [&_video::-webkit-media-text-track-display]:mb-0! data-[state=fullscreen]:data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[9%]! data-[controls-visible]:[&_video::-webkit-media-text-track-display]:bottom-[13%]! data-[state=fullscreen]:[&_video::-webkit-media-text-track-display]:bottom-[7%]!",
@@ -877,16 +877,29 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 interface MediaPlayerControlsProps extends React.ComponentProps<"div"> {
 	asChild?: boolean;
 	isUploadingOrFailed?: boolean;
+	mainControlsVisible?: (arg: boolean) => void;
 }
 
 function MediaPlayerControls(props: MediaPlayerControlsProps) {
-	const { asChild, className, isUploadingOrFailed, ...controlsProps } = props;
+	const {
+		asChild,
+		className,
+		isUploadingOrFailed,
+		mainControlsVisible,
+		...controlsProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
 	const isFullscreen = useMediaSelector(
 		(state) => state.mediaIsFullscreen ?? false,
 	);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
+	// Call the callback whenever controlsVisible changes
+	useEffect(() => {
+		if (typeof mainControlsVisible === "function") {
+			mainControlsVisible(controlsVisible);
+		}
+	}, [mainControlsVisible, controlsVisible]);
 
 	const ControlsPrimitive = asChild ? Slot : "div";
 

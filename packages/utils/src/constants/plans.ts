@@ -1,6 +1,6 @@
-import { buildEnv, NODE_ENV } from "@cap/env";
+import { buildEnv } from "@cap/env";
 
-const planIds = {
+export const STRIPE_PLAN_IDS = {
 	development: {
 		yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
 		monthly: "price_1P9C1DFJxA1XpeSsTwwuddnq",
@@ -9,13 +9,6 @@ const planIds = {
 		yearly: "price_1S2al7FJxA1XpeSsJCI5Z2UD",
 		monthly: "price_1S2akxFJxA1XpeSsfoAUUbpJ",
 	},
-};
-
-export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
-	const value = NODE_ENV;
-	const environment = value === "development" ? "development" : "production";
-
-	return planIds[environment]?.[billingCycle] || "";
 };
 
 export const userIsPro = (

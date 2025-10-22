@@ -171,7 +171,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 export async function updateVideo(data: FormData) {
   const user = await getCurrentUser();
   if (!user?.id) throw new Error("Unauthorized");
-  
+
   // Database operations with Drizzle
   return await db().update(videos).set({ ... }).where(eq(videos.id, id));
 }
@@ -220,7 +220,6 @@ const updateMutation = useMutation({
 
 ### Build/Client (selected)
 - `NEXT_PUBLIC_WEB_URL`
-- `NEXT_PUBLIC_CAP_AWS_BUCKET`, `NEXT_PUBLIC_CAP_AWS_REGION`
 - `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST`
 - `NEXT_PUBLIC_DOCKER_BUILD` (enables Next.js standalone output)
 
@@ -268,7 +267,7 @@ const updateMutation = useMutation({
 - **Connection errors**: Verify Docker containers are running
 - **Schema drift**: Run `pnpm --dir packages/database db:check`
 
-### Desktop App Issues  
+### Desktop App Issues
 - **IPC binding errors**: Restart dev server to regenerate `tauri.ts`
 - **Rust compile errors**: Check Cargo.toml dependencies
 - **Permission issues**: macOS/Windows may require app permissions
@@ -392,8 +391,8 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 
 ### Media Processing Flow
 ```
-Desktop Recording → Local Files → Upload to S3 → 
-Background Processing (tasks service) → 
+Desktop Recording → Local Files → Upload to S3 →
+Background Processing (tasks service) →
 Transcription/AI Enhancement → Database Storage
 ```
 

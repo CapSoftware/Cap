@@ -238,11 +238,14 @@ function Page() {
 					}
 				})();
 
-				await commands.startRecording({
-					capture_target,
-					mode: payload.mode,
-					capture_system_audio: rawOptions.captureSystemAudio,
-				});
+				await handleRecordingResult(
+					commands.startRecording({
+						capture_target,
+						mode: payload.mode,
+						capture_system_audio: rawOptions.captureSystemAudio,
+					}),
+					setOptions,
+				);
 			} else await commands.stopRecording();
 		},
 	}));
@@ -345,7 +348,7 @@ function Page() {
 									}
 								}}
 								class={cx(
-									"text-[0.6rem] rounded-lg px-1 py-0.5",
+									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 										: "bg-gray-3 cursor-pointer hover:bg-gray-5",
@@ -589,6 +592,7 @@ import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
 import {

@@ -1,13 +1,14 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { getProPlanId, userIsPro } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { faCheckCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { clsx } from "clsx";
 import { use, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAuthContext } from "@/app/Layout/AuthContext";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import {
 	CommercialArt,
 	type CommercialArtRef,
@@ -56,8 +57,8 @@ const PlanIcon = ({
 	proArtRef,
 }: {
 	planName: string;
-	commercialArtRef: React.RefObject<CommercialArtRef>;
-	proArtRef: React.RefObject<ProArtRef>;
+	commercialArtRef: React.RefObject<CommercialArtRef | null>;
+	proArtRef: React.RefObject<ProArtRef | null>;
 }) => {
 	if (planName === "Desktop License") {
 		return (
@@ -93,6 +94,7 @@ export const ComparePlans = () => {
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
+	const stripeCtx = useStripeContext();
 
 	// Check if user is already pro or any loading state is active
 	const isDisabled = useMemo(
@@ -247,7 +249,7 @@ export const ComparePlans = () => {
 		);
 
 	const planCheckout = async (planId?: string) => {
-		const finalPlanId = planId || getProPlanId("yearly");
+		const finalPlanId = planId || stripeCtx.plans.yearly;
 		setProLoading(true);
 
 		try {
@@ -297,7 +299,7 @@ export const ComparePlans = () => {
 	};
 	return (
 		<div className="mx-auto w-full max-w-[1400px]">
-			<h2 className="mb-6 text-center">Compare plans</h2>
+			<h2 className="mb-6 text-4xl text-center text-gray-12">Compare plans</h2>
 			<div className="overflow-x-auto w-full">
 				<div className="overflow-hidden rounded-xl border min-w-fit border-gray-5">
 					<table className="w-full text-left border-separate border-spacing-0 bg-gray-2">

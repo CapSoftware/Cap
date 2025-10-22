@@ -8,9 +8,14 @@ import { Effect, Layer, Option } from "effect";
 import { getCurrentUser } from "./Auth.ts";
 import { Database } from "./Database.ts";
 import { FolderRpcsLive } from "./Folders/FoldersRpcs.ts";
+import { UsersRpcsLive } from "./Users/UsersRpcs.ts";
 import { VideosRpcsLive } from "./Videos/VideosRpcs.ts";
 
-export const RpcsLive = Layer.mergeAll(VideosRpcsLive, FolderRpcsLive);
+export const RpcsLive = Layer.mergeAll(
+	VideosRpcsLive,
+	FolderRpcsLive,
+	UsersRpcsLive,
+);
 
 export const RpcAuthMiddlewareLive = Layer.effect(
 	RpcAuthMiddleware,
@@ -28,7 +33,7 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 							Effect.succeed({
 								id: user.id,
 								email: user.email,
-								activeOrgId: user.activeOrganizationId,
+								activeOrganizationId: user.activeOrganizationId,
 							}),
 					}),
 				),

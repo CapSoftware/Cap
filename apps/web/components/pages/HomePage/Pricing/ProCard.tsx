@@ -1,5 +1,4 @@
 import { Button, Switch } from "@cap/ui";
-import { getProPlanId } from "@cap/utils";
 import {
 	faCloud,
 	faCreditCard,
@@ -11,17 +10,18 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { ProArt, type ProArtRef } from "./ProArt";
 
 export const ProCard = () => {
+	const stripeCtx = useStripeContext();
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
-	const [proLoading, setProLoading] = useState(false);
-	const [guestLoading, setGuestLoading] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
@@ -40,10 +40,8 @@ export const ProCard = () => {
 	const incrementUsers = () => setUsers((prev) => prev + 1);
 	const decrementUsers = () => setUsers((prev) => (prev > 1 ? prev - 1 : 1));
 
-	const guestCheckout = async (planId: string) => {
-		setGuestLoading(true);
-
-		try {
+	const guestCheckout = useMutation({
+		mutationFn: async (planId: string) => {
 			const response = await fetch(`/api/settings/billing/guest-checkout`, {
 				method: "POST",
 				headers: {
@@ -58,46 +56,39 @@ export const ProCard = () => {
 			} else {
 				toast.error("Failed to create checkout session");
 			}
-		} catch (error) {
+		},
+		onError: () => {
 			toast.error("An error occurred. Please try again.");
-		} finally {
-			setGuestLoading(false);
-		}
-	};
+		},
+	});
 
-	const planCheckout = async (planId?: string) => {
-		setProLoading(true);
+	const planCheckout = useMutation({
+		mutationFn: async () => {
+			const planId = stripeCtx.plans[isAnnually ? "yearly" : "monthly"];
 
-		if (!planId) {
-			planId = getProPlanId(isAnnually ? "yearly" : "monthly");
-		}
+			const response = await fetch(`/api/settings/billing/subscribe`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ priceId: planId, quantity: users }),
+			});
+			const data = await response.json();
 
-		const response = await fetch(`/api/settings/billing/subscribe`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ priceId: planId, quantity: users }),
-		});
-		const data = await response.json();
+			if (data.auth === false) {
+				await guestCheckout.mutateAsync(planId);
+				return;
+			}
 
-		if (data.auth === false) {
-			// User not authenticated, do guest checkout
-			setProLoading(false);
-			await guestCheckout(planId);
-			return;
-		}
+			if (data.subscription === true) {
+				toast.success("You are already on the Cap Pro plan");
+			}
 
-		if (data.subscription === true) {
-			toast.success("You are already on the Cap Pro plan");
-		}
-
-		if (data.url) {
-			window.location.href = data.url;
-		}
-
-		setProLoading(false);
-	};
+			if (data.url) {
+				window.location.href = data.url;
+			}
+		},
+	});
 
 	return (
 		<div
@@ -120,7 +111,7 @@ export const ProCard = () => {
 					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-4 text-sm font-medium text-center text-gray-6">
+					<p className="mb-4 text-base text-center text-gray-6">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
@@ -134,11 +125,11 @@ export const ProCard = () => {
 						{billingCycleTextPro}
 					</span>
 					{isAnnually ? (
-						<p className="text-sm text-gray-8">
+						<p className="text-base text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
-								className="text-sm tabular-nums"
+								className="text-base tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -151,18 +142,21 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
+									<NumberFlow
+										value={users}
+										className="text-base tabular-nums"
+									/>{" "}
 									users,{" "}
 								</>
 							)}
 							billed monthly
 						</p>
 					) : (
-						<p className="text-sm text-gray-8">
+						<p className="text-base text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
-								className="text-sm tabular-nums"
+								className="text-base tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -175,7 +169,10 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
+									<NumberFlow
+										value={users}
+										className="text-base tabular-nums"
+									/>{" "}
 									users,{" "}
 								</>
 							)}
@@ -300,12 +297,12 @@ export const ProCard = () => {
 			<Button
 				variant="blue"
 				size="lg"
-				onClick={() => planCheckout()}
-				disabled={proLoading || guestLoading}
+				onClick={() => planCheckout.mutate()}
+				disabled={planCheckout.isPending || guestCheckout.isPending}
 				className="w-full font-medium"
 				aria-label="Purchase Cap Pro License"
 			>
-				{proLoading || guestLoading
+				{planCheckout.isPending || guestCheckout.isPending
 					? "Loading..."
 					: homepageCopy.pricing.pro.cta}
 			</Button>

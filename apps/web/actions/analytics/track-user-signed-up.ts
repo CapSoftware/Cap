@@ -33,7 +33,7 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 			return { shouldTrack: false };
 		}
 
-		const result = await db()
+		const [result] = await db()
 			.update(users)
 			.set({
 				preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.user_signed_up', true)`,
@@ -42,11 +42,7 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 				sql`(${users.id} = ${currentUser.id}) AND (${users.created_at} >= CURRENT_DATE()) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.user_signed_up') = 0`,
 			);
 
-		if (result.rowsAffected && result.rowsAffected > 0) {
-			return { shouldTrack: true };
-		}
-
-		return { shouldTrack: false };
+		return { shouldTrack: result.affectedRows > 0 };
 	} catch {
 		return { shouldTrack: false };
 	}

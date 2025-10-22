@@ -1,12 +1,16 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import { Comment, User, type Video } from "@cap/web-domain";
+import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
 	type ComponentProps,
 	forwardRef,
 	type PropsWithChildren,
+	startTransition,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -15,7 +19,7 @@ import {
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
 import type { CommentType } from "../../../Share";
-import Comment from "./Comment";
+import CommentComponent from "./Comment";
 import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
 
@@ -31,6 +35,7 @@ export const Comments = Object.assign(
 			handleCommentSuccess: (comment: CommentType) => void;
 			onSeek?: (time: number) => void;
 			setShowAuthOverlay: (v: boolean) => void;
+			commentsDisabled: boolean;
 		}
 	>((props, ref) => {
 		const {
@@ -38,12 +43,16 @@ export const Comments = Object.assign(
 			setOptimisticComments,
 			setComments,
 			handleCommentSuccess,
+			onSeek,
+			commentsDisabled,
 		} = props;
 		const commentParams = useSearchParams().get("comment");
 		const replyParams = useSearchParams().get("reply");
 
 		const { user } = props;
-		const [replyingTo, setReplyingTo] = useState<string | null>(null);
+		const [replyingTo, setReplyingTo] = useState<Comment.CommentId | null>(
+			null,
+		);
 
 		const commentsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -53,46 +62,54 @@ export const Comments = Object.assign(
 				commentsContainerRef.current.scrollTop =
 					commentsContainerRef.current.scrollHeight;
 			}
-		}, []);
+		}, [commentParams, replyParams]);
 
-		const scrollToBottom = () => {
+		const scrollToBottom = useCallback(() => {
 			if (commentsContainerRef.current) {
 				commentsContainerRef.current.scrollTo({
 					top: commentsContainerRef.current.scrollHeight,
 					behavior: "smooth",
 				});
 			}
-		};
+		}, []);
 
-		useImperativeHandle(ref, () => ({ scrollToBottom }), []);
+		useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
 
 		const rootComments = optimisticComments.filter(
 			(comment) => !comment.parentCommentId || comment.parentCommentId === "",
 		);
 
 		const handleNewComment = async (content: string) => {
+			// Get current video time from the video element
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
+
 			const optimisticComment: CommentType = {
-				id: `temp-${Date.now()}`,
-				authorId: user?.id || "anonymous",
+				id: Comment.CommentId.make(`temp-${Date.now()}`),
+				authorId: User.UserId.make(user?.id || "anonymous"),
 				authorName: user?.name || "Anonymous",
+				authorImageUrlOrKey: user?.image ?? null,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
-				parentCommentId: "",
+				parentCommentId: Comment.CommentId.make(""),
 				type: "text",
-				timestamp: null,
+				timestamp: currentTime,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			setOptimisticComments(optimisticComment);
+			startTransition(() => {
+				setOptimisticComments(optimisticComment);
+			});
 
 			try {
 				const data = await newComment({
 					content,
 					videoId: props.videoId,
-					parentCommentId: "",
+					parentCommentId: Comment.CommentId.make(""),
 					type: "text",
+					timestamp: currentTime,
 				});
 				handleCommentSuccess(data);
 			} catch (error) {
@@ -102,6 +119,8 @@ export const Comments = Object.assign(
 
 		const handleReply = async (content: string) => {
 			if (!replyingTo) return;
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
 
 			const parentComment = optimisticComments.find((c) => c.id === replyingTo);
 			const actualParentId = parentComment?.parentCommentId
@@ -109,20 +128,23 @@ export const Comments = Object.assign(
 				: replyingTo;
 
 			const optimisticReply: CommentType = {
-				id: `temp-reply-${Date.now()}`,
-				authorId: user?.id || "anonymous",
+				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
+				authorId: User.UserId.make(user?.id || "anonymous"),
 				authorName: user?.name || "Anonymous",
+				authorImageUrlOrKey: user?.image ?? null,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
 				parentCommentId: actualParentId,
 				type: "text",
-				timestamp: null,
+				timestamp: currentTime,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			setOptimisticComments(optimisticReply);
+			startTransition(() => {
+				setOptimisticComments(optimisticReply);
+			});
 
 			try {
 				const data = await newComment({
@@ -130,6 +152,7 @@ export const Comments = Object.assign(
 					videoId: props.videoId,
 					parentCommentId: actualParentId,
 					type: "text",
+					timestamp: currentTime,
 				});
 
 				handleCommentSuccess(data);
@@ -152,8 +175,8 @@ export const Comments = Object.assign(
 		};
 
 		const handleDeleteComment = async (
-			commentId: string,
-			parentId?: string,
+			commentId: Comment.CommentId,
+			parentId: Comment.CommentId | null,
 		) => {
 			try {
 				await deleteComment({
@@ -169,17 +192,27 @@ export const Comments = Object.assign(
 
 		return (
 			<Comments.Shell
-				commentInputProps={{ onSubmit: handleNewComment }}
+				commentInputProps={{
+					onSubmit: handleNewComment,
+					disabled: commentsDisabled,
+				}}
 				setShowAuthOverlay={props.setShowAuthOverlay}
 				user={user}
 				commentsContainerRef={commentsContainerRef}
 			>
-				{rootComments.length === 0 ? (
+				{commentsDisabled ? (
+					<div className="p-4 space-y-6 h-full">
+						<EmptyState
+							icon={<FontAwesomeIcon icon={faCommentSlash} />}
+							commentsDisabled={commentsDisabled}
+						/>
+					</div>
+				) : rootComments.length === 0 ? (
 					<EmptyState />
 				) : (
 					<div className="p-4 space-y-6">
 						{rootComments.map((comment) => (
-							<Comment
+							<CommentComponent
 								key={comment.id}
 								comment={comment}
 								replies={optimisticComments}
@@ -195,7 +228,7 @@ export const Comments = Object.assign(
 								onCancelReply={handleCancelReply}
 								onDelete={handleDeleteComment}
 								user={user}
-								onSeek={props.onSeek}
+								onSeek={onSeek}
 							/>
 						))}
 					</div>
@@ -212,7 +245,7 @@ export const Comments = Object.assign(
 					ComponentProps<typeof CommentInput>,
 					"user" | "placholder" | "buttonLabel"
 				>;
-				commentsContainerRef?: React.RefObject<HTMLDivElement>;
+				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
 			}>,
 		) => (
 			<>
@@ -223,24 +256,26 @@ export const Comments = Object.assign(
 					{props.children}
 				</div>
 
-				<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
-					{props.user ? (
-						<CommentInput
-							{...props.commentInputProps}
-							placeholder="Leave a comment"
-							buttonLabel="Comment"
-							user={props.user}
-						/>
-					) : (
-						<Button
-							className="min-w-full"
-							variant="primary"
-							onClick={() => props.setShowAuthOverlay(true)}
-						>
-							Sign in to leave a comment
-						</Button>
-					)}
-				</div>
+				{!props.commentInputProps?.disabled && (
+					<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
+						{props.user ? (
+							<CommentInput
+								{...props.commentInputProps}
+								placeholder="Leave a comment"
+								buttonLabel="Comment"
+								user={props.user}
+							/>
+						) : (
+							<Button
+								className="min-w-full"
+								variant="primary"
+								onClick={() => props.setShowAuthOverlay(true)}
+							>
+								Sign in to leave a comment
+							</Button>
+						)}
+					</div>
+				)}
 			</>
 		),
 		Skeleton: (props: {

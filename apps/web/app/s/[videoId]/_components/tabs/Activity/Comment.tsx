@@ -1,5 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Avatar, Button } from "@cap/ui";
+import type { Comment } from "@cap/web-domain";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
@@ -7,19 +8,23 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
-const Comment: React.FC<{
+const CommentComponent: React.FC<{
 	comment: CommentType;
 	replies: CommentType[];
-	onReply: (commentId: string) => void;
-	replyingToId: string | null;
+	onReply: (commentId: Comment.CommentId) => void;
+	replyingToId: Comment.CommentId | null;
 	handleReply: (content: string) => void;
 	onCancelReply: () => void;
-	onDelete: (commentId: string, parentId?: string) => void;
+	onDelete: (
+		commentId: Comment.CommentId,
+		parentId: Comment.CommentId | null,
+	) => void;
 	user: typeof userSelectProps | null;
 	level?: number;
 	onSeek?: (time: number) => void;
@@ -70,11 +75,15 @@ const Comment: React.FC<{
 			)}
 		>
 			<div className="flex items-start space-x-2.5">
-				<Avatar
-					className="size-6"
-					letterClass="text-sm"
-					name={comment.authorName}
-				/>
+				{comment.authorName && (
+					<SignedImageUrl
+						image={comment.authorImageUrlOrKey}
+						name={comment.authorName}
+						type="user"
+						className="size-6"
+						letterClass="text-sm"
+					/>
+				)}
 				<motion.div
 					viewport={{
 						once: true,
@@ -94,25 +103,32 @@ const Comment: React.FC<{
 					transition={{ duration: 0.75, ease: "easeInOut", delay: 0.15 }}
 					className={"flex-1 p-3 rounded-xl border border-gray-3 bg-gray-2"}
 				>
-					<div className="flex items-center space-x-2">
-						<p className="text-base font-medium text-gray-12">
+					<div className="flex gap-3 justify-between items-center">
+						<p className="text-sm font-medium truncate text-gray-12">
 							{comment.authorName || "Anonymous"}
 						</p>
-						<Tooltip content={formatTimestamp(commentDate)}>
-							<p className="text-sm text-gray-8">
-								{formatTimeAgo(commentDate)}
-							</p>
-						</Tooltip>
-						{comment.timestamp && (
-							<button
-								onClick={() => onSeek?.(comment.timestamp!)}
-								className="text-sm text-blue-500 cursor-pointer hover:text-blue-700"
-							>
-								{new Date(comment.timestamp * 1000).toISOString().substr(11, 8)}
-							</button>
-						)}
+						<div className="flex gap-2 items-center text-nowrap min-w-fit">
+							<Tooltip content={formatTimestamp(commentDate)}>
+								<p className="text-xs text-gray-8">
+									{formatTimeAgo(commentDate)}
+								</p>
+							</Tooltip>
+							{comment.timestamp !== null && (
+								<button
+									type="button"
+									onClick={() => {
+										onSeek?.(Number(comment.timestamp));
+									}}
+									className="text-xs text-blue-500 cursor-pointer hover:text-blue-700"
+								>
+									{new Date(comment.timestamp * 1000)
+										.toISOString()
+										.substr(11, 8)}
+								</button>
+							)}
+						</div>
 					</div>
-					<p className="text-sm text-gray-11">{comment.content}</p>
+					<p className="mt-2 text-sm text-gray-11">{comment.content}</p>
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
 							<Tooltip content="Reply">
@@ -160,7 +176,7 @@ const Comment: React.FC<{
 			{nestedReplies.length > 0 && (
 				<div className="mt-3 space-y-3">
 					{nestedReplies.map((reply) => (
-						<Comment
+						<CommentComponent
 							key={reply.id}
 							comment={reply}
 							replies={replies}
@@ -180,4 +196,4 @@ const Comment: React.FC<{
 	);
 };
 
-export default Comment;
+export default CommentComponent;

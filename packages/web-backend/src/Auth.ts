@@ -1,11 +1,15 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
+import {
+	CurrentUser,
+	type DatabaseError,
+	HttpAuthMiddleware,
+} from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { type Cause, Effect, Layer, Option, Schema } from "effect";
 
-import { Database, type DatabaseError } from "./Database.ts";
+import { Database } from "./Database.ts";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -15,7 +19,7 @@ export const getCurrentUser = Effect.gen(function* () {
 	).pipe(
 		Option.map((session) =>
 			Effect.gen(function* () {
-				const [currentUser] = yield* db.execute((db) =>
+				const [currentUser] = yield* db.use((db) =>
 					db
 						.select()
 						.from(Db.users)
@@ -46,7 +50,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 				if (authHeader?.length === 36) {
 					user = yield* database
-						.execute((db) =>
+						.use((db) =>
 							db
 								.select()
 								.from(Db.users)
@@ -65,7 +69,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 					Option.map((user) => ({
 						id: user.id,
 						email: user.email,
-						activeOrgId: user.activeOrganizationId,
+						activeOrganizationId: user.activeOrganizationId,
 					})),
 					Effect.catchTag(
 						"NoSuchElementException",
@@ -98,7 +102,7 @@ export const provideOptionalAuth = <A, E, R>(
 				CurrentUser.context({
 					id: user.id,
 					email: user.email,
-					activeOrgId: user.activeOrganizationId,
+					activeOrganizationId: user.activeOrganizationId,
 				}),
 			),
 			Option.match({

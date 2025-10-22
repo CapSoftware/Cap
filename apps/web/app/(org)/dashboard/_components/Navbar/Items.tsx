@@ -28,11 +28,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { cloneElement, useRef, useState } from "react";
+import { cloneElement, type RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
@@ -49,13 +49,13 @@ interface Props {
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
-	const [hoveredItem, setHoveredItem] = useState<string | null>(null);
-	const { user, sidebarCollapsed } = useDashboardContext();
+	const { user, sidebarCollapsed, userCapsCount } = useDashboardContext();
 
 	const manageNavigation = [
 		{
 			name: "My Caps",
 			href: `/dashboard/caps`,
+			extraText: userCapsCount,
 			icon: <CapIcon />,
 			subNav: [],
 		},
@@ -66,16 +66,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			icon: <CogIcon />,
 			subNav: [],
 		},
-		...(buildEnv.NEXT_PUBLIC_IS_CAP && user.email.endsWith("@cap.so")
-			? [
-					{
-						name: "Admin Dev",
-						href: "/dashboard/admin",
-						icon: <CogIcon />,
-						subNav: [],
-					},
-				]
-			: []),
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
@@ -92,6 +82,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const router = useRouter();
 
 	const isPathActive = (path: string) => pathname.includes(path);
+	const isDomainSetupVerified =
+		activeOrg?.organization.customDomain &&
+		activeOrg?.organization.domainVerified;
 
 	return (
 		<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -101,7 +94,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					position="right"
 					content={activeOrg?.organization.name ?? "No organization found"}
 				>
-					<PopoverTrigger asChild>
+					<PopoverTrigger suppressHydrationWarning asChild>
 						<motion.div
 							transition={{
 								type: "easeInOut",
@@ -129,37 +122,20 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									)}
 								>
 									<div className="flex items-center">
-										{activeOrg?.organization.iconUrl ? (
-											<div
-												className={clsx(
-													"overflow-hidden relative flex-shrink-0 rounded-full",
-													sidebarCollapsed ? "size-6" : "size-7",
-												)}
-											>
-												<Image
-													src={activeOrg.organization.iconUrl}
-													alt={
-														activeOrg.organization.name || "Organization icon"
-													}
-													fill
-													className="object-cover"
-												/>
-											</div>
-										) : (
-											<Avatar
-												letterClass={clsx(
-													sidebarCollapsed ? "text-sm" : "text-[13px]",
-												)}
-												className={clsx(
-													"relative flex-shrink-0 mx-auto",
-													sidebarCollapsed ? "size-6" : "size-7",
-												)}
-												name={
-													activeOrg?.organization.name ??
-													"No organization found"
-												}
-											/>
-										)}
+										<SignedImageUrl
+											image={activeOrg?.organization.iconUrl}
+											name={
+												activeOrg?.organization.name ?? "No organization found"
+											}
+											type="organization"
+											letterClass={clsx(
+												sidebarCollapsed ? "text-sm" : "text-[13px]",
+											)}
+											className={clsx(
+												"relative flex-shrink-0 mx-auto",
+												sidebarCollapsed ? "size-6" : "size-7",
+											)}
+										/>
 									</div>
 									<div className="flex flex-col flex-1 items-center h-10">
 										<div className="flex justify-between items-center w-full">
@@ -179,32 +155,24 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										{!sidebarCollapsed && (
 											<Link
 												href={
-													activeOrg?.organization.customDomain
+													isDomainSetupVerified
 														? `https://${activeOrg.organization.customDomain}`
 														: "/dashboard/settings/organization"
 												}
 												rel={
-													activeOrg?.organization.customDomain
+													isDomainSetupVerified
 														? "noopener noreferrer"
 														: undefined
 												}
-												target={
-													activeOrg?.organization.customDomain
-														? "_blank"
-														: "_self"
-												}
+												target={isDomainSetupVerified ? "_blank" : "_self"}
 												className="flex truncate w-full overflow-hidden flex-1 gap-1.5 items-center self-start"
 											>
 												<FontAwesomeIcon
-													icon={
-														activeOrg?.organization.customDomain
-															? faLink
-															: faCircleInfo
-													}
+													icon={isDomainSetupVerified ? faLink : faCircleInfo}
 													className="duration-200 size-3 text-gray-10"
 												/>
 												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
-													{activeOrg?.organization.customDomain
+													{isDomainSetupVerified
 														? activeOrg?.organization.customDomain
 														: "No custom domain set"}
 												</p>
@@ -235,7 +203,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 															? "pointer-events-none"
 															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 													)}
-													key={`${organization.organization.name}-organization`}
+													key={`${organization.organization.name}-organization-${organization.organization.id}`}
 													onSelect={async () => {
 														await updateActiveOrganization(
 															organization.organization.id,
@@ -245,25 +213,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													}}
 												>
 													<div className="flex gap-2 items-center w-full">
-														{organization.organization.iconUrl ? (
-															<div className="overflow-hidden relative flex-shrink-0 rounded-full size-5">
-																<Image
-																	src={organization.organization.iconUrl}
-																	alt={
-																		organization.organization.name ||
-																		"Organization icon"
-																	}
-																	fill
-																	className="object-cover"
-																/>
-															</div>
-														) : (
-															<Avatar
-																letterClass="text-xs"
-																className="relative flex-shrink-0 size-5"
-																name={organization.organization.name}
-															/>
-														)}
+														<SignedImageUrl
+															image={organization.organization.iconUrl}
+															name={organization.organization.name}
+															type="organization"
+															letterClass="text-xs"
+															className="relative flex-shrink-0 size-5"
+														/>
 														<p
 															className={clsx(
 																"flex-1 text-sm transition-colors duration-200 group-hover:text-gray-12",
@@ -337,23 +293,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									/>
 								)}
 
-								{hoveredItem === item.name && !isPathActive(item.href) && (
-									<motion.div
-										layoutId="hoverIndicator"
-										className={clsx(
-											"absolute bg-transparent rounded-xl",
-											sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0",
-										)}
-										initial={{ opacity: 0 }}
-										animate={{ opacity: 1 }}
-										exit={{ opacity: 0 }}
-										transition={{
-											type: "spring",
-											bounce: 0.2,
-											duration: 0.2,
-										}}
-									/>
-								)}
 								<NavItem
 									name={item.name}
 									href={item.href}
@@ -361,6 +300,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									sidebarCollapsed={sidebarCollapsed}
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
+									extraText={item.extraText}
 								/>
 							</div>
 						))}
@@ -369,7 +309,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && (
+						{!sidebarCollapsed && !userIsSubscribed && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}
@@ -450,13 +390,19 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
+	extraText,
 }: {
 	name: string;
 	href: string;
-	icon: React.ReactElement;
+	icon: React.ReactElement<{
+		ref: RefObject<CogIconHandle | null>;
+		className: string;
+		size: number;
+	}>;
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
 	isPathActive: (path: string) => boolean;
+	extraText: number | null | undefined;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -498,6 +444,11 @@ const NavItem = ({
 				>
 					{name}
 				</p>
+				{extraText !== null && !sidebarCollapsed && (
+					<p className="ml-auto text-xs font-medium text-gray-11">
+						{extraText}
+					</p>
+				)}
 			</Link>
 		</Tooltip>
 	);

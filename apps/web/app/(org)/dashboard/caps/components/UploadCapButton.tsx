@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
-import type { Folder, Video } from "@cap/web-domain";
+import type { Folder, Organisation, Video } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -17,10 +17,10 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { imageUrlQuery } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { Effect, Queue, Stream } from "effect";
 import { useFeatureFlag } from "@/app/Layout/features";
+import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -30,7 +30,7 @@ export const UploadCapButton = ({
 	grey?: boolean;
 	folderId?: Folder.FolderId;
 }) => {
-	const { user } = useDashboardContext();
+	const { user, activeOrganization } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const { uploadingStore, setUploadStatus } = useUploadingContext();
 	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
@@ -72,11 +72,18 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
+		// This should be unreachable.
+		if (activeOrganization === null) {
+			alert("No organization active!");
+			return;
+		}
+
 		if (useEffectForUploadButton) uploadCapMutation.mutate(file);
 		else {
 			const ok = await legacyUploadCap(
 				file,
 				folderId,
+				activeOrganization.organization.id,
 				setUploadStatus,
 				queryClient,
 			);
@@ -582,6 +589,7 @@ const createProgressTracker = () => {
 async function legacyUploadCap(
 	file: File,
 	folderId: Folder.FolderId | undefined,
+	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	queryClient: QueryClient,
 ) {
@@ -616,6 +624,7 @@ async function legacyUploadCap(
 			isScreenshot: false,
 			isUpload: true,
 			folderId,
+			orgId,
 			supportsUploadProgress: false,
 		});
 
@@ -872,6 +881,7 @@ async function legacyUploadCap(
 				videoId: uploadId,
 				isScreenshot: true,
 				isUpload: true,
+				orgId,
 			});
 
 			const screenshotFormData = new FormData();
@@ -906,7 +916,9 @@ async function legacyUploadCap(
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
 						resolve();
-						queryClient.refetchQueries(imageUrlQuery(uploadId));
+						queryClient.refetchQueries({
+							queryKey: ThumbnailRequest.queryKey(uploadId),
+						});
 					} else {
 						reject(
 							new Error(`Screenshot upload failed with status ${xhr.status}`),

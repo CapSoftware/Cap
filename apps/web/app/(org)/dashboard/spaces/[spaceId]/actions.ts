@@ -4,21 +4,24 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers } from "@cap/database/schema";
+import { Space, User } from "@cap/web-domain";
 import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 
+const spaceRole = z.union([z.literal("Admin"), z.literal("member")]);
+
 const addSpaceMemberSchema = z.object({
-	spaceId: z.string(),
-	userId: z.string(),
-	role: z.string(),
+	spaceId: z.string().transform((v) => Space.SpaceId.make(v)),
+	userId: z.string().transform((v) => User.UserId.make(v)),
+	role: spaceRole,
 });
 
 const addSpaceMembersSchema = z.object({
-	spaceId: z.string(),
-	userIds: z.array(z.string()),
-	role: z.string(),
+	spaceId: z.string().transform((v) => Space.SpaceId.make(v)),
+	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
+	role: spaceRole,
 });
 
 export async function addSpaceMember(
@@ -147,9 +150,11 @@ export async function removeSpaceMember(
 
 // Replace all members for a space
 const setSpaceMembersSchema = z.object({
-	spaceId: z.string(),
-	userIds: z.array(z.string()),
-	role: z.string().default("member"),
+	spaceId: z
+		.string()
+		.transform((v) => Space.SpaceId.make(v) as Space.SpaceIdOrOrganisationId),
+	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
+	role: spaceRole.default("member"),
 });
 
 export async function setSpaceMembers(
@@ -172,7 +177,7 @@ export async function setSpaceMembers(
 	if (userIds.length > 0) {
 		const now = new Date();
 		const values = userIds.map((userId) => ({
-			id: uuidv4().substring(0, nanoIdLength),
+			id: User.UserId.make(uuidv4().substring(0, nanoIdLength)),
 			spaceId,
 			userId,
 			role,

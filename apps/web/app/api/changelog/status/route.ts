@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { getChangelogPosts } from "../../../../utils/changelog";
 
-export const revalidate = 0;
-
 export async function GET(request: Request) {
 	const { searchParams } = new URL(request.url);
 	const version = searchParams.get("version");

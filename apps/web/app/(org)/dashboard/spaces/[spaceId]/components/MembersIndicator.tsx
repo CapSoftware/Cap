@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Avatar,
 	Button,
 	Dialog,
 	DialogContent,
@@ -13,14 +12,15 @@ import {
 	FormControl,
 	FormField,
 } from "@cap/ui";
+import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Image from "next/image";
 import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { setSpaceMembers } from "../actions";
 import type { SpaceMemberData } from "../page";
@@ -30,7 +30,7 @@ type MembersIndicatorProps = {
 	memberCount: number;
 	members: SpaceMemberData[];
 	organizationMembers: SpaceMemberData[];
-	spaceId: string;
+	spaceId: Space.SpaceIdOrOrganisationId;
 	canManageMembers: boolean;
 	onAddVideos?: () => void;
 };
@@ -58,7 +58,7 @@ export const MembersIndicator = ({
 		},
 	});
 
-	const handleSaveMembers = async (selectedUserIds: string[]) => {
+	const handleSaveMembers = async (selectedUserIds: User.UserId[]) => {
 		if (!canManageMembers) return;
 
 		// Compare selectedUserIds to current members' userIds (order-insensitive)
@@ -165,20 +165,13 @@ export const MembersIndicator = ({
 											key={member.userId}
 											className="flex gap-2 items-center p-3 rounded-lg border bg-gray-3 border-gray-4"
 										>
-											{member.image ? (
-												<Image
-													src={member.image}
-													alt={member.name || member.email}
-													width={24}
-													height={24}
-													className="rounded-full size-8"
-												/>
-											) : (
-												<Avatar
-													name={member.name || member.email}
-													className="size-8"
-												/>
-											)}
+											<SignedImageUrl
+												name={member.name || member.email}
+												image={member.image || undefined}
+												type="user"
+												className="size-8"
+												letterClass="text-sm"
+											/>
 											<span className="text-sm text-gray-12">
 												{member.name || member.email}
 											</span>
@@ -196,7 +189,11 @@ export const MembersIndicator = ({
 						{canManageMembers && (
 							<Button
 								onClick={() =>
-									handleSaveMembers(form.getValues("members") ?? [])
+									handleSaveMembers(
+										form
+											.getValues("members")
+											?.map((v) => User.UserId.make(v)) ?? [],
+									)
 								}
 								disabled={isLoading}
 								spinner={isLoading}

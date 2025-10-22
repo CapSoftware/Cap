@@ -1,4 +1,4 @@
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { type ClassValue, clsx } from "clsx";
 import type { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
 import type { NextRequest } from "next/server";
@@ -15,7 +15,7 @@ export const allowedOrigins = [
 	"cap.link",
 ];
 
-export function getHeaders(origin: string) {
+export function getHeaders(origin: string | null) {
 	// Allow "*" for custom domains or allowedOrigins for main domains
 	return {
 		"Access-Control-Allow-Origin": origin || "*",
