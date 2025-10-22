@@ -33,6 +33,7 @@ import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
+import { hideCameraWindow } from "~/utils/camera-window";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
@@ -313,6 +314,8 @@ function Page() {
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
 	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
+	const [cameraPromptKey, setCameraPromptKey] = createSignal(0);
+	const [pendingCameraMode, setPendingCameraMode] = createSignal(false);
 
 	let displayTriggerRef: HTMLButtonElement | undefined;
 	let windowTriggerRef: HTMLButtonElement | undefined;
@@ -564,6 +567,22 @@ function Page() {
 	};
 
 	createEffect(() => {
+		if (!pendingCameraMode()) return;
+		if (!rawOptions.cameraID) return;
+		setPendingCameraMode(false);
+		setDisplayMenuOpen(false);
+		setWindowMenuOpen(false);
+		setOptions("targetMode", "camera");
+		commands.openTargetSelectOverlays(null);
+	});
+
+	createEffect(() => {
+		if (rawOptions.targetMode !== "camera") return;
+		if (rawOptions.cameraID) return;
+		setOptions("targetMode", null);
+	});
+
+	createEffect(() => {
 		const target = options.target();
 		if (!target) return;
 		const screen = options.screen();
@@ -604,6 +623,7 @@ function Page() {
 				disabled={cameras.isPending}
 				options={cameras.data ?? []}
 				value={options.camera() ?? null}
+				promptKey={cameraPromptKey()}
 				onChange={(c) => {
 					if (!c) setCamera.mutate(null);
 					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
@@ -740,12 +760,27 @@ function Page() {
 						name="Area"
 					/>
 					<TargetTypeButton
-						selected={false}
+						selected={rawOptions.targetMode === "camera"}
 						Component={IconLucideCamera}
 						disabled={isRecording()}
 						onClick={() => {
 							if (isRecording()) return;
-							console.log("Camera mode coming soon");
+							const hasCameraSelected = !!rawOptions.cameraID;
+							if (!hasCameraSelected) {
+								setPendingCameraMode(true);
+								setCameraPromptKey((value) => value + 1);
+								return;
+							}
+
+							setPendingCameraMode(false);
+							setDisplayMenuOpen(false);
+							setWindowMenuOpen(false);
+							void hideCameraWindow();
+							const nextTargetMode =
+								rawOptions.targetMode === "camera" ? null : "camera";
+							setOptions("targetMode", nextTargetMode);
+							if (nextTargetMode) commands.openTargetSelectOverlays(null);
+							else commands.closeTargetSelectOverlays();
 						}}
 						name="Camera only"
 					/>

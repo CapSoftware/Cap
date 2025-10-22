@@ -9,10 +9,17 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	type JSX,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import createPresence from "solid-presence";
+import {
+	CameraPreviewSurface,
+	computeCameraPreviewGeometry,
+	createCameraPreviewState,
+	createCameraPreviewStream,
+} from "~/components/camera/camera-preview";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -51,6 +58,25 @@ export default function () {
 	const currentRecording = createCurrentRecordingQuery();
 	const optionsQuery = createOptionsQuery();
 	const auth = authStore.createQuery();
+
+	const [previewState] = createCameraPreviewState();
+	const { latestFrame, frameDimensions, setCanvasRef } =
+		createCameraPreviewStream();
+	const previewGeometry = createMemo(() =>
+		computeCameraPreviewGeometry(previewState, frameDimensions()),
+	);
+	const previewContainerStyle = createMemo<JSX.CSSProperties>(() => {
+		const geometry = previewGeometry();
+		return {
+			width: `${geometry.windowWidth}px`,
+			height: `${geometry.windowHeight}px`,
+		};
+	});
+	const showCameraPreview = createMemo(
+		() =>
+			optionsQuery.rawOptions.targetMode === "camera" &&
+			!!optionsQuery.rawOptions.cameraID,
+	);
 
 	const audioLevel = createAudioInputLevel();
 
@@ -217,6 +243,27 @@ export default function () {
 						<Countdown from={state().from} current={state().current} />
 					</div>
 				)}
+			</Show>
+			<Show when={showCameraPreview()}>
+				<div
+					class="flex h-full items-center px-3 border-r border-gray-5"
+					data-tauri-drag-region
+				>
+					<div
+						class={cx(
+							"flex flex-col relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
+							previewState.shape === "round" ? "rounded-full" : "rounded-3xl",
+						)}
+						style={previewContainerStyle()}
+					>
+						<CameraPreviewSurface
+							state={previewState}
+							latestFrame={latestFrame}
+							frameDimensions={frameDimensions}
+							setCanvasRef={setCanvasRef}
+						/>
+					</div>
+				</div>
 			</Show>
 			<div class="flex flex-row justify-between p-[0.25rem] flex-1">
 				<button

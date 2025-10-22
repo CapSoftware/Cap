@@ -1,5 +1,6 @@
 import { createQuery } from "@tanstack/solid-query";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { createEffect, on } from "solid-js";
 import { trackEvent } from "~/utils/analytics";
 import { createCurrentRecordingQuery, getPermissions } from "~/utils/queries";
 import type { CameraInfo } from "~/utils/tauri";
@@ -12,6 +13,7 @@ export default function CameraSelect(props: {
 	disabled?: boolean;
 	options: CameraInfo[];
 	value: CameraInfo | null;
+	promptKey?: number;
 	onChange: (camera: CameraInfo | null) => void;
 }) {
 	const currentRecording = createCurrentRecordingQuery();
@@ -34,32 +36,46 @@ export default function CameraSelect(props: {
 		});
 	};
 
+	const openMenu = () => {
+		if (!!currentRecording.data || props.disabled) return;
+		Promise.all([
+			CheckMenuItem.new({
+				text: NO_CAMERA,
+				checked: props.value === null,
+				action: () => onChange(null),
+			}),
+			PredefinedMenuItem.new({ item: "Separator" }),
+			...props.options.map((o) =>
+				CheckMenuItem.new({
+					text: o.display_name,
+					checked: o === props.value,
+					action: () => onChange(o),
+				}),
+			),
+		])
+			.then((items) => Menu.new({ items }))
+			.then((m) => {
+				m.popup();
+			});
+	};
+
+	createEffect(
+		on(
+			() => props.promptKey,
+			(key) => {
+				if (!key) return;
+				openMenu();
+			},
+			{ defer: true },
+		),
+	);
+
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
 				disabled={!!currentRecording.data || props.disabled}
 				class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
-				onClick={() => {
-					Promise.all([
-						CheckMenuItem.new({
-							text: NO_CAMERA,
-							checked: props.value === null,
-							action: () => onChange(null),
-						}),
-						PredefinedMenuItem.new({ item: "Separator" }),
-						...props.options.map((o) =>
-							CheckMenuItem.new({
-								text: o.display_name,
-								checked: o === props.value,
-								action: () => onChange(o),
-							}),
-						),
-					])
-						.then((items) => Menu.new({ items }))
-						.then((m) => {
-							m.popup();
-						});
-				}}
+				onClick={openMenu}
 			>
 				<IconCapCamera class="text-gray-10 size-4" />
 				<p class="flex-1 text-sm text-left truncate">

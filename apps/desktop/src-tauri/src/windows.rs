@@ -307,6 +307,12 @@ impl ShowCapWindow {
                 .title();
                 let should_protect = should_protect_window(app, &title);
 
+                let camera_ws_port = {
+                    let state = app.state::<ArcLock<App>>();
+                    let state = state.read().await;
+                    state.camera_ws_port
+                };
+
                 let mut window_builder = self
                     .window_builder(
                         app,
@@ -337,6 +343,14 @@ impl ShowCapWindow {
                 {
                     window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
                 }
+
+                window_builder = window_builder.initialization_script(format!(
+                    "
+                        window.__CAP__ = window.__CAP__ ?? {{}};
+                        window.__CAP__.cameraWsPort = {};
+                    ",
+                    camera_ws_port
+                ));
 
                 let window = window_builder.build()?;
 

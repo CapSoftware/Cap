@@ -1,16 +1,21 @@
 import { Button } from "@cap/ui-solid";
+import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { createElementBounds } from "@solid-primitives/bounds";
 import {
 	createEventListener,
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery, useMutation } from "@tanstack/solid-query";
-import { emit } from "@tauri-apps/api/event";
+import { emit, type UnlistenFn } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as dialog from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	type ComponentProps,
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	type JSX,
@@ -21,8 +26,15 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import {
+	CameraPreviewSurface,
+	computeCameraPreviewGeometry,
+	createCameraPreviewState,
+	createCameraPreviewStream,
+} from "~/components/camera/camera-preview";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
+import { hideCameraWindow } from "~/utils/camera-window";
 import { createOptionsQuery } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
 import {
@@ -41,6 +53,20 @@ const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
+const CAMERA_PREVIEW_BAR_HEIGHT = 56;
+const CAMERA_RECORDING_SCALE = 1.35;
+
+type CameraWindowStage = "overlay" | "recording" | "default";
+
+type CameraWindowBoundsPayload = {
+	stage: CameraWindowStage;
+	bounds?: {
+		position: { x: number; y: number };
+		size: { width: number; height: number };
+		barHeight: number;
+	};
+};
+
 export default function () {
 	return (
 		<RecordingOptionsProvider>
@@ -53,6 +79,23 @@ function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
+	const overlayWindow = getCurrentWindow();
+
+	let hasClosedForNullTargetMode = false;
+	createEffect(() => {
+		const targetMode = rawOptions.targetMode;
+
+		if (targetMode === null) {
+			if (!hasClosedForNullTargetMode) {
+				hasClosedForNullTargetMode = true;
+				void overlayWindow.close().catch((error) => {
+					console.error("Failed to close target select overlay", error);
+				});
+			}
+		} else if (targetMode !== undefined) {
+			hasClosedForNullTargetMode = false;
+		}
+	});
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
@@ -155,7 +198,9 @@ function Inner() {
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs text-white">
-												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
+												{`${size().width}x${size().height} · ${
+													display.refresh_rate
+												}FPS`}
 											</span>
 										)}
 									</Show>
@@ -253,6 +298,12 @@ function Inner() {
 						</div>
 					)}
 				</Show>
+			</Match>
+			<Match when={rawOptions.targetMode === "camera"}>
+				<CameraOverlay
+					displayId={params.displayId}
+					setToggleModeSelect={setToggleModeSelect}
+				/>
 			</Match>
 			<Match when={rawOptions.targetMode === "area"}>
 				{(_) => (
@@ -703,6 +754,8 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	onStartRecording?: () => void;
+	containerRef?: (el: HTMLDivElement | undefined) => void;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -772,11 +825,23 @@ function RecordingControls(props: {
 				}),
 				setOptions,
 			),
+		onSuccess: () => props.onStartRecording?.(),
 	}));
+
+	onCleanup(() => {
+		props.containerRef?.(undefined);
+	});
+
+	const registerContainer = (el: HTMLDivElement) => {
+		props.containerRef?.(el);
+	};
 
 	return (
 		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+			<div
+				ref={registerContainer}
+				class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4"
+			>
 				<div
 					onClick={() => {
 						setOptions("targetMode", null);
@@ -798,7 +863,6 @@ function RecordingControls(props: {
 							return;
 						}
 						if (startRecording.isPending) return;
-
 						startRecording.mutate();
 					}}
 				>
@@ -878,6 +942,282 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 				</p>
 			</Show>
 		</Suspense>
+	);
+}
+
+function CameraOverlay(props: {
+	displayId?: DisplayId;
+	setToggleModeSelect: (value: boolean) => void;
+}) {
+	const { rawOptions } = useRecordingOptions();
+	const [controlsEl, setControlsEl] = createSignal<
+		HTMLDivElement | undefined
+	>();
+	const controlsBounds = createElementBounds(controlsEl);
+	const overlayWindow = getCurrentWindow();
+	const [previewState, setPreviewState] = createCameraPreviewState();
+	const { latestFrame, frameDimensions, setCanvasRef } =
+		createCameraPreviewStream();
+	const previewGeometry = createMemo(() =>
+		computeCameraPreviewGeometry(previewState, frameDimensions()),
+	);
+	const previewWindowSize = createMemo(() => ({
+		width: previewGeometry().windowWidth,
+		height: previewGeometry().windowHeight,
+	}));
+	createEffect(() => {
+		if (previewState.shape === "round") {
+			setPreviewState("shape", "square");
+		}
+	});
+	const isWide = createMemo(() => previewState.shape === "full");
+	const previewContainerStyle = createMemo<JSX.CSSProperties>(() => {
+		const geometry = previewGeometry();
+		return {
+			width: `${geometry.windowWidth}px`,
+			height: `${geometry.windowHeight}px`,
+		};
+	});
+	const previewShapeClass = createMemo(() =>
+		previewState.shape === "full" ? "rounded-2xl" : "rounded-3xl",
+	);
+	let startedRecording = false;
+	let lastStageSignature: string | null = null;
+	let unlistenCloseRequested: UnlistenFn | undefined;
+
+	void overlayWindow
+		.onCloseRequested(() => {
+			if (startedRecording) return;
+			if (rawOptions.targetMode !== "camera" || !rawOptions.cameraID) return;
+			queueMicrotask(() => {
+				void commands.showWindow("Camera");
+			});
+		})
+		.then((unlisten) => {
+			unlistenCloseRequested = unlisten;
+		})
+		.catch((error) => {
+			console.error("Failed to listen for overlay close", error);
+		});
+
+	const isActiveDisplay = createMemo(() => {
+		if (!props.displayId) return false;
+		if (rawOptions.captureTarget.variant === "display")
+			return rawOptions.captureTarget.id === props.displayId;
+		if (rawOptions.captureTarget.variant === "area")
+			return rawOptions.captureTarget.screen === props.displayId;
+		return false;
+	});
+
+	const canControlCamera = () =>
+		rawOptions.targetMode === "camera" &&
+		!!rawOptions.cameraID &&
+		(props.displayId ? isActiveDisplay() : true);
+
+	const sendStage = async (stage: CameraWindowStage) => {
+		if (!canControlCamera()) return;
+		if (stage === "overlay" && startedRecording) return;
+		await commands.showWindow("Camera");
+
+		const [position, scale] = await Promise.all([
+			overlayWindow.outerPosition(),
+			overlayWindow.scaleFactor(),
+		]);
+
+		const logicalWindowPosition =
+			typeof (position as any).toLogical === "function"
+				? (position as any).toLogical(scale)
+				: { x: position.x / scale, y: position.y / scale };
+
+		if (stage === "overlay" && startedRecording) return;
+
+		const size = previewWindowSize();
+		const baseWidth = size.width;
+		const baseContentHeight = size.height;
+		const baseTotalHeight = baseContentHeight + CAMERA_PREVIEW_BAR_HEIGHT;
+		const multiplier = stage === "recording" ? CAMERA_RECORDING_SCALE : 1;
+
+		const stageWidth = baseWidth * multiplier;
+		const stageContentHeight = baseContentHeight * multiplier;
+		const stageTotalHeight = stageContentHeight + CAMERA_PREVIEW_BAR_HEIGHT;
+
+		let viewportLeft = (window.innerWidth - stageWidth) / 2;
+		let viewportTop = (window.innerHeight - stageTotalHeight) / 2;
+
+		if (stage === "overlay") {
+			const ctrlLeft = controlsBounds.left ?? viewportLeft;
+			const ctrlWidth = controlsBounds.width ?? stageWidth;
+			const ctrlTop = controlsBounds.top ?? viewportTop + stageTotalHeight;
+
+			const ctrlCenterX = ctrlLeft + ctrlWidth / 2;
+			viewportLeft = ctrlCenterX - stageWidth / 2;
+			viewportTop = ctrlTop - stageTotalHeight - 24;
+		}
+
+		viewportLeft = Math.max(
+			24,
+			Math.min(viewportLeft, window.innerWidth - stageWidth - 24),
+		);
+		viewportTop = Math.max(
+			24,
+			Math.min(viewportTop, window.innerHeight - stageTotalHeight - 24),
+		);
+
+		const signature = [
+			stage,
+			viewportLeft.toFixed(2),
+			viewportTop.toFixed(2),
+			stageWidth.toFixed(2),
+			stageContentHeight.toFixed(2),
+		].join(":");
+		if (signature === lastStageSignature) return;
+		lastStageSignature = signature;
+
+		const payload: CameraWindowBoundsPayload = {
+			stage,
+			bounds: {
+				position: {
+					x: logicalWindowPosition.x + viewportLeft,
+					y: logicalWindowPosition.y + viewportTop,
+				},
+				size: { width: stageWidth, height: stageContentHeight },
+				barHeight: CAMERA_PREVIEW_BAR_HEIGHT,
+			},
+		};
+
+		await emit("camera-window:set-bounds", payload);
+	};
+
+	createEffect(() => {
+		const active = canControlCamera();
+		const _cameraId = rawOptions.cameraID;
+		const _mode = rawOptions.targetMode;
+
+		if (!active) {
+			if (!startedRecording) {
+				lastStageSignature = null;
+				void emit("camera-window:set-bounds", {
+					stage: "default",
+				} satisfies CameraWindowBoundsPayload);
+			}
+			return;
+		}
+
+		if (startedRecording) return;
+		lastStageSignature = null;
+		void emit("camera-window:set-bounds", {
+			stage: "default",
+		} satisfies CameraWindowBoundsPayload);
+		void hideCameraWindow();
+	});
+
+	onCleanup(() => {
+		setControlsEl(undefined);
+		unlistenCloseRequested?.();
+		if (!startedRecording) {
+			lastStageSignature = null;
+			void emit("camera-window:set-bounds", {
+				stage: "default",
+			} satisfies CameraWindowBoundsPayload);
+			if (rawOptions.targetMode === "camera" && rawOptions.cameraID) {
+				void commands.showWindow("Camera");
+			} else {
+				void hideCameraWindow();
+			}
+		}
+	});
+
+	const handleStartRecording = () => {
+		startedRecording = true;
+		lastStageSignature = null;
+		void sendStage("recording");
+	};
+
+	const recordingTarget = createMemo<ScreenCaptureTarget>(() => {
+		if (rawOptions.captureTarget.variant === "display")
+			return rawOptions.captureTarget;
+		if (rawOptions.captureTarget.variant === "area")
+			return rawOptions.captureTarget;
+		if (rawOptions.captureTarget.variant === "window")
+			return rawOptions.captureTarget;
+		if (props.displayId) return { variant: "display", id: props.displayId };
+		return rawOptions.captureTarget;
+	});
+
+	return (
+		<div class="relative flex h-screen w-screen flex-col items-center justify-center bg-black/50">
+			<div class="relative z-10 flex flex-col items-center gap-6 text-white">
+				<div class="flex flex-col items-center text-center gap-1">
+					<span class="text-3xl font-semibold">Camera only</span>
+					<span class="text-xs opacity-70">
+						Only your camera will be captured during recording
+					</span>
+				</div>
+				<div class="relative mt-4 flex flex-col items-center group">
+					<div class="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 flex justify-center z-20">
+						<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
+							<ControlButton
+								aria-label="Toggle aspect ratio"
+								pressed={isWide()}
+								onClick={() =>
+									setPreviewState("shape", (shape) =>
+										shape === "full" ? "square" : "full",
+									)
+								}
+							>
+								{isWide() ? (
+									<IconLucideRectangleHorizontal class="size-5.5" />
+								) : (
+									<IconCapSquare class="size-5.5" />
+								)}
+							</ControlButton>
+							<ControlButton
+								aria-label={
+									previewState.mirrored ? "Disable mirror" : "Enable mirror"
+								}
+								pressed={previewState.mirrored}
+								onClick={() => setPreviewState("mirrored", (m) => !m)}
+							>
+								<IconCapArrows class="size-5.5" />
+							</ControlButton>
+						</div>
+					</div>
+					<div
+						class={cx(
+							"flex flex-col relative overflow-hidden border-none shadow-lg bg-gray-1 text-gray-12",
+							previewShapeClass(),
+						)}
+						style={previewContainerStyle()}
+					>
+						<CameraPreviewSurface
+							state={previewState}
+							latestFrame={latestFrame}
+							frameDimensions={frameDimensions}
+							setCanvasRef={setCanvasRef}
+						/>
+					</div>
+				</div>
+				<RecordingControls
+					setToggleModeSelect={props.setToggleModeSelect}
+					target={recordingTarget()}
+					onStartRecording={handleStartRecording}
+					containerRef={setControlsEl}
+				/>
+				<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
+			</div>
+		</div>
+	);
+}
+
+function ControlButton(
+	props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class">,
+) {
+	return (
+		<KToggleButton
+			type="button"
+			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			{...props}
+		/>
 	);
 }
 
