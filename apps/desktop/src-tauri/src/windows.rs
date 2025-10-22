@@ -300,7 +300,7 @@ impl ShowCapWindow {
                 let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
-                let is_primary_display = scap_targets::Display::get_containing_cursor()
+                let is_hovered_display = scap_targets::Display::get_containing_cursor()
                     .map(|d| d.id())
                     == Some(display.id());
 
@@ -313,7 +313,7 @@ impl ShowCapWindow {
                 let mut window_builder = self
                     .window_builder(
                         app,
-                        format!("/target-select-overlay?displayId={display_id}&isPrimaryDisplay={is_primary_display}"),
+                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}"),
                     )
                     .maximized(false)
                     .resizable(false)

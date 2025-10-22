@@ -64,9 +64,9 @@ export default function () {
 function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
-		isPrimaryDisplay: string;
+		isHoveredDisplay: string;
 	}>();
-	const isPrimaryDisplay = params.isPrimaryDisplay === "true";
+	const isHoveredDisplay = params.isHoveredDisplay === "true";
 	const { rawOptions, setOptions } = createOptionsQuery();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
@@ -110,7 +110,7 @@ function Inner() {
 	}));
 
 	const [bounds, _setBounds] = createStore(
-		structuredClone(isPrimaryDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS),
+		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS),
 	);
 
 	const { postMessage, onMessage } = makeBroadcastChannel(
