@@ -209,14 +209,20 @@ export function ClipTrack(
 				const [dragOffset, setDragOffset] = createSignal(0);
 				const [initialStart, setInitialStart] = createSignal(segment.start);
 
-				const prevDuration = createMemo(() =>
-					segments()
-						.slice(0, i())
-						.reduce((t, s) => t + (s.end - s.start) / s.timescale, 0)
-				);
+				const prefixOffsets = createMemo(() => {
+					const segs = segments();
+					const out: number[] = new Array(segs.length);
+					let sum = 0;
+					for (let k = 0; k < segs.length; k++) {
+						out[k] = sum;
+						sum += (segs[k].end - segs[k].start) / segs[k].timescale;
+					}
+					return out;
+				});
+				const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
 				const relativeSegment = createMemo(() => {
-					const offset = isDragging() ? dragOffset() : 0;
+					const offset = isDragging() ? dragOffset() / (segment.timescale || 1) : 0;
 					
 					return {
 						start: prevDuration() + offset,
@@ -226,8 +232,8 @@ export function ClipTrack(
 					};
 				});
 
-				const segmentX = useSegmentTranslateX(() => relativeSegment());
-				const segmentWidth = useSegmentWidth(() => relativeSegment());
+				const segmentX = useSegmentTranslateX(relativeSegment);
+				const segmentWidth = useSegmentWidth(relativeSegment);
 
 				const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
@@ -448,7 +454,7 @@ export function ClipTrack(
 												start +
 												(event.clientX - downEvent.clientX) * secsPerPixel();
 
-											// Update visual offset for drag feedback
+											// Update visual offset in recording seconds (scaled in relativeSegment)
 											setDragOffset(newStart - initialStart());
 
 											setProject(
@@ -481,6 +487,18 @@ export function ClipTrack(
 													setDragOffset(0);
 													
 													onHandleReleased();
+												},
+												blur: () => {
+													dispose();
+													resumeHistory();
+													setIsDragging(false);
+													setDragOffset(0);
+												},
+												mouseleave: () => {
+													dispose();
+													resumeHistory();
+													setIsDragging(false);
+													setDragOffset(0);
 												},
 											});
 										});
@@ -569,6 +587,14 @@ export function ClipTrack(
 													resumeHistory();
 													update(e);
 													onHandleReleased();
+												},
+												blur: () => {
+													dispose();
+													resumeHistory();
+												},
+												mouseleave: () => {
+													dispose();
+													resumeHistory();
 												},
 											});
 										});
