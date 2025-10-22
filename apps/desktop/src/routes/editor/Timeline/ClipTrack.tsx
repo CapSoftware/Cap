@@ -591,10 +591,12 @@ export function ClipTrack(
 												blur: () => {
 													dispose();
 													resumeHistory();
+													onHandleReleased();
 												},
 												mouseleave: () => {
 													dispose();
 													resumeHistory();
+													onHandleReleased();
 												},
 											});
 										});
