@@ -40,6 +40,9 @@ import {
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
 
+const MIN_WIDTH = 200;
+const MIN_HEIGHT = 100;
+
 const EMPTY_BOUNDS = {
 	position: { x: 0, y: 0 },
 	size: { width: 0, height: 0 },
@@ -110,7 +113,7 @@ function Inner() {
 			params.displayId !== undefined && rawOptions.targetMode === "display",
 	}));
 
-	const [bounds, _setBounds] = createStore(
+	const [bounds, setBounds] = createStore(
 		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS),
 	);
 
@@ -120,39 +123,7 @@ function Inner() {
 	createEventListener(window, "mousedown", () =>
 		postMessage({ type: "reset" }),
 	);
-	onMessage(() =>
-		_setBounds({
-			position: { x: 0, y: 0 },
-			size: { width: 0, height: 0 },
-		}),
-	);
-
-	const setBounds = (newBounds: typeof bounds) => {
-		const clampedBounds = {
-			position: {
-				x: Math.max(0, newBounds.position.x),
-				y: Math.max(0, newBounds.position.y),
-			},
-			size: {
-				width: Math.max(
-					150,
-					Math.min(
-						window.innerWidth - Math.max(0, newBounds.position.x),
-						newBounds.size.width,
-					),
-				),
-				height: Math.max(
-					150,
-					Math.min(
-						window.innerHeight - Math.max(0, newBounds.position.y),
-						newBounds.size.height,
-					),
-				),
-			},
-		};
-
-		_setBounds(clampedBounds);
-	};
+	onMessage(() => setBounds(EMPTY_BOUNDS));
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
@@ -743,7 +714,7 @@ function Inner() {
 														newPosition.y =
 															window.innerHeight - bounds.size.height;
 
-													_setBounds("position", newPosition);
+													setBounds("position", newPosition);
 												},
 												mouseup: () => {
 													setState(undefined);
@@ -818,6 +789,12 @@ function RecordingControls(props: {
 
 	const generalSetings = generalSettingsStore.createQuery();
 
+	const isAreaTooSmall = () => {
+		if (props.target.variant !== "area") return false;
+		const { width, height } = props.target.bounds.size;
+		return width < MIN_WIDTH || height < MIN_HEIGHT;
+	};
+
 	const menuModes = async () =>
 		await Menu.new({
 			items: [
@@ -884,7 +861,22 @@ function RecordingControls(props: {
 	}));
 
 	return (
-		<>
+		<Show
+			when={!isAreaTooSmall()}
+			fallback={
+				<div class="flex flex-col gap-2 items-center p-4 my-2.5 rounded-xl border min-w-fit w-fit bg-red-500/80 border-red-500/60">
+					<div class="flex gap-2 items-center">
+						<IconCapInfo class="will-change-transform size-4" />
+						<p class="text-sm font-medium">Area Too Small</p>
+					</div>
+					<p class="text-xs text-center">
+						Selection must be at least {MIN_WIDTH}x{MIN_HEIGHT} pixels
+						{props.target.variant === "area" &&
+							` (currently ${props.target.bounds.size.width}x${props.target.bounds.size.height})`}
+					</p>
+				</div>
+			}
+		>
 			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
 				<div
 					onClick={() => {
@@ -966,7 +958,7 @@ function RecordingControls(props: {
 					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
 				</p>
 			</div>
-		</>
+		</Show>
 	);
 }
 
