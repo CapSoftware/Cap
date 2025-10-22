@@ -141,6 +141,9 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         match crate::logging::upload_log_file(&app).await {
                             Ok(_) => {
                                 tracing::info!("Successfully uploaded logs");
+                                app.dialog()
+                                    .message("Logs uploaded successfully")
+                                    .show(|_| {});
                             }
                             Err(e) => {
                                 tracing::error!("Failed to upload logs: {e:#}");
