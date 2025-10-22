@@ -729,6 +729,7 @@ async function AuthorizedContent({
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
 					user={user}
+					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}

@@ -43,7 +43,7 @@ interface SidebarProps {
 		processing?: boolean;
 	} | null;
 	aiGenerationEnabled?: boolean;
-	ownerIsPro: boolean;
+	ownerIsPro?: boolean;
 }
 
 const TabContent = motion.div;
@@ -183,7 +183,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
-							isVideoOwnerPro={ownerIsPro}
+							ownerIsPro={ownerIsPro}
 						/>
 					);
 				case "transcript":

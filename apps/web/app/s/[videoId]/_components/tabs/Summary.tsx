@@ -22,7 +22,7 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	isSummaryDisabled?: boolean;
-	isVideoOwnerPro: boolean;
+	ownerIsPro?: boolean;
 }
 
 const formatTime = (time: number) => {
@@ -66,7 +66,7 @@ export const Summary: React.FC<SummaryProps> = ({
 	initialAiData,
 	isSummaryDisabled = false,
 	aiGenerationEnabled = false,
-	isVideoOwnerPro,
+	ownerIsPro,
 }) => {
 	const [aiData, setAiData] = useState<{
 		title?: string | null;
