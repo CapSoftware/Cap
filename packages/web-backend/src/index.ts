@@ -11,4 +11,5 @@ export { Spaces } from "./Spaces/index.ts";
 export { SpacesPolicy } from "./Spaces/SpacesPolicy.ts";
 export { Videos } from "./Videos/index.ts";
 export { VideosPolicy } from "./Videos/VideosPolicy.ts";
+export { VideosRepo } from "./Videos/VideosRepo.ts";
 export * as Workflows from "./Workflows.ts";

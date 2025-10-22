@@ -134,7 +134,7 @@ export async function generateMetadata(
 		referrer.includes(domain),
 	);
 
-	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),

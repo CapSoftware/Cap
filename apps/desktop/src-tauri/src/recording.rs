@@ -466,6 +466,7 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
+
                 #[cfg(target_os = "macos")]
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
@@ -537,7 +538,13 @@ pub async fn start_recording(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio);
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_max_output_size(
+                            general_settings
+                                .as_ref()
+                                .map(|settings| settings.instant_mode_max_resolution)
+                                .unwrap_or_else(|| 1920),
+                        );
 
                         #[cfg(target_os = "macos")]
                         {
