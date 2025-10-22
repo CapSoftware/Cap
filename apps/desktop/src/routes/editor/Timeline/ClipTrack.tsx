@@ -205,7 +205,6 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-				// Track drag state for visual feedback
 				const [isDragging, setIsDragging] = createSignal(false);
 				const [dragOffset, setDragOffset] = createSignal(0);
 				const [initialStart, setInitialStart] = createSignal(segment.start);
@@ -217,7 +216,6 @@ export function ClipTrack(
 				);
 
 				const relativeSegment = createMemo(() => {
-					// Only apply offset during drag for visual feedback
 					const offset = isDragging() ? dragOffset() : 0;
 					
 					return {
