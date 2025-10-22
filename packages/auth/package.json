@@ -1,0 +1,35 @@
+{
+	"name": "@cap/auth",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsdown"
+	},
+	"dependencies": {
+		"drizzle-orm": "0.44.6",
+		"next": "15.5.4",
+		"next-auth": "^4.24.5",
+		"zod": "^3"
+	},
+	"devDependencies": {
+		"@cap/ui": "workspace:*",
+		"@cap/utils": "workspace:*",
+		"@types/node": "^20.10.0",
+		"@types/react": "^19.1.13",
+		"@types/react-dom": "19.1.9",
+		"dotenv-cli": "latest",
+		"drizzle-kit": "0.31.0",
+		"nodemailer": "^6.9.8",
+		"react": "^19.1.1",
+		"react-dom": "^19.1.1",
+		"react-router-dom": "^6.18.0",
+		"tsconfig": "workspace:*",
+		"typescript": "^5.8.3"
+	},
+	"engines": {
+		"node": "20"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	}
+}
