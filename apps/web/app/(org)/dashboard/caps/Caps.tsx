@@ -2,7 +2,7 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect, Exit } from "effect";
@@ -34,11 +34,14 @@ export type VideoData = {
 	totalComments: number;
 	totalReactions: number;
 	foldersData: FolderDataType[];
-	sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+	sharedOrganizations: {
+		id: string;
+		name: string;
+		iconUrl?: ImageUpload.ImageUrl | null;
+	}[];
 	sharedSpaces?: {
 		id: string;
 		name: string;
-		iconUrl: string;
 		isOrg: boolean;
 		organizationId: string;
 	}[];

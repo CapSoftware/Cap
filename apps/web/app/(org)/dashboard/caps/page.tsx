@@ -15,7 +15,7 @@ import { serverEnv } from "@cap/env";
 import { Database, ImageUploads } from "@cap/web-backend";
 import { type ImageUpload, Video } from "@cap/web-domain";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { Array, Effect } from "effect";
+import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { runPromise } from "@/lib/server";
@@ -32,41 +32,21 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 	if (videoIds.length === 0) return {};
 
 	const db = yield* Database;
-	const imageUploads = yield* ImageUploads;
 
 	// Fetch space-level sharing
-	const spaceSharing = yield* db
-		.use((db) =>
-			db
-				.select({
-					videoId: spaceVideos.videoId,
-					id: spaces.id,
-					name: spaces.name,
-					organizationId: spaces.organizationId,
-					iconUrl: organizations.iconUrl,
-				})
-				.from(spaceVideos)
-				.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-				.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-				.where(inArray(spaceVideos.videoId, videoIds)),
-		)
-		.pipe(
-			Effect.map((v) =>
-				v.map(
-					Effect.fn(function* (v) {
-						return {
-							...v,
-							iconUrl: v.iconUrl
-								? yield* imageUploads.resolveImageUrl(
-										v.iconUrl as ImageUpload.ImageUrlOrKey,
-									)
-								: null,
-						};
-					}),
-				),
-			),
-			Effect.flatMap(Effect.all),
-		);
+	const spaceSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+			.where(inArray(spaceVideos.videoId, videoIds)),
+	);
 
 	// Fetch organization-level sharing
 	const orgSharing = yield* db.use((db) =>
@@ -93,7 +73,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: string;
 			name: string;
 			organizationId: string;
-			iconUrl: string;
 			isOrg: boolean;
 		}>
 	> = {};
@@ -107,7 +86,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || "",
 			isOrg: false,
 		});
 	});
@@ -121,7 +99,6 @@ const getSharedSpacesForVideos = Effect.fn(function* (
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || "",
 			isOrg: true,
 		});
 	});
@@ -167,7 +144,13 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
+			sharedOrganizations: sql<
+				{
+					id: string;
+					name: string;
+					iconUrl: ImageUpload.ImageUrlOrKey | null;
+				}[]
+			>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
@@ -247,31 +230,44 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const sharedSpacesMap =
 		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
-	const processedVideoData = videoData.map((video) => {
-		const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+	const processedVideoData = await Effect.all(
+		videoData.map(
+			Effect.fn(function* (video) {
+				const imageUploads = yield* ImageUploads;
 
-		return {
-			...videoWithoutEffectiveDate,
-			id: Video.VideoId.make(video.id),
-			foldersData,
-			settings: video.settings,
-			sharedOrganizations: Array.isArray(video.sharedOrganizations)
-				? video.sharedOrganizations.filter(
-						(organization) => organization.id !== null,
-					)
-				: [],
-			sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
-				? sharedSpacesMap[video.id]
-				: [],
-			ownerName: video.ownerName ?? "",
-			metadata: video.metadata as
-				| {
-						customCreatedAt?: string;
-						[key: string]: any;
-				  }
-				| undefined,
-		};
-	});
+				const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+
+				return {
+					...videoWithoutEffectiveDate,
+					id: Video.VideoId.make(video.id),
+					foldersData,
+					settings: video.settings,
+					sharedOrganizations: yield* Effect.all(
+						(video.sharedOrganizations ?? [])
+							.filter((organization) => organization.id !== null)
+							.map(
+								Effect.fn(function* (org) {
+									return {
+										...org,
+										iconUrl: org.iconUrl
+											? yield* imageUploads.resolveImageUrl(org.iconUrl)
+											: null,
+									};
+								}),
+							),
+					),
+					sharedSpaces: sharedSpacesMap[video.id] ?? [],
+					ownerName: video.ownerName ?? "",
+					metadata: video.metadata as
+						| {
+								customCreatedAt?: string;
+								[key: string]: any;
+						  }
+						| undefined,
+				};
+			}),
+		),
+	).pipe(runPromise);
 
 	return (
 		<Caps

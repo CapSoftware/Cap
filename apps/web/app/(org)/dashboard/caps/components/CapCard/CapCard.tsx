@@ -8,7 +8,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
 	faCheck,
@@ -63,12 +63,12 @@ export interface CapCardProps extends PropsWithChildren {
 		sharedOrganizations?: {
 			id: string;
 			name: string;
-			iconUrl?: string | null;
+			iconUrl?: ImageUpload.ImageUrl | null;
 		}[];
 		sharedSpaces?: {
 			id: string;
 			name: string;
-			iconUrl?: string | null;
+			iconUrl?: ImageUpload.ImageUrl | null;
 			organizationId: string;
 		}[];
 		ownerName: string | null;
