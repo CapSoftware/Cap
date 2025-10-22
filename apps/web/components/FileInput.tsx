@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Input } from "@cap/ui";
+import { Button, Input, LoadingSpinner } from "@cap/ui";
 import {
 	faCloudUpload,
 	faSpinner,
@@ -12,6 +12,7 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSignedImageUrl } from "@/lib/use-signed-image-url";
+import { SignedImageUrl } from "./SignedImageUrl";
 import { Tooltip } from "./Tooltip";
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
@@ -61,13 +62,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 	// Get signed URL for S3 keys
 	const { data: signedUrl } = useSignedImageUrl(previewUrl, type);
 
-	function isS3Key(imageKeyOrUrl: string | null | undefined): boolean {
-		if (!imageKeyOrUrl) return false;
-		return (
-			imageKeyOrUrl.startsWith("users/") ||
-			imageKeyOrUrl.startsWith("organizations/")
-		);
-	}
 	const previousPreviewRef = useRef<{
 		url: string | null;
 		isLocal: boolean;
@@ -235,7 +229,12 @@ export const FileInput: React.FC<FileInputProps> = ({
 				}}
 			>
 				{/* Fixed height container to prevent resizing */}
-				{previewUrl ? (
+				{isLoading ? (
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
+						<LoadingSpinner themeColors size={16} />
+						<p className="truncate text-[13px] text-gray-11">Uploading...</p>
+					</div>
+				) : previewUrl ? (
 					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
 						<div className="flex flex-1 items-center gap-1.5">
 							<div className="flex flex-1 gap-1 items-center">
@@ -250,19 +249,13 @@ export const FileInput: React.FC<FileInputProps> = ({
 										}}
 										className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
 									>
-										{previewUrl && (
-											<img
-												src={
-													isS3Key(previewUrl) ? (signedUrl ?? "") : previewUrl
-												}
-												alt="File preview"
-												width={32}
-												height={32}
-												loading="eager"
-												referrerPolicy="no-referrer"
-												className="object-cover rounded-full size-8"
-											/>
-										)}
+										<SignedImageUrl
+											image={previewUrl}
+											name="File preview"
+											type={type}
+											letterClass="text-lg"
+											className="size-full"
+										/>
 									</div>
 								</div>
 							</div>

@@ -22,7 +22,7 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	isSummaryDisabled?: boolean;
-	isVideoOwnerPro: boolean | null;
+	ownerIsPro?: boolean;
 }
 
 const formatTime = (time: number) => {
@@ -66,7 +66,7 @@ export const Summary: React.FC<SummaryProps> = ({
 	initialAiData,
 	isSummaryDisabled = false,
 	aiGenerationEnabled = false,
-	isVideoOwnerPro,
+	ownerIsPro,
 }) => {
 	const [aiData, setAiData] = useState<{
 		title?: string | null;
@@ -94,10 +94,7 @@ export const Summary: React.FC<SummaryProps> = ({
 		}
 	};
 
-	const hasExistingAiData =
-		aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
-
-	if (!isVideoOwnerPro && !hasExistingAiData) {
+	if (!ownerIsPro) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<div className="space-y-4 max-w-sm">

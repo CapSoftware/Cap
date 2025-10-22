@@ -43,6 +43,7 @@ interface SidebarProps {
 		processing?: boolean;
 	} | null;
 	aiGenerationEnabled?: boolean;
+	ownerIsPro?: boolean;
 }
 
 const TabContent = motion.div;
@@ -85,6 +86,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			videoId,
 			aiData,
 			aiGenerationEnabled = false,
+			ownerIsPro,
 		},
 		ref,
 	) => {
@@ -141,9 +143,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			setActiveTab(tabId);
 		};
 
-		const isOwner = user?.id === data.ownerId;
-		const isVideoOwnerPro = user && isOwner ? userIsPro(user) : false;
-
 		const renderTabContent = () => {
 			switch (activeTab) {
 				case "activity":
@@ -184,7 +183,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
-							isVideoOwnerPro={isVideoOwnerPro}
+							ownerIsPro={ownerIsPro}
 						/>
 					);
 				case "transcript":
