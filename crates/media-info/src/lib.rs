@@ -135,8 +135,8 @@ impl AudioInfo {
 
     pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
         let sample_size = self.sample_size();
-        let interleaved_chunk_size = sample_size * self.channels;
-        let samples = data.len() / interleaved_chunk_size;
+        let packed_chunk_size = sample_size * self.channels;
+        let samples = data.len() / packed_chunk_size;
 
         let mut frame = frame::Audio::new(self.sample_format, samples, self.channel_layout());
         frame.set_rate(self.sample_rate);
@@ -146,12 +146,11 @@ impl AudioInfo {
         } else if self.channels == 1 || frame.is_packed() {
             frame.data_mut(0)[0..data.len()].copy_from_slice(data)
         } else {
-            // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
+            // cpal *always* returns packed data (i.e. the first sample from every channel, followed
             // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
             // with planar data, so we de-interleave it here if there is more than one channel.
 
-            for (chunk_index, interleaved_chunk) in data.chunks(interleaved_chunk_size).enumerate()
-            {
+            for (chunk_index, packed_chunk) in data.chunks(packed_chunk_size).enumerate() {
                 let start = chunk_index * sample_size;
                 let end = start + sample_size;
 
@@ -159,7 +158,7 @@ impl AudioInfo {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
                     frame.data_mut(channel)[start..end]
-                        .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
+                        .copy_from_slice(&packed_chunk[channel_start..channel_end]);
                 }
             }
         }
