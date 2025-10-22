@@ -17,3 +17,5 @@ either = "1.13.0"
 relative-path = { version = "1.9.3", features = ["serde"] }
 log = "0.4"
 tracing = "0.1.41"
+tempfile = "3.23.0"
+uuid = { version = "1.18.1", version = ["v4"]}

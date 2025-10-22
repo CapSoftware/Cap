@@ -1,4 +1,5 @@
 use std::{
+    env::temp_dir,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
@@ -639,15 +640,15 @@ impl ProjectConfiguration {
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
-        let config_path = project_path.as_ref().join("project-config.json");
-        let temp_path = project_path.as_ref().join("project-config.json.tmp");
+        let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
 
-        // Write to temporary file first
+        // Write to temporary file first to ensure readers don't see partial files
         std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
 
-        // Atomically rename temp file to final file
-        // This ensures readers never see a partial file
-        std::fs::rename(&temp_path, &config_path)?;
+        std::fs::rename(
+            &temp_path,
+            &project_path.as_ref().join("project-config.json"),
+        )?;
 
         Ok(())
     }
