@@ -3,12 +3,12 @@
 import { Avatar } from "@cap/ui";
 import type { Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
 
@@ -124,23 +124,14 @@ export function ClientMyCapsLink({
 			onDragLeave={handleDragLeave}
 			onDrop={handleDrop}
 		>
-			{activeSpace && activeSpace.iconUrl ? (
-				<Image
-					src={activeSpace.iconUrl}
-					alt={activeSpace.name || "Space"}
-					width={20}
-					height={20}
-					className="rounded-full"
+			{activeSpace && (
+				<SignedImageUrl
+					image={activeSpace.iconUrl}
+					name={activeSpace.name}
+					type="organization"
+					letterClass="text-xs"
+					className="relative flex-shrink-0 size-5"
 				/>
-			) : (
-				activeSpace &&
-				!activeSpace.iconUrl && (
-					<Avatar
-						letterClass="text-xs"
-						className="relative flex-shrink-0 size-5"
-						name={activeSpace?.name}
-					/>
-				)
 			)}
 			{activeSpace ? activeSpace.name : "My Caps"}
 		</Link>

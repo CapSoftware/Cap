@@ -196,8 +196,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 			<div class="flex gap-3 justify-between items-center">
 				<div
 					onClick={() => props.onBack()}
-					class="flex gap-1 items-center rounded-md px-1.5 text-xs 
-					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12 
+					class="flex gap-1 items-center rounded-md px-1.5 text-xs
+					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12
 					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
 					<IconLucideArrowLeft class="size-3 text-gray-11" />
@@ -384,6 +384,7 @@ function Page() {
 			reconcile({ variant: "display", id: target.id }),
 		);
 		setOptions("targetMode", "display");
+		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setDisplayMenuOpen(false);
 		displayTriggerRef?.focus();
 	};
@@ -394,6 +395,7 @@ function Page() {
 			reconcile({ variant: "window", id: target.id }),
 		);
 		setOptions("targetMode", "window");
+		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
@@ -413,7 +415,10 @@ function Page() {
 	createUpdateCheck();
 
 	onMount(async () => {
-		setOptions({ targetMode: (window as any).__CAP__.initialTargetMode });
+		const targetMode = (window as any).__CAP__.initialTargetMode;
+		setOptions({ targetMode });
+		if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+		else commands.closeTargetSelectOverlays();
 
 		const currentWindow = getCurrentWindow();
 
@@ -443,11 +448,6 @@ function Page() {
 
 		const monitor = await primaryMonitor();
 		if (!monitor) return;
-	});
-
-	createEffect(() => {
-		if (rawOptions.targetMode) commands.openTargetSelectOverlays();
-		else commands.closeTargetSelectOverlays();
 	});
 
 	const cameras = useQuery(() => listVideoDevices);
@@ -650,6 +650,9 @@ function Page() {
 								setOptions("targetMode", (v) =>
 									v === "display" ? null : "display",
 								);
+								if (rawOptions.targetMode)
+									commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
 							}}
 							name="Display"
 							class="flex-1 h-full rounded-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
@@ -692,6 +695,9 @@ function Page() {
 								setOptions("targetMode", (v) =>
 									v === "window" ? null : "window",
 								);
+								if (rawOptions.targetMode)
+									commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
 							}}
 							name="Window"
 							class="flex-1 h-full rounded-none focus-visible:ring-0 focus-visible:ring-offset-0 pl-5"
@@ -727,6 +733,9 @@ function Page() {
 						onClick={() => {
 							if (isRecording()) return;
 							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+							if (rawOptions.targetMode)
+								commands.openTargetSelectOverlays(null);
+							else commands.closeTargetSelectOverlays();
 						}}
 						name="Area"
 					/>

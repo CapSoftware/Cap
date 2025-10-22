@@ -25,12 +25,12 @@ import { Toolbar } from "./_components/Toolbar";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImage: string | null;
+	authorImageUrlOrKey: string | null;
 };
 
 export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
-	authorImage?: string | null;
+	authorImageUrlOrKey?: string | null;
 	sending?: boolean;
 };
 
@@ -287,8 +287,8 @@ export const Share = ({
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
 				<div className="flex-1">
-					<div className="overflow-hidden relative bg-white rounded-2xl border aspect-video border-gray-5">
-						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-hidden rounded-xl">
+					<div className="overflow-visible relative bg-white rounded-2xl border aspect-video border-gray-5">
+						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
 							<ShareVideo
 								data={{ ...data, transcriptionStatus }}
 								user={user}

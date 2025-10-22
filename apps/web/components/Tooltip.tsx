@@ -40,7 +40,7 @@ const Tooltip = ({
 							{kbd.map((key, index) => (
 								<div
 									className="flex justify-center items-center px-1 rounded-md border shadow-sm bg-gray-3 border-gray-4 size-5 min-w-fit shadow-gray-3/50"
-									key={index}
+									key={index.toString()}
 								>
 									<kbd className="text-[11px] text-gray-10">{key}</kbd>
 								</div>

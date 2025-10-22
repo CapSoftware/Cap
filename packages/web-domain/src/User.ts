@@ -68,10 +68,57 @@ export const OnboardingStepResult = Schema.Union(
 	}),
 );
 
+export const GetSignedImageUrlPayload = Schema.Struct({
+	key: Schema.String,
+	type: Schema.Literal("user", "organization"),
+});
+
+export const GetSignedImageUrlResult = Schema.Struct({
+	url: Schema.String,
+});
+
+export const UploadImagePayload = Schema.Struct({
+	data: Schema.Uint8Array,
+	contentType: Schema.String,
+	fileName: Schema.String,
+	type: Schema.Literal("user", "organization"),
+	entityId: Schema.String,
+	oldImageKey: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+export const UploadImageResult = Schema.Struct({
+	key: Schema.String,
+});
+
+export const RemoveImagePayload = Schema.Struct({
+	imageKey: Schema.String,
+	type: Schema.Literal("user", "organization"),
+	entityId: Schema.String,
+});
+
+export const RemoveImageResult = Schema.Struct({
+	success: Schema.Literal(true),
+});
+
 export class UserRpcs extends RpcGroup.make(
 	Rpc.make("UserCompleteOnboardingStep", {
 		payload: OnboardingStepPayload,
 		success: OnboardingStepResult,
+		error: InternalError,
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("GetSignedImageUrl", {
+		payload: GetSignedImageUrlPayload,
+		success: GetSignedImageUrlResult,
+		error: InternalError,
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("UploadImage", {
+		payload: UploadImagePayload,
+		success: UploadImageResult,
+		error: InternalError,
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("RemoveImage", {
+		payload: RemoveImagePayload,
+		success: RemoveImageResult,
 		error: InternalError,
 	}).middleware(RpcAuthMiddleware),
 ) {}

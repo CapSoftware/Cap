@@ -61,7 +61,9 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
-const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
+type ExtendedGeneralSettingsStore = GeneralSettingsStore;
+
+const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	uploadIndividualFiles: false,
 	hideDockIcon: false,
 	autoCreateShareableLink: false,
@@ -70,13 +72,13 @@ const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	enableNewRecordingFlow: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
-	enableNewUploader: false,
 	excludedWindows: [],
+	instantModeMaxResolution: 1920,
 });
 
 const deriveInitialSettings = (
 	store: GeneralSettingsStore | null,
-): GeneralSettingsStore => {
+): ExtendedGeneralSettingsStore => {
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
@@ -85,6 +87,16 @@ const deriveInitialSettings = (
 		...store,
 	};
 };
+
+const INSTANT_MODE_RESOLUTION_OPTIONS = [
+	{ value: 1280, label: "720p" },
+	{ value: 1920, label: "1080p" },
+	{ value: 2560, label: "1440p" },
+	{ value: 3840, label: "4K" },
+] satisfies {
+	value: number;
+	label: string;
+}[];
 
 export default function GeneralSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -168,7 +180,7 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
-	const [settings, setSettings] = createStore<GeneralSettingsStore>(
+	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveInitialSettings(props.initialStore),
 	);
 
@@ -419,12 +431,22 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 				<SettingGroup title="Recording">
 					<SelectSettingItem
+						label="Instant mode max resolution"
+						description="Choose the maximum resolution for Instant Mode recordings."
+						value={settings.instantModeMaxResolution ?? 1920}
+						onChange={(value) =>
+							handleChange("instantModeMaxResolution", value)
+						}
+						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
+							text: option.label,
+							value: option.value,
+						}))}
+					/>
+					<SelectSettingItem
 						label="Recording countdown"
 						description="Countdown before recording starts"
 						value={settings.recordingCountdown ?? 0}
-						onChange={(value) =>
-							handleChange("recordingCountdown", value as number)
-						}
+						onChange={(value) => handleChange("recordingCountdown", value)}
 						options={[
 							{ text: "Off", value: 0 },
 							{ text: "3 seconds", value: 3 },
@@ -437,10 +459,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						description="The main window recording start behaviour"
 						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
 						onChange={(value) =>
-							handleChange(
-								"mainWindowRecordingStartBehaviour",
-								value as MainWindowRecordingStartBehaviour,
-							)
+							handleChange("mainWindowRecordingStartBehaviour", value)
 						}
 						options={[
 							{ text: "Close", value: "close" },
@@ -452,10 +471,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						description="The studio recording finish behaviour"
 						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
 						onChange={(value) =>
-							handleChange(
-								"postStudioRecordingBehaviour",
-								value as PostStudioRecordingBehaviour,
-							)
+							handleChange("postStudioRecordingBehaviour", value)
 						}
 						options={[
 							{ text: "Open editor", value: "openEditor" },
@@ -469,12 +485,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						label="After deleting recording behaviour"
 						description="Should Cap reopen after deleting an in progress recording?"
 						value={settings.postDeletionBehaviour ?? "doNothing"}
-						onChange={(value) =>
-							handleChange(
-								"postDeletionBehaviour",
-								value as PostDeletionBehaviour,
-							)
-						}
+						onChange={(value) => handleChange("postDeletionBehaviour", value)}
 						options={[
 							{ text: "Do Nothing", value: "doNothing" },
 							{

@@ -1,6 +1,6 @@
-import { Avatar } from "@cap/ui";
 import { faComment } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface CommentStampsProps {
 	comment: {
@@ -9,7 +9,7 @@ interface CommentStampsProps {
 		type: "text" | "emoji";
 		content: string;
 		authorName?: string | null;
-		authorImage?: string | null;
+		authorImageUrlOrKey?: string | null;
 	};
 	adjustedPosition: string;
 	handleMouseEnter: (id: string) => void;
@@ -62,12 +62,15 @@ const CommentStamp: React.FC<CommentStampsProps> = ({
 
 					<div className="flex gap-2 items-center">
 						{/* User avatar/initial */}
-						<Avatar
-							className="size-6"
-							letterClass="text-sm"
-							name={comment.authorName}
-							imageUrl={comment.authorImage ?? undefined}
-						/>
+						{comment.authorName && (
+							<SignedImageUrl
+								image={comment.authorImageUrlOrKey}
+								name={comment.authorName}
+								type="user"
+								className="size-6"
+								letterClass="text-sm"
+							/>
+						)}
 						{/* Comment content */}
 						<div className="flex-1 min-w-0">
 							<div className="text-sm font-medium text-white truncate">

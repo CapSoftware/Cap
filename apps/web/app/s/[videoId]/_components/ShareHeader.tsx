@@ -3,7 +3,7 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -16,6 +16,7 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 
@@ -31,6 +32,7 @@ export const ShareHeader = ({
 	data: typeof videos.$inferSelect & {
 		ownerName?: string | null;
 		ownerImage?: string | null;
+		ownerIsPro?: boolean;
 	};
 	user: typeof userSelectProps | null;
 	customDomain?: string | null;
@@ -62,7 +64,7 @@ export const ShareHeader = ({
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-	const isOwner = user && user.id.toString() === data.ownerId;
+	const isOwner = user && user.id === data.ownerId;
 
 	const { webUrl } = usePublicEnv();
 
@@ -129,9 +131,7 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isUserPro = userIsPro(user);
-	const showUpgradeBanner =
-		user && data.ownerId === user.id && !userIsPro(user);
+	const isVideoOwnerPro: boolean = data.ownerIsPro ?? false;
 
 	const handleSharingUpdated = () => {
 		refresh();
@@ -183,7 +183,7 @@ export const ShareHeader = ({
 
 	return (
 		<>
-			{showUpgradeBanner && (
+			{user !== null && !isVideoOwnerPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -226,7 +226,7 @@ export const ShareHeader = ({
 									<h1
 										className="text-xl sm:text-2xl"
 										onClick={() => {
-											if (user && user.id.toString() === data.ownerId) {
+											if (isOwner) {
 												setIsEditing(true);
 											}
 										}}
@@ -237,9 +237,10 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									<Avatar
-										name={data.ownerName}
-										imageUrl={data.ownerImage ?? undefined}
+									<SignedImageUrl
+										name={data.ownerName ?? "User"}
+										image={data.ownerImage}
+										type="user"
 										className="size-8"
 										letterClass="text-base"
 									/>
@@ -282,7 +283,7 @@ export const ShareHeader = ({
 										)}
 									</Button>
 								</div>
-								{user !== null && !isUserPro && (
+								{!isVideoOwnerPro && (
 									<button
 										type="button"
 										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"

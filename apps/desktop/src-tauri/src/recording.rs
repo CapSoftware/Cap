@@ -466,6 +466,7 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
+
                 #[cfg(target_os = "macos")]
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
@@ -533,19 +534,17 @@ pub async fn start_recording(
                             return Err("Video upload info not found".to_string());
                         };
 
-                        let progressive_upload = InstantMultipartUpload::spawn(
-                            app_handle,
-                            recording_dir.join("content/output.mp4"),
-                            video_upload_info.clone(),
-                            Some(finish_upload_rx),
-                            recording_dir.clone(),
-                        );
-
                         let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio);
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_max_output_size(
+                            general_settings
+                                .as_ref()
+                                .map(|settings| settings.instant_mode_max_resolution)
+                                .unwrap_or_else(|| 1920),
+                        );
 
                         #[cfg(target_os = "macos")]
                         {
@@ -566,6 +565,14 @@ pub async fn start_recording(
                                 error!("Failed to spawn instant recording actor: {e}");
                                 e.to_string()
                             })?;
+
+                        let progressive_upload = InstantMultipartUpload::spawn(
+                            app_handle,
+                            recording_dir.join("content/output.mp4"),
+                            video_upload_info.clone(),
+                            recording_dir.clone(),
+                            Some(finish_upload_rx),
+                        );
 
                         InProgressRecording::Instant {
                             handle,
@@ -734,25 +741,32 @@ pub async fn restart_recording(
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let recording_data = {
         let mut app_state = state.write().await;
-        if let Some(recording) = app_state.clear_current_recording() {
-            let recording_dir = recording.recording_dir().clone();
-            let video_id = match &recording {
-                InProgressRecording::Instant {
-                    video_upload_info, ..
-                } => Some(video_upload_info.id.clone()),
-                _ => None,
-            };
-            Some((recording, recording_dir, video_id))
-        } else {
-            None
-        }
+        app_state.clear_current_recording()
     };
 
-    if let Some((_, recording_dir, video_id)) = recording_data {
+    if let Some(recording) = recording_data {
+        let recording_dir = recording.recording_dir().clone();
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
-        // let _ = recording.cancel().await;
+        let video_id = match &recording {
+            InProgressRecording::Instant {
+                video_upload_info,
+                progressive_upload,
+                ..
+            } => {
+                debug!(
+                    "User deleted recording. Aborting multipart upload for {:?}",
+                    video_upload_info.id
+                );
+                progressive_upload.handle.abort();
+
+                Some(video_upload_info.id.clone())
+            }
+            _ => None,
+        };
+
+        let _ = recording.cancel().await;
 
         std::fs::remove_dir_all(&recording_dir).ok();
 

@@ -9,6 +9,7 @@ import {
 	Label,
 } from "@cap/ui";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -37,6 +38,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
+	const router = useRouter();
 
 	return (
 		<Form {...form}>
@@ -58,6 +60,8 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 						}
 
 						await createOrganization(formData);
+						toast.success("Organization created successfully");
+						router.push(`/dashboard/caps`);
 						props.onOrganizationCreated();
 					} catch (error) {
 						console.error("Error creating organization:", error);
@@ -99,6 +103,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 						<FileInput
 							id="icon"
 							name="icon"
+							type="organization"
 							notDraggingClassName="hover:bg-gray-3"
 							onChange={setSelectedFile}
 							disabled={isUploading}

@@ -1,6 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
-import { classNames } from "@cap/utils";
+import { classNames, userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
@@ -141,6 +141,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			setActiveTab(tabId);
 		};
 
+		const isOwner = user?.id === data.ownerId;
+		const isVideoOwnerPro = user && isOwner ? userIsPro(user) : false;
+
 		const renderTabContent = () => {
 			switch (activeTab) {
 				case "activity":
@@ -181,7 +184,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
-							user={user}
+							isVideoOwnerPro={isVideoOwnerPro}
 						/>
 					);
 				case "transcript":

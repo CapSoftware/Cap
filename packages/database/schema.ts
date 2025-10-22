@@ -19,6 +19,7 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
@@ -629,6 +630,10 @@ export const spaceMembers = mysqlTable(
 		spaceIdIndex: index("space_id_idx").on(table.spaceId),
 		userIdIndex: index("user_id_idx").on(table.userId),
 		spaceIdUserIdIndex: index("space_id_user_id_idx").on(
+			table.spaceId,
+			table.userId,
+		),
+		spaceIdUserIdUnique: unique("space_id_user_id_unique").on(
 			table.spaceId,
 			table.userId,
 		),

@@ -29,7 +29,7 @@ declare global {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImage: string | null;
+	authorImageUrlOrKey: string | null;
 };
 
 export const ShareVideo = forwardRef<
@@ -187,7 +187,7 @@ export const ShareVideo = forwardRef<
 					{data.source.type === "desktopMP4" ? (
 						<CapVideoPlayer
 							videoId={data.id}
-							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"
 							videoSrc={videoSrc}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
@@ -203,6 +203,7 @@ export const ShareVideo = forwardRef<
 								timestamp: comment.timestamp,
 								content: comment.content,
 								authorName: comment.authorName,
+								authorImageUrlOrKey: comment.authorImageUrlOrKey ?? undefined,
 							}))}
 							onSeek={handleSeek}
 						/>

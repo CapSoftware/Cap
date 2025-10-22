@@ -50,7 +50,7 @@ interface Props {
 		type: "text" | "emoji";
 		content: string;
 		authorName?: string | null;
-		authorImage?: string | null;
+		authorImageUrlOrKey?: string | null;
 	}>;
 	onSeek?: (time: number) => void;
 }
@@ -521,7 +521,7 @@ export function CapVideoPlayer({
 			)}
 			<div
 				className={clsx(
-					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300 overflow-visible",
 					videoLoaded || !!uploadProgress
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",

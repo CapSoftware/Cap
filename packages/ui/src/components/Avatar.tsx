@@ -67,6 +67,7 @@ export interface AvatarProps {
 	imageUrl?: string | null;
 	className?: string;
 	letterClass?: string;
+	noFallback?: boolean;
 }
 
 export const Avatar: React.FC<AvatarProps> = ({
@@ -80,7 +81,7 @@ export const Avatar: React.FC<AvatarProps> = ({
 			<img
 				src={imageUrl}
 				alt={name ?? "Avatar"}
-				className={clsx("rounded-full object-cover size-4", className)}
+				className={clsx("object-cover rounded-full size-4", className)}
 				loading="lazy"
 				referrerPolicy="no-referrer"
 			/>

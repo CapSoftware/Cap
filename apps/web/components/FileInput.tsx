@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Input } from "@cap/ui";
+import { Button, Input, LoadingSpinner } from "@cap/ui";
 import {
 	faCloudUpload,
 	faSpinner,
@@ -8,10 +8,11 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useSignedImageUrl } from "@/lib/use-signed-image-url";
+import { SignedImageUrl } from "./SignedImageUrl";
 import { Tooltip } from "./Tooltip";
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
@@ -23,6 +24,7 @@ export interface FileInputProps {
 	disabled?: boolean;
 	id?: string;
 	name?: string;
+	type: "user" | "organization";
 	containerStyle?: React.CSSProperties;
 	className?: string;
 	notDraggingClassName?: string;
@@ -40,6 +42,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 	disabled = false,
 	id = "file",
 	name = "file",
+	type,
 	className = "",
 	notDraggingClassName = "",
 	initialPreviewUrl = null,
@@ -54,20 +57,40 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const [previewUrl, setPreviewUrl] = useState<string | null>(
 		initialPreviewUrl,
 	);
+	const [isLocalPreview, setIsLocalPreview] = useState(false);
+
+	// Get signed URL for S3 keys
+	const { data: signedUrl } = useSignedImageUrl(previewUrl, type);
+
+	const previousPreviewRef = useRef<{
+		url: string | null;
+		isLocal: boolean;
+	}>({ url: null, isLocal: false });
 
 	// Update preview URL when initialPreviewUrl changes
 	useEffect(() => {
+		// Clean up old blob URL if it exists
+		if (previousPreviewRef.current.url && previousPreviewRef.current.isLocal) {
+			URL.revokeObjectURL(previousPreviewRef.current.url);
+		}
+
 		setPreviewUrl(initialPreviewUrl);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: initialPreviewUrl,
+			isLocal: false,
+		};
 	}, [initialPreviewUrl]);
 
 	// Clean up the preview URL when component unmounts
 	useEffect(() => {
 		return () => {
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 		};
-	}, [previewUrl, initialPreviewUrl]);
+	}, [previewUrl, isLocalPreview]);
 
 	const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -144,14 +167,20 @@ export const FileInput: React.FC<FileInputProps> = ({
 				return;
 			}
 
-			// Clean up previous preview URL if it's not the initial preview URL
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			// Clean up previous preview URL if it's a local blob URL
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 
 			// Create a new preview URL for immediate feedback
 			const newPreviewUrl = URL.createObjectURL(file);
 			setPreviewUrl(newPreviewUrl);
+			setIsLocalPreview(true);
+
+			previousPreviewRef.current = {
+				url: newPreviewUrl,
+				isLocal: true,
+			};
 
 			// Call the onChange callback
 			if (onChange) {
@@ -163,12 +192,18 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const handleRemove = (e: React.MouseEvent) => {
 		e.stopPropagation();
 
-		// Clean up preview URL if it's not the initial preview URL
-		if (previewUrl && previewUrl !== initialPreviewUrl) {
+		// Clean up preview URL if it's a local blob URL
+		if (previewUrl && isLocalPreview) {
 			URL.revokeObjectURL(previewUrl);
 		}
 
 		setPreviewUrl(null);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: null,
+			isLocal: false,
+		};
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -194,7 +229,12 @@ export const FileInput: React.FC<FileInputProps> = ({
 				}}
 			>
 				{/* Fixed height container to prevent resizing */}
-				{previewUrl ? (
+				{isLoading ? (
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
+						<LoadingSpinner themeColors size={16} />
+						<p className="truncate text-[13px] text-gray-11">Uploading...</p>
+					</div>
+				) : previewUrl ? (
 					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
 						<div className="flex flex-1 items-center gap-1.5">
 							<div className="flex flex-1 gap-1 items-center">
@@ -209,15 +249,13 @@ export const FileInput: React.FC<FileInputProps> = ({
 										}}
 										className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
 									>
-										{previewUrl && (
-											<Image
-												src={previewUrl}
-												width={32}
-												height={32}
-												alt="File preview"
-												className="object-cover rounded-full"
-											/>
-										)}
+										<SignedImageUrl
+											image={previewUrl}
+											name="File preview"
+											type={type}
+											letterClass="text-lg"
+											className="size-full"
+										/>
 									</div>
 								</div>
 							</div>
