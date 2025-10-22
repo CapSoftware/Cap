@@ -12,7 +12,6 @@ import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
 	type ComponentProps,
-	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
@@ -648,6 +647,7 @@ function Inner() {
 							onMouseDown={(downEvent) => {
 								// Start creating a new area
 								downEvent.preventDefault();
+								postMessage({ type: "reset" });
 								setState("creating");
 								setHasArea(false);
 
