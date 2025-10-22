@@ -19,6 +19,7 @@ import {
 	type JSX,
 	Match,
 	onCleanup,
+	onMount,
 	Show,
 	Suspense,
 	Switch,
@@ -306,14 +307,10 @@ function Inner() {
 							top + height + margin + ctrlH > window.innerHeight;
 						return wouldOverflow;
 					});
-					// Handle window resize to keep placement responsive
-					createEffect(() => {
-						setControlsHeight(controlsEl?.offsetHeight);
-						const onResize = () => setControlsHeight(controlsEl?.offsetHeight);
-
-						window.addEventListener("resize", onResize);
-						onCleanup(() => window.removeEventListener("resize", onResize));
-					});
+					onMount(() => setControlsHeight(controlsEl?.offsetHeight));
+					createEventListener(window, "resize", () =>
+						setControlsHeight(controlsEl?.offsetHeight),
+					);
 
 					function createOnMouseDown(
 						onDrag: (
