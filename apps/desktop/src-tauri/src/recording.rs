@@ -265,7 +265,8 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
-    if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
+    let mut state = state_mtx.read().await;
+    if !matches!(state.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
     }
 
@@ -281,9 +282,7 @@ pub async fn start_recording(
         .join(format!("{id}.cap"));
 
     ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
-    state_mtx
-        .write()
-        .await
+    state
         .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
         .await?;
 
@@ -403,10 +402,8 @@ pub async fn start_recording(
     }
 
     // Set pending state BEFORE closing main window and starting countdown
-    state_mtx
-        .write()
-        .await
-        .set_pending_recording(inputs.mode, inputs.capture_target.clone());
+    state.set_pending_recording(inputs.mode, inputs.capture_target.clone());
+    drop(state);
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
     for (id, win) in app
