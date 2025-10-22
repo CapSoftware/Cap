@@ -9,10 +9,8 @@ import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
-import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
-import { Rpc, withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
@@ -147,11 +145,11 @@ export const Caps = ({
 		});
 	};
 
+	const rpc = useRpcClient();
+
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
-
-			const rpc = yield* Rpc;
 
 			const fiber = yield* Effect.gen(function* () {
 				const results = yield* Effect.all(
@@ -203,7 +201,7 @@ export const Caps = ({
 	});
 
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();

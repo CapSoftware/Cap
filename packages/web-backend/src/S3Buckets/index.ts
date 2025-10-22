@@ -45,6 +45,9 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				requestStreamBufferSize: 16 * 1024,
 			});
 
+		const endpointIsPathStyle = (endpoint: string) =>
+			endpoint.endsWith("s3.amazonaws.com");
+
 		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {
 			const endpoint = await (() => {
 				const v = bucket.endpoint.pipe(Option.getOrUndefined);
@@ -61,7 +64,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				},
 				forcePathStyle:
 					Option.fromNullable(endpoint).pipe(
-						Option.map((e) => e.endsWith("s3.amazonaws.com")),
+						Option.map(endpointIsPathStyle),
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
@@ -126,6 +129,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						getInternal: Effect.succeed(createDefaultClient(true)),
 						getPublic: Effect.succeed(createDefaultClient(false)),
 						bucket: defaultConfigs.bucket,
+						isPathStyle: defaultConfigs.forcePathStyle,
 					});
 
 					return Option.match(cloudfrontBucketAccess, {
@@ -139,12 +143,14 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 							decrypt(customBucket.name),
 						);
 
+						const client = yield* Effect.promise(() =>
+							createBucketClient(customBucket),
+						);
 						const provider = Layer.succeed(S3BucketClientProvider, {
-							getInternal: Effect.promise(() =>
-								createBucketClient(customBucket),
-							),
-							getPublic: Effect.promise(() => createBucketClient(customBucket)),
+							getInternal: Effect.succeed(client),
+							getPublic: Effect.succeed(client),
 							bucket,
+							isPathStyle: client.config.forcePathStyle ?? true,
 						});
 
 						return yield* createS3BucketAccess.pipe(Effect.provide(provider));
@@ -156,9 +162,9 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 		return {
 			getBucketAccess: Effect.fn("S3Buckets.getBucketAccess")(function* (
-				bucketId: Option.Option<S3Bucket.S3BucketId>,
+				bucketId?: Option.Option<S3Bucket.S3BucketId>,
 			) {
-				const customBucket = yield* bucketId.pipe(
+				const customBucket = yield* (bucketId ?? Option.none()).pipe(
 					Option.map(repo.getById),
 					Effect.transposeOption,
 					Effect.map(Option.flatten),

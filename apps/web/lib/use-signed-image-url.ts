@@ -1,6 +1,6 @@
+import { skipToken } from "@tanstack/react-query";
 import { Effect } from "effect";
-import { useEffectQuery } from "@/lib/EffectRuntime";
-import { withRpc } from "./Rpcs";
+import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";
 
 /**
  * Hook to get signed URL for an S3 image key
@@ -12,17 +12,22 @@ export function useSignedImageUrl(
 	key: string | null | undefined,
 	type: "user" | "organization",
 ) {
+	const rpc = useRpcClient();
+
 	return useEffectQuery({
 		queryKey: ["signedImageUrl", key, type],
-		queryFn: () => {
-			if (!key) {
-				return Effect.succeed(key);
-			}
+		queryFn: key
+			? () => {
+					if (!key) {
+						return Effect.succeed(key);
+					}
 
-			return withRpc((rpc) => rpc.GetSignedImageUrl({ key, type }))
-				.pipe(Effect.map((result) => result.url))
-				.pipe(Effect.catchTag("InternalError", () => Effect.succeed(null)));
-		},
+					return rpc.GetSignedImageUrl({ key, type }).pipe(
+						Effect.map((result) => result.url),
+						Effect.catchTag("InternalError", () => Effect.succeed(null)),
+					);
+				}
+			: skipToken,
 		enabled: !!key,
 	});
 }

@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { Base } from "./Base";
@@ -22,6 +22,8 @@ export function InviteTeamPage() {
 	const [users, setUsers] = useState(1);
 	const [isAnnually, setIsAnnually] = useState(true);
 	const router = useRouter();
+	const rpc = useRpcClient();
+
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
 		homepageCopy.pricing.pro.pricing.monthly;
@@ -39,17 +41,12 @@ export function InviteTeamPage() {
 	const decrementUsers = () => setUsers((n) => (n > 1 ? n - 1 : 1));
 
 	const inviteTeamMutation = useEffectMutation({
-		mutationFn: (redirect: boolean) =>
-			Effect.gen(function* () {
-				yield* withRpc((r) =>
-					r.UserCompleteOnboardingStep({
-						step: "inviteTeam",
-						data: undefined,
-					}),
-				);
-				return redirect;
+		mutationFn: (_redirect: boolean) =>
+			rpc.UserCompleteOnboardingStep({
+				step: "inviteTeam",
+				data: undefined,
 			}),
-		onSuccess: (redirect: boolean) => {
+		onSuccess: (_, redirect: boolean) => {
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/download");

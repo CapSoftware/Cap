@@ -59,9 +59,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 	);
 	const [isLocalPreview, setIsLocalPreview] = useState(false);
 
-	// Get signed URL for S3 keys
-	const { data: signedUrl } = useSignedImageUrl(previewUrl, type);
-
 	const previousPreviewRef = useRef<{
 		url: string | null;
 		isLocal: boolean;

@@ -129,12 +129,11 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}),
 
 			update: Effect.fn("Folders.update")(function* (
-				folderId: Folder.FolderId,
 				data: Folder.FolderUpdate,
 			) {
 				const folder = yield* (yield* repo
-					.getById(folderId)
-					.pipe(Policy.withPolicy(policy.canEdit(folderId)))).pipe(
+					.getById(data.id)
+					.pipe(Policy.withPolicy(policy.canEdit(data.id)))).pipe(
 					Effect.catchTag(
 						"NoSuchElementException",
 						() => new Folder.NotFoundError(),
@@ -145,7 +144,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 				if (data.parentId && Option.isSome(data.parentId)) {
 					const parentId = data.parentId.value;
 					// Check that we're not creating an immediate circular reference
-					if (parentId === folderId)
+					if (parentId === data.id)
 						return yield* new Folder.RecursiveDefinitionError();
 
 					const parentFolder = yield* repo
@@ -167,7 +166,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					// Check for circular references in the folder hierarchy
 					let currentParentId = parentFolder.parentId;
 					while (currentParentId) {
-						if (currentParentId === folderId)
+						if (currentParentId === data.id)
 							return yield* new Folder.RecursiveDefinitionError();
 
 						const parentId = currentParentId;
@@ -192,7 +191,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 								? Option.getOrNull(data.parentId)
 								: undefined,
 						})
-						.where(Dz.eq(Db.folders.id, folderId)),
+						.where(Dz.eq(Db.folders.id, data.id)),
 				);
 			}),
 		};

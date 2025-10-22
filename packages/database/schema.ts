@@ -1,6 +1,7 @@
 import type {
 	Comment,
 	Folder,
+	IconImage,
 	Organisation,
 	S3Bucket,
 	Space,

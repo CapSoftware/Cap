@@ -12,8 +12,8 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Spaces } from "@cap/web-backend";
-import { CurrentUser, type Organisation, Space, Video } from "@cap/web-domain";
+import { makeCurrentUserLayer, Spaces } from "@cap/web-backend";
+import { type Organisation, Space, Video } from "@cap/web-domain";
 import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
@@ -100,7 +100,7 @@ export default async function SharedCapsPage(props: {
 		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
 	).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
-		Effect.provideService(CurrentUser, user),
+		Effect.provide(makeCurrentUserLayer(user)),
 		runPromise,
 	);
 

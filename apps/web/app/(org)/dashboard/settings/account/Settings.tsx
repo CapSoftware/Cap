@@ -11,22 +11,18 @@ import {
 } from "@cap/ui";
 import { Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings } from "./server";
 
-export const Settings = ({
-	user,
-}: {
-	user?: typeof users.$inferSelect | null;
-}) => {
+export const Settings = ({ user }: { user: typeof users.$inferSelect }) => {
 	const router = useRouter();
 	const { organizationData } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
@@ -91,81 +87,50 @@ export const Settings = ({
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
 	}, [hasChanges]);
 
-	const uploadProfileImageMutation = useEffectMutation({
-		mutationFn: (file: File) => {
-			if (!user?.id) {
-				return Effect.fail(new Error("User ID is required"));
-			}
+	const rpc = useRpcClient();
 
-			return Effect.promise(() => file.arrayBuffer()).pipe(
-				Effect.map((arrayBuffer) => new Uint8Array(arrayBuffer)),
-				Effect.flatMap((data) =>
-					withRpc((rpc) =>
-						rpc.UploadImage({
-							data,
-							contentType: file.type,
-							fileName: file.name,
-							type: "user" as const,
-							entityId: user.id,
-							oldImageKey: user.image,
-						}),
-					),
-				),
-				Effect.tap(() =>
-					Effect.sync(() => {
-						setProfileImageOverride(undefined);
-						toast.success("Profile image updated successfully");
-						router.refresh();
-					}),
-				),
-				Effect.catchAll((error) =>
-					Effect.sync(() => {
-						console.error("Error uploading profile image:", error);
-						setProfileImageOverride(undefined);
-						toast.error(
-							error instanceof Error
-								? error.message
-								: "Failed to upload profile image",
-						);
-						throw error;
-					}),
-				),
+	const uploadProfileImageMutation = useEffectMutation({
+		mutationFn: Effect.fn(function* (file: File) {
+			const arrayBuffer = yield* Effect.promise(() => file.arrayBuffer());
+			yield* rpc.UserUpdate({
+				id: user.id,
+				image: Option.some({
+					data: new Uint8Array(arrayBuffer),
+					contentType: file.type,
+					fileName: file.name,
+				}),
+			});
+		}),
+		onSuccess: () => {
+			setProfileImageOverride(undefined);
+			toast.success("Profile image updated successfully");
+			router.refresh();
+		},
+		onError: (error) => {
+			console.error("Error uploading profile image:", error);
+			setProfileImageOverride(undefined);
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to upload profile image",
 			);
 		},
 	});
 
 	const removeProfileImageMutation = useEffectMutation({
-		mutationFn: () => {
-			if (!user?.id) {
-				return Effect.fail(new Error("User ID is required"));
-			}
-
-			return withRpc((rpc) =>
-				rpc.RemoveImage({
-					imageKey: user.image || "",
-					type: "user" as const,
-					entityId: user.id,
-				}),
-			).pipe(
-				Effect.tap(() =>
-					Effect.sync(() => {
-						setProfileImageOverride(null);
-						toast.success("Profile image removed");
-						router.refresh();
-					}),
-				),
-				Effect.catchAll((error) =>
-					Effect.sync(() => {
-						console.error("Error removing profile image:", error);
-						setProfileImageOverride(initialProfileImage);
-						toast.error(
-							error instanceof Error
-								? error.message
-								: "Failed to remove profile image",
-						);
-						throw error;
-					}),
-				),
+		mutationFn: () => rpc.UserUpdate({ id: user.id, image: Option.none() }),
+		onSuccess: () => {
+			setProfileImageOverride(null);
+			toast.success("Profile image removed");
+			router.refresh();
+		},
+		onError: (error) => {
+			console.error("Error removing profile image:", error);
+			setProfileImageOverride(initialProfileImage);
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to remove profile image",
 			);
 		},
 	});

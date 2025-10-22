@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { CurrentUser, Folder } from "@cap/web-domain";
+import { Folder } from "@cap/web-domain";
+import { makeCurrentUserLayer } from "@cap/web-backend";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import {
@@ -9,6 +10,7 @@ import {
 	getVideosByFolderId,
 } from "@/lib/folder";
 import { runPromise } from "@/lib/server";
+
 import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
 import {
@@ -86,7 +88,7 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 				/>
 			</div>
 		);
-	}).pipe(Effect.provideService(CurrentUser, user), runPromise);
+	}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
 };
 
 export default FolderPage;
