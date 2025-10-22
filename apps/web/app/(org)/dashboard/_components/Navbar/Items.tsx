@@ -36,7 +36,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, CogIcon } from "../AnimatedIcons";
+import { CapIcon, ChartLineIcon, CogIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import CapAIBox from "./CapAIBox";
 import SpacesList from "./SpacesList";
@@ -57,6 +57,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			href: `/dashboard/caps`,
 			extraText: userCapsCount,
 			icon: <CapIcon />,
+			subNav: [],
+		},
+		{
+			name: "Analytics",
+			href: `/dashboard/analytics`,
+			icon: <ChartLineIcon />,
 			subNav: [],
 		},
 		{

@@ -62,6 +62,7 @@ const Top = () => {
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
+		"/dashboard/analytics": "Analytics",
 	};
 
 	const title = activeSpace
