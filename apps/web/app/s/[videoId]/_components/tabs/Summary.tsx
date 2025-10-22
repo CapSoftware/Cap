@@ -22,7 +22,7 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	isSummaryDisabled?: boolean;
-	isVideoOwnerPro: boolean | null;
+	isVideoOwnerPro: boolean;
 }
 
 const formatTime = (time: number) => {

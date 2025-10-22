@@ -697,6 +697,7 @@ async function AuthorizedContent({
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
+		ownerIsPro: video.ownerIsPro ?? false,
 		password: null,
 		folderId: null,
 		orgSettings: video.orgSettings || null,

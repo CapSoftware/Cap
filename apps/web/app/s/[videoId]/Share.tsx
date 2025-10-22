@@ -51,6 +51,7 @@ interface ShareProps {
 	customDomain: string | null;
 	domainVerified: boolean;
 	videoSettings?: OrganizationSettings | null;
+	ownerIsPro: boolean;
 	userOrganizations?: { id: string; name: string }[];
 	initialAiData?: {
 		title?: string | null;
@@ -141,6 +142,7 @@ export const Share = ({
 	data,
 	user,
 	comments,
+	ownerIsPro,
 	views,
 	initialAiData,
 	aiGenerationEnabled,
@@ -321,6 +323,7 @@ export const Share = ({
 								createdAt: effectiveDate,
 								transcriptionStatus,
 							}}
+							ownerIsPro={ownerIsPro}
 							videoSettings={videoSettings}
 							user={user}
 							commentsData={commentsData}
