@@ -6,7 +6,6 @@ use crate::{
 };
 use anyhow::anyhow;
 use cap_timestamp::Timestamps;
-use scap_targets::bounds::LogicalBounds;
 use std::{path::PathBuf, sync::Arc};
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
@@ -23,6 +22,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         system_audio: Option<screen_capture::SystemAudioSourceConfig>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
+        output_resolution: (u32, u32),
     ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
@@ -49,6 +49,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         system_audio: Option<screen_capture::SystemAudioSourceConfig>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
+        output_resolution: (u32, u32),
     ) -> anyhow::Result<OutputPipeline> {
         let mut output = OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture);
@@ -63,7 +64,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
         output
             .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
-                output_height: Some(1080),
+                output_height: Some(output_resolution.1),
             })
             .await
     }
@@ -84,8 +85,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                 d3d_device,
-                bitrate_multiplier: 0.1f32,
+                bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
+                output_size: None,
             })
             .await
     }
@@ -95,6 +97,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         system_audio: Option<screen_capture::SystemAudioSourceConfig>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
+        output_resolution: (u32, u32),
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
@@ -112,9 +115,13 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_builder
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                bitrate_multiplier: 0.08f32,
+                bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
                 d3d_device,
+                output_size: Some(windows::Graphics::SizeInt32 {
+                    Width: output_resolution.0 as i32,
+                    Height: output_resolution.1 as i32,
+                }),
             })
             .await
     }
