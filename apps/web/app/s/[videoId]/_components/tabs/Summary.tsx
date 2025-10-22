@@ -94,10 +94,7 @@ export const Summary: React.FC<SummaryProps> = ({
 		}
 	};
 
-	const hasExistingAiData =
-		aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
-
-	if (!isVideoOwnerPro && !hasExistingAiData) {
+	if (!isVideoOwnerPro) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<div className="space-y-4 max-w-sm">
