@@ -65,6 +65,9 @@ importers:
       '@solid-primitives/bounds':
         specifier: ^0.0.122
         version: 0.0.122(solid-js@1.9.6)
+      '@solid-primitives/broadcast-channel':
+        specifier: ^0.1.1
+        version: 0.1.1(solid-js@1.9.6)
       '@solid-primitives/context':
         specifier: ^0.2.3
         version: 0.2.3(solid-js@1.9.6)
@@ -6243,6 +6246,11 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
+  '@solid-primitives/broadcast-channel@0.1.1':
+    resolution: {integrity: sha512-7wjQvY320E8elCcuruoJJohDHLzw6l7tAvHXZez5FAolb9BGsk3sPJ9wKDHsdRx0ww2cPg8GeUrGFdJ+5CnCxA==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
   '@solid-primitives/context@0.2.3':
     resolution: {integrity: sha512-6/e8qu9qJf48FJ+sxc/B782NdgFw5TvI8+r6U0gHizumfZcWZg8FAJqvRZAiwlygkUNiTQOGTeO10LVbMm0kvg==}
     peerDependencies:
@@ -6487,10 +6495,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.0.0-beta.10':
-    resolution: {integrity: sha512-Lr/nVrkZLzMBs1CIvIc0ddr2UyWRmqnoYalBLUKraGZUCOfCzpJ3ywzfj3lMhfOR4456Lld0X9SFd04DQFHDnQ==}
+  '@storybook/builder-vite@10.0.0-beta.13':
+    resolution: {integrity: sha512-ZPxqgoofi2yfJRQkkEBINSzPjkhrgfh4HsPs4fsbPt3jfVyfP4Wic7vHep4UlR1os2iL2MTRLcapkkiajoztWQ==}
     peerDependencies:
-      storybook: ^10.0.0-beta.10
+      storybook: ^10.0.0-beta.13
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -6501,12 +6509,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.0.0-beta.10':
-    resolution: {integrity: sha512-sKCnWOHU97799zj6RoZuFygJCKPPUmohYZsESPddWQm6tHckjmKp1k4ISvd7Z5MIBwiEPYCnppQDDH1mOG6SPw==}
+  '@storybook/csf-plugin@10.0.0-beta.13':
+    resolution: {integrity: sha512-mjdDsl5MAn6bLZHHInut+TQjYUJDdErpXnYlXPLvZRoaCxqxLN2O2sf5LmxAP9SRjEdKnsLFvBwMCJxVcav/lQ==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.0.0-beta.10
+      storybook: ^10.0.0-beta.13
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -13597,7 +13605,7 @@ packages:
   superagent@8.1.2:
     resolution: {integrity: sha512-6WTxW1EB6yCxV5VFOIPQruWGHqc3yI7hEmZK6h+pyk69Lk/Ut7rLUY6W/ONF2MjBuGjvmMiIpsrVJ2vjrHlslA==}
     engines: {node: '>=6.4.0 <13 || >=14'}
-    deprecated: Please upgrade to v9.0.0+ as we have fixed a public vulnerability with formidable dependency. Note that v9.0.0+ requires Node.js v14.18.0+. See https://github.com/ladjs/superagent/pull/1800 for insight. This project is supported and maintained by the team at Forward Email @ https://forwardemail.net
+    deprecated: Please upgrade to superagent v10.2.2+, see release notes at https://github.com/forwardemail/superagent/releases/tag/v10.2.2 - maintenance is supported by Forward Email @ https://forwardemail.net
 
   supertest@6.3.4:
     resolution: {integrity: sha512-erY3HFDG0dPnhw4U+udPfrzXa4xhSG+n4rxfRuZWCUvjFWwKl+OxWf/7zk50s84/fAAs7vf5QAb9uRa0cCykxw==}
@@ -20734,6 +20742,10 @@ snapshots:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
       solid-js: 1.9.6
 
+  '@solid-primitives/broadcast-channel@0.1.1(solid-js@1.9.6)':
+    dependencies:
+      solid-js: 1.9.6
+
   '@solid-primitives/context@0.2.3(solid-js@1.9.6)':
     dependencies:
       solid-js: 1.9.6
@@ -21034,9 +21046,9 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
-  '@storybook/builder-vite@10.0.0-beta.10(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/builder-vite@10.0.0-beta.13(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
-      '@storybook/csf-plugin': 10.0.0-beta.10(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/csf-plugin': 10.0.0-beta.13(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
@@ -21066,7 +21078,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.0.0-beta.10(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/csf-plugin@10.0.0-beta.13(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 2.3.10
@@ -29669,7 +29681,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(esbuild@0.25.5)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5)):
     dependencies:
-      '@storybook/builder-vite': 10.0.0-beta.10(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/builder-vite': 10.0.0-beta.13(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6
