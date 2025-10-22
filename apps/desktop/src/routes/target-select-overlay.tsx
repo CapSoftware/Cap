@@ -43,10 +43,10 @@ import {
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 100;
 
-const EMPTY_BOUNDS = {
+const EMPTY_BOUNDS = () => ({
 	position: { x: 0, y: 0 },
 	size: { width: 0, height: 0 },
-};
+});
 
 const DEFAULT_BOUNDS = {
 	position: { x: 100, y: 100 },
@@ -114,7 +114,7 @@ function Inner() {
 	}));
 
 	const [bounds, setBounds] = createStore(
-		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS),
+		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS()),
 	);
 
 	const { postMessage, onMessage } = makeBroadcastChannel<{ type: "reset" }>(
@@ -123,7 +123,7 @@ function Inner() {
 	createEventListener(window, "mousedown", () =>
 		postMessage({ type: "reset" }),
 	);
-	onMessage(() => setBounds(EMPTY_BOUNDS));
+	onMessage(() => setBounds(EMPTY_BOUNDS()));
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
@@ -336,10 +336,10 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const width = startBounds.size.width - delta.x;
-											const limitedWidth = Math.max(width, 150);
+											const limitedWidth = Math.max(width, MIN_WIDTH);
 
 											const height = startBounds.size.height - delta.y;
-											const limitedHeight = Math.max(height, 150);
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
 
 											setBounds({
 												position: {
@@ -372,10 +372,10 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const width = startBounds.size.width + delta.x;
-											const limitedWidth = Math.max(width, 150);
+											const limitedWidth = Math.max(width, MIN_WIDTH);
 
 											const height = startBounds.size.height - delta.y;
-											const limitedHeight = Math.max(height, 150);
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
 
 											setBounds({
 												position: {
@@ -405,10 +405,10 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const width = startBounds.size.width - delta.x;
-											const limitedWidth = Math.max(width, 150);
+											const limitedWidth = Math.max(width, MIN_WIDTH);
 
 											const height = startBounds.size.height + delta.y;
-											const limitedHeight = Math.max(height, 150);
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
 
 											setBounds({
 												position: {
@@ -438,10 +438,10 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const width = startBounds.size.width + delta.x;
-											const limitedWidth = Math.max(width, 150);
+											const limitedWidth = Math.max(width, MIN_WIDTH);
 
 											const height = startBounds.size.height + delta.y;
-											const limitedHeight = Math.max(height, 150);
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
 
 											setBounds({
 												position: {
@@ -468,7 +468,7 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const height = startBounds.size.height - delta.y;
-											const limitedHeight = Math.max(height, 150);
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
 
 											setBounds({
 												position: {
@@ -504,7 +504,7 @@ function Inner() {
 												},
 												size: {
 													width: Math.max(
-														150,
+														MIN_WIDTH,
 														startBounds.size.width + delta.x,
 													),
 													height: startBounds.size.height,
@@ -532,7 +532,7 @@ function Inner() {
 												size: {
 													width: startBounds.size.width,
 													height: Math.max(
-														150,
+														MIN_HEIGHT,
 														startBounds.size.height + delta.y,
 													),
 												},
@@ -552,7 +552,7 @@ function Inner() {
 										e.stopPropagation();
 										createOnMouseDown((startBounds, delta) => {
 											const width = startBounds.size.width - delta.x;
-											const limitedWidth = Math.max(150, width);
+											const limitedWidth = Math.max(MIN_WIDTH, width);
 
 											setBounds({
 												position: {
@@ -655,10 +655,7 @@ function Inner() {
 												setHasArea(true);
 											} else {
 												// Reset to no area if too small
-												setBounds({
-													position: { x: 0, y: 0 },
-													size: { width: 0, height: 0 },
-												});
+												setBounds(EMPTY_BOUNDS());
 											}
 											dispose();
 										},
