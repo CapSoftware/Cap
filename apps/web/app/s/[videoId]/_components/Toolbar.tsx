@@ -6,9 +6,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
-import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 const MotionButton = motion.create(Button);
 

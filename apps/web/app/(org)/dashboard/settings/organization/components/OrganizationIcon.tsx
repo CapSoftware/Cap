@@ -1,15 +1,15 @@
 "use client";
 
 import { CardDescription, Label } from "@cap/ui";
+import type { Organisation } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useId } from "react";
 import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
-import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { Organisation } from "@cap/web-domain";
 
 export const OrganizationIcon = () => {
 	const router = useRouter();

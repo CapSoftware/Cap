@@ -2,15 +2,17 @@ import "@/app/globals.css";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { buildEnv, serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS, userIsPro } from "@cap/utils";
+import { ImageUploads } from "@cap/web-backend";
+import type { ImageUpload } from "@cap/web-domain";
 import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { Effect } from "effect";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import type { PropsWithChildren } from "react";
-import { ImageUploads } from "@cap/web-backend";
-import { ImageUpload } from "@cap/web-domain";
-
 import { SonnerToaster } from "@/components/SonnerToastProvider";
+import { EffectRuntime } from "@/lib/EffectRuntime";
+import { runPromise } from "@/lib/server";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./Layout/AuthContext";
@@ -26,9 +28,6 @@ import {
 import { StripeContextProvider } from "./Layout/StripeContext";
 //@ts-expect-error
 import { script } from "./themeScript";
-import { Effect } from "effect";
-import { EffectRuntime } from "@/lib/EffectRuntime";
-import { runPromise } from "@/lib/server";
 
 const defaultFont = localFont({
 	src: [

@@ -2,6 +2,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -20,7 +21,6 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "./utils/transcript-utils";
-import { ImageUpload } from "@cap/web-domain";
 
 declare global {
 	interface Window {

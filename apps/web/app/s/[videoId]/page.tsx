@@ -23,7 +23,7 @@ import {
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
-	ImageUpload,
+	type ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,

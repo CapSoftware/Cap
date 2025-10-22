@@ -16,10 +16,10 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
-import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 export const ShareHeader = ({
 	data,

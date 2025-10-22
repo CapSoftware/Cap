@@ -8,12 +8,12 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
-import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 const CommentComponent: React.FC<{
 	comment: CommentType;

@@ -18,11 +18,11 @@ import {
 } from "react";
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../../Share";
 import CommentComponent from "./Comment";
 import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
-import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 export const Comments = Object.assign(
 	forwardRef<

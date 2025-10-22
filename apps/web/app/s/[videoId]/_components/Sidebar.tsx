@@ -6,11 +6,11 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
 import { Transcript } from "./tabs/Transcript";
-import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 type TabType = "activity" | "transcript" | "summary" | "settings";
 
@@ -104,7 +104,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				: !(
 							videoSettings?.disableTranscript ??
 							data.orgSettings?.disableTranscript
-					  )
+						)
 					? "transcript"
 					: "activity";
 
