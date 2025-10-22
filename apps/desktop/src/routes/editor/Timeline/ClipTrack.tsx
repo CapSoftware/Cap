@@ -452,9 +452,8 @@ export function ClipTrack(
 										function update(event: MouseEvent) {
 											const newStart =
 												start +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+												(event.clientX - downEvent.clientX) * secsPerPixel() * segment.timescale;
 
-											// Update visual offset in recording seconds (scaled in relativeSegment)
 											setDragOffset(newStart - initialStart());
 
 											setProject(
@@ -482,7 +481,6 @@ export function ClipTrack(
 													resumeHistory();
 													update(e);
 													
-													// Reset drag state so segment snaps back
 													setIsDragging(false);
 													setDragOffset(0);
 													
@@ -493,12 +491,14 @@ export function ClipTrack(
 													resumeHistory();
 													setIsDragging(false);
 													setDragOffset(0);
+													onHandleReleased();
 												},
 												mouseleave: () => {
 													dispose();
 													resumeHistory();
 													setIsDragging(false);
 													setDragOffset(0);
+													onHandleReleased();
 												},
 											});
 										});
