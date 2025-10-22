@@ -11,6 +11,7 @@ pub use macos::*;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(isize)]
 pub enum HapticPattern {
     Alignment = 0,
@@ -20,6 +21,7 @@ pub enum HapticPattern {
 }
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(usize)]
 pub enum HapticPerformanceTime {
     Default = 0,
