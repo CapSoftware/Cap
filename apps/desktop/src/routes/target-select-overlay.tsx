@@ -866,7 +866,7 @@ function RecordingControls(props: {
 						<IconCapInfo class="will-change-transform size-4" />
 						<p class="text-sm font-medium">Area Too Small</p>
 					</div>
-					<p class="text-xs text-center">
+					<p class="text-xs text-center tabular-nums">
 						Selection must be at least {MIN_WIDTH}x{MIN_HEIGHT} pixels
 						{props.target.variant === "area" &&
 							` (currently ${props.target.bounds.size.width}x${props.target.bounds.size.height})`}
