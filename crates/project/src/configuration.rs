@@ -641,17 +641,14 @@ impl ProjectConfiguration {
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
         let config_path = project_path.as_ref().join("project-config.json");
         let temp_path = project_path.as_ref().join("project-config.json.tmp");
-        
+
         // Write to temporary file first
-        std::fs::write(
-            &temp_path,
-            serde_json::to_string_pretty(self)?,
-        )?;
-        
+        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
+
         // Atomically rename temp file to final file
         // This ensures readers never see a partial file
         std::fs::rename(&temp_path, &config_path)?;
-        
+
         Ok(())
     }
 
