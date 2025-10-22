@@ -11,7 +11,6 @@ import {
 	createSignal,
 	For,
 	Match,
-	mergeProps,
 	Show,
 	Switch,
 } from "solid-js";
@@ -205,37 +204,42 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-				const [isDragging, setIsDragging] = createSignal(false);
-				const [dragOffset, setDragOffset] = createSignal(0);
-				const [initialStart, setInitialStart] = createSignal(segment.start);
+					const [isDragging, setIsDragging] = createSignal(false);
+					const [dragOffset, setDragOffset] = createSignal(0);
+					const [initialStart, setInitialStart] = createSignal(segment.start);
 
-				const prefixOffsets = createMemo(() => {
-					const segs = segments();
-					const out: number[] = new Array(segs.length);
-					let sum = 0;
-					for (let k = 0; k < segs.length; k++) {
-						out[k] = sum;
-						sum += (segs[k].end - segs[k].start) / segs[k].timescale;
-					}
-					return out;
-				});
-				const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
+					const prefixOffsets = createMemo(() => {
+						const segs = segments();
+						const out: number[] = new Array(segs.length);
+						let sum = 0;
+						for (let k = 0; k < segs.length; k++) {
+							out[k] = sum;
+							sum += (segs[k].end - segs[k].start) / segs[k].timescale;
+						}
+						return out;
+					});
+					const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
-				const relativeSegment = createMemo(() => {
-					const offset = isDragging() ? dragOffset() / (segment.timescale || 1) : 0;
-					
-					return {
-						start: prevDuration() + offset,
-						end: prevDuration() + offset + (segment.end - segment.start) / segment.timescale,
-						timescale: segment.timescale,
-						recordingSegment: segment.recordingSegment,
-					};
-				});
+					const relativeSegment = createMemo(() => {
+						const offset = isDragging()
+							? dragOffset() / (segment.timescale || 1)
+							: 0;
 
-				const segmentX = useSegmentTranslateX(relativeSegment);
-				const segmentWidth = useSegmentWidth(relativeSegment);
+						return {
+							start: prevDuration() + offset,
+							end:
+								prevDuration() +
+								offset +
+								(segment.end - segment.start) / segment.timescale,
+							timescale: segment.timescale,
+							recordingSegment: segment.recordingSegment,
+						};
+					});
 
-				const segmentRecording = (s = i()) =>
+					const segmentX = useSegmentTranslateX(relativeSegment);
+					const segmentWidth = useSegmentWidth(relativeSegment);
+
+					const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
 							segments()[s].recordingSegment ?? 0
 						];
@@ -452,23 +456,27 @@ export function ClipTrack(
 										function update(event: MouseEvent) {
 											const newStart =
 												start +
-												(event.clientX - downEvent.clientX) * secsPerPixel() * segment.timescale;
+												(event.clientX - downEvent.clientX) *
+													secsPerPixel() *
+													segment.timescale;
 
-											setDragOffset(newStart - initialStart());
+											const clampedStart = Math.min(
+												Math.max(
+													newStart,
+													prevSegmentIsSameClip ? prevSegment.end : 0,
+													segment.end - maxDuration,
+												),
+												segment.end - 1,
+											);
+
+											setDragOffset(clampedStart - initialStart());
 
 											setProject(
 												"timeline",
 												"segments",
 												i(),
 												"start",
-												Math.min(
-													Math.max(
-														newStart,
-														prevSegmentIsSameClip ? prevSegment.end : 0,
-														segment.end - maxDuration,
-													),
-													segment.end - 1,
-												),
+												clampedStart,
 											);
 										}
 
@@ -480,10 +488,10 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
-													
+
 													setIsDragging(false);
 													setDragOffset(0);
-													
+
 													onHandleReleased();
 												},
 												blur: () => {
@@ -699,7 +707,7 @@ function CutOffsetButton(props: {
 			{props.value === 0 ? (
 				<IconCapScissors class="size-3.5" />
 			) : (
-				<>{formatTime(props.value)}</>
+				formatTime(props.value)
 			)}
 		</button>
 	);
