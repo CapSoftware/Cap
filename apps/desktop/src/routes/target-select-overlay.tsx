@@ -1,13 +1,14 @@
 import { Button } from "@cap/ui-solid";
+import { makeBroadcastChannel } from "@solid-primitives/broadcast-channel";
 import {
 	createEventListener,
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
+import { createWritableMemo } from "@solid-primitives/memo";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery, useMutation } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import { makeBroadcastChannel } from "@solid-primitives/broadcast-channel";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -37,7 +38,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { createWritableMemo } from "@solid-primitives/memo";
 
 const EMPTY_BOUNDS = {
 	position: { x: 0, y: 0 },
