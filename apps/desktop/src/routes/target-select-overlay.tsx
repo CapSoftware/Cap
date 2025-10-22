@@ -13,6 +13,7 @@ import { cx } from "cva";
 import {
 	type ComponentProps,
 	createEffect,
+	createMemo,
 	createRoot,
 	createSignal,
 	type JSX,
@@ -113,13 +114,13 @@ function Inner() {
 		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS),
 	);
 
-	const { postMessage, onMessage } = makeBroadcastChannel(
+	const { postMessage, onMessage } = makeBroadcastChannel<{ type: "reset" }>(
 		"target_select_overlay",
 	);
 	createEventListener(window, "mousedown", () =>
 		postMessage({ type: "reset" }),
 	);
-	onMessage(() => _setBounds(structuredClone(EMPTY_BOUNDS)));
+	onMessage(() => setBounds(structuredClone(EMPTY_BOUNDS)));
 
 	const setBounds = (newBounds: typeof bounds) => {
 		const clampedBounds = {
@@ -279,46 +280,39 @@ function Inner() {
 			</Match>
 			<Match when={rawOptions.targetMode === "area"}>
 				{(_) => {
-					const [dragging, setDragging] = createSignal(false);
-					const [creating, setCreating] = createSignal(false);
+					const [state, setState] = createSignal<
+						"creating" | "dragging" | undefined
+					>();
+
 					// Initialize hasArea based on whether bounds have meaningful dimensions
 					const [hasArea, setHasArea] = createWritableMemo(
 						() => bounds.size.width > 0 && bounds.size.height > 0,
 					);
 					// Track whether the controls should be placed above the selection to avoid window bottom overflow
-					const [placeControlsAbove, setPlaceControlsAbove] =
-						createSignal(false);
 					let controlsEl: HTMLDivElement | undefined;
 
+					const [controlsHeight, setControlsHeight] = createSignal<
+						number | undefined
+					>(undefined);
 					// Recompute placement when bounds change or window resizes
-					createEffect(() => {
-						// Read reactive dependencies
+					const placeControlsAbove = createMemo(() => {
 						const top = bounds.position.y;
 						const height = bounds.size.height;
 						// Measure controls height (fallback to 64px if not yet mounted)
-						const ctrlH = controlsEl?.offsetHeight ?? 64;
+						const ctrlH = controlsHeight() ?? 64;
 						const margin = 16;
 
 						const wouldOverflow =
 							top + height + margin + ctrlH > window.innerHeight;
-						setPlaceControlsAbove(wouldOverflow);
+						return wouldOverflow;
 					});
-
 					// Handle window resize to keep placement responsive
-					createRoot((dispose) => {
-						const onResize = () => {
-							const ctrlH = controlsEl?.offsetHeight ?? 64;
-							const margin = 16;
-							const wouldOverflow =
-								bounds.position.y + bounds.size.height + margin + ctrlH >
-								window.innerHeight;
-							setPlaceControlsAbove(wouldOverflow);
-						};
+					createEffect(() => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						const onResize = () => setControlsHeight(controlsEl?.offsetHeight);
+
 						window.addEventListener("resize", onResize);
-						onCleanup(() => {
-							window.removeEventListener("resize", onResize);
-							dispose();
-						});
+						onCleanup(() => window.removeEventListener("resize", onResize));
 					});
 
 					function createOnMouseDown(
@@ -657,7 +651,7 @@ function Inner() {
 							onMouseDown={(downEvent) => {
 								// Start creating a new area
 								downEvent.preventDefault();
-								setCreating(true);
+								setState("creating");
 								setHasArea(false);
 
 								const startX = downEvent.clientX;
@@ -682,7 +676,7 @@ function Inner() {
 											});
 										},
 										mouseup: () => {
-											setCreating(false);
+											setState(undefined);
 											// Only set hasArea if we created a meaningful area
 											if (bounds.size.width > 10 && bounds.size.height > 10) {
 												setHasArea(true);
@@ -705,7 +699,7 @@ function Inner() {
 								<div
 									class={cx(
 										"flex absolute flex-col items-center",
-										dragging() ? "cursor-grabbing" : "cursor-grab",
+										state() === "dragging" ? "cursor-grabbing" : "cursor-grab",
 									)}
 									style={{
 										width: `${bounds.size.width}px`,
@@ -715,7 +709,7 @@ function Inner() {
 									}}
 									onMouseDown={(downEvent) => {
 										downEvent.stopPropagation();
-										setDragging(true);
+										setState("dragging");
 										const startPosition = { ...bounds.position };
 
 										createRoot((dispose) => {
@@ -750,7 +744,7 @@ function Inner() {
 													_setBounds("position", newPosition);
 												},
 												mouseup: () => {
-													setDragging(false);
+													setState(undefined);
 													dispose();
 												},
 											});
@@ -781,7 +775,7 @@ function Inner() {
 								<ResizeHandles />
 							</Show>
 
-							<Show when={creating()}>
+							<Show when={state() === "creating"}>
 								<div
 									class="absolute border-2 border-blue-500 bg-blue-500/20 pointer-events-none"
 									style={{
@@ -793,7 +787,7 @@ function Inner() {
 								/>
 							</Show>
 
-							<Show when={!creating()}>
+							<Show when={!state()}>
 								<Show when={!hasArea()}>
 									<p class="z-10 text-xl pointer-events-none text-white">
 										Click and drag to select area
