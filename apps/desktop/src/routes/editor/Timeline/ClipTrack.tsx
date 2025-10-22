@@ -564,9 +564,11 @@ export function ClipTrack(
 												: false;
 
 										function update(event: MouseEvent) {
-											const newEnd =
-												end +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+											const deltaRecorded =
+												(event.clientX - downEvent.clientX) *
+													secsPerPixel() *
+													(segment.timescale || 1);
+											const newEnd = end + deltaRecorded;
 
 											setProject(
 												"timeline",
@@ -576,7 +578,8 @@ export function ClipTrack(
 												Math.max(
 													Math.min(
 														newEnd,
-														segment.end + availableTimelineDuration,
+														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
+														end + availableTimelineDuration * (segment.timescale || 1),
 														nextSegmentIsSameClip
 															? nextSegment.start
 															: maxSegmentDuration,
