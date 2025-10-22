@@ -45,8 +45,18 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				requestStreamBufferSize: 16 * 1024,
 			});
 
-		const endpointIsPathStyle = (endpoint: string) =>
-			endpoint.endsWith("s3.amazonaws.com");
+		const endpointIsPathStyle = (endpoint: string) => {
+			try {
+				const { hostname } = new URL(endpoint);
+				return (
+					hostname === "s3.amazonaws.com" ||
+					hostname.endsWith(".s3.amazonaws.com")
+				);
+			} catch {
+				// If endpoint can't be parsed as a URL, fall back to false for safety
+				return false;
+			}
+		};
 
 		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {
 			const endpoint = await (() => {
