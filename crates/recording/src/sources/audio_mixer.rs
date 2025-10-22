@@ -322,7 +322,7 @@ impl AudioMixer {
 
                 source.buffer_last = Some((
                     timestamp,
-                    Duration::from_secs_f64(frame.samples() as f64 / frame.rate() as f64),
+                    Duration::from_secs_f64(frame.samples() as f64 / rate as f64),
                 ));
                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
             }
