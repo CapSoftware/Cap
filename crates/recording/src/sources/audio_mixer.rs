@@ -322,7 +322,7 @@ impl AudioMixer {
 
                 source.buffer_last = Some((
                     timestamp,
-                    Duration::from_secs_f64(frame.samples() as f64 / frame.rate() as f64),
+                    Duration::from_secs_f64(frame.samples() as f64 / rate as f64),
                 ));
                 source.buffer.push_back(AudioFrame::new(frame, timestamp));
             }
@@ -400,7 +400,15 @@ impl AudioMixer {
 
         let mut filtered = ffmpeg::frame::Audio::empty();
         while self.abuffersink.sink().frame(&mut filtered).is_ok() {
-            let elapsed = Duration::from_secs_f64(self.samples_out as f64 / filtered.rate() as f64);
+            let output_rate_i32 = Self::INFO.rate();
+            let output_rate = output_rate_i32 as f64;
+
+            // Downstream encoders assume the mixer outputs at AudioMixer::INFO.rate().
+            // Normalize the frame metadata so we don't inherit whatever FFmpeg propagated
+            // from upstream sources (some CoreAudio devices report 16 kHz).
+            filtered.set_rate(output_rate_i32 as u32);
+
+            let elapsed = Duration::from_secs_f64(self.samples_out as f64 / output_rate);
             let timestamp = start.instant() + start_timestamp.duration_since(start) + elapsed;
 
             self.samples_out += filtered.samples();
