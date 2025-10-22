@@ -1,10 +1,10 @@
 import * as Db from "@cap/database/schema";
-import { type IconImage, Organisation, Policy } from "@cap/web-domain";
+import { type ImageUpload, Organisation, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option } from "effect";
 
 import { Database } from "../Database";
-import { IconImages } from "../IconImages";
+import { ImageUploads } from "../ImageUploads";
 import { S3Buckets } from "../S3Buckets";
 import { OrganisationsPolicy } from "./OrganisationsPolicy";
 
@@ -14,7 +14,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 		effect: Effect.gen(function* () {
 			const db = yield* Database;
 			const policy = yield* OrganisationsPolicy;
-			const iconImages = yield* IconImages;
+			const imageUploads = yield* ImageUploads;
 
 			const update = Effect.fn("Organisations.update")(function* (
 				payload: Organisation.OrganisationUpdate,
@@ -36,10 +36,10 @@ export class Organisations extends Effect.Service<Organisations>()(
 					);
 
 				if (payload.image) {
-					yield* iconImages.applyUpdate({
+					yield* imageUploads.applyUpdate({
 						payload: payload.image,
 						existing: Option.fromNullable(
-							organisation.iconUrl as IconImage.ImageUrlOrKey | null,
+							organisation.iconUrl as ImageUpload.ImageUrlOrKey | null,
 						),
 						keyPrefix: `organisations/${organisation.id}`,
 						update: (db, urlOrKey) =>
@@ -54,7 +54,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 			return { update };
 		}),
 		dependencies: [
-			IconImages.Default,
+			ImageUploads.Default,
 			S3Buckets.Default,
 			Database.Default,
 			OrganisationsPolicy.Default,

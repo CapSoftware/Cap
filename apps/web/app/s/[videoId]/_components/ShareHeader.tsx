@@ -19,10 +19,10 @@ import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 export const ShareHeader = ({
 	data,
-	user,
 	customDomain,
 	domainVerified,
 	sharedOrganizations = [],
@@ -34,7 +34,6 @@ export const ShareHeader = ({
 		ownerImage?: string | null;
 		ownerIsPro?: boolean;
 	};
-	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
@@ -53,6 +52,7 @@ export const ShareHeader = ({
 	}[];
 	spacesData?: Spaces[] | null;
 }) => {
+	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
 	const [isEditing, setIsEditing] = useState(false);
 	const [title, setTitle] = useState(data.name);

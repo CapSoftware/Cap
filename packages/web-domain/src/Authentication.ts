@@ -3,7 +3,7 @@ import { RpcMiddleware } from "@effect/rpc";
 import { Context, type Option, Schema } from "effect";
 
 import { InternalError } from "./Errors.ts";
-import type { IconImage, Organisation, User } from "./index.ts";
+import type { ImageUpload, Organisation, User } from "./index.ts";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
 	CurrentUser,
@@ -11,7 +11,7 @@ export class CurrentUser extends Context.Tag("CurrentUser")<
 		id: User.UserId;
 		email: string;
 		activeOrganizationId: Organisation.OrganisationId;
-		iconUrlOrKey: Option.Option<IconImage.ImageUrlOrKey>;
+		iconUrlOrKey: Option.Option<ImageUpload.ImageUrlOrKey>;
 	}
 >() {}
 

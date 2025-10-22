@@ -1,7 +1,7 @@
 import type {
 	Comment,
 	Folder,
-	IconImage,
+	ImageUpload,
 	Organisation,
 	S3Bucket,
 	Space,
@@ -65,7 +65,7 @@ export const users = mysqlTable(
 		lastName: varchar("lastName", { length: 255 }),
 		email: varchar("email", { length: 255 }).unique().notNull(),
 		emailVerified: timestamp("emailVerified"),
-		image: varchar("image", { length: 255 }),
+		image: varchar("image", { length: 255 }).$type<ImageUpload.ImageUrlOrKey>(),
 		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
 		stripeSubscriptionId: varchar("stripeSubscriptionId", {
 			length: 255,
@@ -191,7 +191,9 @@ export const organizations = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 		}>(),
-		iconUrl: varchar("iconUrl", { length: 1024 }),
+		iconUrl: varchar("iconUrl", {
+			length: 1024,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
@@ -600,7 +602,9 @@ export const spaces = mysqlTable(
 			.notNull()
 			.$type<Organisation.OrganisationId>(),
 		createdById: nanoId("createdById").notNull().$type<User.UserId>(),
-		iconUrl: varchar("iconUrl", { length: 255 }),
+		iconUrl: varchar("iconUrl", {
+			length: 255,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
 		description: varchar("description", { length: 1000 }),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),

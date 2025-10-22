@@ -3,11 +3,11 @@ import { CurrentUser, type User } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
-import { IconImages } from "../IconImages";
+import { ImageUploads } from "../ImageUploads";
 
 export class Users extends Effect.Service<Users>()("Users", {
 	effect: Effect.gen(function* () {
-		const iconImages = yield* IconImages;
+		const imageUploads = yield* ImageUploads;
 
 		const update = Effect.fn("Users.update")(function* (
 			payload: User.UserUpdate,
@@ -15,7 +15,7 @@ export class Users extends Effect.Service<Users>()("Users", {
 			const user = yield* CurrentUser;
 
 			if (payload.image) {
-				yield* iconImages.applyUpdate({
+				yield* imageUploads.applyUpdate({
 					payload: payload.image,
 					existing: user.iconUrlOrKey,
 					keyPrefix: `users/${user.id}`,
@@ -30,5 +30,5 @@ export class Users extends Effect.Service<Users>()("Users", {
 
 		return { update };
 	}),
-	dependencies: [IconImages.Default],
+	dependencies: [ImageUploads.Default],
 }) {}

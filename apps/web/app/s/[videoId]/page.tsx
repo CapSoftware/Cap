@@ -14,10 +14,16 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { provideOptionalAuth, Videos } from "@cap/web-backend";
+import {
+	Database,
+	ImageUploads,
+	provideOptionalAuth,
+	Videos,
+} from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
+	ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,
@@ -633,15 +639,20 @@ async function AuthorizedContent({
 				)
 		: Promise.resolve([]);
 
-	const commentsPromise = (async () => {
+	const commentsPromise = Effect.gen(function* () {
+		const db = yield* Database;
+		const imageUploads = yield* ImageUploads;
+
 		let toplLevelCommentId = Option.none<Comment.CommentId>();
 
 		if (Option.isSome(replyId)) {
-			const [parentComment] = await db()
-				.select({ parentCommentId: comments.parentCommentId })
-				.from(comments)
-				.where(eq(comments.id, replyId.value))
-				.limit(1);
+			const [parentComment] = yield* db.use((db) =>
+				db
+					.select({ parentCommentId: comments.parentCommentId })
+					.from(comments)
+					.where(eq(comments.id, replyId.value))
+					.limit(1),
+			);
 			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
 		}
 
@@ -650,33 +661,54 @@ async function AuthorizedContent({
 			() => commentId,
 		);
 
-		const allComments = await db()
-			.select({
-				id: comments.id,
-				content: comments.content,
-				timestamp: comments.timestamp,
-				type: comments.type,
-				authorId: comments.authorId,
-				videoId: comments.videoId,
-				createdAt: comments.createdAt,
-				updatedAt: comments.updatedAt,
-				parentCommentId: comments.parentCommentId,
-				authorName: users.name,
-				authorImageUrlOrKey: users.image,
-			})
-			.from(comments)
-			.leftJoin(users, eq(comments.authorId, users.id))
-			.where(eq(comments.videoId, videoId))
-			.orderBy(
-				Option.match(commentToBringToTheTop, {
-					onSome: (commentId) =>
-						sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
-					onNone: () => comments.createdAt,
-				}),
+		return yield* db
+			.use((db) =>
+				db
+					.select({
+						id: comments.id,
+						content: comments.content,
+						timestamp: comments.timestamp,
+						type: comments.type,
+						authorId: comments.authorId,
+						videoId: comments.videoId,
+						createdAt: comments.createdAt,
+						updatedAt: comments.updatedAt,
+						parentCommentId: comments.parentCommentId,
+						authorName: users.name,
+						authorImage: users.image,
+					})
+					.from(comments)
+					.leftJoin(users, eq(comments.authorId, users.id))
+					.where(eq(comments.videoId, videoId))
+					.orderBy(
+						Option.match(commentToBringToTheTop, {
+							onSome: (commentId) =>
+								sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
+							onNone: () => comments.createdAt,
+						}),
+					),
+			)
+			.pipe(
+				Effect.map((comments) =>
+					comments.map(
+						Effect.fn(function* (c) {
+							return Object.assign(c, {
+								authorImage: yield* Option.fromNullable(c.authorImage).pipe(
+									Option.map((v) =>
+										imageUploads.resolveImageUrl(
+											v as ImageUpload.ImageUrlOrKey,
+										),
+									),
+									Effect.transposeOption,
+									Effect.map(Option.getOrNull),
+								),
+							});
+						}),
+					),
+				),
+				Effect.flatMap(Effect.all),
 			);
-
-		return allComments;
-	})();
+	}).pipe(EffectRuntime.runPromise);
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -713,7 +745,6 @@ async function AuthorizedContent({
 							? new Date(video.metadata.customCreatedAt)
 							: video.createdAt,
 					}}
-					user={user}
 					customDomain={customDomain}
 					domainVerified={domainVerified}
 					sharedOrganizations={
@@ -727,7 +758,6 @@ async function AuthorizedContent({
 				<Share
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
-					user={user}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}

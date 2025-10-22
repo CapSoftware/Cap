@@ -11,10 +11,16 @@ import {
 	users,
 	videos,
 } from "@cap/database/schema";
+import { Database, ImageUploads } from "@cap/web-backend";
+import type { ImageUpload } from "@cap/web-domain";
 import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { Effect } from "effect";
+import { runPromise } from "@/lib/server";
 
 export type Organization = {
-	organization: typeof organizations.$inferSelect;
+	organization: Omit<typeof organizations.$inferSelect, "iconUrl"> & {
+		iconUrl: ImageUpload.ImageUrl | null;
+	};
 	members: (typeof organizationMembers.$inferSelect & {
 		user: Pick<
 			typeof users.$inferSelect,
@@ -32,10 +38,11 @@ export type OrganizationSettings = NonNullable<
 
 export type Spaces = Omit<
 	typeof spaces.$inferSelect,
-	"createdAt" | "updatedAt"
+	"createdAt" | "updatedAt" | "iconUrl"
 > & {
 	memberCount: number;
 	videoCount: number;
+	iconUrl: ImageUpload.ImageUrl | null;
 };
 
 export type UserPreferences = (typeof users.$inferSelect)["preferences"];
@@ -121,40 +128,65 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				.where(eq(organizations.id, activeOrganizationId));
 			organizationSettings = organizationSetting?.settings || null;
 
-			spacesData = await db()
-				.selectDistinct({
-					id: spaces.id,
-					primary: spaces.primary,
-					privacy: spaces.privacy,
-					name: spaces.name,
-					description: spaces.description,
-					organizationId: spaces.organizationId,
-					createdById: spaces.createdById,
-					iconUrl: spaces.iconUrl,
-					memberImage: users.image,
-					memberCount: sql<number>`(
+			spacesData = await Effect.gen(function* () {
+				const db = yield* Database;
+				const imageUploads = yield* ImageUploads;
+
+				return yield* db
+					.use((db) =>
+						db
+							.selectDistinct({
+								id: spaces.id,
+								primary: spaces.primary,
+								privacy: spaces.privacy,
+								name: spaces.name,
+								description: spaces.description,
+								organizationId: spaces.organizationId,
+								createdById: spaces.createdById,
+								iconUrl: spaces.iconUrl,
+								memberImage: users.image,
+								memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
-					videoCount: sql<number>`(
+								videoCount: sql<number>`(
           SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
         )`,
-				})
-				.from(spaces)
-				.leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-				.leftJoin(users, eq(spaceMembers.userId, users.id))
-				.where(
-					and(
-						eq(spaces.organizationId, activeOrganizationId),
-						or(
-							// User is the space creator
-							eq(spaces.createdById, user.id),
-							// User is a member of the space
-							eq(spaceMembers.userId, user.id),
-							// Space is public within the organization
-							eq(spaces.privacy, "Public"),
+							})
+							.from(spaces)
+							.leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+							.leftJoin(users, eq(spaceMembers.userId, users.id))
+							.where(
+								and(
+									eq(spaces.organizationId, activeOrganizationId),
+									or(
+										// User is the space creator
+										eq(spaces.createdById, user.id),
+										// User is a member of the space
+										eq(spaceMembers.userId, user.id),
+										// Space is public within the organization
+										eq(spaces.privacy, "Public"),
+									),
+								),
+							),
+					)
+					.pipe(
+						Effect.map((rows) =>
+							rows.map(
+								Effect.fn(function* (row) {
+									return {
+										...row,
+										iconUrl: row.iconUrl
+											? yield* imageUploads.resolveImageUrl(
+													row.iconUrl as ImageUpload.ImageUrlOrKey,
+												)
+											: null,
+									};
+								}),
+							),
 						),
-					),
-				);
+						Effect.flatMap(Effect.all),
+					);
+			}).pipe(runPromise);
 
 			// Add a single 'All spaces' entry for the active organization
 			const activeOrgInfo = organizationsWithMembers.find(
@@ -198,18 +230,28 @@ export async function getDashboardData(user: typeof userSelectProps) {
 
 				userCapsCount = userCapsCountResult[0]?.value || 0;
 
-				const allSpacesEntry = {
-					id: activeOrgInfo.organization.id,
-					primary: true,
-					privacy: "Public",
-					name: `All ${activeOrgInfo.organization.name}`,
-					description: `View all content in ${activeOrgInfo.organization.name}`,
-					organizationId: activeOrgInfo.organization.id,
-					iconUrl: activeOrgInfo.organization.iconUrl,
-					memberCount: orgMemberCount,
-					createdById: activeOrgInfo.organization.ownerId,
-					videoCount: orgVideoCount,
-				} as const;
+				const allSpacesEntry = await Effect.gen(function* () {
+					const imageUploads = yield* ImageUploads;
+
+					const iconUrl = activeOrgInfo.organization
+						.iconUrl as ImageUpload.ImageUrlOrKey;
+
+					return {
+						id: activeOrgInfo.organization.id,
+						primary: true,
+						privacy: "Public",
+						name: `All ${activeOrgInfo.organization.name}`,
+						description: `View all content in ${activeOrgInfo.organization.name}`,
+						organizationId: activeOrgInfo.organization.id,
+						iconUrl: iconUrl
+							? yield* imageUploads.resolveImageUrl(iconUrl)
+							: null,
+						memberCount: orgMemberCount,
+						createdById: activeOrgInfo.organization.ownerId,
+						videoCount: orgVideoCount,
+					} as const;
+				}).pipe(runPromise);
+
 				spacesData = [allSpacesEntry, ...spacesData];
 			}
 		}
@@ -222,7 +264,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			.where(eq(users.id, user.id))
 			.limit(1);
 
-		const organizationSelect: Organization[] = await Promise.all(
+		const organizationSelect: Organization[] = await Effect.all(
 			organizationsWithMembers
 				.reduce((acc: (typeof organizations.$inferSelect)[], row) => {
 					const existingOrganization = acc.find(
@@ -233,62 +275,81 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					}
 					return acc;
 				}, [])
-				.map(async (organization) => {
-					const allMembers = await db()
-						.select({
-							member: organizationMembers,
-							user: {
-								id: users.id,
-								name: users.name,
-								lastName: users.lastName,
-								email: users.email,
-								image: users.image,
-							},
-						})
-						.from(organizationMembers)
-						.leftJoin(users, eq(organizationMembers.userId, users.id))
-						.where(eq(organizationMembers.organizationId, organization.id));
+				.map(
+					Effect.fn(function* (organization) {
+						const db = yield* Database;
+						const iconImages = yield* ImageUploads;
 
-					const owner = await db()
-						.select({
-							inviteQuota: users.inviteQuota,
-						})
-						.from(users)
-						.where(eq(users.id, organization.ownerId))
-						.then((result) => result[0]);
+						const allMembers = yield* db.use((db) =>
+							db
+								.select({
+									member: organizationMembers,
+									user: {
+										id: users.id,
+										name: users.name,
+										lastName: users.lastName,
+										email: users.email,
+										image: users.image,
+									},
+								})
+								.from(organizationMembers)
+								.leftJoin(users, eq(organizationMembers.userId, users.id))
+								.where(eq(organizationMembers.organizationId, organization.id)),
+						);
 
-					const totalInvitesResult = await db()
-						.select({
-							value: sql<number>`
+						const owner = yield* db.use((db) =>
+							db
+								.select({
+									inviteQuota: users.inviteQuota,
+								})
+								.from(users)
+								.where(eq(users.id, organization.ownerId))
+								.then((result) => result[0]),
+						);
+
+						const totalInvitesResult = yield* db.use((db) =>
+							db
+								.select({
+									value: sql<number>`
                 ${count(organizationMembers.id)} + ${count(
 									organizationInvites.id,
 								)}
               `,
-						})
-						.from(organizations)
-						.leftJoin(
-							organizationMembers,
-							eq(organizations.id, organizationMembers.organizationId),
-						)
-						.leftJoin(
-							organizationInvites,
-							eq(organizations.id, organizationInvites.organizationId),
-						)
-						.where(eq(organizations.ownerId, organization.ownerId));
+								})
+								.from(organizations)
+								.leftJoin(
+									organizationMembers,
+									eq(organizations.id, organizationMembers.organizationId),
+								)
+								.leftJoin(
+									organizationInvites,
+									eq(organizations.id, organizationInvites.organizationId),
+								)
+								.where(eq(organizations.ownerId, organization.ownerId)),
+						);
 
-					const totalInvites = totalInvitesResult[0]?.value || 0;
+						const totalInvites = totalInvitesResult[0]?.value || 0;
 
-					return {
-						organization,
-						members: allMembers.map((m) => ({ ...m.member, user: m.user! })),
-						invites: organizationInvitesData.filter(
-							(invite) => invite.organizationId === organization.id,
-						),
-						inviteQuota: owner?.inviteQuota || 1,
-						totalInvites,
-					};
-				}),
-		);
+						return {
+							organization: {
+								...organization,
+								iconUrl: organization.iconUrl
+									? yield* iconImages.resolveImageUrl(
+											organization.iconUrl as ImageUpload.ImageUrlOrKey,
+										)
+									: null,
+							},
+							members: allMembers.map((m) => ({ ...m.member, user: m.user! })),
+							invites: organizationInvitesData.filter(
+								(invite) => invite.organizationId === organization.id,
+							),
+							inviteQuota: owner?.inviteQuota || 1,
+							totalInvites,
+						};
+					}),
+				),
+			{ concurrency: 3 },
+		).pipe(runPromise);
 
 		return {
 			organizationSelect,

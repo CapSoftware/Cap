@@ -3,7 +3,7 @@ import { Schema } from "effect";
 
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
-import { ImageUpdatePayload } from "./IconImage.ts";
+import { ImageUpdatePayload } from "./ImageUpload.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 

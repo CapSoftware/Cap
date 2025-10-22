@@ -20,6 +20,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "./utils/transcript-utils";
+import { ImageUpload } from "@cap/web-domain";
 
 declare global {
 	interface Window {
@@ -29,7 +30,7 @@ declare global {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImageUrlOrKey: string | null;
+	authorImage: ImageUpload.ImageUrl | null;
 };
 
 export const ShareVideo = forwardRef<
@@ -40,7 +41,6 @@ export const ShareVideo = forwardRef<
 			hasActiveUpload?: boolean;
 			orgSettings?: OrganizationSettings | null;
 		};
-		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -203,7 +203,7 @@ export const ShareVideo = forwardRef<
 								timestamp: comment.timestamp,
 								content: comment.content,
 								authorName: comment.authorName,
-								authorImageUrlOrKey: comment.authorImageUrlOrKey ?? undefined,
+								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
 						/>

@@ -1,10 +1,11 @@
 import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
-import { RpcAuthMiddleware } from "./Authentication";
-import { InternalError } from "./Errors";
-import { ImageUpdatePayload } from "./IconImage";
-import { PolicyDeniedError } from "./Policy";
+
+import { RpcAuthMiddleware } from "./Authentication.ts";
+import { InternalError } from "./Errors.ts";
+import { ImageUpdatePayload } from "./ImageUpload.ts";
+import { PolicyDeniedError } from "./Policy.ts";
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"OrgNotFoundError",

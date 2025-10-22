@@ -1,6 +1,5 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
 import type { Video } from "@cap/web-domain";
 import type React from "react";
 import { forwardRef, type JSX, Suspense, useState } from "react";
@@ -9,12 +8,12 @@ import type { CommentType } from "../../../Share";
 import { AuthOverlay } from "../../AuthOverlay";
 import Analytics from "./Analytics";
 import { Comments } from "./Comments";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 interface ActivityProps {
 	views: MaybePromise<number>;
 	comments: CommentType[];
 	setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
-	user: typeof userSelectProps | null;
 	onSeek?: (time: number) => void;
 	handleCommentSuccess: (comment: CommentType) => void;
 	videoId: Video.VideoId;
@@ -28,7 +27,6 @@ export const Activity = Object.assign(
 	forwardRef<{ scrollToBottom: () => void }, ActivityProps>(
 		(
 			{
-				user,
 				videoId,
 				isOwnerOrMember,
 				comments,
@@ -53,7 +51,6 @@ export const Activity = Object.assign(
 							/>
 						</Suspense>
 					}
-					user={user}
 					isOwnerOrMember={isOwnerOrMember}
 				>
 					{({ setShowAuthOverlay }) => (
@@ -63,7 +60,6 @@ export const Activity = Object.assign(
 							optimisticComments={optimisticComments}
 							setOptimisticComments={setOptimisticComments}
 							setComments={setComments}
-							user={user}
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
 							onSeek={props.onSeek}
@@ -77,17 +73,17 @@ export const Activity = Object.assign(
 	{
 		Shell: (props: {
 			analytics?: JSX.Element;
-			user: typeof userSelectProps | null;
 			isOwnerOrMember: boolean;
 			children?: (props: {
 				setShowAuthOverlay: (show: boolean) => void;
 			}) => JSX.Element;
 		}) => {
+			const user = useCurrentUser();
 			const [showAuthOverlay, setShowAuthOverlay] = useState(false);
 
 			return (
 				<div className="flex flex-col h-full">
-					{props.user && props.isOwnerOrMember && (
+					{user && props.isOwnerOrMember && (
 						<div className="flex flex-row items-center p-4 h-12 border-b border-gray-200">
 							{props.analytics}
 						</div>
@@ -102,16 +98,10 @@ export const Activity = Object.assign(
 				</div>
 			);
 		},
-		Skeleton: (props: {
-			user: typeof userSelectProps | null;
-			isOwnerOrMember: boolean;
-		}) => (
+		Skeleton: (props: { isOwnerOrMember: boolean }) => (
 			<Activity.Shell {...props} analytics={<CapCardAnalytics.Skeleton />}>
 				{({ setShowAuthOverlay }) => (
-					<Comments.Skeleton
-						setShowAuthOverlay={setShowAuthOverlay}
-						user={props.user}
-					/>
+					<Comments.Skeleton setShowAuthOverlay={setShowAuthOverlay} />
 				)}
 			</Activity.Shell>
 		),

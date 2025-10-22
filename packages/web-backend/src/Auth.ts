@@ -4,7 +4,7 @@ import {
 	CurrentUser,
 	type DatabaseError,
 	HttpAuthMiddleware,
-	type IconImage,
+	type ImageUpload,
 } from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";
@@ -43,7 +43,7 @@ export const makeCurrentUser = (
 		email: user.email,
 		activeOrganizationId: user.activeOrganizationId,
 		iconUrlOrKey: Option.fromNullable(
-			user.image as IconImage.ImageUrlOrKey | null,
+			user.image as ImageUpload.ImageUrlOrKey | null,
 		),
 	});
 

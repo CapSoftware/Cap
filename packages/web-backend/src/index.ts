@@ -3,6 +3,7 @@ export * from "./Aws.ts";
 export * from "./Database.ts";
 export { Folders } from "./Folders/index.ts";
 export { HttpLive } from "./Http/Live.ts";
+export { ImageUploads } from "./ImageUploads/index.ts";
 export * from "./Loom/index.ts";
 export { Organisations } from "./Organisations/index.ts";
 export { OrganisationsPolicy } from "./Organisations/OrganisationsPolicy.ts";

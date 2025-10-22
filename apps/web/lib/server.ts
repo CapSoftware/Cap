@@ -7,6 +7,7 @@ import {
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
+	ImageUploads,
 	Organisations,
 	OrganisationsPolicy,
 	S3Buckets,
@@ -110,6 +111,7 @@ export const Dependencies = Layer.mergeAll(
 	Users.Default,
 	Organisations.Default,
 	AwsCredentials.Default,
+	ImageUploads.Default,
 	WorkflowRpcLive,
 	layerTracer,
 ).pipe(

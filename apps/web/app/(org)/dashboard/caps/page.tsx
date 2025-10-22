@@ -12,10 +12,13 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Video } from "@cap/web-domain";
+import { Database, ImageUploads } from "@cap/web-backend";
+import { type ImageUpload, Video } from "@cap/web-domain";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
@@ -23,35 +26,65 @@ export const metadata: Metadata = {
 };
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+const getSharedSpacesForVideos = Effect.fn(function* (
+	videoIds: Video.VideoId[],
+) {
 	if (videoIds.length === 0) return {};
 
+	const db = yield* Database;
+	const imageUploads = yield* ImageUploads;
+
 	// Fetch space-level sharing
-	const spaceSharing = await db()
-		.select({
-			videoId: spaceVideos.videoId,
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-		.where(inArray(spaceVideos.videoId, videoIds));
+	const spaceSharing = yield* db
+		.use((db) =>
+			db
+				.select({
+					videoId: spaceVideos.videoId,
+					id: spaces.id,
+					name: spaces.name,
+					organizationId: spaces.organizationId,
+					iconUrl: organizations.iconUrl,
+				})
+				.from(spaceVideos)
+				.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+				.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+				.where(inArray(spaceVideos.videoId, videoIds)),
+		)
+		.pipe(
+			Effect.map((v) =>
+				v.map(
+					Effect.fn(function* (v) {
+						return {
+							...v,
+							iconUrl: v.iconUrl
+								? yield* imageUploads.resolveImageUrl(
+										v.iconUrl as ImageUpload.ImageUrlOrKey,
+									)
+								: null,
+						};
+					}),
+				),
+			),
+			Effect.flatMap(Effect.all),
+		);
 
 	// Fetch organization-level sharing
-	const orgSharing = await db()
-		.select({
-			videoId: sharedVideos.videoId,
-			id: organizations.id,
-			name: organizations.name,
-			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(sharedVideos)
-		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.where(inArray(sharedVideos.videoId, videoIds));
+	const orgSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(inArray(sharedVideos.videoId, videoIds)),
+	);
 
 	// Combine and group by videoId
 	const sharedSpacesMap: Record<
@@ -94,7 +127,7 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	});
 
 	return sharedSpacesMap;
-}
+});
 
 export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const searchParams = await props.searchParams;
@@ -211,7 +244,8 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 
 	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
+	const sharedSpacesMap =
+		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
 	const processedVideoData = videoData.map((video) => {
 		const { effectiveDate, ...videoWithoutEffectiveDate } = video;

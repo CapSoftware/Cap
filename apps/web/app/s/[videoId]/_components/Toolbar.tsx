@@ -8,6 +8,7 @@ import { newComment } from "@/actions/videos/new-comment";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 
 const MotionButton = motion.create(Button);
 
@@ -16,7 +17,6 @@ interface ToolbarProps {
 	data: typeof videos.$inferSelect & {
 		orgSettings?: OrganizationSettings | null;
 	};
-	user: typeof userSelectProps | null;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
 	disableReactions?: boolean;
@@ -24,23 +24,24 @@ interface ToolbarProps {
 
 export const Toolbar = ({
 	data,
-	user,
 	onOptimisticComment,
 	onCommentSuccess,
 	disableReactions,
 }: ToolbarProps) => {
+	const user = useCurrentUser();
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
 
 	const handleEmojiClick = async (emoji: string) => {
+		if (!user) return;
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: Comment.CommentId.make(`temp-${Date.now()}`),
-			authorId: User.UserId.make(user?.id || "anonymous"),
-			authorName: user?.name || "Anonymous",
-			authorImageUrlOrKey: user?.image ?? null,
+			authorId: user.id,
+			authorName: user.name,
+			authorImage: user.imageUrl,
 			content: emoji,
 			createdAt: new Date(),
 			videoId: data.id,
@@ -73,16 +74,16 @@ export const Toolbar = ({
 	};
 
 	const handleCommentSubmit = async () => {
-		if (comment.length === 0) {
+		if (comment.length === 0 || !user) {
 			return;
 		}
 		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: Comment.CommentId.make(`temp-${Date.now()}`),
-			authorId: User.UserId.make(user?.id || "anonymous"),
-			authorName: user?.name || "Anonymous",
-			authorImageUrlOrKey: user?.image ?? null,
+			authorId: user.id,
+			authorName: user.name,
+			authorImage: user.imageUrl,
 			content: comment,
 			createdAt: new Date(),
 			videoId: data.id,
