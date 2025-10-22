@@ -120,7 +120,12 @@ function Inner() {
 	createEventListener(window, "mousedown", () =>
 		postMessage({ type: "reset" }),
 	);
-	onMessage(() => setBounds(structuredClone(EMPTY_BOUNDS)));
+	onMessage(() =>
+		_setBounds({
+			position: { x: 0, y: 0 },
+			size: { width: 0, height: 0 },
+		}),
+	);
 
 	const setBounds = (newBounds: typeof bounds) => {
 		const clampedBounds = {
