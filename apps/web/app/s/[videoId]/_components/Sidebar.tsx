@@ -106,7 +106,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				: !(
 							videoSettings?.disableTranscript ??
 							data.orgSettings?.disableTranscript
-					  )
+						)
 					? "transcript"
 					: "activity";
 

@@ -334,20 +334,22 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									? yield* iconImages.resolveImageUrl(organization.iconUrl)
 									: null,
 							},
-							members: yield* Effect.all(allMembers.map(
-								Effect.fn(function* (m) {
-									const imageUploads = yield* ImageUploads;
-									return {
-										...m.member,
-										user: {
-											...m.user!,
-											image: m.user!.image
-												? yield* imageUploads.resolveImageUrl(m.user!.image)
-												: null,
-										},
-									};
-								}),
-							)),
+							members: yield* Effect.all(
+								allMembers.map(
+									Effect.fn(function* (m) {
+										const imageUploads = yield* ImageUploads;
+										return {
+											...m.member,
+											user: {
+												...m.user!,
+												image: m.user!.image
+													? yield* imageUploads.resolveImageUrl(m.user!.image)
+													: null,
+											},
+										};
+									}),
+								),
+							),
 							invites: organizationInvitesData.filter(
 								(invite) => invite.organizationId === organization.id,
 							),
