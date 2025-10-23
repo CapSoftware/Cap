@@ -4,7 +4,7 @@ use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     posthog::{PostHogEvent, async_capture_event},
-    shared_client::{get_retryable_client, get_retryable_client_builder},
+    shared_client::get_retryable_client,
     web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
