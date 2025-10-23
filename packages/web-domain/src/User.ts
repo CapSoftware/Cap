@@ -82,16 +82,6 @@ export class UserRpcs extends RpcGroup.make(
 		success: OnboardingStepResult,
 		error: InternalError,
 	}).middleware(RpcAuthMiddleware),
-	Rpc.make("GetSignedImageUrl", {
-		payload: Schema.Struct({
-			key: Schema.String,
-			type: Schema.Literal("user", "organization"),
-		}),
-		success: Schema.Struct({
-			url: Schema.String,
-		}),
-		error: InternalError,
-	}).middleware(RpcAuthMiddleware),
 	Rpc.make("UserUpdate", {
 		payload: UserUpdate,
 		error: Schema.Union(InternalError, PolicyDeniedError),
