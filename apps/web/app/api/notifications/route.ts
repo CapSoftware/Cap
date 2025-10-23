@@ -101,7 +101,9 @@ export async function GET() {
 						if (!author) return null;
 
 						const resolvedAvatar = author.avatar
-							? yield* imageUploads.resolveImageUrl(author.avatar)
+							? yield* imageUploads
+									.resolveImageUrl(author.avatar)
+									.pipe(Effect.catchAll(() => Effect.succeed(null)))
 							: null;
 
 						return APINotification.parse({

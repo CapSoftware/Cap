@@ -1,4 +1,5 @@
 import type { Notification as APINotification } from "@cap/web-api-contract";
+import type { ImageUpload } from "@cap/web-domain";
 import { faComment, faEye, faReply } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -47,7 +48,7 @@ export const NotificationItem = ({
 			{/* Avatar */}
 			<div className="relative flex-shrink-0">
 				<SignedImageUrl
-					image={notification.author.avatar}
+					image={notification.author.avatar as ImageUpload.ImageUrl | null}
 					name={notification.author.name}
 					className="relative flex-shrink-0 size-7"
 					letterClass="text-sm"
