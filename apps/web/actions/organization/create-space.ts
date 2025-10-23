@@ -2,12 +2,16 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId, nanoIdLength } from "@cap/database/helpers";
+import { nanoId } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
-import { Space, User } from "@cap/web-domain";
+import {
+	Space,
+	SpaceMemberId,
+	type SpaceMemberRole,
+	User,
+} from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { v4 as uuidv4 } from "uuid";
 import { uploadSpaceIcon } from "./upload-space-icon";
 
 interface CreateSpaceResponse {
@@ -108,10 +112,9 @@ export async function createSpace(
 		if (memberUserIds.length > 0) {
 			const spaceMembersToInsert = memberUserIds.map((userId) => {
 				// Creator is always Admin, others are member
-				const role =
-					userId === user.id ? ("Admin" as const) : ("member" as const);
+				const role: SpaceMemberRole = userId === user.id ? "Admin" : "member";
 				return {
-					id: uuidv4().substring(0, nanoIdLength),
+					id: SpaceMemberId.make(nanoId()),
 					spaceId,
 					userId: User.UserId.make(userId),
 					role,
