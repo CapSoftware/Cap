@@ -19,6 +19,8 @@ use tokio::sync::Mutex;
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+use crate::shared_client::get_shared_client;
+
 // Re-export caption types from cap_project
 pub use cap_project::{CaptionSegment, CaptionSettings};
 
@@ -1067,7 +1069,7 @@ pub async fn download_whisper_model(
     };
 
     // Create the client and download the model
-    let client = Client::new();
+    let client = get_shared_client();
     let response = client
         .get(model_url)
         .send()

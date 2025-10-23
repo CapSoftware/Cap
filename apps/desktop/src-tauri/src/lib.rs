@@ -21,6 +21,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod shared_client;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
