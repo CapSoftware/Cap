@@ -42,6 +42,7 @@ import {
 } from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
+import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -277,7 +278,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					name: videos.name,
 					ownerId: videos.ownerId,
 					ownerName: users.name,
-					ownerImage: users.image,
 					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
@@ -373,7 +373,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
 		ownerName?: string | null;
-		ownerImageUrlOrKey?: string | null;
+		ownerImageUrlOrKey?: ImageUpload.ImageUrlOrKey | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -720,17 +720,24 @@ async function AuthorizedContent({
 		customDomainPromise,
 	]);
 
-	const videoWithOrganizationInfo: VideoWithOrganization = {
-		...video,
-		organizationMembers: membersList.map((member) => member.userId),
-		organizationId: video.sharedOrganization?.organizationId ?? undefined,
-		sharedOrganizations: sharedOrganizations,
-		ownerIsPro: video.ownerIsPro ?? false,
-		password: null,
-		folderId: null,
-		orgSettings: video.orgSettings || null,
-		settings: video.videoSettings || null,
-	};
+	const videoWithOrganizationInfo = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		return {
+			...video,
+			ownerImage: video.ownerImageUrlOrKey
+				? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
+				: null,
+			organizationMembers: membersList.map((member) => member.userId),
+			organizationId: video.sharedOrganization?.organizationId ?? undefined,
+			sharedOrganizations: sharedOrganizations,
+			ownerIsPro: video.ownerIsPro ?? false,
+			password: null,
+			folderId: null,
+			orgSettings: video.orgSettings || null,
+			settings: video.videoSettings || null,
+		};
+	}).pipe(runPromise);
 
 	return (
 		<>
