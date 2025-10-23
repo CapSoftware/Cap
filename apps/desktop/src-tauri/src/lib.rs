@@ -2358,7 +2358,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
                                         CapWindowId::from_str(&id)
                                     {
-                                        let _ = window.close();
+                                        let _ = window.hide();
                                     }
                                 }
 

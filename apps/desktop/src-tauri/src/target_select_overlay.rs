@@ -53,11 +53,14 @@ pub async fn init(app: &AppHandle) {
                 let app = app.clone();
 
                 async move {
-                    ShowCapWindow::TargetSelectOverlay { display_id }
+                    let result = ShowCapWindow::TargetSelectOverlay { display_id }
                         .show(&app)
                         .await
-                        .map_err(|err| error!("Error initializing target select overlay: {err}"))
-                        .ok();
+                        .map_err(|err| error!("Error initializing target select overlay: {err}"));
+
+                    if let Ok(window) = result {
+                        window.hide().ok();
+                    }
                 }
             }),
     )
@@ -83,6 +86,8 @@ pub async fn open_target_select_overlays(
                     ShowCapWindow::TargetSelectOverlay { display_id }
                         .show(&app)
                         .await
+                        .map_err(|err| error!("Error initializing target select overlay: {err}"))
+                        .ok();
                 }
             }),
     )
@@ -145,7 +150,10 @@ pub async fn open_target_select_overlays(
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
-            let _ = window.close();
+            window
+                .hide()
+                .map_err(|err| error!("Error hiding target select overlay: {err}"))
+                .ok();
         }
     }
 
