@@ -1,3 +1,4 @@
+import type { ImageUpload } from "@cap/web-domain";
 import { faComment } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
@@ -9,7 +10,7 @@ interface CommentStampsProps {
 		type: "text" | "emoji";
 		content: string;
 		authorName?: string | null;
-		authorImageUrlOrKey?: string | null;
+		authorImage?: ImageUpload.ImageUrl | null;
 	};
 	adjustedPosition: string;
 	handleMouseEnter: (id: string) => void;
@@ -64,9 +65,8 @@ const CommentStamp: React.FC<CommentStampsProps> = ({
 						{/* User avatar/initial */}
 						{comment.authorName && (
 							<SignedImageUrl
-								image={comment.authorImageUrlOrKey}
+								image={comment.authorImage}
 								name={comment.authorName}
-								type="user"
 								className="size-6"
 								letterClass="text-sm"
 							/>

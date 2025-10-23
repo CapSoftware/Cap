@@ -5,14 +5,14 @@ import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
 import { Database } from "../Database.ts";
-import { S3Buckets } from "../S3Buckets/index.ts";
+import { ImageUploads } from "../ImageUploads/index.ts";
 
 export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 	"UsersOnboarding",
 	{
 		effect: Effect.gen(function* () {
 			const db = yield* Database;
-			const s3Buckets = yield* S3Buckets;
+			const imageUploads = yield* ImageUploads;
 
 			return {
 				welcome: Effect.fn("Onboarding.welcome")(function* (data: {
@@ -164,7 +164,11 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 						if (data.organizationIcon) {
 							const organizationIcon = data.organizationIcon;
 							const uploadEffect = Effect.gen(function* () {
-								const { data: fileData, contentType } = organizationIcon;
+								const {
+									data: fileData,
+									contentType,
+									fileName,
+								} = organizationIcon;
 								const allowedExt = new Map<string, string>([
 									["image/png", "png"],
 									["image/jpeg", "jpg"],
@@ -174,21 +178,21 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 								const fileExtension = allowedExt.get(contentType);
 								if (!fileExtension)
 									throw new Error("Unsupported icon content type");
-								const fileKey = `organizations/${finalOrganizationId}/icon-${Date.now()}.${fileExtension}`;
 
-								const [bucket] = yield* s3Buckets.getBucketAccess(
-									Option.none(),
-								);
-
-								yield* bucket.putObject(fileKey, fileData, { contentType });
-								const iconUrl = yield* bucket.getSignedObjectUrl(fileKey);
-
-								yield* db.use((db) =>
-									db
-										.update(Db.organizations)
-										.set({ iconUrl })
-										.where(Dz.eq(Db.organizations.id, finalOrganizationId)),
-								);
+								yield* imageUploads.applyUpdate({
+									payload: Option.some({
+										data: fileData,
+										contentType,
+										fileName,
+									}),
+									existing: Option.none(),
+									keyPrefix: `organizations/${finalOrganizationId}`,
+									update: (db, iconUrl) =>
+										db
+											.update(Db.organizations)
+											.set({ iconUrl })
+											.where(Dz.eq(Db.organizations.id, finalOrganizationId)),
+								});
 							}).pipe(
 								Effect.catchAll((error) =>
 									Effect.logError("Failed to upload organization icon", error),
@@ -313,6 +317,6 @@ export class UsersOnboarding extends Effect.Service<UsersOnboarding>()(
 				}),
 			};
 		}),
-		dependencies: [Database.Default, S3Buckets.Default],
+		dependencies: [Database.Default, ImageUploads.Default],
 	},
 ) {}

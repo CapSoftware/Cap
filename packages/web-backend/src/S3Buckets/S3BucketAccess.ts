@@ -38,6 +38,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 	const provider = yield* S3BucketClientProvider;
 	return {
 		bucketName: provider.bucket,
+		isPathStyle: provider.isPathStyle,
 		getSignedObjectUrl: (key: string) =>
 			wrapS3Promise(
 				provider.getPublic.pipe(

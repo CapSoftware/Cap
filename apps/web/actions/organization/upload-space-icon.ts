@@ -3,9 +3,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
-import type { Space } from "@cap/web-domain";
+import { ImageUpload, type Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -54,9 +53,11 @@ export async function uploadSpaceIcon(
 
 	// Prepare new file key
 	const fileExtension = file.name.split(".").pop();
-	const fileKey = `organizations/${
-		space.organizationId
-	}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
+	const fileKey = ImageUpload.ImageKey.make(
+		`organizations/${
+			space.organizationId
+		}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`,
+	);
 
 	const [bucket] = await S3Buckets.getBucketAccess(Option.none()).pipe(
 		runPromise,
@@ -89,12 +90,13 @@ export async function uploadSpaceIcon(
 			)
 			.pipe(runPromise);
 
-		const iconUrl = fileKey;
-
-		await db().update(spaces).set({ iconUrl }).where(eq(spaces.id, spaceId));
+		await db()
+			.update(spaces)
+			.set({ iconUrl: fileKey })
+			.where(eq(spaces.id, spaceId));
 
 		revalidatePath("/dashboard");
-		return { success: true, iconUrl };
+		return { success: true, iconUrl: fileKey };
 	} catch (error) {
 		console.error("Error uploading space icon:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");

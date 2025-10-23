@@ -7,6 +7,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { faPlus, faXmark } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -20,7 +21,7 @@ type UserObject = {
 	id: string;
 	email: string;
 	name: string | null;
-	image: string | null;
+	image: ImageUpload.ImageUrl | null;
 };
 
 type OrganizationMember = {
@@ -31,7 +32,7 @@ type OrganizationMember = {
 export interface TagOption {
 	value: string;
 	label: string;
-	image?: string;
+	image?: ImageUpload.ImageUrl;
 }
 
 interface MemberSelectProps {
@@ -198,7 +199,6 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 										<SignedImageUrl
 											name={opt.label}
 											image={opt.image}
-											type="user"
 											className="w-5 h-5"
 											letterClass="text-[11px]"
 										/>
@@ -222,7 +222,6 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 									<SignedImageUrl
 										name={tag.label}
 										image={tag.image}
-										type="user"
 										className="w-5 h-5"
 										letterClass="text-[11px]"
 									/>

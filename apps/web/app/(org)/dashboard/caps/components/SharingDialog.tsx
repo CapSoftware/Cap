@@ -9,7 +9,7 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
-import { Space, type Video } from "@cap/web-domain";
+import { type ImageUpload, Space, type Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -388,7 +388,7 @@ const SpaceCard = ({
 	space: {
 		id: string;
 		name: string;
-		iconUrl?: string | null;
+		iconUrl?: ImageUpload.ImageUrl | null;
 		organizationId: string;
 	};
 	selectedSpaces: Set<string>;
@@ -419,7 +419,6 @@ const SpaceCard = ({
 				<SignedImageUrl
 					image={space.iconUrl}
 					name={space.name}
-					type="organization"
 					letterClass="text-[11px]"
 					className="relative z-10 flex-shrink-0 size-5"
 				/>
