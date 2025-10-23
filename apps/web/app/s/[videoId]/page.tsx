@@ -48,6 +48,7 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import { runPromise } from "@/lib/server";
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -277,7 +278,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					name: videos.name,
 					ownerId: videos.ownerId,
 					ownerName: users.name,
-					ownerImage: users.image,
 					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
@@ -373,7 +373,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
 		ownerName?: string | null;
-		ownerImageUrlOrKey?: string | null;
+		ownerImageUrlOrKey?: ImageUpload.ImageUrlOrKey | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -720,17 +720,24 @@ async function AuthorizedContent({
 		customDomainPromise,
 	]);
 
-	const videoWithOrganizationInfo: VideoWithOrganization = {
-		...video,
-		organizationMembers: membersList.map((member) => member.userId),
-		organizationId: video.sharedOrganization?.organizationId ?? undefined,
-		sharedOrganizations: sharedOrganizations,
-		ownerIsPro: video.ownerIsPro ?? false,
-		password: null,
-		folderId: null,
-		orgSettings: video.orgSettings || null,
-		settings: video.videoSettings || null,
-	};
+	const videoWithOrganizationInfo = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		return {
+			...video,
+			ownerImage: video.ownerImageUrlOrKey
+				? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
+				: null,
+			organizationMembers: membersList.map((member) => member.userId),
+			organizationId: video.sharedOrganization?.organizationId ?? undefined,
+			sharedOrganizations: sharedOrganizations,
+			ownerIsPro: video.ownerIsPro ?? false,
+			password: null,
+			folderId: null,
+			orgSettings: video.orgSettings || null,
+			settings: video.videoSettings || null,
+		};
+	}).pipe(runPromise);
 
 	return (
 		<>
