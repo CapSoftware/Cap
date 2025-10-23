@@ -112,21 +112,10 @@ async function getVideoUploadPresignedUrl({
 				Option.fromNullable(customBucket?.id),
 			);
 
-			const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
+			return yield* bucket.getPresignedPostUrl(fileKey, {
 				Fields,
 				Expires: 1800,
 			});
-
-			const customEndpoint = serverEnv().CAP_AWS_ENDPOINT;
-			if (customEndpoint && !customEndpoint.includes("amazonaws.com")) {
-				if (serverEnv().S3_PATH_STYLE) {
-					presignedPostData.url = `${customEndpoint}/${bucket.bucketName}`;
-				} else {
-					presignedPostData.url = customEndpoint;
-				}
-			}
-
-			return presignedPostData;
 		}).pipe(runPromise);
 
 		return { presignedPostData };

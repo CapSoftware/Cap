@@ -69,11 +69,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
-	const {
-		organizationData: orgData,
-		activeOrganization: activeOrg,
-		isSubscribed: userIsSubscribed,
-	} = useDashboardContext();
+	const { organizationData: orgData, activeOrganization: activeOrg } =
+		useDashboardContext();
 	const formRef = useRef<HTMLFormElement | null>(null);
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
@@ -307,7 +304,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && !userIsSubscribed && (
+						{!sidebarCollapsed && !user.isPro && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}
@@ -327,7 +324,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					</AnimatePresence>
 					<UsageButton
 						toggleMobileNav={() => toggleMobileNav?.()}
-						subscribed={userIsSubscribed}
+						subscribed={user.isPro}
 					/>
 					{buildEnv.NEXT_PUBLIC_IS_CAP && (
 						<div className="flex justify-center items-center mt-2">

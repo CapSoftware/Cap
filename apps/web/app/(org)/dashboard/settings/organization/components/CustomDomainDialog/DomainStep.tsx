@@ -19,7 +19,7 @@ const DomainStep = ({
 	onClearError,
 	submitLoading,
 }: DomainStepProps) => {
-	const { isSubscribed } = useDashboardContext();
+	const { user } = useDashboardContext();
 	const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 		setDomain(e.target.value);
 		if (error) {
@@ -42,7 +42,7 @@ const DomainStep = ({
 					id="customDomain"
 					placeholder="caps.yourdomain.com"
 					value={domain}
-					disabled={!isSubscribed || submitLoading}
+					disabled={!user.isPro || submitLoading}
 					className={clsx(
 						"max-w-[400px] mx-auto",
 						error && "border-red-500 focus:border-red-500",

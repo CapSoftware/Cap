@@ -130,7 +130,7 @@ const CustomDomainDialog = ({
 	setIsVerified,
 	setShowUpgradeModal,
 }: CustomDomainDialogProps) => {
-	const { activeOrganization, isSubscribed } = useDashboardContext();
+	const { activeOrganization, user } = useDashboardContext();
 	const [domain, setDomain] = useState(
 		activeOrganization?.organization.customDomain || "",
 	);
@@ -378,7 +378,7 @@ const CustomDomainDialog = ({
 					<Stepper steps={steps} onStepClick={handleStepClick} />
 
 					<div className="relative w-full h-full">
-						{!isSubscribed && <SubscribeContent />}
+						{!user.isPro && <SubscribeContent />}
 
 						<div className="p-5">
 							{/* Domain Step */}
@@ -441,7 +441,7 @@ const CustomDomainDialog = ({
 
 							{currentStep.id === "domain" && (
 								<>
-									{isSubscribed ? (
+									{user.isPro ? (
 										<Button
 											onClick={handleDomainSubmit}
 											size="sm"

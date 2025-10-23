@@ -128,7 +128,7 @@ export const CapCard = ({
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
-	const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
+	const { user, setUpgradeModalOpen } = useDashboardContext();
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -470,7 +470,7 @@ export const CapCard = ({
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
-										if (!isSubscribed) setUpgradeModalOpen(true);
+										if (!user.isPro) setUpgradeModalOpen(true);
 										else setIsPasswordDialogOpen(true);
 									}}
 									className="flex gap-2 items-center rounded-lg"
