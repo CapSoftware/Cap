@@ -91,7 +91,6 @@ export async function GET() {
 			formattedCountResults[type] = Number(count);
 		});
 
-		// Resolve avatar URLs using ImageUploads service
 		const formattedNotifications = await Effect.gen(function* () {
 			const imageUploads = yield* ImageUploads;
 
