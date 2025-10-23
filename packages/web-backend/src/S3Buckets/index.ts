@@ -45,20 +45,17 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				requestStreamBufferSize: 16 * 1024,
 			});
 
-		const endpointIsPathStyle = (endpoint: string) => {
+		const endpointIsPathStyle = (endpoint: string, bucket: string) => {
 			try {
 				const { hostname } = new URL(endpoint);
-				return (
-					hostname === "s3.amazonaws.com" ||
-					hostname.endsWith(".s3.amazonaws.com")
-				);
+				return !hostname.startsWith(`${bucket}.s3`)
 			} catch {
 				// If endpoint can't be parsed as a URL, fall back to false for safety
-				return false;
+				return true;
 			}
 		};
 
-		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {
+		const createBucketClient = async (bucket: S3Bucket.S3Bucket, name: string) => {
 			const endpoint = await (() => {
 				const v = bucket.endpoint.pipe(Option.getOrUndefined);
 				if (!v) return;
@@ -74,7 +71,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				},
 				forcePathStyle:
 					Option.fromNullable(endpoint).pipe(
-						Option.map(endpointIsPathStyle),
+						Option.map(e => endpointIsPathStyle(e, name)),
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
@@ -154,7 +151,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						);
 
 						const client = yield* Effect.promise(() =>
-							createBucketClient(customBucket),
+							createBucketClient(customBucket, bucket),
 						);
 						const provider = Layer.succeed(S3BucketClientProvider, {
 							getInternal: Effect.succeed(client),
