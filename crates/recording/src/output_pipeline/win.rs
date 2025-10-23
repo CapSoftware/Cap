@@ -114,14 +114,14 @@ impl Muxer for WindowsMuxer {
                     Ok(encoder) => {
                         if ready_tx.send(Ok(())).is_err() {
                             error!("Failed to send ready signal - receiver dropped");
-                            return;
+                            return Ok(());
                         }
                         encoder
                     }
                     Err(e) => {
                         error!("Encoder setup failed: {}", e);
-                        let _ = ready_tx.send(Err(e));
-                        return;
+                        let _ = ready_tx.send(Err(e.into()));
+                        return Err(e.into());
                     }
                 };
 
