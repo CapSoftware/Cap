@@ -48,14 +48,17 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		const endpointIsPathStyle = (endpoint: string, bucket: string) => {
 			try {
 				const { hostname } = new URL(endpoint);
-				return !hostname.startsWith(`${bucket}.s3`)
+				return !hostname.startsWith(`${bucket}.s3`);
 			} catch {
 				// If endpoint can't be parsed as a URL, fall back to false for safety
 				return true;
 			}
 		};
 
-		const createBucketClient = async (bucket: S3Bucket.S3Bucket, name: string) => {
+		const createBucketClient = async (
+			bucket: S3Bucket.S3Bucket,
+			name: string,
+		) => {
 			const endpoint = await (() => {
 				const v = bucket.endpoint.pipe(Option.getOrUndefined);
 				if (!v) return;
@@ -71,7 +74,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				},
 				forcePathStyle:
 					Option.fromNullable(endpoint).pipe(
-						Option.map(e => endpointIsPathStyle(e, name)),
+						Option.map((e) => endpointIsPathStyle(e, name)),
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
