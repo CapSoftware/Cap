@@ -291,14 +291,11 @@ function Inner() {
 						if (isFullHeight) {
 							// Try to place on the right side
 							const rightSpace = window.innerWidth - (left + width);
-							if (rightSpace >= ctrlW + margin) {
+							if (rightSpace >= ctrlW + margin)
 								return { position: "right" as const };
-							}
 
 							// Try to place on the left side
-							if (left >= ctrlW + margin) {
-								return { position: "left" as const };
-							}
+							if (left >= ctrlW + margin) return { position: "left" as const };
 
 							// Fall back to inside at the bottom
 							return { position: "inside-bottom" as const };
