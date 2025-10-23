@@ -725,6 +725,7 @@ async function AuthorizedContent({
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
+		ownerIsPro: video.ownerIsPro ?? false,
 		password: null,
 		folderId: null,
 		orgSettings: video.orgSettings || null,
@@ -754,6 +755,7 @@ async function AuthorizedContent({
 				<Share
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
+					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}

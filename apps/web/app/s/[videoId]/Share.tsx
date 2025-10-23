@@ -39,7 +39,6 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	organizationId?: string;
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
-	ownerIsPro?: boolean;
 	orgSettings?: OrganizationSettings | null;
 };
 
@@ -50,6 +49,7 @@ interface ShareProps {
 	customDomain: string | null;
 	domainVerified: boolean;
 	videoSettings?: OrganizationSettings | null;
+	ownerIsPro?: boolean;
 	userOrganizations?: { id: string; name: string }[];
 	initialAiData?: {
 		title?: string | null;
@@ -139,6 +139,7 @@ const useVideoStatus = (
 export const Share = ({
 	data,
 	comments,
+	ownerIsPro,
 	views,
 	initialAiData,
 	aiGenerationEnabled,
@@ -317,6 +318,7 @@ export const Share = ({
 								createdAt: effectiveDate,
 								transcriptionStatus,
 							}}
+							ownerIsPro={ownerIsPro}
 							videoSettings={videoSettings}
 							commentsData={commentsData}
 							setCommentsData={setCommentsData}
