@@ -2,6 +2,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -29,7 +30,7 @@ declare global {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImage: string | null;
+	authorImage: ImageUpload.ImageUrl | null;
 };
 
 export const ShareVideo = forwardRef<
@@ -40,7 +41,6 @@ export const ShareVideo = forwardRef<
 			hasActiveUpload?: boolean;
 			orgSettings?: OrganizationSettings | null;
 		};
-		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		areChaptersDisabled?: boolean;
@@ -187,7 +187,7 @@ export const ShareVideo = forwardRef<
 					{data.source.type === "desktopMP4" ? (
 						<CapVideoPlayer
 							videoId={data.id}
-							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
+							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl overflow-visible"
 							videoSrc={videoSrc}
 							disableCaptions={areCaptionsDisabled ?? false}
 							disableCommentStamps={areCommentStampsDisabled ?? false}
@@ -203,6 +203,7 @@ export const ShareVideo = forwardRef<
 								timestamp: comment.timestamp,
 								content: comment.content,
 								authorName: comment.authorName,
+								authorImage: comment.authorImage ?? undefined,
 							}))}
 							onSeek={handleSeek}
 						/>

@@ -3,9 +3,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
-import type { Space } from "@cap/web-domain";
+import { ImageUpload, type Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -54,9 +53,11 @@ export async function uploadSpaceIcon(
 
 	// Prepare new file key
 	const fileExtension = file.name.split(".").pop();
-	const fileKey = `organizations/${
-		space.organizationId
-	}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
+	const fileKey = ImageUpload.ImageKey.make(
+		`organizations/${
+			space.organizationId
+		}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`,
+	);
 
 	const [bucket] = await S3Buckets.getBucketAccess(Option.none()).pipe(
 		runPromise,
@@ -65,8 +66,10 @@ export async function uploadSpaceIcon(
 	try {
 		// Remove previous icon if exists
 		if (space.iconUrl) {
-			// Try to extract the previous S3 key from the URL
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+			// Extract the S3 key (it might already be a key or could be a legacy URL)
+			const key = space.iconUrl.startsWith("organizations/")
+				? space.iconUrl
+				: space.iconUrl.match(/organizations\/.+/)?.[0];
 			if (key) {
 				try {
 					await bucket.deleteObject(key).pipe(runPromise);
@@ -87,24 +90,13 @@ export async function uploadSpaceIcon(
 			)
 			.pipe(runPromise);
 
-		let iconUrl: string | undefined;
-
-		// Construct the icon URL
-		if (serverEnv().CAP_AWS_BUCKET_URL) {
-			iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-		} else if (serverEnv().CAP_AWS_ENDPOINT) {
-			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-		} else {
-			iconUrl = `https://${bucket.bucketName}.s3.${
-				serverEnv().CAP_AWS_REGION || "us-east-1"
-			}.amazonaws.com/${fileKey}`;
-		}
-
-		// Update space with new icon URL
-		await db().update(spaces).set({ iconUrl }).where(eq(spaces.id, spaceId));
+		await db()
+			.update(spaces)
+			.set({ iconUrl: fileKey })
+			.where(eq(spaces.id, spaceId));
 
 		revalidatePath("/dashboard");
-		return { success: true, iconUrl };
+		return { success: true, iconUrl: fileKey };
 	} catch (error) {
 		console.error("Error uploading space icon:", error);
 		throw new Error(error instanceof Error ? error.message : "Upload failed");

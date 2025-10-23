@@ -1,4 +1,5 @@
 use std::{
+    env::temp_dir,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
@@ -639,10 +640,17 @@ impl ProjectConfiguration {
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
-        std::fs::write(
-            project_path.as_ref().join("project-config.json"),
-            serde_json::to_string_pretty(self)?,
-        )
+        let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
+
+        // Write to temporary file first to ensure readers don't see partial files
+        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
+
+        std::fs::rename(
+            &temp_path,
+            &project_path.as_ref().join("project-config.json"),
+        )?;
+
+        Ok(())
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {

@@ -1,5 +1,5 @@
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
-import { Organisation, User } from "@cap/web-domain";
+import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
@@ -179,11 +179,14 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 			const row = rows[0];
 			return row?.users ?? null;
 		},
-		async updateUser({ id, ...userData }) {
+		async updateUser({ id, image, ...userData }) {
 			if (!id) throw new Error("User not found");
 			await db
 				.update(users)
-				.set(userData)
+				.set({
+					...userData,
+					image: image as ImageUpload.ImageUrlOrKey | null,
+				})
 				.where(eq(users.id, User.UserId.make(id)));
 			const rows = await db
 				.select()

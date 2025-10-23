@@ -1,21 +1,23 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { ImageUpload } from "@cap/web-domain";
 import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 
 interface ProfileImageProps {
-	initialPreviewUrl?: string | null;
+	initialPreviewUrl?: ImageUpload.ImageUrl | null;
 	onChange?: (file: File | null) => void;
 	onRemove?: () => void;
 	disabled?: boolean;
 	isUploading?: boolean;
 	isRemoving?: boolean;
+	userName?: string | null;
 }
 
 export function ProfileImage({
@@ -25,16 +27,19 @@ export function ProfileImage({
 	disabled = false,
 	isUploading = false,
 	isRemoving = false,
+	userName,
 }: ProfileImageProps) {
-	const [previewUrl, setPreviewUrl] = useState<string | null>(
+	const [previewUrl, setPreviewUrl] = useState<ImageUpload.ImageUrl | null>(
 		initialPreviewUrl || null,
 	);
+	const [isLocalPreview, setIsLocalPreview] = useState(false);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	// Reset isRemoving when the parent confirms the operation completed
 	useEffect(() => {
 		if (initialPreviewUrl !== undefined) {
 			setPreviewUrl(initialPreviewUrl);
+			setIsLocalPreview(false);
 		}
 	}, [initialPreviewUrl]);
 
@@ -46,16 +51,21 @@ export function ProfileImage({
 			toast.error("File size must be 1MB or less");
 			return;
 		}
-		if (previewUrl && previewUrl !== initialPreviewUrl) {
+		if (previewUrl && isLocalPreview) {
 			URL.revokeObjectURL(previewUrl);
 		}
 		const objectUrl = URL.createObjectURL(file);
-		setPreviewUrl(objectUrl);
+		setPreviewUrl(ImageUpload.ImageUrl.make(objectUrl));
+		setIsLocalPreview(true);
 		onChange?.(file);
 	};
 
 	const handleRemove = () => {
+		if (previewUrl && isLocalPreview) {
+			URL.revokeObjectURL(previewUrl);
+		}
 		setPreviewUrl(null);
+		setIsLocalPreview(false);
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
 		}
@@ -80,15 +90,19 @@ export function ProfileImage({
 					)}
 				>
 					{previewUrl ? (
-						<Image
-							src={previewUrl}
-							alt="Profile Image"
-							width={56}
-							className="object-cover rounded-full size-14"
-							height={56}
+						<SignedImageUrl
+							image={previewUrl}
+							name={userName || "User"}
+							letterClass="text-lg"
+							className="size-full"
 						/>
 					) : (
-						<FontAwesomeIcon icon={faImage} className="size-4 text-gray-9" />
+						<div className="flex justify-center items-center rounded-full size-full bg-gray-5">
+							<FontAwesomeIcon
+								icon={faImage}
+								className="mx-auto size-5 text-gray-8"
+							/>
+						</div>
 					)}
 				</div>
 				<input

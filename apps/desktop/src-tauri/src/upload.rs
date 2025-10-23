@@ -13,7 +13,8 @@ use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{Stream, StreamExt, TryStreamExt, future::join, stream};
+use futures::future::join;
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ use std::{
     path::{Path, PathBuf},
     pin::pin,
     str::FromStr,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 use tauri::{AppHandle, ipc::Channel};
@@ -33,10 +35,10 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
-    time::{self, Instant},
+    time::{self, Instant, timeout},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{Span, debug, error, info, instrument, trace};
+use tracing::{Span, debug, error, info, info_span, instrument, trace};
 use tracing_futures::Instrument;
 
 pub struct UploadedItem {
@@ -53,10 +55,11 @@ pub struct UploadProgressEvent {
     total: String,
 }
 
-// a typical recommended chunk size is 5MB (AWS min part size).
-const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
+// The size of each S3 multipart upload chunk
+const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
+const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024; // 20 MB
 
-#[instrument(skip(app, channel))]
+#[instrument(skip(app, channel, file_path, screenshot_path))]
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -65,7 +68,6 @@ pub async fn upload_video(
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, AuthedApiError> {
-    println!("Uploading video {video_id}...");
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
@@ -103,9 +105,10 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
 
-        Ok(())
+        Ok(metadata)
     };
 
     // TODO: We don't report progress on image upload
@@ -126,8 +129,15 @@ pub async fn upload_video(
         tokio::join!(video_fut, thumbnail_fut);
 
     async_capture_event(match &video_result {
-        Ok(()) => PostHogEvent::MultipartUploadComplete {
+        Ok(meta) => PostHogEvent::MultipartUploadComplete {
             duration: start.elapsed(),
+            length: meta
+                .as_ref()
+                .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                .unwrap_or_default(),
+            size: std::fs::metadata(file_path)
+                .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                .unwrap_or_default(),
         },
         Err(err) => PostHogEvent::MultipartUploadFailed {
             duration: start.elapsed(),
@@ -229,13 +239,21 @@ pub async fn create_or_get_video(
             error: String,
         }
 
-        if let Ok(error) = response.json::<CreateErrorResponse>().await {
+        let status = response.status();
+        let body = response.text().await;
+
+        if let Some(error) = body
+            .as_ref()
+            .ok()
+            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(&*body).ok())
+            && status == StatusCode::FORBIDDEN
+        {
             if error.error == "upgrade_required" {
                 return Err(AuthedApiError::UpgradeRequired);
             }
         }
 
-        return Err("Unknown error uploading video".into());
+        return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
     }
 
     let response_text = response
@@ -318,23 +336,30 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_upload_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
+        realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
         Self {
             handle: spawn_actor(async move {
                 let start = Instant::now();
                 let result = Self::run(
                     app,
-                    file_path,
+                    file_path.clone(),
                     pre_created_video,
-                    realtime_upload_done,
                     recording_dir,
+                    realtime_upload_done,
                 )
                 .await;
                 async_capture_event(match &result {
-                    Ok(()) => PostHogEvent::MultipartUploadComplete {
+                    Ok(meta) => PostHogEvent::MultipartUploadComplete {
                         duration: start.elapsed(),
+                        length: meta
+                            .as_ref()
+                            .map(|v| Duration::from_secs(v.duration_in_secs as u64))
+                            .unwrap_or_default(),
+                        size: std::fs::metadata(file_path)
+                            .map(|m| ((m.len() as f64) / 1_000_000.0) as u64)
+                            .unwrap_or_default(),
                     },
                     Err(err) => PostHogEvent::MultipartUploadFailed {
                         duration: start.elapsed(),
@@ -351,9 +376,9 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
-        realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
-    ) -> Result<(), AuthedApiError> {
+        realtime_video_done: Option<Receiver<()>>,
+    ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
@@ -398,7 +423,8 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+            .await?;
         info!("Multipart upload complete for {video_id}.");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -411,7 +437,7 @@ impl InstantMultipartUpload {
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
-        Ok(())
+        Ok(metadata)
     }
 }
 
@@ -434,7 +460,7 @@ pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk
         let total_size = file.metadata().await?.len();
         let mut file = BufReader::new(file);
 
-        let mut buf = vec![0u8; CHUNK_SIZE as usize];
+        let mut buf = vec![0u8; MAX_CHUNK_SIZE as usize];
         let mut part_number = 0;
         loop {
             part_number += 1;
@@ -459,12 +485,22 @@ pub fn from_pending_file_to_chunks(
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
-        let mut file = tokio::fs::File::open(&path).await?;
+        let mut file = timeout(Duration::from_secs(20), async move {
+            loop {
+                if let Ok(file) = tokio::fs::File::open(&path).await.map_err(|err| error!("from_pending_file_to_chunks/open: {err:?}")) {
+                    break file;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to open file. The recording pipeline may have crashed?"))?;
+
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
         let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
         let mut first_chunk_size: Option<u64> = None;
-        let mut chunk_buffer = vec![0u8; CHUNK_SIZE as usize];
+        let mut chunk_buffer = vec![0u8; MAX_CHUNK_SIZE as usize];
 
         loop {
             // Check if realtime recording is done
@@ -473,10 +509,10 @@ pub fn from_pending_file_to_chunks(
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
-                        Err(_) => yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
-                            "Realtime generation failed"
-                        ))?,
+                        // This means all senders where dropped.
+                        // This can assume this means realtime is done.
+                        // It possibly means something has gone wrong but that's not the uploader's problem.
+                        Err(_) => realtime_is_done = Some(true),
                     }
                 }
             }
@@ -494,13 +530,13 @@ pub fn from_pending_file_to_chunks(
 
             // Determine if we should read a chunk
             let should_read_chunk = if let Some(is_done) = realtime_is_done {
-                (new_data_size >= CHUNK_SIZE) || (is_done && new_data_size > 0)
+                (new_data_size >= MIN_CHUNK_SIZE) || (is_done && new_data_size > 0)
             } else {
                 new_data_size > 0
             };
 
             if should_read_chunk {
-                let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE) as usize;
+                let chunk_size = std::cmp::min(new_data_size, MAX_CHUNK_SIZE) as usize;
 
                 file.seek(std::io::SeekFrom::Start(last_read_position)).await?;
 
@@ -587,75 +623,181 @@ fn multipart_uploader(
     app: AppHandle,
     video_id: String,
     upload_id: String,
-    stream: impl Stream<Item = io::Result<Chunk>>,
-) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> {
+    stream: impl Stream<Item = io::Result<Chunk>> + Send + 'static,
+) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> + 'static {
+    const MAX_CONCURRENT_UPLOADS: usize = 3;
+
     debug!("Initializing multipart uploader for video {video_id:?}");
     let start = Instant::now();
+    let video_id2 = video_id.clone();
 
-    try_stream! {
-        let mut stream = pin!(stream);
-        let mut prev_part_number = None;
-        let mut expected_part_number = 1u32;
+    stream::once(async move {
+        let use_md5_hashes = app.is_server_url_custom().await;
+        let first_chunk_presigned_url = Arc::new(Mutex::new(None::<(String, Instant)>));
 
-        loop {
-            let (Some(item), presigned_url) = join(
-                stream.next(),
-                // We generate the presigned URL ahead of time for the part we expect to come next.
-                // If it's not the chunk that actually comes next we just throw it out.
-                // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
-                api::upload_multipart_presign_part(&app, &video_id, &upload_id, expected_part_number)
-              ).await else {
-                break;
-            };
-            let mut presigned_url = presigned_url?;
+        stream::unfold(
+            (Box::pin(stream), 1),
+            move |(mut stream, expected_part_number)| {
+                let app = app.clone();
+                let video_id = video_id.clone();
+                let upload_id = upload_id.clone();
+                let first_chunk_presigned_url = first_chunk_presigned_url.clone();
 
+                async move {
+                    let (Some(item), presigned_url) = join(stream.next(), async {
+                        // Self-hosted still uses the legacy web API which requires these so we can't presign the URL.
+                        if use_md5_hashes {
+                            return Ok(None);
+                        }
 
-            let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
-            trace!("Uploading chunk {part_number} ({} bytes) for video {video_id:?}", chunk.len());
-            prev_part_number = Some(part_number);
-            let size = chunk.len();
+                        // We generate the presigned URL ahead of time for the part we expect to come next.
+                        // If it's not the chunk that actually comes next we just throw it out.
+                        // This means if the filesystem takes a while for the recording to reach previous total + CHUNK_SIZE, which is the common case, we aren't just doing nothing.
+                        api::upload_multipart_presign_part(
+                            &app,
+                            &video_id,
+                            &upload_id,
+                            expected_part_number,
+                            None,
+                        )
+                        .await
+                        .map(Some)
+                    })
+                    .await
+                    else {
+                        return None;
+                    };
 
-            // We prefetched for the wrong chunk. Let's try again.
-            if expected_part_number != part_number {
-                presigned_url = api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number)
-                    .await?
-            }
+                    let part_number = item
+                        .as_ref()
+                        .map(|c| c.part_number.to_string())
+                        .unwrap_or_else(|_| "--".into());
 
-            trace!("Uploading part {part_number}");
+                    Some((
+                        async move {
+                            let Chunk {
+                                total_size,
+                                part_number,
+                                chunk,
+                            } = item.map_err(|err| {
+                                format!("uploader/part/{:?}/fs: {err:?}", expected_part_number)
+                            })?;
+                            trace!(
+                                "Uploading chunk {part_number} ({} bytes) for video {video_id:?}",
+                                chunk.len()
+                            );
 
-            let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
-            let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
-                .build()
-                .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
-                .put(&presigned_url)
-                .header("Content-Length", chunk.len())
-                .timeout(Duration::from_secs(120))
-                .body(chunk)
-                .send()
-                .await
-                .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
+                            // We prefetched for the wrong chunk. Let's try again with the correct part number now that we know it.
+                            let md5_sum =
+                                use_md5_hashes.then(|| base64::encode(md5::compute(&chunk).0));
+                            let presigned_url = if let Some(url) = presigned_url?
+                                && part_number == expected_part_number
+                            {
+                                url
+                            } else if part_number == 1
+                                && !use_md5_hashes
+                                // We have a presigned URL left around from the first chunk
+                                && let Some((url, expiry)) = first_chunk_presigned_url
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .clone()
+                                // The URL hasn't expired
+                                && expiry.elapsed() < Duration::from_secs(60 * 50)
+                            {
+                                url
+                            } else {
+                                api::upload_multipart_presign_part(
+                                    &app,
+                                    &video_id,
+                                    &upload_id,
+                                    part_number,
+                                    md5_sum.as_deref(),
+                                )
+                                .await?
+                            };
 
-            let etag = resp.headers().get("ETag").as_ref().and_then(|etag| etag.to_str().ok()).map(|v| v.trim_matches('"').to_string());
+                            // We cache the presigned URL for the first chunk,
+                            // as for instant mode we upload the first chunk at the end again to include the updated video metadata.
+                            if part_number == 1 {
+                                *first_chunk_presigned_url
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner) =
+                                    Some((presigned_url.clone(), Instant::now()));
+                            }
 
-            match !resp.status().is_success() {
-                true => Err(format!("uploader/part/{part_number}/error: {}", resp.text().await.unwrap_or_default())),
-                false => Ok(()),
-            }?;
+                            let size = chunk.len();
+                            let url = Uri::from_str(&presigned_url).map_err(|err| {
+                                format!("uploader/part/{part_number}/invalid_url: {err:?}")
+                            })?;
+                            let mut req =
+                                retryable_client(url.host().unwrap_or("<unknown>").to_string())
+                                    .build()
+                                    .map_err(|err| {
+                                        format!("uploader/part/{part_number}/client: {err:?}")
+                                    })?
+                                    .put(&presigned_url)
+                                    .header("Content-Length", chunk.len())
+                                    .timeout(Duration::from_secs(5 * 60))
+                                    .body(chunk);
 
-            trace!("Completed upload of part {part_number}");
+                            if let Some(md5_sum) = &md5_sum {
+                                req = req.header("Content-MD5", md5_sum);
+                            }
 
-            yield UploadedPart {
-                etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
-                part_number,
-                size,
-                total_size
-            };
+                            let resp = req
+                                .send()
+                                .instrument(info_span!("s3_put", size = size))
+                                .await
+                                .map_err(|err| {
+                                    format!("uploader/part/{part_number}/error: {err:?}")
+                                })?;
 
-            expected_part_number = part_number + 1;
-        }
+                            let etag = resp
+                                .headers()
+                                .get("ETag")
+                                .as_ref()
+                                .and_then(|etag| etag.to_str().ok())
+                                .map(|v| v.trim_matches('"').to_string());
 
-        debug!("Completed multipart upload for {video_id:?} in {:?}", start.elapsed());
-    }
+                            match !resp.status().is_success() {
+                                true => Err(format!(
+                                    "uploader/part/{part_number}/error: {}",
+                                    resp.text().await.unwrap_or_default()
+                                )),
+                                false => Ok(()),
+                            }?;
+
+                            trace!("Completed upload of part {part_number}");
+
+                            Ok::<_, AuthedApiError>(UploadedPart {
+                                etag: etag.ok_or_else(|| {
+                                    format!(
+                                        "uploader/part/{part_number}/error: ETag header not found"
+                                    )
+                                })?,
+                                part_number,
+                                size,
+                                total_size,
+                            })
+                        }
+                        .instrument(info_span!("upload_part", part_number = part_number)),
+                        (stream, expected_part_number + 1),
+                    ))
+                }
+            },
+        )
+        .buffered(MAX_CONCURRENT_UPLOADS)
+        .boxed()
+    })
+    .chain(stream::once(async move {
+        debug!(
+            "Completed multipart upload for {video_id2:?} in {:?}",
+            start.elapsed()
+        );
+
+        stream::empty().boxed()
+    }))
+    .flatten()
     .instrument(Span::current())
 }
 
@@ -676,7 +818,6 @@ pub async fn singlepart_uploader(
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
-        .timeout(Duration::from_secs(120))
         .body(reqwest::Body::wrap_stream(stream))
         .send()
         .await

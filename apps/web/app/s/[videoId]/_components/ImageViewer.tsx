@@ -12,12 +12,10 @@ import { Toolbar } from "./Toolbar";
 // million-ignore
 export const ImageViewer = ({
 	data,
-	user,
 	comments,
 	imageSrc,
 }: {
 	data: typeof videos.$inferSelect;
-	user: typeof userSelectProps | null;
 	comments: (typeof commentsSchema.$inferSelect)[];
 	imageSrc: string;
 }) => {
@@ -33,7 +31,7 @@ export const ImageViewer = ({
 	return (
 		<div className="wrapper py-8">
 			<div className="space-y-6">
-				<ShareHeader data={data} user={user} />
+				<ShareHeader data={data} />
 				<div
 					className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
 					id="player"
@@ -106,7 +104,7 @@ export const ImageViewer = ({
 					</div>
 				</div>
 				<div className="flex justify-center">
-					<Toolbar data={data} user={user} />
+					<Toolbar data={data} />
 				</div>
 			</div>
 		</div>

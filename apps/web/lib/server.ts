@@ -7,12 +7,16 @@ import {
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
+	ImageUploads,
+	Organisations,
 	OrganisationsPolicy,
 	S3Buckets,
 	Spaces,
 	SpacesPolicy,
+	Users,
 	Videos,
 	VideosPolicy,
+	VideosRepo,
 	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
@@ -21,11 +25,10 @@ import {
 	Headers,
 	type HttpApi,
 	HttpApiBuilder,
-	HttpApiClient,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { RpcClient, RpcMessage, RpcMiddleware } from "@effect/rpc";
+import { RpcClient, RpcMiddleware } from "@effect/rpc";
 import {
 	Cause,
 	Config,
@@ -100,11 +103,15 @@ export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
 	VideosPolicy.Default,
+	VideosRepo.Default,
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
 	Spaces.Default,
+	Users.Default,
+	Organisations.Default,
 	AwsCredentials.Default,
+	ImageUploads.Default,
 	WorkflowRpcLive,
 	layerTracer,
 ).pipe(

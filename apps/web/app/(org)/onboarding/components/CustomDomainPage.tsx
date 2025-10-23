@@ -6,26 +6,21 @@ import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
 export function CustomDomainPage() {
 	const router = useRouter();
+	const rpc = useRpcClient();
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
 	const customDomainMutation = useEffectMutation({
-		mutationFn: (redirect: boolean) =>
-			Effect.gen(function* () {
-				yield* withRpc((r) =>
-					r.UserCompleteOnboardingStep({
-						step: "customDomain",
-						data: undefined,
-					}),
-				);
-				return redirect;
+		mutationFn: (_redirect: boolean) =>
+			rpc.UserCompleteOnboardingStep({
+				step: "customDomain",
+				data: undefined,
 			}),
-		onSuccess: (redirect: boolean) => {
+		onSuccess: (_, redirect) => {
 			startTransition(() => {
 				if (redirect) {
 					router.push("/onboarding/invite-team");

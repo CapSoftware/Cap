@@ -1,11 +1,12 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames, userIsPro } from "@cap/utils";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -15,7 +16,7 @@ type TabType = "activity" | "transcript" | "summary" | "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
-	authorImage?: string | null;
+	authorImage?: ImageUpload.ImageUrl | null;
 };
 
 type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
@@ -26,7 +27,6 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 
 interface SidebarProps {
 	data: VideoWithOrganizationInfo;
-	user: typeof userSelectProps | null;
 	commentsData: CommentType[];
 	optimisticComments: CommentType[];
 	handleCommentSuccess: (comment: CommentType) => void;
@@ -43,6 +43,7 @@ interface SidebarProps {
 		processing?: boolean;
 	} | null;
 	aiGenerationEnabled?: boolean;
+	ownerIsPro?: boolean;
 }
 
 const TabContent = motion.div;
@@ -73,7 +74,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	(
 		{
 			data,
-			user,
 			commentsData,
 			setCommentsData,
 			optimisticComments,
@@ -85,9 +85,12 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			videoId,
 			aiData,
 			aiGenerationEnabled = false,
+			ownerIsPro,
 		},
 		ref,
 	) => {
+		const user = useCurrentUser();
+
 		const isOwnerOrMember: boolean = Boolean(
 			user?.id === data.ownerId ||
 				(data.organizationId &&
@@ -141,20 +144,12 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			setActiveTab(tabId);
 		};
 
-		const isOwner = user?.id === data.ownerId;
-		const isVideoOwnerPro = user && isOwner ? userIsPro(user) : false;
-
 		const renderTabContent = () => {
 			switch (activeTab) {
 				case "activity":
 					return (
 						<Suspense
-							fallback={
-								<Activity.Skeleton
-									user={user}
-									isOwnerOrMember={isOwnerOrMember}
-								/>
-							}
+							fallback={<Activity.Skeleton isOwnerOrMember={isOwnerOrMember} />}
 						>
 							<Activity
 								ref={ref}
@@ -166,7 +161,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 									false
 								}
 								setComments={setCommentsData}
-								user={user}
 								optimisticComments={optimisticComments}
 								setOptimisticComments={setOptimisticComments}
 								handleCommentSuccess={handleCommentSuccess}
@@ -184,7 +178,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
-							isVideoOwnerPro={isVideoOwnerPro}
+							ownerIsPro={ownerIsPro}
 						/>
 					);
 				case "transcript":

@@ -8,7 +8,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { Base } from "./Base";
 
@@ -23,6 +23,7 @@ export function OrganizationSetupPage({
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const router = useRouter();
+	const rpc = useRpcClient();
 
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
@@ -52,15 +53,13 @@ export function OrganizationSetupPage({
 					};
 				}
 
-				yield* withRpc((r) =>
-					r.UserCompleteOnboardingStep({
-						step: "organizationSetup",
-						data: {
-							organizationName: data.organizationName,
-							organizationIcon,
-						},
-					}),
-				);
+				yield* rpc.UserCompleteOnboardingStep({
+					step: "organizationSetup",
+					data: {
+						organizationName: data.organizationName,
+						organizationIcon,
+					},
+				});
 			}),
 		onSuccess: () => {
 			startTransition(() => {

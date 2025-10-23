@@ -47,13 +47,15 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 				return handlers.handle("getVideoSrc", ({ urlParams }) =>
 					Effect.gen(function* () {
-						const [video] = yield* videos.getById(urlParams.videoId).pipe(
-							Effect.flatten,
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new HttpApiError.NotFound(),
-							),
-						);
+						const [video] = yield* videos
+							.getByIdForViewing(urlParams.videoId)
+							.pipe(
+								Effect.flatten,
+								Effect.catchTag(
+									"NoSuchElementException",
+									() => new HttpApiError.NotFound(),
+								),
+							);
 
 						return yield* getPlaylistResponse(video, urlParams);
 					}).pipe(

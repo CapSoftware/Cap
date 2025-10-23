@@ -2,17 +2,21 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { db, updateIfDefined } from "@cap/database";
+import { updateIfDefined } from "@cap/database";
 import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
+	makeCurrentUser,
+	makeCurrentUserLayer,
 	provideOptionalAuth,
 	S3Buckets,
 	Videos,
+	VideosPolicy,
+	VideosRepo,
 } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
@@ -47,14 +51,18 @@ app.post(
 		});
 
 		const videoIdFromFileKey = fileKey.split("/")[1];
-		const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
-		if (!videoId) throw new Error("Video ID is required");
+		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+		if (!videoIdRaw) return c.text("Video id not found", 400);
+		const videoId = Video.VideoId.make(videoIdRaw);
 
 		const resp = await Effect.gen(function* () {
-			const videos = yield* Videos;
+			const repo = yield* VideosRepo;
+			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
-			const video = yield* videos.getById(Video.VideoId.make(videoId));
+			const video = yield* repo
+				.getById(videoId)
+				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 			if (Option.isNone(video)) return yield* new Video.NotFoundError();
 
 			yield* db.use((db) =>
@@ -64,7 +72,6 @@ app.post(
 					.where(eq(Db.videoUploads.videoId, video.value[0].id)),
 			);
 		}).pipe(
-			provideOptionalAuth,
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
@@ -74,6 +81,7 @@ app.post(
 					c.json({ error: "Error initiating multipart upload" }, 500),
 				);
 			}),
+			Effect.provide(makeCurrentUserLayer(user)),
 			runPromise,
 		);
 		if (resp) return resp;
@@ -230,13 +238,14 @@ app.post(
 				]),
 			),
 	),
-	(c) =>
-		Effect.gen(function* () {
-			const videos = yield* Videos;
-			const db = yield* Database;
+	(c) => {
+		const { uploadId, parts, ...body } = c.req.valid("json");
+		const user = c.get("user");
 
-			const { uploadId, parts, ...body } = c.req.valid("json");
-			const user = c.get("user");
+		return Effect.gen(function* () {
+			const repo = yield* VideosRepo;
+			const policy = yield* VideosPolicy;
+			const db = yield* Database;
 
 			const fileKey = parseVideoIdOrFileKey(user.id, {
 				...body,
@@ -244,13 +253,16 @@ app.post(
 			});
 
 			const videoIdFromFileKey = fileKey.split("/")[1];
-			const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
-			if (!videoId) throw new Error("Video ID is required");
+			const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+			if (!videoIdRaw) return c.text("Video id not found", 400);
+			const videoId = Video.VideoId.make(videoIdRaw);
 
-			const maybeVideo = yield* videos.getById(Video.VideoId.make(videoId));
+			const maybeVideo = yield* repo
+				.getById(videoId)
+				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 			if (Option.isNone(maybeVideo)) {
 				c.status(404);
-				return c.text("Video not found");
+				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
 			}
 			const [video] = maybeVideo.value;
 
@@ -467,5 +479,6 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(provideOptionalAuth, runPromise),
+		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
+	},
 );
