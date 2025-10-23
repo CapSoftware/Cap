@@ -8,7 +8,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
 	faCheck,
@@ -41,7 +41,7 @@ import {
 	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { usePublicEnv } from "@/utils/public-env";
 import { PasswordDialog } from "../PasswordDialog";
@@ -63,12 +63,12 @@ export interface CapCardProps extends PropsWithChildren {
 		sharedOrganizations?: {
 			id: string;
 			name: string;
-			iconUrl?: string | null;
+			iconUrl?: ImageUpload.ImageUrl | null;
 		}[];
 		sharedSpaces?: {
 			id: string;
 			name: string;
-			iconUrl?: string | null;
+			iconUrl?: ImageUpload.ImageUrl | null;
 			organizationId: string;
 		}[];
 		ownerName: string | null;
@@ -133,11 +133,12 @@ export const CapCard = ({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
 	const router = useRouter();
+	const rpc = useRpcClient();
 
 	const downloadMutation = useEffectMutation({
 		mutationFn: () =>
 			Effect.gen(function* () {
-				const result = yield* withRpc((r) => r.VideoGetDownloadInfo(cap.id));
+				const result = yield* rpc.VideoGetDownloadInfo(cap.id);
 				const httpClient = yield* HttpClient.HttpClient;
 				if (Option.isSome(result)) {
 					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
@@ -175,7 +176,7 @@ export const CapCard = ({
 	});
 
 	const duplicateMutation = useEffectMutation({
-		mutationFn: () => withRpc((r) => r.VideoDuplicate(cap.id)),
+		mutationFn: () => rpc.VideoDuplicate(cap.id),
 		onSuccess: () => {
 			router.refresh();
 		},

@@ -1,12 +1,13 @@
 "use client";
 
 import { CardDescription, Label } from "@cap/ui";
-import { Effect } from "effect";
+import type { Organisation } from "@cap/web-domain";
+import { Effect, Option } from "effect";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useId } from "react";
 import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
-import * as EffectRuntime from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 
@@ -17,74 +18,55 @@ export const OrganizationIcon = () => {
 	const organizationId = activeOrganization?.organization.id;
 	const existingIconUrl = activeOrganization?.organization.iconUrl ?? null;
 
-	const [isUploading, setIsUploading] = useState(false);
+	const rpc = useRpcClient();
 
-	const handleFileChange = async (file: File | null) => {
-		// If file is null, it means the user removed the file
-		if (!file || !organizationId) return;
+	const uploadIcon = useEffectMutation({
+		mutationFn: Effect.fn(function* ({
+			file,
+			organizationId,
+		}: {
+			organizationId: Organisation.OrganisationId;
+			file: File;
+		}) {
+			const arrayBuffer = yield* Effect.promise(() => file.arrayBuffer());
 
-		// Upload the file to the server immediately
-		try {
-			setIsUploading(true);
-
-			const arrayBuffer = await file.arrayBuffer();
-			const data = new Uint8Array(arrayBuffer);
-
-			await EffectRuntime.EffectRuntime.runPromise(
-				withRpc((rpc) =>
-					rpc.UploadImage({
-						data,
-						contentType: file.type,
-						fileName: file.name,
-						type: "organization" as const,
-						entityId: organizationId,
-						oldImageKey: existingIconUrl,
-					}),
-				).pipe(
-					Effect.tap(() =>
-						Effect.sync(() => {
-							toast.success("Organization icon updated successfully");
-							router.refresh();
-						}),
-					),
-				),
-			);
-		} catch (error) {
+			yield* rpc.OrganisationUpdate({
+				id: organizationId,
+				image: Option.some({
+					contentType: file.type,
+					fileName: file.name,
+					data: new Uint8Array(arrayBuffer),
+				}),
+			});
+		}),
+		onSuccess: () => {
+			toast.success("Organization icon updated successfully");
+			router.refresh();
+		},
+		onError: (error) => {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to upload icon",
 			);
-		} finally {
-			setIsUploading(false);
-		}
-	};
+		},
+	});
 
-	const handleRemoveIcon = async () => {
-		if (!organizationId) return;
-
-		try {
-			await EffectRuntime.EffectRuntime.runPromise(
-				withRpc((rpc) =>
-					rpc.RemoveImage({
-						imageKey: existingIconUrl || "",
-						type: "organization" as const,
-						entityId: organizationId,
-					}),
-				).pipe(
-					Effect.tap(() =>
-						Effect.sync(() => {
-							toast.success("Organization icon removed successfully");
-							router.refresh();
-						}),
-					),
-				),
-			);
-		} catch (error) {
+	const removeIcon = useEffectMutation({
+		mutationFn: (organizationId: Organisation.OrganisationId) =>
+			rpc.OrganisationUpdate({
+				id: organizationId,
+				image: Option.none(),
+			}),
+		onSuccess: () => {
+			toast.success("Organization icon removed successfully");
+			router.refresh();
+		},
+		onError: (error) => {
 			console.error("Error removing organization icon:", error);
 			toast.error(
 				error instanceof Error ? error.message : "Failed to remove icon",
 			);
-		}
-	};
+		},
+	});
 
 	return (
 		<div className="flex-1 space-y-4">
@@ -99,12 +81,17 @@ export const OrganizationIcon = () => {
 				previewIconSize={20}
 				id={iconInputId}
 				name="icon"
-				type="organization"
-				onChange={handleFileChange}
-				disabled={isUploading}
-				isLoading={isUploading}
+				onChange={(file) => {
+					if (!file || !organizationId) return;
+					uploadIcon.mutate({ organizationId, file });
+				}}
+				disabled={uploadIcon.isPending}
+				isLoading={uploadIcon.isPending}
 				initialPreviewUrl={existingIconUrl}
-				onRemove={handleRemoveIcon}
+				onRemove={() => {
+					if (!organizationId) return;
+					removeIcon.mutate(organizationId);
+				}}
 				maxFileSizeBytes={1 * 1024 * 1024} // 1MB
 			/>
 		</div>

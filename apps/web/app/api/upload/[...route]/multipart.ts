@@ -8,6 +8,8 @@ import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
+	makeCurrentUser,
+	makeCurrentUserLayer,
 	provideOptionalAuth,
 	S3Buckets,
 	Videos,
@@ -70,7 +72,6 @@ app.post(
 					.where(eq(Db.videoUploads.videoId, video.value[0].id)),
 			);
 		}).pipe(
-			provideOptionalAuth,
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {
 				if (e._tag === "VideoNotFoundError")
@@ -80,7 +81,7 @@ app.post(
 					c.json({ error: "Error initiating multipart upload" }, 500),
 				);
 			}),
-			Effect.provideService(CurrentUser, user),
+			Effect.provide(makeCurrentUserLayer(user)),
 			runPromise,
 		);
 		if (resp) return resp;
@@ -478,6 +479,6 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(Effect.provideService(CurrentUser, user), runPromise);
+		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
 	},
 );

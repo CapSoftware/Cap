@@ -18,6 +18,7 @@ import {
 } from "react";
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { newComment } from "@/actions/videos/new-comment";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../../../Share";
 import CommentComponent from "./Comment";
 import CommentInput from "./CommentInput";
@@ -28,7 +29,6 @@ export const Comments = Object.assign(
 		{ scrollToBottom: () => void },
 		{
 			setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
-			user: typeof userSelectProps | null;
 			videoId: Video.VideoId;
 			optimisticComments: CommentType[];
 			setOptimisticComments: (newComment: CommentType) => void;
@@ -48,8 +48,8 @@ export const Comments = Object.assign(
 		} = props;
 		const commentParams = useSearchParams().get("comment");
 		const replyParams = useSearchParams().get("reply");
+		const user = useCurrentUser();
 
-		const { user } = props;
 		const [replyingTo, setReplyingTo] = useState<Comment.CommentId | null>(
 			null,
 		);
@@ -80,15 +80,17 @@ export const Comments = Object.assign(
 		);
 
 		const handleNewComment = async (content: string) => {
+			if (!user) return;
+
 			// Get current video time from the video element
 			const videoElement = document.querySelector("video") as HTMLVideoElement;
 			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
 				id: Comment.CommentId.make(`temp-${Date.now()}`),
-				authorId: User.UserId.make(user?.id || "anonymous"),
-				authorName: user?.name || "Anonymous",
-				authorImageUrlOrKey: user?.image ?? null,
+				authorId: User.UserId.make(user.id),
+				authorName: user?.name,
+				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
@@ -118,7 +120,8 @@ export const Comments = Object.assign(
 		};
 
 		const handleReply = async (content: string) => {
-			if (!replyingTo) return;
+			if (!replyingTo || !user) return;
+
 			const videoElement = document.querySelector("video") as HTMLVideoElement;
 			const currentTime = videoElement?.currentTime || 0;
 
@@ -129,9 +132,9 @@ export const Comments = Object.assign(
 
 			const optimisticReply: CommentType = {
 				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
-				authorId: User.UserId.make(user?.id || "anonymous"),
-				authorName: user?.name || "Anonymous",
-				authorImageUrlOrKey: user?.image ?? null,
+				authorId: user.id,
+				authorName: user.name,
+				authorImage: user.imageUrl ?? null,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
@@ -197,7 +200,6 @@ export const Comments = Object.assign(
 					disabled: commentsDisabled,
 				}}
 				setShowAuthOverlay={props.setShowAuthOverlay}
-				user={user}
 				commentsContainerRef={commentsContainerRef}
 			>
 				{commentsDisabled ? (
@@ -227,7 +229,6 @@ export const Comments = Object.assign(
 								handleReply={handleReply}
 								onCancelReply={handleCancelReply}
 								onDelete={handleDeleteComment}
-								user={user}
 								onSeek={onSeek}
 							/>
 						))}
@@ -239,7 +240,6 @@ export const Comments = Object.assign(
 	{
 		Shell: (
 			props: PropsWithChildren<{
-				user: typeof userSelectProps | null;
 				setShowAuthOverlay: (v: boolean) => void;
 				commentInputProps?: Omit<
 					ComponentProps<typeof CommentInput>,
@@ -247,40 +247,42 @@ export const Comments = Object.assign(
 				>;
 				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
 			}>,
-		) => (
-			<>
-				<div
-					ref={props.commentsContainerRef}
-					className="overflow-y-auto flex-1 min-h-0"
-				>
-					{props.children}
-				</div>
+		) => {
+			const user = useCurrentUser();
 
-				{!props.commentInputProps?.disabled && (
-					<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
-						{props.user ? (
-							<CommentInput
-								{...props.commentInputProps}
-								placeholder="Leave a comment"
-								buttonLabel="Comment"
-								user={props.user}
-							/>
-						) : (
-							<Button
-								className="min-w-full"
-								variant="primary"
-								onClick={() => props.setShowAuthOverlay(true)}
-							>
-								Sign in to leave a comment
-							</Button>
-						)}
+			return (
+				<>
+					<div
+						ref={props.commentsContainerRef}
+						className="overflow-y-auto flex-1 min-h-0"
+					>
+						{props.children}
 					</div>
-				)}
-			</>
+
+					{!props.commentInputProps?.disabled && (
+						<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
+							{user ? (
+								<CommentInput
+									{...props.commentInputProps}
+									placeholder="Leave a comment"
+									buttonLabel="Comment"
+								/>
+							) : (
+								<Button
+									className="min-w-full"
+									variant="primary"
+									onClick={() => props.setShowAuthOverlay(true)}
+								>
+									Sign in to leave a comment
+								</Button>
+							)}
+						</div>
+					)}
+				</>
+			);
+		},
+		Skeleton: (props: { setShowAuthOverlay: (v: boolean) => void }) => (
+			<Comments.Shell {...props} commentInputProps={{ disabled: true }} />
 		),
-		Skeleton: (props: {
-			user: typeof userSelectProps | null;
-			setShowAuthOverlay: (v: boolean) => void;
-		}) => <Comments.Shell {...props} commentInputProps={{ disabled: true }} />,
 	},
 );

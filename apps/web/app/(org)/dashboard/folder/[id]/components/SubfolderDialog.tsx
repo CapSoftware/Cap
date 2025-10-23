@@ -19,7 +19,7 @@ import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
@@ -107,16 +107,16 @@ export const SubfolderDialog: React.FC<Props> = ({
 		),
 	);
 
+	const rpc = useRpcClient();
+
 	const createSubfolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
-			withRpc((r) =>
-				r.FolderCreate({
-					name: data.name,
-					color: data.color,
-					spaceId: Option.fromNullable(activeSpace?.id),
-					parentId: Option.some(parentFolderId),
-				}),
-			),
+			rpc.FolderCreate({
+				name: data.name,
+				color: data.color,
+				spaceId: Option.fromNullable(activeSpace?.id),
+				parentId: Option.some(parentFolderId),
+			}),
 		onSuccess: () => {
 			setFolderName("");
 			setSelectedColor(null);

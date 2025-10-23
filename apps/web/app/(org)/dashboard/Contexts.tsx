@@ -1,10 +1,10 @@
 "use client";
 
-import type { users } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import Cookies from "js-cookie";
-import { usePathname } from "next/navigation";
+import { redirect, usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
+import { type CurrentUser, useCurrentUser } from "@/app/Layout/AuthContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type {
 	Organization,
@@ -21,7 +21,7 @@ type SharedContext = {
 	userSpaces: Spaces[] | null;
 	sharedSpaces: Spaces[] | null;
 	activeSpace: Spaces | null;
-	user: typeof users.$inferSelect;
+	user: CurrentUser;
 	userCapsCount: number | null;
 	isSubscribed: boolean;
 	toggleSidebarCollapsed: () => void;
@@ -56,7 +56,6 @@ export function DashboardContexts({
 	activeOrganization,
 	spacesData,
 	userCapsCount,
-	user,
 	isSubscribed,
 	organizationSettings,
 	userPreferences,
@@ -70,7 +69,6 @@ export function DashboardContexts({
 	activeOrganization: SharedContext["activeOrganization"];
 	spacesData: SharedContext["spacesData"];
 	userCapsCount: SharedContext["userCapsCount"];
-	user: SharedContext["user"];
 	isSubscribed: SharedContext["isSubscribed"];
 	organizationSettings: SharedContext["organizationSettings"];
 	userPreferences: SharedContext["userPreferences"];
@@ -79,6 +77,9 @@ export function DashboardContexts({
 	initialSidebarCollapsed: boolean;
 	referClicked: boolean;
 }) {
+	const user = useCurrentUser();
+	if (!user) redirect("/login");
+
 	const [theme, setTheme] = useState<ITheme>(initialTheme);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(
 		initialSidebarCollapsed,

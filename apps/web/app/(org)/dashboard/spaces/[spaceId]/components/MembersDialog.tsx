@@ -1,4 +1,6 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
+import { ImageUpdatePayload } from "@cap/web-domain/src/ImageUpload";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface OrganizationMember {
@@ -14,7 +16,7 @@ interface OrganizationMember {
 		email: string;
 		firstName?: string | null;
 		lastName?: string | null;
-		memberImage?: string | null;
+		memberImage?: ImageUpload.ImageUrl | null;
 	};
 }
 
@@ -45,7 +47,6 @@ export const MembersDialog = ({
 								<SignedImageUrl
 									image={member.user?.memberImage || undefined}
 									name={member.user?.name || "User"}
-									type="user"
 									className="mr-3 size-8"
 									letterClass="text-md"
 								/>

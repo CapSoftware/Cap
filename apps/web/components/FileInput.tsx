@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input, LoadingSpinner } from "@cap/ui";
+import { ImageUpload } from "@cap/web-domain";
 import {
 	faCloudUpload,
 	faSpinner,
@@ -11,7 +12,6 @@ import clsx from "clsx";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useSignedImageUrl } from "@/lib/use-signed-image-url";
 import { SignedImageUrl } from "./SignedImageUrl";
 import { Tooltip } from "./Tooltip";
 
@@ -24,11 +24,10 @@ export interface FileInputProps {
 	disabled?: boolean;
 	id?: string;
 	name?: string;
-	type: "user" | "organization";
 	containerStyle?: React.CSSProperties;
 	className?: string;
 	notDraggingClassName?: string;
-	initialPreviewUrl?: string | null;
+	initialPreviewUrl?: ImageUpload.ImageUrl | null;
 	onRemove?: () => void;
 	isLoading?: boolean;
 	height?: string | number;
@@ -42,7 +41,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 	disabled = false,
 	id = "file",
 	name = "file",
-	type,
 	className = "",
 	notDraggingClassName = "",
 	initialPreviewUrl = null,
@@ -54,13 +52,10 @@ export const FileInput: React.FC<FileInputProps> = ({
 }) => {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragging, setIsDragging] = useState(false);
-	const [previewUrl, setPreviewUrl] = useState<string | null>(
+	const [previewUrl, setPreviewUrl] = useState<ImageUpload.ImageUrl | null>(
 		initialPreviewUrl,
 	);
 	const [isLocalPreview, setIsLocalPreview] = useState(false);
-
-	// Get signed URL for S3 keys
-	const { data: signedUrl } = useSignedImageUrl(previewUrl, type);
 
 	const previousPreviewRef = useRef<{
 		url: string | null;
@@ -174,7 +169,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 
 			// Create a new preview URL for immediate feedback
 			const newPreviewUrl = URL.createObjectURL(file);
-			setPreviewUrl(newPreviewUrl);
+			setPreviewUrl(ImageUpload.ImageUrl.make(newPreviewUrl));
 			setIsLocalPreview(true);
 
 			previousPreviewRef.current = {
@@ -252,7 +247,6 @@ export const FileInput: React.FC<FileInputProps> = ({
 										<SignedImageUrl
 											image={previewUrl}
 											name="File preview"
-											type={type}
 											letterClass="text-lg"
 											className="size-full"
 										/>

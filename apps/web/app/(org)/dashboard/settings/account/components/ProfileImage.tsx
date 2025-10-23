@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { ImageUpload } from "@cap/web-domain";
 import { faImage, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -10,7 +11,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 
 interface ProfileImageProps {
-	initialPreviewUrl?: string | null;
+	initialPreviewUrl?: ImageUpload.ImageUrl | null;
 	onChange?: (file: File | null) => void;
 	onRemove?: () => void;
 	disabled?: boolean;
@@ -28,7 +29,7 @@ export function ProfileImage({
 	isRemoving = false,
 	userName,
 }: ProfileImageProps) {
-	const [previewUrl, setPreviewUrl] = useState<string | null>(
+	const [previewUrl, setPreviewUrl] = useState<ImageUpload.ImageUrl | null>(
 		initialPreviewUrl || null,
 	);
 	const [isLocalPreview, setIsLocalPreview] = useState(false);
@@ -54,7 +55,7 @@ export function ProfileImage({
 			URL.revokeObjectURL(previewUrl);
 		}
 		const objectUrl = URL.createObjectURL(file);
-		setPreviewUrl(objectUrl);
+		setPreviewUrl(ImageUpload.ImageUrl.make(objectUrl));
 		setIsLocalPreview(true);
 		onChange?.(file);
 	};
@@ -92,7 +93,6 @@ export function ProfileImage({
 						<SignedImageUrl
 							image={previewUrl}
 							name={userName || "User"}
-							type="user"
 							letterClass="text-lg"
 							className="size-full"
 						/>

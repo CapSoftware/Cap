@@ -3,8 +3,7 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
-import { useEffectQuery } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";
 
 type UploadProgress =
 	| { status: "fetching" }
@@ -27,12 +26,14 @@ export function useUploadProgress(
 	videoId: Video.VideoId,
 	enabled: boolean,
 ): UploadProgress | null {
+	const rpc = useRpcClient();
+
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
-			withRpc((rpc) => rpc.GetUploadProgress(videoId)).pipe(
-				Effect.map((v) => Option.getOrNull(v ?? Option.none())),
-			),
+			rpc
+				.GetUploadProgress(videoId)
+				.pipe(Effect.map((v) => Option.getOrNull(v ?? Option.none()))),
 		enabled,
 		refetchInterval: (query) => {
 			if (!enabled || !query.state.data) return false;

@@ -2,7 +2,7 @@
 
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
 	startTransition,
@@ -25,12 +25,12 @@ import { Toolbar } from "./_components/Toolbar";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
-	authorImageUrlOrKey: string | null;
+	authorImage: ImageUpload.ImageUrl | null;
 };
 
 export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
-	authorImageUrlOrKey?: string | null;
+	authorImage?: ImageUpload.ImageUrl | null;
 	sending?: boolean;
 };
 
@@ -44,7 +44,6 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 
 interface ShareProps {
 	data: VideoWithOrganizationInfo;
-	user: typeof userSelectProps | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	customDomain: string | null;
@@ -139,7 +138,6 @@ const useVideoStatus = (
 
 export const Share = ({
 	data,
-	user,
 	comments,
 	ownerIsPro,
 	views,
@@ -292,7 +290,6 @@ export const Share = ({
 						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
 							<ShareVideo
 								data={{ ...data, transcriptionStatus }}
-								user={user}
 								comments={comments}
 								areChaptersDisabled={areChaptersDisabled}
 								areCaptionsDisabled={areCaptionsDisabled}
@@ -309,7 +306,6 @@ export const Share = ({
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
 							data={data}
-							user={user}
 						/>
 					</div>
 				</div>
@@ -324,7 +320,6 @@ export const Share = ({
 							}}
 							ownerIsPro={ownerIsPro}
 							videoSettings={videoSettings}
-							user={user}
 							commentsData={commentsData}
 							setCommentsData={setCommentsData}
 							optimisticComments={optimisticComments}
@@ -351,7 +346,6 @@ export const Share = ({
 							data.orgSettings?.disableReactions
 						}
 						data={data}
-						user={user}
 					/>
 				</div>
 			</div>

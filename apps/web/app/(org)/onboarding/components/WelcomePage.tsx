@@ -4,23 +4,21 @@ import { Button, Input } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { Base } from "./Base";
 
 export function WelcomePage() {
 	const [firstName, setFirstName] = useState("");
 	const [lastName, setLastName] = useState("");
 	const router = useRouter();
+	const rpc = useRpcClient();
 
 	const welcomeMutation = useEffectMutation({
 		mutationFn: (data: { firstName: string; lastName?: string }) =>
-			withRpc((r) =>
-				r.UserCompleteOnboardingStep({
-					step: "welcome",
-					data,
-				}),
-			),
+			rpc.UserCompleteOnboardingStep({
+				step: "welcome",
+				data,
+			}),
 		onSuccess: () => {
 			startTransition(() => {
 				router.push("/onboarding/organization-setup");

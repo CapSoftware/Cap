@@ -50,7 +50,6 @@ interface Props {
 		type: "text" | "emoji";
 		content: string;
 		authorName?: string | null;
-		authorImageUrlOrKey?: string | null;
 	}>;
 	onSeek?: (time: number) => void;
 }
