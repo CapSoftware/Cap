@@ -96,34 +96,34 @@ export async function GET() {
 
 			return yield* Effect.all(
 				notificationsWithAuthors.map(({ notification, author }) =>
-					Effect.fn(function* () {
-						try {
-							// all notifications currently require an author
-							if (!author) return null;
+					Effect.gen(function* () {
+						// all notifications currently require an author
+						if (!author) return null;
 
-							const resolvedAvatar = author.avatar
-								? yield* imageUploads.resolveImageUrl(author.avatar)
-								: null;
+						const resolvedAvatar = author.avatar
+							? yield* imageUploads.resolveImageUrl(author.avatar)
+							: null;
 
-							return APINotification.parse({
-								id: notification.id,
-								type: notification.type,
-								readAt: notification.readAt,
-								videoId: notification.data.videoId,
-								createdAt: notification.createdAt,
-								data: notification.data,
-								comment: notification.data.comment,
-								author: {
-									id: author.id,
-									name: author.name ?? "Unknown",
-									avatar: resolvedAvatar,
-								},
-							});
-						} catch (error) {
+						return APINotification.parse({
+							id: notification.id,
+							type: notification.type,
+							readAt: notification.readAt,
+							videoId: notification.data.videoId,
+							createdAt: notification.createdAt,
+							data: notification.data,
+							comment: notification.data.comment,
+							author: {
+								id: author.id,
+								name: author.name ?? "Unknown",
+								avatar: resolvedAvatar,
+							},
+						});
+					}).pipe(
+						Effect.catchAll((error) => {
 							console.error("Invalid notification data:", error);
-							return null;
-						}
-					})(),
+							return Effect.succeed(null);
+						}),
+					),
 				),
 			);
 		})
