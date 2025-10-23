@@ -133,9 +133,8 @@ export function ExportDialog() {
 	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
 
 	// Ensure GIF is not selected when exportTo is "link"
-	if (settings.format === "Gif" && settings.exportTo === "link") {
+	if (settings.format === "Gif" && settings.exportTo === "link")
 		setSettings("format", "Mp4");
-	}
 
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
