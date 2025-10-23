@@ -77,7 +77,7 @@ pub async fn open_target_select_overlays(
     state: tauri::State<'_, State>,
     focused_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
-    join_all(
+    let windows = join_all(
         scap_targets::Display::list()
             .into_iter()
             .map(|d| d.id())
@@ -89,11 +89,20 @@ pub async fn open_target_select_overlays(
                         .show(&app)
                         .await
                         .map_err(|err| error!("Error initializing target select overlay: {err}"))
-                        .ok();
+                        .ok()
                 }
             }),
     )
     .await;
+
+    for window in windows {
+        if let Some(window) = window {
+            window
+                .show()
+                .map_err(|err| error!("Error showing target select overlay: {err}"))
+                .ok();
+        }
+    }
 
     let handle = tokio::spawn({
         let app = app.clone();
