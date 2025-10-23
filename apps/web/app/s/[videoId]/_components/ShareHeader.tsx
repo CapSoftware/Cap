@@ -238,12 +238,14 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									<SignedImageUrl
-										name={data.ownerName ?? "User"}
-										image={data.ownerImage}
-										className="size-8"
-										letterClass="text-base"
-									/>
+									{data.ownerName && (
+										<SignedImageUrl
+											name={data.ownerName}
+											image={data.ownerImage}
+											className="size-8"
+											letterClass="text-base"
+										/>
+									)}
 									<div className="flex flex-col text-left">
 										<p className="text-sm text-gray-12">{data.ownerName}</p>
 										<p className="text-xs text-gray-10">

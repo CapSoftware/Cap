@@ -109,6 +109,7 @@ export const Comments = Object.assign(
 				const data = await newComment({
 					content,
 					videoId: props.videoId,
+					authorImage: user.imageUrl,
 					parentCommentId: Comment.CommentId.make(""),
 					type: "text",
 					timestamp: currentTime,
