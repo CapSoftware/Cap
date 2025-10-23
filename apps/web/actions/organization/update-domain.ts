@@ -7,6 +7,7 @@ import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";
+import { userIsPro } from "@cap/utils";
 
 export async function updateDomain(
 	domain: string,
@@ -18,10 +19,7 @@ export async function updateDomain(
 		throw new Error("Unauthorized");
 	}
 
-	//check user subscription to prevent abuse
-	const isSubscribed = user.stripeSubscriptionStatus === "active";
-
-	if (!isSubscribed) {
+	if (!userIsPro(user)) {
 		throw new Error("User is not subscribed");
 	}
 

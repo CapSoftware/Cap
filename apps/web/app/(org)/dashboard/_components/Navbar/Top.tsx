@@ -184,7 +184,7 @@ const Top = () => {
 const User = () => {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-	const { user, isSubscribed } = useDashboardContext();
+	const { user } = useDashboardContext();
 
 	const menuItems = useMemo(
 		() => [
@@ -204,7 +204,7 @@ const User = () => {
 					setUpgradeModalOpen(true);
 				},
 				iconClassName: "text-amber-400 group-hover:text-amber-500",
-				showCondition: !isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP,
+				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP && !user.isPro,
 			},
 			{
 				name: "Earn 40% Referral",

@@ -65,11 +65,6 @@ export default async function DashboardLayout({
 		activeOrganization = organizationSelect[0];
 	}
 
-	const isSubscribed =
-		(user.stripeSubscriptionId &&
-			user.stripeSubscriptionStatus !== "cancelled") ||
-		!!user.thirdPartyStripeSubscriptionId;
-
 	const theme = (await cookies()).get("theme")?.value ?? "light";
 	const sidebar = (await cookies()).get("sidebarCollapsed")?.value ?? "false";
 	const referClicked = (await cookies()).get("referClicked")?.value ?? "false";
@@ -83,7 +78,6 @@ export default async function DashboardLayout({
 					organizationData={organizationSelect}
 					activeOrganization={activeOrganization || null}
 					spacesData={spacesData}
-					isSubscribed={isSubscribed}
 					initialTheme={theme as "light" | "dark"}
 					initialSidebarCollapsed={sidebar === "true"}
 					anyNewNotifications={anyNewNotifications}
