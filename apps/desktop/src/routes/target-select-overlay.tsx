@@ -1005,9 +1005,3 @@ function ResizeHandle(
 		/>
 	);
 }
-
-function getDisplayId(displayId: string | undefined) {
-	const id = Number(displayId);
-	if (Number.isNaN(id)) return 0;
-	return id;
-}
