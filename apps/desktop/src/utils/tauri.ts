@@ -71,8 +71,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
+async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings, upload: boolean) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { projectPath, progress, settings, upload });
 },
 async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
