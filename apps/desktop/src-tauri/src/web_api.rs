@@ -6,6 +6,7 @@ use tracing::{error, warn};
 use crate::{
     ArcLock,
     auth::{AuthSecret, AuthStore},
+    shared_client::get_shared_client,
 };
 
 #[derive(Error, Debug)]
@@ -59,10 +60,10 @@ fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 
 async fn do_authed_request(
     auth: &AuthStore,
-    build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     url: String,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
+    let client = get_shared_client();
 
     let req = build(client, url).header(
         "Authorization",
@@ -82,13 +83,13 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError>;
 
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
@@ -100,7 +101,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError> {
         let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
         else {
@@ -122,10 +123,10 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = self.make_app_url(path.into()).await;
-        let client = reqwest::Client::new();
+        let client = get_shared_client();
 
         apply_env_headers(build(client, url)).send().await
     }
