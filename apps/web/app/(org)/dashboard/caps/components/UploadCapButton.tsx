@@ -38,9 +38,7 @@ export const UploadCapButton = ({
 	const handleClick = () => {
 		if (!user) return;
 
-		const isCapPro = userIsPro(user);
-
-		if (!isCapPro) {
+		if (!user.isPro) {
 			setUpgradeModalOpen(true);
 			return;
 		}

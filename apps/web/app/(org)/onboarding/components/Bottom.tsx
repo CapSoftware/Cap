@@ -5,20 +5,19 @@ import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { startTransition } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 export const Bottom = () => {
 	const router = useRouter();
 
+	const rpc = useRpcClient();
+
 	const skipToDashboard = useEffectMutation({
 		mutationFn: () =>
-			withRpc((r) =>
-				r.UserCompleteOnboardingStep({
-					step: "skipToDashboard",
-					data: undefined,
-				}),
-			),
+			rpc.UserCompleteOnboardingStep({
+				step: "skipToDashboard",
+				data: undefined,
+			}),
 		onSuccess: () => {
 			startTransition(() => {
 				router.push("/dashboard/caps");

@@ -12,10 +12,13 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Video } from "@cap/web-domain";
+import { Database, ImageUploads } from "@cap/web-backend";
+import { type ImageUpload, Video } from "@cap/web-domain";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
@@ -23,35 +26,45 @@ export const metadata: Metadata = {
 };
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+const getSharedSpacesForVideos = Effect.fn(function* (
+	videoIds: Video.VideoId[],
+) {
 	if (videoIds.length === 0) return {};
 
+	const db = yield* Database;
+
 	// Fetch space-level sharing
-	const spaceSharing = await db()
-		.select({
-			videoId: spaceVideos.videoId,
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-		.where(inArray(spaceVideos.videoId, videoIds));
+	const spaceSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+			.where(inArray(spaceVideos.videoId, videoIds)),
+	);
 
 	// Fetch organization-level sharing
-	const orgSharing = await db()
-		.select({
-			videoId: sharedVideos.videoId,
-			id: organizations.id,
-			name: organizations.name,
-			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(sharedVideos)
-		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.where(inArray(sharedVideos.videoId, videoIds));
+	const orgSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(inArray(sharedVideos.videoId, videoIds)),
+	);
 
 	// Combine and group by videoId
 	const sharedSpacesMap: Record<
@@ -60,7 +73,6 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: string;
 			name: string;
 			organizationId: string;
-			iconUrl: string;
 			isOrg: boolean;
 		}>
 	> = {};
@@ -74,7 +86,6 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || "",
 			isOrg: false,
 		});
 	});
@@ -88,13 +99,12 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || "",
 			isOrg: true,
 		});
 	});
 
 	return sharedSpacesMap;
-}
+});
 
 export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const searchParams = await props.searchParams;
@@ -134,7 +144,13 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
+			sharedOrganizations: sql<
+				{
+					id: string;
+					name: string;
+					iconUrl: ImageUpload.ImageUrlOrKey | null;
+				}[]
+			>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
@@ -211,33 +227,47 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 
 	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
+	const sharedSpacesMap =
+		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
-	const processedVideoData = videoData.map((video) => {
-		const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+	const processedVideoData = await Effect.all(
+		videoData.map(
+			Effect.fn(function* (video) {
+				const imageUploads = yield* ImageUploads;
 
-		return {
-			...videoWithoutEffectiveDate,
-			id: Video.VideoId.make(video.id),
-			foldersData,
-			settings: video.settings,
-			sharedOrganizations: Array.isArray(video.sharedOrganizations)
-				? video.sharedOrganizations.filter(
-						(organization) => organization.id !== null,
-					)
-				: [],
-			sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
-				? sharedSpacesMap[video.id]
-				: [],
-			ownerName: video.ownerName ?? "",
-			metadata: video.metadata as
-				| {
-						customCreatedAt?: string;
-						[key: string]: any;
-				  }
-				| undefined,
-		};
-	});
+				const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+
+				return {
+					...videoWithoutEffectiveDate,
+					id: Video.VideoId.make(video.id),
+					foldersData,
+					settings: video.settings,
+					sharedOrganizations: yield* Effect.all(
+						(video.sharedOrganizations ?? [])
+							.filter((organization) => organization.id !== null)
+							.map(
+								Effect.fn(function* (org) {
+									return {
+										...org,
+										iconUrl: org.iconUrl
+											? yield* imageUploads.resolveImageUrl(org.iconUrl)
+											: null,
+									};
+								}),
+							),
+					),
+					sharedSpaces: sharedSpacesMap[video.id] ?? [],
+					ownerName: video.ownerName ?? "",
+					metadata: video.metadata as
+						| {
+								customCreatedAt?: string;
+								[key: string]: any;
+						  }
+						| undefined,
+				};
+			}),
+		),
+	).pipe(runPromise);
 
 	return (
 		<Caps

@@ -8,7 +8,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { useEffect, useRef, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export function VerifyOTPForm({
@@ -86,7 +86,7 @@ export function VerifyOTPForm({
 				throw "Invalid code. Please try again.";
 			}
 		},
-		onSuccess: () => {
+		onSuccess: async () => {
 			router.refresh();
 			router.replace(next || "/dashboard");
 		},

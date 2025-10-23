@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -20,7 +21,7 @@ export type OrganizationMemberData = {
 	id: string;
 	userId: string;
 	role: string;
-	image?: string | null;
+	image?: ImageUpload.ImageUrl | null;
 	name: string | null;
 	email: string;
 };
@@ -73,9 +74,8 @@ export const OrganizationIndicator = ({
 											className="flex gap-3 items-center px-3 py-2 rounded-lg border transition-colors bg-gray-3 border-gray-4"
 										>
 											<SignedImageUrl
-												image={member.image || undefined}
+												image={member.image}
 												name={member.name || member.email}
-												type="user"
 												className="size-8"
 												letterClass="text-sm"
 											/>

@@ -282,7 +282,6 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 										<SignedImageUrl
 											image={space.iconUrl}
 											name={space.name}
-											type="organization"
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[11px]",
 											)}

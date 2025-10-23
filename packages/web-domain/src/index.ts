@@ -5,6 +5,7 @@ export * from "./Errors.ts";
 export * from "./Errors.ts";
 export * as Folder from "./Folder.ts";
 export * as Http from "./Http/index.ts";
+export * as ImageUpload from "./ImageUpload.ts";
 export * as Loom from "./Loom.ts";
 export * as Organisation from "./Organisation.ts";
 export * from "./Organisation.ts";

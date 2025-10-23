@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { Spaces } from "@cap/web-backend";
-import { CurrentUser, type Folder, Space } from "@cap/web-domain";
+import { makeCurrentUserLayer, Spaces } from "@cap/web-backend";
+import { type Folder, Space } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";
@@ -109,7 +109,7 @@ const FolderPage = async (props: {
 		);
 	}).pipe(
 		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
-		Effect.provideService(CurrentUser, user),
+		Effect.provide(makeCurrentUserLayer(user)),
 		runPromise,
 	);
 };

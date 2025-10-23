@@ -63,8 +63,6 @@ const CapSettingsCard = () => {
 		organizationSettings || settings,
 	);
 
-	const isUserPro = userIsPro(user);
-
 	const debouncedUpdateSettings = useDebounce(settings, 1000);
 
 	useEffect(() => {
@@ -179,7 +177,7 @@ const CapSettingsCard = () => {
 						</div>
 						<Switch
 							disabled={
-								(option.pro && !isUserPro) ||
+								(option.pro && !user.isPro) ||
 								((option.value === "disableSummary" ||
 									option.value === "disableChapters") &&
 									settings?.disableTranscript)

@@ -5,6 +5,7 @@ import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
+import type { ImageUpload } from "@cap/web-domain";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
@@ -16,13 +17,13 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 
 export const ShareHeader = ({
 	data,
-	user,
 	customDomain,
 	domainVerified,
 	sharedOrganizations = [],
@@ -31,10 +32,9 @@ export const ShareHeader = ({
 }: {
 	data: typeof videos.$inferSelect & {
 		ownerName?: string | null;
-		ownerImage?: string | null;
+		ownerImage?: ImageUpload.ImageUrl | null;
 		ownerIsPro?: boolean;
 	};
-	user: typeof userSelectProps | null;
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
@@ -53,6 +53,7 @@ export const ShareHeader = ({
 	}[];
 	spacesData?: Spaces[] | null;
 }) => {
+	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
 	const [isEditing, setIsEditing] = useState(false);
 	const [title, setTitle] = useState(data.name);
@@ -183,7 +184,7 @@ export const ShareHeader = ({
 
 	return (
 		<>
-			{user !== null && !isVideoOwnerPro && (
+			{isOwner && !isVideoOwnerPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -237,13 +238,14 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									<SignedImageUrl
-										name={data.ownerName ?? "User"}
-										image={data.ownerImage}
-										type="user"
-										className="size-8"
-										letterClass="text-base"
-									/>
+									{data.ownerName && (
+										<SignedImageUrl
+											name={data.ownerName}
+											image={data.ownerImage}
+											className="size-8"
+											letterClass="text-base"
+										/>
+									)}
 									<div className="flex flex-col text-left">
 										<p className="text-sm text-gray-12">{data.ownerName}</p>
 										<p className="text-xs text-gray-10">

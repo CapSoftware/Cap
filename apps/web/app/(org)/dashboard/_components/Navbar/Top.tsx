@@ -105,7 +105,6 @@ const Top = () => {
 						<SignedImageUrl
 							image={activeSpace.iconUrl}
 							name={activeSpace?.name}
-							type="organization"
 							letterClass="text-xs"
 							className="relative flex-shrink-0 size-5"
 						/>
@@ -186,7 +185,7 @@ const Top = () => {
 const User = () => {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-	const { user, isSubscribed } = useDashboardContext();
+	const { user } = useDashboardContext();
 
 	const menuItems = useMemo(
 		() => [
@@ -206,7 +205,7 @@ const User = () => {
 					setUpgradeModalOpen(true);
 				},
 				iconClassName: "text-amber-400 group-hover:text-amber-500",
-				showCondition: !isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP,
+				showCondition: buildEnv.NEXT_PUBLIC_IS_CAP && !user.isPro,
 			},
 			{
 				name: "Earn 40% Referral",
@@ -263,9 +262,8 @@ const User = () => {
 					>
 						<div className="flex items-center">
 							<SignedImageUrl
-								image={user.image}
+								image={user.imageUrl}
 								name={user.name ?? "User"}
-								type="user"
 								letterClass="text-xs lg:text-md"
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>

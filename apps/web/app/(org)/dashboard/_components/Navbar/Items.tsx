@@ -75,11 +75,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	];
 
 	const [dialogOpen, setDialogOpen] = useState(false);
-	const {
-		organizationData: orgData,
-		activeOrganization: activeOrg,
-		isSubscribed: userIsSubscribed,
-	} = useDashboardContext();
+	const { organizationData: orgData, activeOrganization: activeOrg } =
+		useDashboardContext();
 	const formRef = useRef<HTMLFormElement | null>(null);
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
@@ -133,7 +130,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											name={
 												activeOrg?.organization.name ?? "No organization found"
 											}
-											type="organization"
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
@@ -222,7 +218,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 														<SignedImageUrl
 															image={organization.organization.iconUrl}
 															name={organization.organization.name}
-															type="organization"
 															letterClass="text-xs"
 															className="relative flex-shrink-0 size-5"
 														/>
@@ -315,7 +310,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 				</div>
 				<div className="pb-4 mt-auto w-full">
 					<AnimatePresence>
-						{!sidebarCollapsed && !userIsSubscribed && (
+						{!sidebarCollapsed && !user.isPro && (
 							<motion.div
 								initial={{ scale: 0 }}
 								animate={{ scale: 1 }}
@@ -335,7 +330,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					</AnimatePresence>
 					<UsageButton
 						toggleMobileNav={() => toggleMobileNav?.()}
-						subscribed={userIsSubscribed}
+						subscribed={user.isPro}
 					/>
 					{buildEnv.NEXT_PUBLIC_IS_CAP && (
 						<div className="flex justify-center items-center mt-2">

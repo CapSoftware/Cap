@@ -14,6 +14,7 @@ import {
 	Input,
 	Label,
 } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -36,7 +37,7 @@ interface SpaceDialogProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrl?: string;
+		iconUrl?: ImageUpload.ImageUrl;
 	} | null;
 	onSpaceUpdated?: () => void;
 }
@@ -117,7 +118,7 @@ export interface NewSpaceFormProps {
 		id: string;
 		name: string;
 		members: string[];
-		iconUrl?: string;
+		iconUrl?: ImageUpload.ImageUrl;
 	} | null;
 }
 
@@ -277,7 +278,6 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 						<FileInput
 							id="space-icon"
 							name="icon"
-							type="organization"
 							initialPreviewUrl={space?.iconUrl || null}
 							notDraggingClassName="hover:bg-gray-3"
 							onChange={setSelectedFile}

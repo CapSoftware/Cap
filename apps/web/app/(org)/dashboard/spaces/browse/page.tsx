@@ -135,7 +135,6 @@ export default function BrowseSpacesPage() {
 											<SignedImageUrl
 												image={space.iconUrl}
 												name={space.name}
-												type="organization"
 												className="relative flex-shrink-0 size-7"
 												letterClass="text-sm"
 											/>

@@ -9,8 +9,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
@@ -70,8 +69,10 @@ const FolderCard = ({
 		}),
 	});
 
+	const rpc = useRpcClient();
+
 	const deleteFolder = useEffectMutation({
-		mutationFn: (id: Folder.FolderId) => withRpc((r) => r.FolderDelete(id)),
+		mutationFn: (id: Folder.FolderId) => rpc.FolderDelete(id),
 		onSuccess: () => {
 			router.refresh();
 			toast.success("Folder deleted successfully");
@@ -83,8 +84,7 @@ const FolderCard = ({
 	});
 
 	const updateFolder = useEffectMutation({
-		mutationFn: (data: Folder.FolderUpdate) =>
-			withRpc((r) => r.FolderUpdate(data)),
+		mutationFn: (data: Folder.FolderUpdate) => rpc.FolderUpdate(data),
 		onSuccess: () => {
 			toast.success("Folder name updated successfully");
 			router.refresh();

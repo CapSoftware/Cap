@@ -8,9 +8,8 @@ import {
 	organizations,
 	users,
 } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
 import { S3Buckets } from "@cap/web-backend";
-import { Organisation, type User } from "@cap/web-domain";
+import { ImageUpload, Organisation, type User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -42,7 +41,7 @@ export async function createOrganization(formData: FormData) {
 		id: Organisation.OrganisationId;
 		ownerId: User.UserId;
 		name: string;
-		iconUrl?: string;
+		iconUrl?: ImageUpload.ImageUrlOrKey;
 	} = {
 		id: organizationId,
 		ownerId: user.id,
@@ -64,7 +63,9 @@ export async function createOrganization(formData: FormData) {
 
 		// Create a unique file key
 		const fileExtension = iconFile.name.split(".").pop();
-		const fileKey = `organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`;
+		const fileKey = ImageUpload.ImageKey.make(
+			`organizations/${organizationId}/icon-${Date.now()}.${fileExtension}`,
+		);
 
 		try {
 			await Effect.gen(function* () {
