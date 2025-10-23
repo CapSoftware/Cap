@@ -56,12 +56,12 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "../OptionsContext";
+import { BaseControls } from "./BaseControls";
 import ChangelogButton from "./ChangeLogButton";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import { useSystemHardwareOptions } from "./useSystemHardwareOptions";
-import { BaseControls } from "./BaseControls";
 
 function getWindowSize() {
 	return {

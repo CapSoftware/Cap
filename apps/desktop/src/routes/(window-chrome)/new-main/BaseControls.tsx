@@ -1,12 +1,12 @@
+import { createMutation } from "@tanstack/solid-query";
 import { onMount } from "solid-js";
+import { createCameraMutation } from "~/utils/queries";
+import { commands } from "~/utils/tauri";
+import { useRecordingOptions } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
 import { useSystemHardwareOptions } from "./useSystemHardwareOptions";
-import { useRecordingOptions } from "../OptionsContext";
-import { createCameraMutation } from "~/utils/queries";
-import { createMutation } from "@tanstack/solid-query";
-import { commands } from "~/utils/tauri";
 
 export function BaseControls() {
 	const { rawOptions, setOptions } = useRecordingOptions();

@@ -5,12 +5,12 @@ import {
 	listVideoDevices,
 	listWindows,
 } from "~/utils/queries";
-import { useRecordingOptions } from "../OptionsContext";
 import type {
 	CameraInfo,
 	DeviceOrModelID,
 	ScreenCaptureTarget,
 } from "~/utils/tauri";
+import { useRecordingOptions } from "../OptionsContext";
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {

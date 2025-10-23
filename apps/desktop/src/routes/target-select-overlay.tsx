@@ -35,11 +35,11 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import { BaseControls } from "./(window-chrome)/new-main/BaseControls";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { BaseControls } from "./(window-chrome)/new-main/BaseControls";
 
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 100;
