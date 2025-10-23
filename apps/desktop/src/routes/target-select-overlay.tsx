@@ -39,6 +39,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { BaseControls } from "./(window-chrome)/new-main/BaseControls";
 
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 100;
@@ -945,6 +946,11 @@ function RecordingControls(props: {
 					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
+
+			<div class="bg-gray-1 p-3 m-2 rounded-md">
+				<BaseControls />
+			</div>
+
 			<div
 				onClick={() => props.setToggleModeSelect?.(true)}
 				class="flex gap-1 items-center mb-5 transition-opacity duration-200 hover:opacity-60"
