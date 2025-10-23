@@ -5,6 +5,7 @@ import clsx from "clsx";
 import moment from "moment";
 import Link from "next/link";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import type { NotificationType } from "@/lib/Notification";
 
 type NotificationItemProps = {
@@ -45,17 +46,12 @@ export const NotificationItem = ({
 		>
 			{/* Avatar */}
 			<div className="relative flex-shrink-0">
-				{notification.author.avatar ? (
-					<img
-						src={notification.author.avatar}
-						alt={notification.author.name}
-						className="object-cover rounded-full size-10"
-					/>
-				) : (
-					<div className="flex justify-center items-center text-xl font-medium text-white bg-purple-500 rounded-full size-10">
-						{notification.author.name.charAt(0)}
-					</div>
-				)}
+				<SignedImageUrl
+					image={notification.author.avatar}
+					name={notification.author.name}
+					className="relative flex-shrink-0 size-7"
+					letterClass="text-sm"
+				/>
 				{notification.readAt === null && (
 					<div className="absolute top-0 right-0 size-2.5 rounded-full bg-red-500 border-2 border-gray-1"></div>
 				)}
