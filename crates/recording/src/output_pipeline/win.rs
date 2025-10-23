@@ -1,6 +1,5 @@
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
-use anyhow::Context;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
 use futures::channel::oneshot;
@@ -64,7 +63,7 @@ impl Muxer for WindowsMuxer {
             .transpose()?;
 
         let output = Arc::new(Mutex::new(output));
-        let (ready_tx, ready_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         {
             let output = output.clone();
@@ -127,14 +126,14 @@ impl Muxer for WindowsMuxer {
                     Ok(encoder) => {
                         if ready_tx.send(Ok(())).is_err() {
                             error!("Failed to send ready signal - receiver dropped");
-                            return;
+                            return Ok(());
                         }
                         encoder
                     }
                     Err(e) => {
-                        error!("Encoder setup failed: {}", e);
-                        let _ = ready_tx.send(Err(e));
-                        return;
+                        error!("Encoder setup failed: {:#}", e);
+                        let _ = ready_tx.send(Err(anyhow!("{e}")));
+                        return Err(anyhow!("{e}"));
                     }
                 };
 
@@ -169,7 +168,7 @@ impl Muxer for WindowsMuxer {
                                     Ok(())
                                 },
                             )
-                            .unwrap();
+                            .context("run native encoder")
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
@@ -185,20 +184,17 @@ impl Muxer for WindowsMuxer {
 
                             use scap_ffmpeg::AsFFmpeg;
 
-                            if let Err(e) =
-                                frame
-                                    .as_ffmpeg()
-                                    .context("frame as_ffmpeg")
-                                    .and_then(|frame| {
-                                        encoder
-                                            .queue_frame(frame, time, &mut output)
-                                            .context("queue_frame")
-                                    })
-                            {
-                                error!("{e}");
-                                return;
-                            }
+                            frame
+                                .as_ffmpeg()
+                                .context("frame as_ffmpeg")
+                                .and_then(|frame| {
+                                    encoder
+                                        .queue_frame(frame, time, &mut output)
+                                        .context("queue_frame")
+                                })?;
                         }
+
+                        Ok(())
                     }
                 }
             });

@@ -384,6 +384,12 @@ impl Capturer {
     }
 }
 
+impl Drop for Capturer {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
 pub struct Frame {
     width: u32,
     height: u32,

@@ -197,15 +197,13 @@ impl output_pipeline::VideoSource for VideoSource {
                         }
                         Err(e) => {
                             error!("Failed to create GraphicsCaptureItem on capture thread: {}", e);
-                            let _ = error_tx.send(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
-                            return;
+                            return Err(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
                         }
                     }
                 }
                 None => {
                     error!("Display not found for ID: {:?}", display_id);
-                    let _ = error_tx.send(anyhow!("Display not found for ID: {:?}", display_id));
-                    return;
+                    return Err(anyhow!("Display not found for ID: {:?}", display_id));
                 }
             };
 
@@ -246,15 +244,13 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
                 Err(e) => {
                     error!("Failed to create D3D capturer: {}", e);
-                    let _ = error_tx.send(e.into());
-                    return;
+                    return Err(e.into());
                 }
             };
 
             let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
                 error!("Failed to receive Start control message - channel disconnected");
-                let _ = error_tx.send(anyhow!("Control channel disconnected before Start"));
-                return;
+                return Err(anyhow!("Control channel disconnected before Start"));
             };
 
             tokio_rt.spawn(
@@ -279,19 +275,21 @@ impl output_pipeline::VideoSource for VideoSource {
             }
             if reply.send(start_result).is_err() {
                 error!("Failed to send start result - receiver dropped");
-                return;
+                return Ok(());
             }
 
             let Ok(VideoControl::Stop(reply)) = ctrl_rx.recv() else {
                 trace!("Failed to receive Stop control message - channel disconnected (expected during shutdown)");
-                return;
+                return Ok(());
             };
 
             if reply.send(capturer.stop().map_err(Into::into)).is_err() {
-                return;
+            	return Ok(());
             }
 
-            drop(drop_guard)
+            drop(drop_guard);
+
+            Ok(())
         });
 
         ctx.tasks().spawn("d3d-capture", async move {
