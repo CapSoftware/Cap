@@ -694,11 +694,7 @@ async function AuthorizedContent({
 						Effect.fn(function* (c) {
 							return Object.assign(c, {
 								authorImage: yield* Option.fromNullable(c.authorImage).pipe(
-									Option.map((v) =>
-										imageUploads.resolveImageUrl(
-											v as ImageUpload.ImageUrlOrKey,
-										),
-									),
+									Option.map(imageUploads.resolveImageUrl),
 									Effect.transposeOption,
 									Effect.map(Option.getOrNull),
 								),

@@ -24,9 +24,7 @@ export default async function DashboardLayout({
 }) {
 	const user = await getCurrentUser();
 
-	if (!user || !user.id) {
-		redirect("/login");
-	}
+	if (!user) redirect("/login");
 
 	if (!user.name || user.name.length === 0) {
 		redirect("/onboarding/welcome");
@@ -82,7 +80,6 @@ export default async function DashboardLayout({
 				organizationData={organizationSelect}
 				activeOrganization={activeOrganization || null}
 				spacesData={spacesData}
-				user={user}
 				isSubscribed={isSubscribed}
 				initialTheme={theme as "light" | "dark"}
 				initialSidebarCollapsed={sidebar === "true"}

@@ -104,7 +104,6 @@ const Top = () => {
 						<SignedImageUrl
 							image={activeSpace.iconUrl}
 							name={activeSpace?.name}
-							type="organization"
 							letterClass="text-xs"
 							className="relative flex-shrink-0 size-5"
 						/>
@@ -262,9 +261,8 @@ const User = () => {
 					>
 						<div className="flex items-center">
 							<SignedImageUrl
-								image={user.image}
+								image={user.imageUrl}
 								name={user.name ?? "User"}
-								type="user"
 								letterClass="text-xs lg:text-md"
 								className="flex-shrink-0 size-[24px] text-gray-12"
 							/>

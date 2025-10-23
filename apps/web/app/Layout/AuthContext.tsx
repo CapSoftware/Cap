@@ -1,13 +1,15 @@
 "use client";
 
-import type { ImageUpload, User } from "@cap/web-domain";
+import type { ImageUpload, Organisation, User } from "@cap/web-domain";
 import { createContext, use } from "react";
 
-type CurrentUser = {
+export type CurrentUser = {
 	id: User.UserId;
 	email: string;
 	name: string | null;
+	lastName: string | null;
 	imageUrl: ImageUpload.ImageUrl | null;
+	defaultOrgId: Organisation.OrganisationId | null;
 	isPro: boolean;
 };
 

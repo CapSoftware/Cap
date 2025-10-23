@@ -5,6 +5,7 @@ import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
+import type { ImageUpload } from "@cap/web-domain";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
@@ -31,7 +32,7 @@ export const ShareHeader = ({
 }: {
 	data: typeof videos.$inferSelect & {
 		ownerName?: string | null;
-		ownerImage?: string | null;
+		ownerImage?: ImageUpload.ImageUrl | null;
 		ownerIsPro?: boolean;
 	};
 	customDomain?: string | null;
@@ -240,7 +241,6 @@ export const ShareHeader = ({
 									<SignedImageUrl
 										name={data.ownerName ?? "User"}
 										image={data.ownerImage}
-										type="user"
 										className="size-8"
 										letterClass="text-base"
 									/>

@@ -79,7 +79,6 @@ const CommentComponent: React.FC<{
 					<SignedImageUrl
 						image={comment.authorImage}
 						name={comment.authorName}
-						type="user"
 						className="size-6"
 						letterClass="text-sm"
 					/>

@@ -42,9 +42,7 @@ export const makeCurrentUser = (
 		id: user.id,
 		email: user.email,
 		activeOrganizationId: user.activeOrganizationId,
-		iconUrlOrKey: Option.fromNullable(
-			user.image as ImageUpload.ImageUrlOrKey | null,
-		),
+		iconUrlOrKey: Option.fromNullable(user.image),
 	});
 
 export const makeCurrentUserLayer = (

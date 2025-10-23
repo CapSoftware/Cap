@@ -38,9 +38,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 				if (payload.image) {
 					yield* imageUploads.applyUpdate({
 						payload: payload.image,
-						existing: Option.fromNullable(
-							organisation.iconUrl as ImageUpload.ImageUrlOrKey | null,
-						),
+						existing: Option.fromNullable(organisation.iconUrl),
 						keyPrefix: `organisations/${organisation.id}`,
 						update: (db, urlOrKey) =>
 							db

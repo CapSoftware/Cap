@@ -81,7 +81,6 @@ export const OrganizationIcon = () => {
 				previewIconSize={20}
 				id={iconInputId}
 				name="icon"
-				type="organization"
 				onChange={(file) => {
 					if (!file || !organizationId) return;
 					uploadIcon.mutate({ organizationId, file });

@@ -78,7 +78,6 @@ const Orgs = ({
 			<SignedImageUrl
 				image={activeOrg?.organization.iconUrl}
 				name={activeOrg?.organization.name ?? "No organization found"}
-				type="organization"
 				letterClass="text-xs"
 				className="relative flex-shrink-0 mx-auto size-6"
 			/>
@@ -138,7 +137,6 @@ const OrgsMenu = ({
 							<SignedImageUrl
 								image={organization.organization.iconUrl}
 								name={organization.organization.name}
-								type="organization"
 								letterClass="text-xs"
 								className="relative flex-shrink-0 size-5"
 							/>

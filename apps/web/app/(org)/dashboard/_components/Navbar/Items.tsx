@@ -127,7 +127,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											name={
 												activeOrg?.organization.name ?? "No organization found"
 											}
-											type="organization"
 											letterClass={clsx(
 												sidebarCollapsed ? "text-sm" : "text-[13px]",
 											)}
@@ -216,7 +215,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 														<SignedImageUrl
 															image={organization.organization.iconUrl}
 															name={organization.organization.name}
-															type="organization"
 															letterClass="text-xs"
 															className="relative flex-shrink-0 size-5"
 														/>

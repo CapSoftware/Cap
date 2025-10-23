@@ -9,7 +9,7 @@ import {
 	Input,
 	Select,
 } from "@cap/ui";
-import { Organisation } from "@cap/web-domain";
+import { type ImageUpload, Organisation } from "@cap/web-domain";
 import { useMutation } from "@tanstack/react-query";
 import { Effect, Option } from "effect";
 import { useRouter } from "next/navigation";
@@ -22,9 +22,9 @@ import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings } from "./server";
 
-export const Settings = ({ user }: { user: typeof users.$inferSelect }) => {
+export const Settings = () => {
 	const router = useRouter();
-	const { organizationData } = useDashboardContext();
+	const { organizationData, user } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
 	const [defaultOrgId, setDefaultOrgId] = useState<
@@ -33,9 +33,9 @@ export const Settings = ({ user }: { user: typeof users.$inferSelect }) => {
 	const firstNameId = useId();
 	const lastNameId = useId();
 	const contactEmailId = useId();
-	const initialProfileImage = user?.image ?? null;
+	const initialProfileImage = user?.imageUrl ?? null;
 	const [profileImageOverride, setProfileImageOverride] = useState<
-		string | null | undefined
+		ImageUpload.ImageUrl | null | undefined
 	>(undefined);
 	const profileImagePreviewUrl =
 		profileImageOverride !== undefined
@@ -250,7 +250,6 @@ export const Settings = ({ user }: { user: typeof users.$inferSelect }) => {
 									className="size-5"
 									image={org.organization.iconUrl}
 									name={org.organization.name}
-									type="organization"
 								/>
 							),
 						}))}

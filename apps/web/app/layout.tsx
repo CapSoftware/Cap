@@ -91,11 +91,11 @@ export default ({ children }: PropsWithChildren) =>
 					return {
 						id: u.id,
 						name: u.name,
+						lastName: u.lastName,
+						defaultOrgId: u.defaultOrgId,
 						email: u.email,
 						imageUrl: u.image
-							? yield* imageUploads.resolveImageUrl(
-									u.image as ImageUpload.ImageUrlOrKey,
-								)
+							? yield* imageUploads.resolveImageUrl(u.image)
 							: null,
 						isPro: userIsPro(u),
 					};

@@ -168,7 +168,6 @@ export const MembersIndicator = ({
 											<SignedImageUrl
 												name={member.name || member.email}
 												image={member.image || undefined}
-												type="user"
 												className="size-8"
 												letterClass="text-sm"
 											/>

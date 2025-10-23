@@ -24,8 +24,8 @@ export type Organization = {
 	members: (typeof organizationMembers.$inferSelect & {
 		user: Pick<
 			typeof users.$inferSelect,
-			"id" | "name" | "email" | "lastName" | "image"
-		>;
+			"id" | "name" | "email" | "lastName"
+		> & { image?: ImageUpload.ImageUrl | null };
 	})[];
 	invites: (typeof organizationInvites.$inferSelect)[];
 	inviteQuota: number;
@@ -176,9 +176,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									return {
 										...row,
 										iconUrl: row.iconUrl
-											? yield* imageUploads.resolveImageUrl(
-													row.iconUrl as ImageUpload.ImageUrlOrKey,
-												)
+											? yield* imageUploads.resolveImageUrl(row.iconUrl)
 											: null,
 									};
 								}),
@@ -233,8 +231,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				const allSpacesEntry = await Effect.gen(function* () {
 					const imageUploads = yield* ImageUploads;
 
-					const iconUrl = activeOrgInfo.organization
-						.iconUrl as ImageUpload.ImageUrlOrKey;
+					const iconUrl = activeOrgInfo.organization.iconUrl;
 
 					return {
 						id: activeOrgInfo.organization.id,
@@ -334,12 +331,23 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							organization: {
 								...organization,
 								iconUrl: organization.iconUrl
-									? yield* iconImages.resolveImageUrl(
-											organization.iconUrl as ImageUpload.ImageUrlOrKey,
-										)
+									? yield* iconImages.resolveImageUrl(organization.iconUrl)
 									: null,
 							},
-							members: allMembers.map((m) => ({ ...m.member, user: m.user! })),
+							members: yield* Effect.all(allMembers.map(
+								Effect.fn(function* (m) {
+									const imageUploads = yield* ImageUploads;
+									return {
+										...m.member,
+										user: {
+											...m.user!,
+											image: m.user!.image
+												? yield* imageUploads.resolveImageUrl(m.user!.image)
+												: null,
+										},
+									};
+								}),
+							)),
 							invites: organizationInvitesData.filter(
 								(invite) => invite.organizationId === organization.id,
 							),
