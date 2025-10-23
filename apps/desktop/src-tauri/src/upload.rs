@@ -712,11 +712,14 @@ fn multipart_uploader(
                             let url = Uri::from_str(&presigned_url).map_err(|err| {
                                 format!("uploader/part/{part_number}/invalid_url: {err:?}")
                             })?;
-                            let mut req =
-                                get_retryable_client(url.host().unwrap_or("<unknown>").to_string())
-                                    .map_err(|err| {
-                                        format!("uploader/part/{part_number}/client: {err:?}")
-                                    })?
+                            let host = url.host()
+                                .ok_or_else(|| format!("uploader/part/{part_number}/missing_host"))?
+                                .to_string();
+                            let client = get_retryable_client(host)
+                                .map_err(|err| {
+                                    format!("uploader/part/{part_number}/client: {err:?}")
+                                })?;
+                            let mut req = client
                                     .put(&presigned_url)
                                     .header("Content-Length", chunk.len())
                                     .timeout(Duration::from_secs(5 * 60))
@@ -795,8 +798,12 @@ pub async fn singlepart_uploader(
 
     let url = Uri::from_str(&presigned_url)
         .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let resp = get_retryable_client(url.host().unwrap_or("<unknown>").to_string())
-        .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
+    let host = url.host()
+        .ok_or_else(|| "singlepart_uploader/missing_host".to_string())?
+        .to_string();
+    let client = get_retryable_client(host)
+        .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?;
+    let resp = client
         .put(&presigned_url)
         .header("Content-Length", total_size)
         .body(reqwest::Body::wrap_stream(stream))
