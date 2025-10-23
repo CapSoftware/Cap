@@ -455,7 +455,6 @@ impl H264Encoder {
                                     windows::core::HRESULT(0),
                                     "Too many consecutive empty samples",
                                 ));
-                                panic!("Too many consecutive empty samples");
                             }
                         }
                     }
