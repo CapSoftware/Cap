@@ -16,6 +16,7 @@ import { runPromise } from "@/lib/server";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./Layout/AuthContext";
+import { resolveCurrentUser } from "./Layout/current-user";
 import { GTag } from "./Layout/GTag";
 import { MetaPixel } from "./Layout/MetaPixel";
 import { PosthogIdentify } from "./Layout/PosthogIdentify";
@@ -82,27 +83,7 @@ export const dynamic = "force-dynamic";
 
 export default ({ children }: PropsWithChildren) =>
 	Effect.gen(function* () {
-		const imageUploads = yield* ImageUploads;
 		const bootstrapData = yield* Effect.promise(getBootstrapData);
-		const userPromise = Effect.promise(getCurrentUser).pipe(
-			Effect.flatMap(
-				Effect.fn(function* (u) {
-					if (!u) return null;
-					return {
-						id: u.id,
-						name: u.name,
-						lastName: u.lastName,
-						defaultOrgId: u.defaultOrgId,
-						email: u.email,
-						imageUrl: u.image
-							? yield* imageUploads.resolveImageUrl(u.image)
-							: null,
-						isPro: userIsPro(u),
-					};
-				}),
-			),
-			runPromise,
-		);
 
 		return (
 			<html className={defaultFont.className} lang="en">
@@ -136,7 +117,7 @@ export default ({ children }: PropsWithChildren) =>
 					/>
 					<TooltipPrimitive.Provider>
 						<PostHogProvider bootstrapData={bootstrapData}>
-							<AuthContextProvider user={userPromise}>
+							<AuthContextProvider user={runPromise(resolveCurrentUser)}>
 								<SessionProvider>
 									<StripeContextProvider
 										plans={

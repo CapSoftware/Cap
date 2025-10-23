@@ -1,6 +1,9 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { AuthContextProvider } from "@/app/Layout/AuthContext";
+import { resolveCurrentUser } from "@/app/Layout/current-user";
+import { runPromise } from "@/lib/server";
 import DashboardInner from "./_components/DashboardInner";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
@@ -23,7 +26,6 @@ export default async function DashboardLayout({
 	children: React.ReactNode;
 }) {
 	const user = await getCurrentUser();
-
 	if (!user) redirect("/login");
 
 	if (!user.name || user.name.length === 0) {
@@ -73,29 +75,31 @@ export default async function DashboardLayout({
 	const referClicked = (await cookies()).get("referClicked")?.value ?? "false";
 
 	return (
-		<UploadingProvider>
-			<DashboardContexts
-				organizationSettings={organizationSettings}
-				userCapsCount={userCapsCount}
-				organizationData={organizationSelect}
-				activeOrganization={activeOrganization || null}
-				spacesData={spacesData}
-				isSubscribed={isSubscribed}
-				initialTheme={theme as "light" | "dark"}
-				initialSidebarCollapsed={sidebar === "true"}
-				anyNewNotifications={anyNewNotifications}
-				userPreferences={userPreferences}
-				referClicked={referClicked === "true"}
-			>
-				<div className="bg-gray-2 dashboard-grid">
-					<DesktopNav />
-					<div className="flex h-full [grid-area:main] focus:outline-none">
-						<MobileNav />
-						<DashboardInner>{children}</DashboardInner>
+		<AuthContextProvider user={runPromise(resolveCurrentUser)}>
+			<UploadingProvider>
+				<DashboardContexts
+					organizationSettings={organizationSettings}
+					userCapsCount={userCapsCount}
+					organizationData={organizationSelect}
+					activeOrganization={activeOrganization || null}
+					spacesData={spacesData}
+					isSubscribed={isSubscribed}
+					initialTheme={theme as "light" | "dark"}
+					initialSidebarCollapsed={sidebar === "true"}
+					anyNewNotifications={anyNewNotifications}
+					userPreferences={userPreferences}
+					referClicked={referClicked === "true"}
+				>
+					<div className="bg-gray-2 dashboard-grid">
+						<DesktopNav />
+						<div className="flex h-full [grid-area:main] focus:outline-none">
+							<MobileNav />
+							<DashboardInner>{children}</DashboardInner>
+						</div>
+						<MobileTab />
 					</div>
-					<MobileTab />
-				</div>
-			</DashboardContexts>
-		</UploadingProvider>
+				</DashboardContexts>
+			</UploadingProvider>
+		</AuthContextProvider>
 	);
 }
