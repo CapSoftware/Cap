@@ -1880,7 +1880,10 @@ async fn check_notification_permissions(app: AppHandle) {
 #[specta::specta]
 #[instrument(skip(app))]
 async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
-    app.write().await.server_url = server_url;
+    let mut app = app.write().await;
+    posthog::set_server_url(&server_url);
+    app.server_url = server_url;
+
     Ok(())
 }
 
@@ -2223,6 +2226,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             {
+                let server_url = std::option_env!("VITE_SERVER_URL")
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        GeneralSettingsStore::get(&app)
+                            .ok()
+                            .flatten()
+                            .map(|v| v.server_url.clone())
+                    })
+                    .unwrap_or_else(|| "https://cap.so".to_string());
+                posthog::set_server_url(&server_url);
+
                 app.manage(Arc::new(RwLock::new(App {
                     camera_ws_port,
                     handle: app.clone(),
@@ -2231,15 +2245,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     recording_logging_handle,
                     mic_feed,
                     camera_feed,
-                    server_url: std::option_env!("VITE_SERVER_URL")
-                        .map(|s| s.to_string())
-                        .or_else(|| {
-                            GeneralSettingsStore::get(&app)
-                                .ok()
-                                .flatten()
-                                .map(|v| v.server_url.clone())
-                        })
-                        .unwrap_or_else(|| "https://cap.so".to_string()),
+                    server_url,
                     logs_dir: logs_dir.clone(),
                 })));
 
