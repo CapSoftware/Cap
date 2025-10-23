@@ -6,7 +6,7 @@ import { spaces } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
 import { ImageUpload, type Space } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
 import { runPromise } from "@/lib/server";
@@ -47,8 +47,8 @@ export async function uploadSpaceIcon(
 	if (!file.type.startsWith("image/")) {
 		throw new Error("File must be an image");
 	}
-	if (file.size > 2 * 1024 * 1024) {
-		throw new Error("File size must be less than 2MB");
+	if (file.size > 1024 * 1024) {
+		throw new Error("File size must be less than 1MB");
 	}
 
 	// Prepare new file key
@@ -81,13 +81,12 @@ export async function uploadSpaceIcon(
 		}
 
 		const sanitizedFile = await sanitizeFile(file);
+		const arrayBuffer = await sanitizedFile.arrayBuffer();
 
 		await bucket
-			.putObject(
-				fileKey,
-				Effect.promise(() => sanitizedFile.bytes()),
-				{ contentType: file.type },
-			)
+			.putObject(fileKey, new Uint8Array(arrayBuffer), {
+				contentType: file.type,
+			})
 			.pipe(runPromise);
 
 		await db()
