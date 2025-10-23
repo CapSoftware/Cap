@@ -779,6 +779,9 @@ function Inner() {
 												screen: params.displayId!,
 												bounds,
 											}}
+											showBackground={
+												controlsPlacement().position === "inside-bottom"
+											}
 										/>
 										<ShowCapFreeWarning
 											isInstantMode={rawOptions.mode === "instant"}
@@ -808,9 +811,11 @@ function Inner() {
 									</p>
 								</Show>
 								<Show when={hasArea()}>
-									<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
-										Click and drag to create new area
-									</p>
+									<Show when={controlsPlacement().position !== "inside-bottom"}>
+										<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
+											Click and drag to create new area
+										</p>
+									</Show>
 								</Show>
 							</Show>
 						</div>
@@ -824,6 +829,7 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	showBackground?: boolean;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -991,7 +997,12 @@ function RecordingControls(props: {
 			</div>
 			<div
 				onClick={() => props.setToggleModeSelect?.(true)}
-				class="flex gap-1 items-center mb-5 transition-opacity duration-200 hover:opacity-60"
+				class="flex gap-1 items-center mb-5 transition-all duration-200"
+				classList={{
+					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
+						props.showBackground,
+					"hover:opacity-60": props.showBackground,
+				}}
 			>
 				<IconCapInfo class="opacity-70 will-change-transform size-3" />
 				<p class="text-sm text-white">
