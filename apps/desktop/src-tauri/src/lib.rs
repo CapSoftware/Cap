@@ -2227,7 +2227,17 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             {
                 let server_url = std::option_env!("VITE_SERVER_URL")
-                    .map(|s| s.to_string())
+                    .map(|s| {
+                        GeneralSettingsStore::update(&app, |state| {
+                            state.server_url = s.to_string();
+                        })
+                        .map_err(|err| {
+                            error!("Error updating server URL to match value from env: {err}")
+                        })
+                        .ok();
+
+                        s.to_string()
+                    })
                     .or_else(|| {
                         GeneralSettingsStore::get(&app)
                             .ok()
