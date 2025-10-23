@@ -29,7 +29,7 @@ export function BaseControls() {
 	});
 
 	return (
-		<div class="space-y-2">
+		<div class="space-x-2 grid grid-cols-3">
 			<CameraSelect
 				disabled={cameras.isPending}
 				options={cameras.data ?? []}
