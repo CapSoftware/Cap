@@ -287,7 +287,9 @@ impl output_pipeline::VideoSource for VideoSource {
             	return Ok(());
             }
 
-            drop(drop_guard)
+            drop(drop_guard);
+
+            Ok(())
         });
 
         ctx.tasks().spawn("d3d-capture", async move {

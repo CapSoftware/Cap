@@ -57,7 +57,7 @@ impl Muxer for WindowsMuxer {
             .transpose()?;
 
         let output = Arc::new(Mutex::new(output));
-        let (ready_tx, ready_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
 
         {
             let output = output.clone();
@@ -119,9 +119,9 @@ impl Muxer for WindowsMuxer {
                         encoder
                     }
                     Err(e) => {
-                        error!("Encoder setup failed: {}", e);
-                        let _ = ready_tx.send(Err(e.into()));
-                        return Err(e.into());
+                        error!("Encoder setup failed: {:#}", e);
+                        let _ = ready_tx.send(Err(anyhow!("{e}")));
+                        return Err(anyhow!("{e}"));
                     }
                 };
 
