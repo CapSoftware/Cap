@@ -71,6 +71,7 @@ import SystemAudio from "./SystemAudio";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import { useSystemHardwareOptions } from "./useSystemHardwareOptions";
 
 function getWindowSize() {
 	return {
@@ -78,15 +79,6 @@ function getWindowSize() {
 		height: 256,
 	};
 }
-
-const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
-	return cameras.find((c) => {
-		if (!id) return false;
-		return "DeviceID" in id
-			? id.DeviceID === c.device_id
-			: id.ModelID === c.model_id;
-	});
-};
 
 type WindowListItem = Pick<
 	CaptureWindow,
@@ -326,9 +318,8 @@ function Page() {
 		refetchInterval: false,
 	}));
 
-	const screens = useQuery(() => listScreens);
-	const windows = useQuery(() => listWindows);
-
+	const { screens, windows, cameras, mics, options } =
+		useSystemHardwareOptions();
 	const hasDisplayTargetsData = () => displayTargets.status === "success";
 	const hasWindowTargetsData = () => windowTargets.status === "success";
 
@@ -449,9 +440,6 @@ function Page() {
 		if (!monitor) return;
 	});
 
-	const cameras = useQuery(() => listVideoDevices);
-	const mics = useQuery(() => listAudioDevices);
-
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
 	);
@@ -494,73 +482,61 @@ function Page() {
 		void displayTargets.refetch();
 	});
 
-	cameras.promise.then((cameras) => {
-		if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
-			setOptions("cameraLabel", null);
-		}
-	});
+	// const options = {
+	// 	screen: () => {
+	// 		let screen;
 
-	mics.promise.then((mics) => {
-		if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
-			setOptions("micName", null);
-		}
-	});
+	// 		if (rawOptions.captureTarget.variant === "display") {
+	// 			const screenId = rawOptions.captureTarget.id;
+	// 			screen =
+	// 				screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+	// 		} else if (rawOptions.captureTarget.variant === "area") {
+	// 			const screenId = rawOptions.captureTarget.screen;
+	// 			screen =
+	// 				screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+	// 		}
 
-	const options = {
-		screen: () => {
-			let screen;
+	// 		return screen;
+	// 	},
+	// 	window: () => {
+	// 		let win;
 
-			if (rawOptions.captureTarget.variant === "display") {
-				const screenId = rawOptions.captureTarget.id;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
-			} else if (rawOptions.captureTarget.variant === "area") {
-				const screenId = rawOptions.captureTarget.screen;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
-			}
+	// 		if (rawOptions.captureTarget.variant === "window") {
+	// 			const windowId = rawOptions.captureTarget.id;
+	// 			win = windows.data?.find((s) => s.id === windowId) ?? windows.data?.[0];
+	// 		}
 
-			return screen;
-		},
-		window: () => {
-			let win;
-
-			if (rawOptions.captureTarget.variant === "window") {
-				const windowId = rawOptions.captureTarget.id;
-				win = windows.data?.find((s) => s.id === windowId) ?? windows.data?.[0];
-			}
-
-			return win;
-		},
-		camera: () => {
-			if (!rawOptions.cameraID) return undefined;
-			return findCamera(cameras.data || [], rawOptions.cameraID);
-		},
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
-		target: (): ScreenCaptureTarget | undefined => {
-			switch (rawOptions.captureTarget.variant) {
-				case "display": {
-					const screen = options.screen();
-					if (!screen) return;
-					return { variant: "display", id: screen.id };
-				}
-				case "window": {
-					const window = options.window();
-					if (!window) return;
-					return { variant: "window", id: window.id };
-				}
-				case "area": {
-					const screen = options.screen();
-					if (!screen) return;
-					return {
-						variant: "area",
-						bounds: rawOptions.captureTarget.bounds,
-						screen: screen.id,
-					};
-				}
-			}
-		},
-	};
+	// 		return win;
+	// 	},
+	// 	camera: () => {
+	// 		if (!rawOptions.cameraID) return undefined;
+	// 		return findCamera(cameras.data || [], rawOptions.cameraID);
+	// 	},
+	// 	micName: () => mics.data?.find((name) => name === rawOptions.micName),
+	// 	target: (): ScreenCaptureTarget | undefined => {
+	// 		switch (rawOptions.captureTarget.variant) {
+	// 			case "display": {
+	// 				const screen = options.screen();
+	// 				if (!screen) return;
+	// 				return { variant: "display", id: screen.id };
+	// 			}
+	// 			case "window": {
+	// 				const window = options.window();
+	// 				if (!window) return;
+	// 				return { variant: "window", id: window.id };
+	// 			}
+	// 			case "area": {
+	// 				const screen = options.screen();
+	// 				if (!screen) return;
+	// 				return {
+	// 					variant: "area",
+	// 					bounds: rawOptions.captureTarget.bounds,
+	// 					screen: screen.id,
+	// 				};
+	// 			}
+	// 		}
+	// 	},
+	// };
 
 	createEffect(() => {
 		const target = options.target();
