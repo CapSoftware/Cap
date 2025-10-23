@@ -270,22 +270,54 @@ function Inner() {
 					const [controlsHeight, setControlsHeight] = createSignal<
 						number | undefined
 					>(undefined);
-					// Recompute placement when bounds change or window resizes
-					const placeControlsAbove = createMemo(() => {
+					const [controlsWidth, setControlsWidth] = createSignal<
+						number | undefined
+					>(undefined);
+
+					// Determine the best placement for controls
+					const controlsPlacement = createMemo(() => {
 						const top = bounds.position.y;
+						const left = bounds.position.x;
+						const width = bounds.size.width;
 						const height = bounds.size.height;
-						// Measure controls height (fallback to 64px if not yet mounted)
+						// Measure controls dimensions (fallback if not yet mounted)
 						const ctrlH = controlsHeight() ?? 64;
+						const ctrlW = controlsWidth() ?? 300;
 						const margin = 16;
 
+						// Check if selection spans full height (or nearly full height)
+						const isFullHeight = height >= window.innerHeight * 0.9;
+
+						if (isFullHeight) {
+							// Try to place on the right side
+							const rightSpace = window.innerWidth - (left + width);
+							if (rightSpace >= ctrlW + margin) {
+								return { position: "right" as const };
+							}
+
+							// Try to place on the left side
+							if (left >= ctrlW + margin) {
+								return { position: "left" as const };
+							}
+
+							// Fall back to inside at the bottom
+							return { position: "inside-bottom" as const };
+						}
+
+						// For non-full-height selections, use original logic
 						const wouldOverflow =
 							top + height + margin + ctrlH > window.innerHeight;
-						return wouldOverflow;
+						return { position: wouldOverflow ? "above" : "below" } as const;
 					});
-					onMount(() => setControlsHeight(controlsEl?.offsetHeight));
-					createEventListener(window, "resize", () =>
-						setControlsHeight(controlsEl?.offsetHeight),
-					);
+
+					onMount(() => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
+					createEventListener(window, "resize", () => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
 
 					function createOnMouseDown(
 						onDrag: (
@@ -725,9 +757,24 @@ function Inner() {
 										ref={controlsEl}
 										class={cx(
 											"flex absolute flex-col items-center m-2",
-											placeControlsAbove() ? "bottom-full" : "top-full",
+											controlsPlacement().position === "above" && "bottom-full",
+											controlsPlacement().position === "below" && "top-full",
+											controlsPlacement().position === "right" &&
+												"left-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "left" &&
+												"right-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "inside-bottom" &&
+												"bottom-2 left-1/2 -translate-x-1/2",
 										)}
-										style={{ width: `${bounds.size.width}px` }}
+										style={{
+											width:
+												controlsPlacement().position === "right" ||
+												controlsPlacement().position === "left"
+													? "auto"
+													: controlsPlacement().position === "inside-bottom"
+														? "auto"
+														: `${bounds.size.width}px`,
+										}}
 									>
 										<RecordingControls
 											target={{
