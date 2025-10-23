@@ -1,12 +1,14 @@
 ---
-title: Uploader and audio improvements
+title: Instant Mode resolution picker + Improvements to audio and uploader
 app: Cap Desktop
-publishedAt: “2025-10-21”
+publishedAt: “2025-10-23”
 version: 0.3.77
 image:
 ---
 
-- **Uploader speed improvements** — Uploads are now done more efficently
-- **Audio recording fixes** — A bug that caused recorded audio to sound choppy should has been mitigated
-- **Upload logs feedback** — Using the 'Upload Logs' tray button will show a dialog if the upload succeeds
+- **New Instant Mode Resolution Picker** — You can now set the resolution of Instant Mode recordings in Settings. Choose from 720p, 1080, 1440p and 4k. Defaults to 1080p.
+- **Uploader speed improvements** — Uploads are now done more efficiently by uploading multiple chunks at the same time, bumping the chunk size to 20mb, and reusing the presigned URL for the last chunk
+- **Audio recording fixes** — A bug that caused recorded audio to sound choppy should now be fixed
+- **Upload logs feedback** — Using the 'Upload Logs' tray button will show a dialog if the logs upload succeeds
+- **Improved area selector** — Drag to select now supported in the new recording flow area selector (enable new recording flow via Settings -> Experimental)
 - **Improved error handling** — Some errors that can occur while recording on Windows will now safely stop recording
