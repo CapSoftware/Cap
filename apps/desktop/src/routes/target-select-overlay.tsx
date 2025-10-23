@@ -779,6 +779,7 @@ function Inner() {
 												screen: params.displayId!,
 												bounds,
 											}}
+											setToggleModeSelect={setToggleModeSelect}
 											showBackground={
 												controlsPlacement().position === "inside-bottom"
 											}
@@ -995,9 +996,9 @@ function RecordingControls(props: {
 					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
-			<div
+			<button
 				onClick={() => props.setToggleModeSelect?.(true)}
-				class="flex gap-1 items-center mb-5 transition-all duration-200"
+				class="cursor-pointer flex gap-1 items-center mb-5 transition-all duration-200"
 				classList={{
 					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
 						props.showBackground,
@@ -1009,7 +1010,7 @@ function RecordingControls(props: {
 					<span class="opacity-70">What is </span>
 					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
 				</p>
-			</div>
+			</button>
 		</Show>
 	);
 }
