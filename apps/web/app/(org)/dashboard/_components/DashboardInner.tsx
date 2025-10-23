@@ -1,9 +1,4 @@
 "use client";
-
-import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { useDashboardContext } from "../Contexts";
-import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import Top from "./Navbar/Top";
 
 export default function DashboardInner({
@@ -11,10 +6,6 @@ export default function DashboardInner({
 }: {
 	children: React.ReactNode;
 }) {
-	const { activeOrganization } = useDashboardContext();
-	const [membersDialogOpen, setMembersDialogOpen] = useState(false);
-	const isSharedCapsPage = usePathname() === "/dashboard/shared-caps";
-
 	return (
 		<div className="flex overflow-hidden w-full flex-col flex-1 md:mt-0 mt-[126px]">
 			<Top />
@@ -33,14 +24,6 @@ export default function DashboardInner({
 					<div className="flex flex-col flex-1 gap-4 min-h-fit">{children}</div>
 				</div>
 			</main>
-			{isSharedCapsPage && activeOrganization?.members && (
-				<MembersDialog
-					open={membersDialogOpen}
-					onOpenChange={setMembersDialogOpen}
-					members={activeOrganization.members}
-					organizationName={activeOrganization.organization.name || ""}
-				/>
-			)}
 		</div>
 	);
 }

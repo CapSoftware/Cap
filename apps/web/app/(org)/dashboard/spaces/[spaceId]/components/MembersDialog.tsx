@@ -1,6 +1,5 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
-import { ImageUpdatePayload } from "@cap/web-domain/src/ImageUpload";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface OrganizationMember {
@@ -45,7 +44,7 @@ export const MembersDialog = ({
 								className="flex items-center p-2 rounded-lg hover:bg-gray-3"
 							>
 								<SignedImageUrl
-									image={member.user?.memberImage || undefined}
+									image={member.user?.memberImage}
 									name={member.user?.name || "User"}
 									className="mr-3 size-8"
 									letterClass="text-md"
