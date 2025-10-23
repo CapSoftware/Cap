@@ -2238,7 +2238,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     (url, false)
                 } else {
                     (
-                        optional_env!("VITE_SERVER_URL")
+                        option_env!("VITE_SERVER_URL")
                             .unwrap_or("https://cap.so")
                             .to_string(),
                         true,
