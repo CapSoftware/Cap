@@ -18,6 +18,7 @@ import type { ImageUpload } from "@cap/web-domain";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -131,6 +132,7 @@ const formSchema = z.object({
 
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const { edit = false, space } = props;
+	const router = useRouter();
 
 	const form = useForm<z.infer<typeof formSchema>>({
 		resolver: zodResolver(formSchema),
@@ -203,11 +205,19 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							if (selectedFile === null && space.iconUrl) {
 								formData.append("removeIcon", "true");
 							}
-							await updateSpace(formData);
+							const result = await updateSpace(formData);
+							if (!result.success) {
+								throw new Error(result.error || "Failed to update space");
+							}
 							toast.success("Space updated successfully");
+							router.refresh();
 						} else {
-							await createSpace(formData);
+							const result = await createSpace(formData);
+							if (!result.success) {
+								throw new Error(result.error || "Failed to create space");
+							}
 							toast.success("Space created successfully");
+							router.refresh();
 						}
 
 						form.reset();

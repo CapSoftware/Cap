@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { spaceMembers } from "@cap/database/schema";
+import { spaceMembers, spaces } from "@cap/database/schema";
 import { Space, User } from "@cap/web-domain";
 import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -170,25 +170,41 @@ export async function setSpaceMembers(
 	}
 	const { spaceId, userIds, role } = validation.data;
 
+	// Get the space creator to ensure they're always included
+	const [space] = await db()
+		.select({ createdById: spaces.createdById })
+		.from(spaces)
+		.where(eq(spaces.id, spaceId))
+		.limit(1);
+
+	if (!space) {
+		throw new Error("Space not found");
+	}
+
+	// Ensure creator is always included in the member list
+	const allMemberIds = Array.from(new Set([...userIds, space.createdById]));
+
 	// Remove all current members
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 
-	// Insert new members if any
-	if (userIds.length > 0) {
-		const now = new Date();
-		const values = userIds.map((userId) => ({
+	// Insert new members (always at least the creator)
+	const now = new Date();
+	const values = allMemberIds.map((userId) => {
+		// Creator is always Admin, others get the specified role
+		const memberRole = userId === space.createdById ? "Admin" : role;
+		return {
 			id: User.UserId.make(uuidv4().substring(0, nanoIdLength)),
 			spaceId,
 			userId,
-			role,
+			role: memberRole,
 			createdAt: now,
 			updatedAt: now,
-		}));
-		await db().insert(spaceMembers).values(values);
-	}
+		};
+	});
+	await db().insert(spaceMembers).values(values);
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
-	return { success: true, count: userIds.length };
+	return { success: true, count: allMemberIds.length };
 }
 
 const batchRemoveSpaceMembersSchema = z.object({

@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
 import {
+	type ImageUpload,
 	Space,
 	SpaceMemberId,
 	type SpaceMemberRole,
@@ -65,21 +66,50 @@ export async function createSpace(
 
 		// Generate the space ID early so we can use it in the file path
 		const spaceId = Space.SpaceId.make(nanoId());
+		let iconUrl: ImageUpload.ImageUrlOrKey | null = null;
 
-		// Create the space first
-		await db().insert(spaces).values({
-			id: spaceId,
-			name,
-			organizationId: user.activeOrganizationId,
-			createdById: user.id,
-			iconUrl: null,
-			createdAt: new Date(),
-			updatedAt: new Date(),
+		await db().transaction(async (tx) => {
+			// Create the space first
+			await tx.insert(spaces).values({
+				id: spaceId,
+				name,
+				organizationId: user.activeOrganizationId,
+				createdById: user.id,
+				iconUrl: null,
+			});
+
+			// --- Member Management Logic ---
+			// Collect member user IDs from formData
+			const memberUserIds: string[] = [];
+			for (const entry of formData.getAll("members[]")) {
+				if (typeof entry === "string" && entry.length > 0) {
+					memberUserIds.push(entry);
+				}
+			}
+
+			// Always add the creator as Admin (if not already in the list)
+			if (!memberUserIds.includes(user.id)) {
+				memberUserIds.push(user.id);
+			}
+
+			// Create space members
+			if (memberUserIds.length > 0) {
+				const spaceMembersToInsert = memberUserIds.map((userId) => {
+					// Creator is always Admin, others are member
+					const role: SpaceMemberRole = userId === user.id ? "Admin" : "member";
+					return {
+						id: SpaceMemberId.make(nanoId()),
+						spaceId,
+						userId: User.UserId.make(userId),
+						role,
+					};
+				});
+
+				await tx.insert(spaceMembers).values(spaceMembersToInsert);
+			}
 		});
 
-		// Upload icon if provided
 		const iconFile = formData.get("icon") as File | null;
-		let iconUrl = null;
 
 		if (iconFile) {
 			try {
@@ -89,41 +119,7 @@ export async function createSpace(
 				iconUrl = result.iconUrl;
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
-				// Don't fail the space creation if icon upload fails
-				// The space is already created, just without an icon
 			}
-		}
-
-		// --- Member Management Logic ---
-		// Collect member user IDs from formData
-		const memberUserIds: string[] = [];
-		for (const entry of formData.getAll("members[]")) {
-			if (typeof entry === "string" && entry.length > 0) {
-				memberUserIds.push(entry);
-			}
-		}
-
-		// Always add the creator as Admin (if not already in the list)
-		if (!memberUserIds.includes(user.id)) {
-			memberUserIds.push(user.id);
-		}
-
-		// Create space members
-		if (memberUserIds.length > 0) {
-			const spaceMembersToInsert = memberUserIds.map((userId) => {
-				// Creator is always Admin, others are member
-				const role: SpaceMemberRole = userId === user.id ? "Admin" : "member";
-				return {
-					id: SpaceMemberId.make(nanoId()),
-					spaceId,
-					userId: User.UserId.make(userId),
-					role,
-					createdAt: new Date(),
-					updatedAt: new Date(),
-				};
-			});
-
-			await db().insert(spaceMembers).values(spaceMembersToInsert);
 		}
 
 		revalidatePath("/dashboard");
@@ -131,8 +127,8 @@ export async function createSpace(
 		return {
 			success: true,
 			spaceId,
-			name,
 			iconUrl,
+			name,
 		};
 	} catch (error) {
 		console.error("Error creating space:", error);
