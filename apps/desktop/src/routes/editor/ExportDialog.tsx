@@ -32,7 +32,6 @@ import {
 	commands,
 	type ExportCompression,
 	type ExportSettings,
-	events,
 	type FramesRendered,
 	type UploadProgress,
 } from "~/utils/tauri";
@@ -133,6 +132,11 @@ export function ExportDialog() {
 
 	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
 
+	// Ensure GIF is not selected when exportTo is "link"
+	if (settings.format === "Gif" && settings.exportTo === "link") {
+		setSettings("format", "Mp4");
+	}
+
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
 			projectPath,
@@ -159,8 +163,6 @@ export function ExportDialog() {
 		);
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
-
-	const selectedStyle = "bg-gray-7";
 
 	const projectPath = editorInstance.path;
 
@@ -496,7 +498,20 @@ export function ExportDialog() {
 									<For each={EXPORT_TO_OPTIONS}>
 										{(option) => (
 											<Button
-												onClick={() => setSettings("exportTo", option.value)}
+												onClick={() => {
+													setSettings(
+														produce((newSettings) => {
+															newSettings.exportTo = option.value;
+															// If switching to link and GIF is selected, change to MP4
+															if (
+																option.value === "link" &&
+																settings.format === "Gif"
+															) {
+																newSettings.format = "Mp4";
+															}
+														}),
+													);
+												}}
 												data-selected={settings.exportTo === option.value}
 												class="flex flex-1 gap-2 items-center text-nowrap"
 												variant="gray"
@@ -515,49 +530,62 @@ export function ExportDialog() {
 								<h3 class="text-gray-12">Format</h3>
 								<div class="flex flex-row gap-2">
 									<For each={FORMAT_OPTIONS}>
-										{(option) => (
-											<Button
-												variant="gray"
-												onClick={() => {
-													setSettings(
-														produce((newSettings) => {
-															newSettings.format = option.value as ExportFormat;
+										{(option) => {
+											const isGifDisabled = () =>
+												option.value === "Gif" && settings.exportTo === "link";
 
-															if (
-																option.value === "Gif" &&
-																!(
-																	settings.resolution.value === "720p" ||
-																	settings.resolution.value === "1080p"
-																)
-															)
-																newSettings.resolution = {
-																	...RESOLUTION_OPTIONS._720p,
-																};
+											return (
+												<Button
+													variant="gray"
+													disabled={isGifDisabled()}
+													onClick={() => {
+														if (isGifDisabled()) return;
+														setSettings(
+															produce((newSettings) => {
+																newSettings.format =
+																	option.value as ExportFormat;
 
-															if (
-																option.value === "Gif" &&
-																GIF_FPS_OPTIONS.every(
-																	(v) => v.value === settings.fps,
+																if (
+																	option.value === "Gif" &&
+																	!(
+																		settings.resolution.value === "720p" ||
+																		settings.resolution.value === "1080p"
+																	)
 																)
-															)
-																newSettings.fps = 15;
+																	newSettings.resolution = {
+																		...RESOLUTION_OPTIONS._720p,
+																	};
 
-															if (
-																option.value === "Mp4" &&
-																FPS_OPTIONS.every(
-																	(v) => v.value !== settings.fps,
+																if (
+																	option.value === "Gif" &&
+																	GIF_FPS_OPTIONS.every(
+																		(v) => v.value === settings.fps,
+																	)
 																)
-															)
-																newSettings.fps = 30;
-														}),
-													);
-												}}
-												autofocus={false}
-												data-selected={settings.format === option.value}
-											>
-												{option.label}
-											</Button>
-										)}
+																	newSettings.fps = 15;
+
+																if (
+																	option.value === "Mp4" &&
+																	FPS_OPTIONS.every(
+																		(v) => v.value !== settings.fps,
+																	)
+																)
+																	newSettings.fps = 30;
+															}),
+														);
+													}}
+													autofocus={false}
+													data-selected={settings.format === option.value}
+													class={
+														isGifDisabled()
+															? "opacity-50 cursor-not-allowed"
+															: ""
+													}
+												>
+													{option.label}
+												</Button>
+											);
+										}}
 									</For>
 								</div>
 							</div>
