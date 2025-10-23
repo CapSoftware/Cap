@@ -135,7 +135,7 @@ export const Comments = Object.assign(
 				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
 				authorId: user.id,
 				authorName: user.name,
-				authorImage: user.imageUrl ?? null,
+				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
