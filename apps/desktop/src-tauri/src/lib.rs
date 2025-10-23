@@ -2184,6 +2184,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
 
+            tokio::spawn(async move {
+                target_select_overlay::init(&app).await;
+            });
+
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
                 let app = app.clone();

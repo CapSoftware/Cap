@@ -7,6 +7,7 @@ use std::{
 
 use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
+use futures::future::join_all;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use scap_targets::{
@@ -41,6 +42,28 @@ pub struct DisplayInformation {
     refresh_rate: String,
 }
 
+// We create the windows hidden at app launch so they are ready when used.
+// Otherwise we have noticed they can take a while to load on first interaction (especially on Windows).
+pub async fn init(app: &AppHandle) {
+    join_all(
+        scap_targets::Display::list()
+            .into_iter()
+            .map(|d| d.id())
+            .map(|display_id| {
+                let app = app.clone();
+
+                async move {
+                    ShowCapWindow::TargetSelectOverlay { display_id }
+                        .show(&app)
+                        .await
+                        .map_err(|err| error!("Error initializing target select overlay: {err}"))
+                        .ok();
+                }
+            }),
+    )
+    .await;
+}
+
 #[specta::specta]
 #[tauri::command]
 #[instrument(skip(app, state))]
@@ -49,15 +72,21 @@ pub async fn open_target_select_overlays(
     state: tauri::State<'_, WindowFocusManager>,
     focused_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
-    let displays = scap_targets::Display::list()
-        .into_iter()
-        .map(|d| d.id())
-        .collect::<Vec<_>>();
-    for display_id in displays {
-        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
-            .show(&app)
-            .await;
-    }
+    join_all(
+        scap_targets::Display::list()
+            .into_iter()
+            .map(|d| d.id())
+            .map(|display_id| {
+                let app = app.clone();
+
+                async move {
+                    ShowCapWindow::TargetSelectOverlay { display_id }
+                        .show(&app)
+                        .await
+                }
+            }),
+    )
+    .await;
 
     let handle = tokio::spawn({
         let app = app.clone();
