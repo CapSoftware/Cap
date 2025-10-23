@@ -138,19 +138,26 @@ impl TaskPool {
         ));
     }
 
-    pub fn spawn_thread(&mut self, name: &'static str, cb: impl FnOnce() + Send + 'static) {
+    pub fn spawn_thread(
+        &mut self,
+        name: &'static str,
+        cb: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+    ) {
         let span = error_span!("", task = name);
         let (done_tx, done_rx) = oneshot::channel();
         std::thread::spawn(move || {
             let _guard = span.enter();
             trace!("Task started");
-            cb();
-            let _ = done_tx.send(());
+            let _ = done_tx.send(cb());
             info!("Task finished");
         });
         self.0.push((
             name,
-            tokio::spawn(done_rx.map_err(|_| anyhow!("Cancelled"))),
+            tokio::spawn(
+                done_rx
+                    .map_err(|_| anyhow!("Cancelled"))
+                    .map(|v| v.and_then(|v| v)),
+            ),
         ));
     }
 }
@@ -481,7 +488,10 @@ async fn configure_audio<TMutex: AudioMuxer>(
 
     setup_ctx.tasks().spawn_thread("audio-mixer", {
         let stop_flag = stop_flag.clone();
-        move || audio_mixer.run(audio_tx, ready_tx, stop_flag)
+        move || {
+            audio_mixer.run(audio_tx, ready_tx, stop_flag);
+            Ok(())
+        }
     });
     let _ = ready_rx
         .await

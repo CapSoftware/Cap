@@ -1,6 +1,5 @@
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
-use anyhow::Context;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
 use futures::channel::oneshot;
@@ -130,7 +129,7 @@ impl Muxer for WindowsMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder");
                         let mut first_timestamp = None;
-                        if let Err(e) = encoder
+                        encoder
                             .run(
                                 Arc::new(AtomicBool::default()),
                                 || {
@@ -157,13 +156,7 @@ impl Muxer for WindowsMuxer {
                                     Ok(())
                                 },
                             )
-                        {
-                            error!(
-                                "Hardware encoder failed with error: {} (code: {:?}). This may be due to hardware limitations or driver issues.",
-                                e.message(),
-                                e.code()
-                            );
-                        }
+                            .context("run native encoder")
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
@@ -179,20 +172,17 @@ impl Muxer for WindowsMuxer {
 
                             use scap_ffmpeg::AsFFmpeg;
 
-                            if let Err(e) =
-                                frame
-                                    .as_ffmpeg()
-                                    .context("frame as_ffmpeg")
-                                    .and_then(|frame| {
-                                        encoder
-                                            .queue_frame(frame, time, &mut output)
-                                            .context("queue_frame")
-                                    })
-                            {
-                                error!("{e}");
-                                return;
-                            }
+                            frame
+                                .as_ffmpeg()
+                                .context("frame as_ffmpeg")
+                                .and_then(|frame| {
+                                    encoder
+                                        .queue_frame(frame, time, &mut output)
+                                        .context("queue_frame")
+                                })?;
                         }
+
+                        Ok(())
                     }
                 }
             });
