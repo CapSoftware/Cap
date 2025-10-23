@@ -2226,25 +2226,29 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             });
 
             {
-                let server_url = std::option_env!("VITE_SERVER_URL")
-                    .map(|s| {
-                        GeneralSettingsStore::update(&app, |state| {
-                            state.server_url = s.to_string();
-                        })
-                        .map_err(|err| {
-                            error!("Error updating server URL to match value from env: {err}")
-                        })
-                        .ok();
+                let (server_url, should_update) = if cfg!(debug_assertions)
+                    && let Ok(url) = std::env::var("VITE_SERVER_URL")
+                {
+                    (url, true)
+                } else if let Some(url) = GeneralSettingsStore::get(&app)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.server_url.clone())
+                {
+                    (url, false)
+                } else {
+                    (env!("VITE_SERVER_URL").to_string(), true)
+                };
 
-                        s.to_string()
+                // This ensures settings reflects the correct value if it's set at startup
+                if should_update {
+                    GeneralSettingsStore::update(&app, |mut s| {
+                        s.server_url = server_url.clone();
                     })
-                    .or_else(|| {
-                        GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
-                            .map(|v| v.server_url.clone())
-                    })
-                    .unwrap_or_else(|| "https://cap.so".to_string());
+                    .map_err(|err| warn!("Error updating server URL into settings store: {err}"))
+                    .ok();
+                }
+
                 posthog::set_server_url(&server_url);
 
                 app.manage(Arc::new(RwLock::new(App {
