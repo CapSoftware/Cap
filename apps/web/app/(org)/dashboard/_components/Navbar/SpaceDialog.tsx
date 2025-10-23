@@ -92,7 +92,6 @@ const SpaceDialog = ({
 						disabled={isSubmitting || !spaceName.trim().length}
 						spinner={isSubmitting}
 						onClick={() => formRef.current?.requestSubmit()}
-						type="submit"
 					>
 						{isSubmitting
 							? edit
@@ -156,6 +155,22 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
 	const { activeOrganization } = useDashboardContext();
+
+	const handleFileChange = (file: File | null) => {
+		if (file) {
+			// Validate file size (1MB = 1024 * 1024 bytes)
+			if (file.size > 1024 * 1024) {
+				toast.error("File size must be less than 1MB");
+				return;
+			}
+			// Validate file type
+			if (!file.type.startsWith("image/")) {
+				toast.error("File must be an image");
+				return;
+			}
+		}
+		setSelectedFile(file);
+	};
 
 	return (
 		<Form {...form}>
@@ -270,7 +285,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 					<div className="space-y-1">
 						<Label htmlFor="icon">Space Icon</Label>
 						<CardDescription className="w-full max-w-[400px]">
-							Upload a custom logo or icon for your space.
+							Upload a custom logo or icon for your space (max 1MB).
 						</CardDescription>
 					</div>
 
@@ -280,7 +295,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							name="icon"
 							initialPreviewUrl={space?.iconUrl || null}
 							notDraggingClassName="hover:bg-gray-3"
-							onChange={setSelectedFile}
+							onChange={handleFileChange}
 							disabled={isUploading}
 							isLoading={isUploading}
 						/>

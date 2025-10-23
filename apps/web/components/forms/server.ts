@@ -73,7 +73,7 @@ export async function createOrganization(formData: FormData) {
 
 				yield* bucket.putObject(
 					fileKey,
-					yield* Effect.promise(() => iconFile.bytes()),
+					yield* Effect.promise(() => iconFile.arrayBuffer()),
 					{ contentType: iconFile.type },
 				);
 			}).pipe(runPromise);

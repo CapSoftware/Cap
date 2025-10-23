@@ -144,7 +144,6 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								organizationId: spaces.organizationId,
 								createdById: spaces.createdById,
 								iconUrl: spaces.iconUrl,
-								memberImage: users.image,
 								memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
