@@ -6,6 +6,7 @@ use std::{
 };
 
 use base64::prelude::*;
+use cap_recording::screen_capture::ScreenCaptureTarget;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use scap_targets::{
@@ -18,7 +19,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt};
 use tauri_specta::Event;
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, instrument};
 
 #[derive(tauri_specta::Event, Serialize, Type, Clone)]
 pub struct TargetUnderCursor {
@@ -42,9 +43,11 @@ pub struct DisplayInformation {
 
 #[specta::specta]
 #[tauri::command]
+#[instrument(skip(app, state))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
+    focused_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
     let displays = scap_targets::Display::list()
         .into_iter()
@@ -58,11 +61,18 @@ pub async fn open_target_select_overlays(
 
     let handle = tokio::spawn({
         let app = app.clone();
+
         async move {
             loop {
                 {
-                    let display = scap_targets::Display::get_containing_cursor();
-                    let window = scap_targets::Window::get_topmost_at_cursor();
+                    let display = focused_target
+                        .as_ref()
+                        .map(|v| v.display())
+                        .unwrap_or_else(|| scap_targets::Display::get_containing_cursor());
+                    let window = focused_target
+                        .as_ref()
+                        .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
+                        .unwrap_or_else(|| scap_targets::Window::get_topmost_at_cursor());
 
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
@@ -102,6 +112,7 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
+#[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
@@ -114,6 +125,7 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> {
     let window_id = window_id
         .parse::<WindowId>()
@@ -127,6 +139,7 @@ pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> 
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn display_information(display_id: &str) -> Result<DisplayInformation, String> {
     let display_id = display_id
         .parse::<DisplayId>()
@@ -142,6 +155,7 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
 
 #[specta::specta]
 #[tauri::command]
+#[instrument]
 pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     let window = Window::from_id(&window_id).ok_or("Window not found")?;
 
@@ -166,13 +180,30 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::UI::WindowsAndMessaging::{
-            SW_RESTORE, SetForegroundWindow, ShowWindow,
+            GetWindowPlacement, IsIconic, SW_RESTORE, SetForegroundWindow, SetWindowPlacement,
+            ShowWindow, WINDOWPLACEMENT,
         };
 
         let hwnd = window.raw_handle().inner();
 
         unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
+            // Only restore if the window is actually minimized
+            if IsIconic(hwnd).as_bool() {
+                // Get current window placement to preserve size/position
+                let mut wp = WINDOWPLACEMENT::default();
+                wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+
+                if GetWindowPlacement(hwnd, &mut wp).is_ok() {
+                    // Restore using the previous placement to avoid resizing
+                    wp.showCmd = SW_RESTORE.0 as u32;
+                    SetWindowPlacement(hwnd, &wp);
+                } else {
+                    // Fallback to simple restore if placement fails
+                    ShowWindow(hwnd, SW_RESTORE);
+                }
+            }
+
+            // Always try to bring to foreground
             SetForegroundWindow(hwnd);
         }
     }

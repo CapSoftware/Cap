@@ -62,6 +62,12 @@ export function Header() {
 	});
 	onCleanup(() => unlistenTitlebar?.());
 
+	const clearTimelineSelection = () => {
+		if (!editorState.timeline.selection) return false;
+		setEditorState("timeline", "selection", null);
+		return true;
+	};
+
 	return (
 		<div
 			data-tauri-drag-region
@@ -74,38 +80,24 @@ export function Header() {
 				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
 				<EditorButton
 					onClick={async () => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						clearTimelineSelection();
 
 						if (!(await ask("Are you sure you want to delete this recording?")))
 							return;
 
 						await commands.editorDeleteProject();
 					}}
-					tooltipText={
-						editorState.timeline.selection
-							? "Close selection"
-							: "Delete recording"
-					}
+					tooltipText="Delete recording"
 					leftIcon={<IconCapTrash class="w-5" />}
 				/>
 				<EditorButton
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						clearTimelineSelection();
 
 						console.log({ path: `${editorInstance.path}/` });
 						revealItemInDir(`${editorInstance.path}/`);
 					}}
-					tooltipText={
-						editorState.timeline.selection
-							? "Close selection"
-							: "Open recording bundle"
-					}
+					tooltipText="Open recording bundle"
 					leftIcon={<IconLucideFolder class="w-5" />}
 				/>
 
@@ -116,27 +108,17 @@ export function Header() {
 				<div data-tauri-drag-region class="flex-1 h-full" />
 				<EditorButton
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						if (clearTimelineSelection()) return;
 					}}
-					tooltipText={
-						editorState.timeline.selection ? "Close selection" : "Captions"
-					}
+					tooltipText="Captions"
 					leftIcon={<IconCapCaptions class="w-5" />}
 					comingSoon={!editorState.timeline.selection}
 				/>
 				<EditorButton
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						if (clearTimelineSelection()) return;
 					}}
-					tooltipText={
-						editorState.timeline.selection ? "Close selection" : "Performance"
-					}
+					tooltipText="Performance"
 					leftIcon={<IconCapGauge class="w-[18px]" />}
 					comingSoon={!editorState.timeline.selection}
 				/>
@@ -158,34 +140,26 @@ export function Header() {
 			>
 				<EditorButton
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						clearTimelineSelection();
+						if (!projectHistory.canUndo()) return;
 						projectHistory.undo();
 					}}
 					disabled={
 						!projectHistory.canUndo() && !editorState.timeline.selection
 					}
-					tooltipText={
-						editorState.timeline.selection ? "Close selection" : "Undo"
-					}
+					tooltipText="Undo"
 					leftIcon={<IconCapUndo class="w-5" />}
 				/>
 				<EditorButton
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						clearTimelineSelection();
+						if (!projectHistory.canRedo()) return;
 						projectHistory.redo();
 					}}
 					disabled={
 						!projectHistory.canRedo() && !editorState.timeline.selection
 					}
-					tooltipText={
-						editorState.timeline.selection ? "Close selection" : "Redo"
-					}
+					tooltipText="Redo"
 					leftIcon={<IconCapRedo class="w-5" />}
 				/>
 				<div data-tauri-drag-region class="flex-1 h-full" />
@@ -196,10 +170,7 @@ export function Header() {
 					variant="dark"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
-						if (editorState.timeline.selection) {
-							setEditorState("timeline", "selection", null);
-							return;
-						}
+						clearTimelineSelection();
 
 						trackEvent("export_button_clicked");
 						if (exportState.type === "done") setExportState({ type: "idle" });

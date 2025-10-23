@@ -1,7 +1,8 @@
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cap_timestamp::Timestamp;
 use cpal::{
-    Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
+    BufferSize, Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
+    SupportedStreamConfigRange,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use flume::TrySendError;
@@ -61,6 +62,7 @@ impl OpenState {
             self.attached = Some(AttachedState {
                 id: data.id,
                 config: data.config.clone(),
+                buffer_size_frames: data.buffer_size_frames,
                 done_tx: data.done_tx,
             });
             self.connecting = None;
@@ -77,6 +79,7 @@ struct AttachedState {
     #[allow(dead_code)]
     id: u32,
     config: SupportedStreamConfig,
+    buffer_size_frames: Option<u32>,
     done_tx: mpsc::SyncSender<()>,
 }
 
@@ -106,8 +109,6 @@ impl MicrophoneFeed {
             host.default_input_device().and_then(get_usable_device)
         {
             device_map.insert(name, (device, config));
-        } else {
-            warn!("No default input device found or it's not usable");
         }
 
         match host.input_devices() {
@@ -148,16 +149,69 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
 
-            configs
-                .into_iter()
-                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 >= 48000)
-                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+            configs.into_iter().find_map(|config| {
+                ffmpeg_sample_format_for(config.sample_format())
+                    .map(|_| config.with_sample_rate(select_sample_rate(&config)))
+            })
         });
 
-    result.and_then(|config| {
-        let final_config = config.with_sample_rate(cpal::SampleRate(48000));
-        device.name().ok().map(|name| (name, device, final_config))
-    })
+    result.and_then(|config| device.name().ok().map(|name| (name, device, config)))
+}
+
+fn select_sample_rate(config: &SupportedStreamConfigRange) -> cpal::SampleRate {
+    const PREFERRED_RATES: [u32; 2] = [48_000, 44_100];
+
+    for rate in PREFERRED_RATES {
+        if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
+            return cpal::SampleRate(rate);
+        }
+    }
+
+    cpal::SampleRate(config.max_sample_rate().0)
+}
+
+const TARGET_LATENCY_MS: u32 = 35;
+const MIN_LATENCY_MS: u32 = 10;
+const MAX_LATENCY_MS: u32 = 120;
+const ABS_MIN_BUFFER_FRAMES: u32 = 128;
+
+fn stream_config_with_latency(config: &SupportedStreamConfig) -> (cpal::StreamConfig, Option<u32>) {
+    let mut stream_config: cpal::StreamConfig = config.clone().into();
+    let buffer_size_frames = desired_buffer_size_frames(config);
+
+    if let Some(frames) = buffer_size_frames {
+        stream_config.buffer_size = BufferSize::Fixed(frames);
+    }
+
+    (stream_config, buffer_size_frames)
+}
+
+fn desired_buffer_size_frames(config: &SupportedStreamConfig) -> Option<u32> {
+    match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            let sample_rate = config.sample_rate().0;
+
+            if sample_rate == 0 || *max == 0 {
+                return None;
+            }
+
+            let desired = latency_ms_to_frames(sample_rate, TARGET_LATENCY_MS);
+            let min_latency_frames = latency_ms_to_frames(sample_rate, MIN_LATENCY_MS);
+            let max_latency_frames = latency_ms_to_frames(sample_rate, MAX_LATENCY_MS);
+
+            let desired = desired.clamp(min_latency_frames, max_latency_frames);
+            let device_max = *max;
+            let device_min = ABS_MIN_BUFFER_FRAMES.min(device_max).max(*min);
+
+            Some(desired.clamp(device_min, device_max))
+        }
+        cpal::SupportedBufferSize::Unknown => None,
+    }
+}
+
+fn latency_ms_to_frames(sample_rate: u32, milliseconds: u32) -> u32 {
+    let frames = (sample_rate as u64 * milliseconds as u64) / 1_000;
+    frames.max(1) as u32
 }
 
 #[derive(Reply)]
@@ -165,6 +219,7 @@ pub struct MicrophoneFeedLock {
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
+    buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
 }
 
@@ -175,6 +230,10 @@ impl MicrophoneFeedLock {
 
     pub fn audio_info(&self) -> AudioInfo {
         self.audio_info
+    }
+
+    pub fn buffer_size_frames(&self) -> Option<u32> {
+        self.buffer_size_frames
     }
 }
 
@@ -211,6 +270,7 @@ pub struct Lock;
 struct InputConnected {
     id: u32,
     config: SupportedStreamConfig,
+    buffer_size_frames: Option<u32>,
     done_tx: SyncSender<()>,
 }
 
@@ -258,17 +318,20 @@ impl Message<SetInput> for MicrophoneFeed {
         };
 
         let sample_format = config.sample_format();
+        let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
 
-        let (ready_tx, ready_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
         let actor_ref = ctx.actor_ref();
         let ready = {
-            let config = config.clone();
+            let config_for_ready = config.clone();
             ready_rx
-                .map(|v| {
+                .map(move |v| {
+                    let config = config_for_ready.clone();
                     v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .map(|_| config)
+                        .and_then(|inner| inner)
+                        .map(|buffer_size| (config, buffer_size))
                 })
                 .shared()
         };
@@ -281,9 +344,10 @@ impl Message<SetInput> for MicrophoneFeed {
                 ready
                     .clone()
                     .map(move |v| {
-                        v.map(|config| InputConnected {
+                        v.map(|(config, buffer_size_frames)| InputConnected {
                             id,
                             config,
+                            buffer_size_frames,
                             done_tx,
                         })
                     })
@@ -293,6 +357,7 @@ impl Message<SetInput> for MicrophoneFeed {
 
         std::thread::spawn({
             let config = config.clone();
+            let stream_config = stream_config.clone();
             let device_name_for_log = device.name().ok();
             move || {
                 // Log all configs for debugging
@@ -309,16 +374,26 @@ impl Message<SetInput> for MicrophoneFeed {
                     }
                 }
 
+                let buffer_size_description = match &stream_config.buffer_size {
+                    BufferSize::Default => "default".to_string(),
+                    BufferSize::Fixed(frames) => format!(
+                        "{} frames (~{:.1}ms)",
+                        frames,
+                        (*frames as f64 / config.sample_rate().0 as f64) * 1000.0
+                    ),
+                };
+
                 info!(
-                    "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}",
+                    "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}, buffer_size={}",
                     device_name_for_log,
                     config.sample_rate().0,
                     config.channels(),
-                    sample_format
+                    sample_format,
+                    buffer_size_description
                 );
 
                 let stream = match device.build_input_stream_raw(
-                    &config.into(),
+                    &stream_config,
                     sample_format,
                     {
                         let actor_ref = actor_ref.clone();
@@ -363,7 +438,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     return;
                 }
 
-                let _ = ready_tx.send(Ok(()));
+                let _ = ready_tx.send(Ok(buffer_size_frames));
 
                 match done_rx.recv() {
                     Ok(_) => {
@@ -379,13 +454,15 @@ impl Message<SetInput> for MicrophoneFeed {
         tokio::spawn({
             let ready = ready.clone();
             let actor = ctx.actor_ref();
+            let done_tx = done_tx;
             async move {
                 match ready.await {
-                    Ok(config) => {
+                    Ok((config, buffer_size_frames)) => {
                         let _ = actor
                             .tell(InputConnected {
                                 id,
                                 config,
+                                buffer_size_frames,
                                 done_tx,
                             })
                             .await;
@@ -397,7 +474,9 @@ impl Message<SetInput> for MicrophoneFeed {
             }
         });
 
-        Ok(ready.boxed())
+        let ready_for_return = ready.clone().map(|result| result.map(|(config, _)| config));
+
+        Ok(ready_for_return.boxed())
     }
 }
 
@@ -483,6 +562,7 @@ impl Message<Lock> for MicrophoneFeed {
         };
 
         let config = attached.config.clone();
+        let buffer_size_frames = attached.buffer_size_frames;
 
         self.state = State::Locked { inner: attached };
 
@@ -495,9 +575,10 @@ impl Message<Lock> for MicrophoneFeed {
         });
 
         Ok(MicrophoneFeedLock {
-            audio_info: AudioInfo::from_stream_config(&config),
+            audio_info: AudioInfo::from_stream_config_with_buffer(&config, buffer_size_frames),
             actor: ctx.actor_ref(),
             config,
+            buffer_size_frames,
             drop_tx: Some(drop_tx),
         })
     }

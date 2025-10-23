@@ -95,10 +95,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						const segment = segments[currentSegmentIndex];
 
 						segments.splice(currentSegmentIndex + 1, 0, {
+							...segment,
 							start: segment.start + searchTime,
 							end: segment.end,
-							timescale: 1,
-							recordingSegment: segment.recordingSegment,
 						});
 						segments[currentSegmentIndex].end = segment.start + searchTime;
 					}),
@@ -128,6 +127,27 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitZoomSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"zoomSegments",
+					produce((segments) => {
+						const segment = segments[index];
+						if (!segment) return;
+
+						const newLengths = [segment.end - segment.start - time, time];
+
+						if (newLengths.some((l) => l < 1)) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
 			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
 					setProject(
@@ -145,6 +165,27 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					);
 					setEditorState("timeline", "selection", null);
 				});
+			},
+			splitSceneSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"sceneSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const newLengths = [segment.end - segment.start - time, time];
+
+						if (newLengths.some((l) => l < 1)) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
 			},
 			deleteSceneSegment: (segmentIndex: number) => {
 				batch(() => {
@@ -294,6 +335,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						);
 					},
 				},
+				hoveredTrack: null as null | "clip" | "zoom" | "scene",
 			},
 		});
 

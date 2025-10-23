@@ -1,23 +1,23 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
+    },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
-    output_pipeline::{
-        AudioFrame, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
-    },
+    output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
+    screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{
-    FutureExt, StreamExt, channel::mpsc, future::OptionFuture, stream::FuturesUnordered,
-};
+use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
+use scap_targets::WindowId;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -348,6 +348,8 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    #[cfg(target_os = "macos")]
+    excluded_windows: Vec<WindowId>,
 }
 
 impl ActorBuilder {
@@ -359,6 +361,8 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
+            #[cfg(target_os = "macos")]
+            excluded_windows: Vec::new(),
         }
     }
 
@@ -382,6 +386,12 @@ impl ActorBuilder {
         self
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
+        self.excluded_windows = excluded_windows;
+        self
+    }
+
     pub async fn build(
         self,
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
@@ -395,6 +405,8 @@ impl ActorBuilder {
                 camera_feed: self.camera_feed,
                 #[cfg(target_os = "macos")]
                 shareable_content,
+                #[cfg(target_os = "macos")]
+                excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
         )
@@ -671,20 +683,15 @@ async fn create_segment_pipeline(
     custom_cursor_capture: bool,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
-    let display = base_inputs
-        .capture_target
-        .display()
-        .ok_or(CreateSegmentPipelineError::NoDisplay)?;
-    let crop_bounds = base_inputs
-        .capture_target
-        .cursor_crop()
-        .ok_or(CreateSegmentPipelineError::NoBounds)?;
-
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
-    let screen_config = create_screen_capture(
-        &base_inputs.capture_target,
+    let (display, crop) =
+        target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
+
+    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+        display,
+        crop,
         !custom_cursor_capture,
         120,
         start_time.system_time(),
@@ -693,9 +700,11 @@ async fn create_segment_pipeline(
         d3d_device,
         #[cfg(target_os = "macos")]
         base_inputs.shareable_content,
+        #[cfg(target_os = "macos")]
+        base_inputs.excluded_windows,
     )
     .await
-    .unwrap();
+    .context("screen capture init")?;
 
     let (capture_source, system_audio) = screen_config.to_sources().await?;
 
@@ -747,21 +756,28 @@ async fn create_segment_pipeline(
     .transpose()
     .context("microphone pipeline setup")?;
 
-    let cursor = custom_cursor_capture.then(move || {
-        let cursor = spawn_cursor_recorder(
-            crop_bounds,
-            display,
-            cursors_dir.to_path_buf(),
-            prev_cursors,
-            next_cursors_id,
-            start_time,
-        );
+    let cursor = custom_cursor_capture
+        .then(move || {
+            let cursor_crop_bounds = base_inputs
+                .capture_target
+                .cursor_crop()
+                .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
-        CursorPipeline {
-            output_path: dir.join("cursor.json"),
-            actor: cursor,
-        }
-    });
+            let cursor = spawn_cursor_recorder(
+                cursor_crop_bounds,
+                display,
+                cursors_dir.to_path_buf(),
+                prev_cursors,
+                next_cursors_id,
+                start_time,
+            );
+
+            Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
+                output_path: dir.join("cursor.json"),
+                actor: cursor,
+            })
+        })
+        .transpose()?;
 
     info!("pipeline playing");
 

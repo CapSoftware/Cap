@@ -76,7 +76,7 @@ impl CameraLayer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            camera_frame,
+            camera_frame.data(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(frame_size.x * 4),

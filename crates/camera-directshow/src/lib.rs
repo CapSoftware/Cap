@@ -326,10 +326,6 @@ impl VideoInputDeviceIterator {
                 0,
             )?;
 
-            if enum_moniker.is_none() {
-                warn!("VideoInputDeviceIterator::new produced no enum moniker");
-            }
-
             // CreateClassEnumerator can return S_FALSE which is treated as success,
             // so we can't assume this exists
             enum_moniker

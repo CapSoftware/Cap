@@ -1,15 +1,29 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import type { Input, Output } from "@pulumi/pulumi";
+
 const GITHUB_ORG = "CapSoftware";
 const GITHUB_REPO = "Cap";
 const GITHUB_APP_ID = "1196731";
 
+const VERCEL_PROJECT_NAME = "cap-web";
 const VERCEL_TEAM_SLUG = "mc-ilroy";
 const VERCEL_TEAM_ID = "team_vbZRU7UW78rpKKIj4c9PfFAC";
 
 const CLOUDFLARE_ACCOUNT_ID = "3de2dd633194481d80f68f55257bdbaa";
 const AXIOM_API_TOKEN = "xaat-c0704be6-e942-4935-b068-3b491d7cc00f";
 const AXIOM_DATASET = "cap-otel";
+
+const parsedStage = () => {
+	if ($app.stage === "staging") return { variant: "staging" } as const;
+	if ($app.stage === "production") return { variant: "production" } as const;
+	if ($app.stage.startsWith("git-branch-"))
+		return {
+			variant: "git-branch",
+			branch: $app.stage.slice("git-branch-".length),
+		} as const;
+	throw new Error("Unsupported stage");
+};
 
 export default $config({
 	app(input) {
@@ -30,48 +44,77 @@ export default $config({
 				aws: {},
 				planetscale: true,
 				awsx: "2.21.1",
+				random: true,
 			},
 		};
 	},
 	async run() {
+		const stage = parsedStage();
 		const WEB_URLS: Record<string, string> = {
 			production: "https://cap.so",
 			staging: "https://staging.cap.so",
 		};
-		const webUrl = WEB_URLS[$app.stage];
+		const webUrl =
+			WEB_URLS[stage.variant] ??
+			`https://${VERCEL_PROJECT_NAME}-git-${stage.branch}-${VERCEL_TEAM_SLUG}.vercel.app`;
 		const secrets = Secrets();
 		// const planetscale = Planetscale();
 
-		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
+		const recordingsBucket = new aws.s3.BucketV2(
+			"RecordingsBucket",
+			{},
+			{ retainOnDelete: true },
+		);
+
+		new aws.s3.BucketCorsConfigurationV2("RecordingsBucketCors", {
+			bucket: recordingsBucket.bucket,
+			corsRules: [
+				{
+					allowedHeaders: ["*"],
+					allowedMethods: ["GET", "POST"],
+					allowedOrigins:
+						stage.variant === "production"
+							? [
+									"https://cap.so",
+									"https://cap.link",
+									"https://v.cap.so",
+									"https://dyk2p776s2gx5.cloudfront.net",
+								]
+							: ["http://localhost:*", "https://*.vercel.app", webUrl],
+					exposeHeaders: [],
+				},
+			],
+		});
 
 		const vercelVariables = [
 			{ key: "NEXT_PUBLIC_AXIOM_TOKEN", value: AXIOM_API_TOKEN },
 			{ key: "NEXT_PUBLIC_AXIOM_DATASET", value: AXIOM_DATASET },
 			{ key: "CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "NEXT_PUBLIC_CAP_AWS_BUCKET", value: recordingsBucket.bucket },
-			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_HTTP.value },
+			{ key: "DATABASE_URL", value: secrets.DATABASE_URL_MYSQL.value },
 		];
 
-		// new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
-		// 	bucket: recordingsBucket.id,
-		// 	status: "Enabled",
-		// });
+		new aws.s3.BucketAccelerateConfigurationV2("RecordingsBucketAcceleration", {
+			bucket: recordingsBucket.id,
+			status: "Enabled",
+		});
 
-		// const cloudfrontDistribution = aws.cloudfront.getDistributionOutput({
-		// 	id: "E36XSZEM0VIIYB",
-		// });
+		const cloudfrontDistribution =
+			stage.variant === "production"
+				? aws.cloudfront.getDistributionOutput({ id: "E36XSZEM0VIIYB" })
+				: null;
 
 		const vercelUser = new aws.iam.User("VercelUser", { forceDestroy: false });
 
-		const vercelProject = vercel.getProjectOutput({ name: "cap-web" });
+		const vercelProject = vercel.getProjectOutput({
+			name: VERCEL_PROJECT_NAME,
+		});
 
-		if (webUrl) {
+		if (webUrl)
 			vercelVariables.push(
 				{ key: "WEB_URL", value: webUrl },
 				{ key: "NEXT_PUBLIC_WEB_URL", value: webUrl },
 				{ key: "NEXTAUTH_URL", value: webUrl },
 			);
-		}
 
 		// vercelEnvVar("VercelCloudfrontEnv", {
 		// 	key: "CAP_CLOUDFRONT_DISTRIBUTION_ID",
@@ -86,19 +129,14 @@ export default $config({
 			return {
 				aud,
 				url,
-				provider: await aws.iam
-					.getOpenIdConnectProvider({ url: `https://${url}` })
-					.catch(
-						() =>
-							new aws.iam.OpenIdConnectProvider(
-								"VercelAWSOIDC",
-								{ url: `https://${url}`, clientIdLists: [aud] },
-								{ retainOnDelete: true },
-							),
-					),
+				provider: aws.iam.getOpenIdConnectProviderOutput({
+					url: `https://${url}`,
+				}),
 			};
 		})();
 
+		const oidcSub = (environment: "production" | "preview" | "staging") =>
+			`owner:${VERCEL_TEAM_SLUG}:project:${VERCEL_PROJECT_NAME}:environment:${environment}`;
 		const vercelAwsAccessRole = new aws.iam.Role("VercelAWSAccessRole", {
 			assumeRolePolicy: {
 				Version: "2012-10-17",
@@ -114,9 +152,10 @@ export default $config({
 								[`${oidc.url}:aud`]: oidc.aud,
 							},
 							StringLike: {
-								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:staging`,
-								],
+								[`${oidc.url}:sub`]:
+									stage.variant === "production"
+										? [oidcSub("production")]
+										: [oidcSub("preview"), oidcSub("staging")],
 							},
 						},
 					},
@@ -125,48 +164,81 @@ export default $config({
 			inlinePolicies: [
 				{
 					name: "VercelAWSAccessPolicy",
-					policy: recordingsBucket.arn.apply((arn) =>
+					policy: $resolve([
+						recordingsBucket.arn,
+						cloudfrontDistribution?.arn,
+					] as const).apply(([bucketArn, cloudfrontArn]) =>
 						JSON.stringify({
 							Version: "2012-10-17",
 							Statement: [
 								{
 									Effect: "Allow",
 									Action: ["s3:*"],
-									Resource: `${arn}/*`,
+									Resource: `${bucketArn}/*`,
 								},
 								{
 									Effect: "Allow",
 									Action: ["s3:*"],
-									Resource: `${arn}`,
+									Resource: bucketArn,
 								},
-							],
+								cloudfrontArn && {
+									Effect: "Allow",
+									Action: ["cloudfront:CreateInvalidation"],
+									Resource: cloudfrontArn,
+								},
+							].filter(Boolean),
 						}),
 					),
 				},
 			],
 		});
 
-		const workflowCluster = await WorkflowCluster(recordingsBucket, secrets);
+		const workflowCluster =
+			stage.variant === "staging"
+				? await WorkflowCluster(recordingsBucket, secrets)
+				: null;
 
-		if ($app.stage === "staging" || $app.stage === "production") {
-			[
-				...vercelVariables,
-				{ key: "REMOTE_WORKFLOW_URL", value: workflowCluster.api.url },
-				{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
-			].map(
-				(v) =>
-					new vercel.ProjectEnvironmentVariable(`VercelEnv${v.key}`, {
+		[
+			...vercelVariables,
+			workflowCluster && {
+				key: "WORKFLOWS_RPC_URL",
+				value: workflowCluster.api.url,
+			},
+			workflowCluster && {
+				key: "WORKFLOWS_RPC_SECRET",
+				value: secrets.WORKFLOWS_RPC_SECRET.result,
+			},
+			{ key: "VERCEL_AWS_ROLE_ARN", value: vercelAwsAccessRole.arn },
+		]
+			.filter(Boolean)
+			.forEach((_v) => {
+				const v = _v as NonNullable<typeof _v>;
+
+				new vercel.ProjectEnvironmentVariable(
+					`VercelEnv${v.key}`,
+					{
 						...v,
 						projectId: vercelProject.id,
 						customEnvironmentIds:
-							$app.stage === "staging"
+							stage.variant === "staging"
 								? ["env_CFbtmnpsI11e4o8X5UD8MZzxELQi"]
 								: undefined,
 						targets:
-							$app.stage === "staging" ? undefined : ["preview", "production"],
-					}),
-			);
-		}
+							stage.variant === "production"
+								? ["production"]
+								: stage.variant === "staging"
+									? ["development", "preview"]
+									: stage.variant === "git-branch"
+										? ["preview"]
+										: undefined,
+						gitBranch:
+							stage.variant === "git-branch" ? stage.branch : undefined,
+						comment:
+							"This var is being managed by SST, do not edit or delete it via the Vercel dashboard",
+					},
+					{ deleteBeforeReplace: true },
+				);
+			});
 
 		// DiscordBot();
 	},
@@ -174,30 +246,16 @@ export default $config({
 
 function Secrets() {
 	return {
-		DATABASE_URL_HTTP: new sst.Secret("DATABASE_URL_HTTP"),
 		DATABASE_URL_MYSQL: new sst.Secret("DATABASE_URL_MYSQL"),
-		CAP_AWS_ACCESS_KEY: new sst.Secret("CAP_AWS_ACCESS_KEY"),
-		CAP_AWS_SECRET_KEY: new sst.Secret("CAP_AWS_SECRET_KEY"),
-		GITHUB_PAT: new sst.Secret("GITHUB_PAT"),
+		GITHUB_PAT:
+			$app.stage === "staging" ? new sst.Secret("GITHUB_PAT") : undefined,
+		WORKFLOWS_RPC_SECRET: new random.RandomString("WORKFLOWS_RPC_SECRET", {
+			length: 48,
+		}),
 	};
 }
 
 type Secrets = ReturnType<typeof Secrets>;
-
-// function Planetscale() {
-// 	const org = planetscale.getOrganizationOutput({ name: "cap" });
-// 	const db = planetscale.getDatabaseOutput({
-// 		name: "cap-production",
-// 		organization: org.name,
-// 	});
-// 	const branch = planetscale.getBranchOutput({
-// 		name: $app.stage === "production" ? "main" : "staging",
-// 		database: db.name,
-// 		organization: org.name,
-// 	});
-
-// 	return { org, db, branch };
-// }
 
 // function DiscordBot() {
 // 	new sst.cloudflare.Worker("DiscordBotScript", {
@@ -290,26 +348,26 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 		CAP_AWS_BUCKET: bucket.bucket,
 		SHARD_DATABASE_URL: $interpolate`mysql://${db.username}:${db.password}@${db.host}:${db.port}/${db.database}`,
 		DATABASE_URL: secrets.DATABASE_URL_MYSQL.value,
-		CAP_AWS_ACCESS_KEY: secrets.CAP_AWS_ACCESS_KEY.value,
-		CAP_AWS_SECRET_KEY: secrets.CAP_AWS_SECRET_KEY.value,
 		AXIOM_API_TOKEN,
 		AXIOM_DOMAIN: "api.axiom.co",
 		AXIOM_DATASET,
+		WORKFLOWS_RPC_SECRET: secrets.WORKFLOWS_RPC_SECRET.result,
 	};
 
 	const ghcrCredentialsSecret = new aws.secretsmanager.Secret(
 		"GHCRCredentialsSecret",
 	);
 
-	new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
-		secretId: ghcrCredentialsSecret.id,
-		secretString: secrets.GITHUB_PAT.value.apply((password) =>
-			JSON.stringify({
-				username: "brendonovich",
-				password,
-			}),
-		),
-	});
+	if (secrets.GITHUB_PAT)
+		new aws.secretsmanager.SecretVersion("GHCRCredentialsSecretVersion", {
+			secretId: ghcrCredentialsSecret.id,
+			secretString: secrets.GITHUB_PAT.value.apply((password) =>
+				JSON.stringify({
+					username: "brendonovich",
+					password,
+				}),
+			),
+		});
 
 	const ghcrCredentialsTransform = {
 		taskRole(args) {
@@ -409,6 +467,12 @@ async function WorkflowCluster(bucket: aws.s3.BucketV2, secrets: Secrets) {
 				ghcrCredentialsTransform.taskDefinition(args);
 			},
 		},
+		permissions: [
+			{
+				actions: ["s3:*"],
+				resources: [bucket.arn, $interpolate`${bucket.arn}/*`],
+			},
+		],
 	});
 
 	const api = new sst.aws.ApiGatewayV2("MyApi", {

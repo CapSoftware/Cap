@@ -96,8 +96,6 @@ export const SettingsDialog = ({
 		}
 	}, [buildSettings, isOpen, settingsData]);
 
-	const isUserPro = userIsPro(user);
-
 	const saveHandler = async () => {
 		if (!settings) return;
 		setSaveLoading(true);
@@ -193,7 +191,7 @@ export const SettingsDialog = ({
 								</div>
 								<Switch
 									disabled={
-										(option.pro && !isUserPro) ||
+										(option.pro && !user.isPro) ||
 										((key === "disableSummary" || key === "disableChapters") &&
 											getEffectiveValue(
 												"disableTranscript" as keyof OrganizationSettings,

@@ -32,6 +32,7 @@ pub struct CaptureWindow {
     pub name: String,
     pub bounds: LogicalBounds,
     pub refresh_rate: u32,
+    pub bundle_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -68,6 +69,13 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
+        }
+    }
+
+    pub fn window(&self) -> Option<WindowId> {
+        match self {
+            Self::Window { id } => Some(id.clone()),
+            _ => None,
         }
     }
 
@@ -198,6 +206,8 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     #[cfg(target_os = "macos")]
     shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    #[cfg(target_os = "macos")]
+    pub excluded_windows: Vec<WindowId>,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
@@ -234,6 +244,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
             d3d_device: self.d3d_device.clone(),
             #[cfg(target_os = "macos")]
             shareable_content: self.shareable_content.clone(),
+            #[cfg(target_os = "macos")]
+            excluded_windows: self.excluded_windows.clone(),
         }
     }
 }
@@ -241,13 +253,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
 #[derive(Clone, Debug)]
 pub struct Config {
     display: DisplayId,
-    #[cfg(windows)]
-    crop_bounds: Option<PhysicalBounds>,
-    #[cfg(target_os = "macos")]
-    crop_bounds: Option<LogicalBounds>,
+    crop_bounds: Option<CropBounds>,
     fps: u32,
     show_cursor: bool,
 }
+
+#[cfg(target_os = "macos")]
+pub type CropBounds = LogicalBounds;
+
+#[cfg(windows)]
+pub type CropBounds = PhysicalBounds;
 
 impl Config {
     pub fn fps(&self) -> u32 {
@@ -268,102 +283,22 @@ pub enum ScreenCaptureInitError {
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
-        target: &ScreenCaptureTarget,
+        display: scap_targets::Display,
+        crop_bounds: Option<CropBounds>,
         show_cursor: bool,
         max_fps: u32,
         start_time: SystemTime,
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+        #[cfg(target_os = "macos")] excluded_windows: Vec<WindowId>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let display = target.display().ok_or(ScreenCaptureInitError::NoDisplay)?;
-
         let fps = max_fps.min(display.refresh_rate() as u32);
 
-        let crop_bounds = match target {
-            ScreenCaptureTarget::Display { .. } => None,
-            ScreenCaptureTarget::Window { id } => {
-                let window = Window::from_id(id).ok_or(ScreenCaptureInitError::NoWindow)?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    let raw_display_bounds = display
-                        .raw_handle()
-                        .logical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let raw_window_bounds = window
-                        .raw_handle()
-                        .logical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(LogicalBounds::new(
-                        LogicalPosition::new(
-                            raw_window_bounds.position().x() - raw_display_bounds.position().x(),
-                            raw_window_bounds.position().y() - raw_display_bounds.position().y(),
-                        ),
-                        raw_window_bounds.size(),
-                    ))
-                }
-
-                #[cfg(windows)]
-                {
-                    let raw_display_position = display
-                        .raw_handle()
-                        .physical_position()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let raw_window_bounds = window
-                        .raw_handle()
-                        .physical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(PhysicalBounds::new(
-                        PhysicalPosition::new(
-                            raw_window_bounds.position().x() - raw_display_position.x(),
-                            raw_window_bounds.position().y() - raw_display_position.y(),
-                        ),
-                        raw_window_bounds.size(),
-                    ))
-                }
-            }
-            ScreenCaptureTarget::Area {
-                bounds: relative_bounds,
-                ..
-            } => {
-                #[cfg(target_os = "macos")]
-                {
-                    Some(*relative_bounds)
-                }
-
-                #[cfg(windows)]
-                {
-                    let raw_display_size = display
-                        .physical_size()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let logical_display_size = display
-                        .logical_size()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(PhysicalBounds::new(
-                        PhysicalPosition::new(
-                            (relative_bounds.position().x() / logical_display_size.width())
-                                * raw_display_size.width(),
-                            (relative_bounds.position().y() / logical_display_size.height())
-                                * raw_display_size.height(),
-                        ),
-                        PhysicalSize::new(
-                            (relative_bounds.size().width() / logical_display_size.width())
-                                * raw_display_size.width(),
-                            (relative_bounds.size().height() / logical_display_size.height())
-                                * raw_display_size.height(),
-                        ),
-                    ))
-                }
-            }
-        };
-
         let output_size = crop_bounds
+            .clone()
             .and_then(|b| {
                 #[cfg(target_os = "macos")]
                 {
@@ -401,6 +336,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             d3d_device,
             #[cfg(target_os = "macos")]
             shareable_content: shareable_content.retained(),
+            #[cfg(target_os = "macos")]
+            excluded_windows,
         })
     }
 
@@ -464,13 +401,22 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
                 }
             }
 
+            let owner_name = v.owner_name()?;
+
+            #[cfg(target_os = "macos")]
+            let bundle_identifier = v.raw_handle().bundle_identifier();
+
+            #[cfg(not(target_os = "macos"))]
+            let bundle_identifier = None;
+
             Some((
                 CaptureWindow {
                     id: v.id(),
                     name,
-                    owner_name: v.owner_name()?,
+                    owner_name,
                     bounds: v.display_relative_logical_bounds()?,
                     refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
+                    bundle_identifier,
                 },
                 v,
             ))

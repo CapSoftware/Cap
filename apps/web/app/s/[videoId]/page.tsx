@@ -14,10 +14,16 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { provideOptionalAuth, Videos } from "@cap/web-backend";
+import {
+	Database,
+	ImageUploads,
+	provideOptionalAuth,
+	Videos,
+} from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
+	type ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,
@@ -134,7 +140,7 @@ export async function generateMetadata(
 		referrer.includes(domain),
 	);
 
-	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
@@ -272,6 +278,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					ownerId: videos.ownerId,
 					ownerName: users.name,
 					ownerImage: users.image,
+					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -366,7 +373,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
 		ownerName?: string | null;
-		ownerImage?: string | null;
+		ownerImageUrlOrKey?: string | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -471,7 +478,7 @@ async function AuthorizedContent({
 				name: videos.name,
 				ownerId: videos.ownerId,
 				ownerName: users.name,
-				ownerImage: users.image,
+				ownerImageUrlOrKey: users.image,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -632,44 +639,72 @@ async function AuthorizedContent({
 				)
 		: Promise.resolve([]);
 
-	const commentsPromise = (async () => {
-		let toplLevelCommentId: Comment.CommentId | undefined;
+	const commentsPromise = Effect.gen(function* () {
+		const db = yield* Database;
+		const imageUploads = yield* ImageUploads;
+
+		let toplLevelCommentId = Option.none<Comment.CommentId>();
 
 		if (Option.isSome(replyId)) {
-			const [parentComment] = await db()
-				.select({ parentCommentId: comments.parentCommentId })
-				.from(comments)
-				.where(eq(comments.id, replyId.value))
-				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId ?? undefined;
+			const [parentComment] = yield* db.use((db) =>
+				db
+					.select({ parentCommentId: comments.parentCommentId })
+					.from(comments)
+					.where(eq(comments.id, replyId.value))
+					.limit(1),
+			);
+			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
 		}
 
-		const commentToBringToTheTop = toplLevelCommentId ?? commentId;
+		const commentToBringToTheTop = Option.orElse(
+			toplLevelCommentId,
+			() => commentId,
+		);
 
-		const allComments = await db()
-			.select({
-				id: comments.id,
-				content: comments.content,
-				timestamp: comments.timestamp,
-				type: comments.type,
-				authorId: comments.authorId,
-				videoId: comments.videoId,
-				createdAt: comments.createdAt,
-				updatedAt: comments.updatedAt,
-				parentCommentId: comments.parentCommentId,
-				authorName: users.name,
-			})
-			.from(comments)
-			.leftJoin(users, eq(comments.authorId, users.id))
-			.where(eq(comments.videoId, videoId))
-			.orderBy(
-				commentToBringToTheTop
-					? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
-					: comments.createdAt,
+		return yield* db
+			.use((db) =>
+				db
+					.select({
+						id: comments.id,
+						content: comments.content,
+						timestamp: comments.timestamp,
+						type: comments.type,
+						authorId: comments.authorId,
+						videoId: comments.videoId,
+						createdAt: comments.createdAt,
+						updatedAt: comments.updatedAt,
+						parentCommentId: comments.parentCommentId,
+						authorName: users.name,
+						authorImage: users.image,
+					})
+					.from(comments)
+					.leftJoin(users, eq(comments.authorId, users.id))
+					.where(eq(comments.videoId, videoId))
+					.orderBy(
+						Option.match(commentToBringToTheTop, {
+							onSome: (commentId) =>
+								sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
+							onNone: () => comments.createdAt,
+						}),
+					),
+			)
+			.pipe(
+				Effect.map((comments) =>
+					comments.map(
+						Effect.fn(function* (c) {
+							return Object.assign(c, {
+								authorImage: yield* Option.fromNullable(c.authorImage).pipe(
+									Option.map(imageUploads.resolveImageUrl),
+									Effect.transposeOption,
+									Effect.map(Option.getOrNull),
+								),
+							});
+						}),
+					),
+				),
+				Effect.flatMap(Effect.all),
 			);
-
-		return allComments;
-	})();
+	}).pipe(EffectRuntime.runPromise);
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -690,6 +725,7 @@ async function AuthorizedContent({
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
+		ownerIsPro: video.ownerIsPro ?? false,
 		password: null,
 		folderId: null,
 		orgSettings: video.orgSettings || null,
@@ -706,7 +742,6 @@ async function AuthorizedContent({
 							? new Date(video.metadata.customCreatedAt)
 							: video.createdAt,
 					}}
-					user={user}
 					customDomain={customDomain}
 					domainVerified={domainVerified}
 					sharedOrganizations={
@@ -720,7 +755,7 @@ async function AuthorizedContent({
 				<Share
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
-					user={user}
+					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}

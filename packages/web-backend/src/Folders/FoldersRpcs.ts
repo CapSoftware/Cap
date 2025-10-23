@@ -30,7 +30,7 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 
 			FolderUpdate: (data) =>
 				folders
-					.update(data.id, data)
+					.update(data)
 					.pipe(
 						Effect.catchTag(
 							"DatabaseError",

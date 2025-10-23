@@ -9,5 +9,6 @@ export class S3BucketClientProvider extends Context.Tag(
 		getInternal: Effect.Effect<S3Client, Cause.UnknownException>;
 		getPublic: Effect.Effect<S3Client, Cause.UnknownException>;
 		bucket: string;
+		isPathStyle: boolean;
 	}
 >() {}

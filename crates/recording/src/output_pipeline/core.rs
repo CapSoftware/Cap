@@ -128,7 +128,7 @@ impl TaskPool {
                     let res = future.await;
                     match &res {
                         Ok(_) => info!("Task finished successfully"),
-                        Err(err) => error!("Task failed: {}", err),
+                        Err(err) => error!("Task failed: {:#}", err),
                     }
                     res
                 }
@@ -349,7 +349,7 @@ async fn finish_build(
             Ok(())
         }
         .then(async move |res| {
-            let muxer_res = muxer.lock().await.finish();
+            let muxer_res = muxer.lock().await.finish(timestamps.instant().elapsed());
 
             let _ = done_tx.send(match (res, muxer_res) {
                 (Err(e), _) | (_, Err(e)) => Err(e),
@@ -405,12 +405,25 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
     muxer: Arc<Mutex<TMutex>>,
     timestamps: Timestamps,
 ) {
+    setup_ctx.tasks().spawn("capture-video", {
+        let stop_token = stop_token.clone();
+        async move {
+            video_source.start().await?;
+
+            stop_token.cancelled().await;
+
+            if let Err(e) = video_source.stop().await {
+                error!("Video source stop failed: {e:#}");
+            };
+
+            Ok(())
+        }
+    });
+
     setup_ctx.tasks().spawn("mux-video", async move {
         use futures::StreamExt;
 
         let mut first_tx = Some(first_tx);
-
-        video_source.start().await?;
 
         stop_token
             .run_until_cancelled(async {
@@ -431,8 +444,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 Ok::<(), anyhow::Error>(())
             })
             .await;
-
-        video_source.stop().await.context("video_source_stop")?;
 
         muxer.lock().await.stop();
 
@@ -766,7 +777,7 @@ pub trait Muxer: Send + 'static {
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self) -> anyhow::Result<()>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()>;
 }
 
 pub trait AudioMuxer: Muxer {

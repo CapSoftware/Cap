@@ -24,16 +24,14 @@ export default async function DashboardLayout({
 }) {
 	const user = await getCurrentUser();
 
-	if (!user || !user.id) {
-		redirect("/login");
-	}
+	if (!user) redirect("/login");
 
 	if (!user.name || user.name.length === 0) {
-		redirect("/onboarding");
+		redirect("/onboarding/welcome");
 	}
 
 	let organizationSelect: Organization[] = [];
-	let userCapsCount: number | null = null;
+	let userCapsCount: number | null = 0;
 	let organizationSettings: OrganizationSettings | null = null;
 	let spacesData: Spaces[] = [];
 	let anyNewNotifications = false;
@@ -49,7 +47,7 @@ export default async function DashboardLayout({
 	} catch (error) {
 		console.error("Failed to load dashboard data", error);
 		organizationSelect = [];
-		userCapsCount = null;
+		userCapsCount = 0;
 		organizationSettings = null;
 		spacesData = [];
 		anyNewNotifications = false;
@@ -82,7 +80,6 @@ export default async function DashboardLayout({
 				organizationData={organizationSelect}
 				activeOrganization={activeOrganization || null}
 				spacesData={spacesData}
-				user={user}
 				isSubscribed={isSubscribed}
 				initialTheme={theme as "light" | "dark"}
 				initialSidebarCollapsed={sidebar === "true"}

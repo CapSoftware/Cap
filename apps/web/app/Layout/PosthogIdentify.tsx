@@ -7,7 +7,7 @@ import {
 	initAnonymousUser,
 	trackEvent,
 } from "../utils/analytics";
-import { useAuthContext } from "./AuthContext";
+import { useCurrentUser } from "./AuthContext";
 
 export function PosthogIdentify() {
 	return (
@@ -18,7 +18,7 @@ export function PosthogIdentify() {
 }
 
 function Inner() {
-	const user = use(useAuthContext().user);
+	const user = useCurrentUser();
 
 	useEffect(() => {
 		if (!user) {

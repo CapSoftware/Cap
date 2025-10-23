@@ -53,6 +53,7 @@ import {
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
+import IconLucideTimer from "~icons/lucide/timer";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
 import {
@@ -137,6 +138,12 @@ const BACKGROUND_GRADIENTS = [
 
 const WALLPAPER_NAMES = [
 	// macOS wallpapers
+	"macOS/tahoe-dusk-min",
+	"macOS/tahoe-dawn-min",
+	"macOS/tahoe-day-min",
+	"macOS/tahoe-night-min",
+	"macOS/tahoe-dark",
+	"macOS/tahoe-light",
 	"macOS/sequoia-dark",
 	"macOS/sequoia-light",
 	"macOS/sonoma-clouds",
@@ -226,6 +233,13 @@ export function ConfigSidebar() {
 		editorState,
 		meta,
 	} = useEditorContext();
+
+	const cursorIdleDelay = () =>
+		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
+			2) as number;
+
+	const clampIdleDelay = (value: number) =>
+		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -460,6 +474,39 @@ export function ConfigSidebar() {
 								step={1}
 							/>
 						</Field>
+						<Field
+							name="Hide When Idle"
+							icon={<IconLucideTimer class="size-4" />}
+							value={
+								<Toggle
+									checked={project.cursor.hideWhenIdle}
+									onChange={(value) =>
+										setProject("cursor", "hideWhenIdle", value)
+									}
+								/>
+							}
+						/>
+						<Show when={project.cursor.hideWhenIdle}>
+							<Subfield name="Inactivity Delay" class="items-center gap-4">
+								<div class="flex items-center gap-3 flex-1">
+									<Slider
+										class="flex-1"
+										value={[cursorIdleDelay()]}
+										onChange={(v) => {
+											const rounded = clampIdleDelay(v[0]);
+											setProject("cursor", "hideWhenIdleDelay" as any, rounded);
+										}}
+										minValue={0.5}
+										maxValue={5}
+										step={0.1}
+										formatTooltip={(value) => `${value.toFixed(1)}s`}
+									/>
+									<span class="w-12 text-xs text-right text-gray-11">
+										{cursorIdleDelay().toFixed(1)}s
+									</span>
+								</div>
+							</Subfield>
+						</Show>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
@@ -1913,26 +1960,25 @@ function ZoomSegmentPreview(props: {
 
 	const start = createMemo(() => props.segment.start);
 
-	const segmentIndex = createMemo(() => {
+	const clipSegment = createMemo(() => {
 		const st = start();
-		const i = project.timeline?.segments.findIndex(
-			(s) => s.start <= st && s.end > st,
-		);
-		if (i === undefined || i === -1) return 0;
-		return i;
+		return project.timeline?.segments.find((s) => s.start <= st && s.end > st);
 	});
 
 	const relativeTime = createMemo(() => {
 		const st = start();
-		const segment = project.timeline?.segments[segmentIndex()];
+		const segment = clipSegment();
 		if (!segment) return 0;
 		return Math.max(0, st - segment.start);
 	});
 
 	const video = document.createElement("video");
 	createEffect(() => {
+		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${editorInstance.path}/content/segments/segment-${
+				clipSegment()?.recordingSegment ?? 0
+			}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2447,8 +2493,8 @@ function SourceOffsetField(props: {
 
 	return (
 		<Field name={props.name}>
-			<div class="flex flex-row items-center justify-between w-full -mt-2">
-				<div class="flex flex-row space-x-1 items-end">
+			<div class="flex flex-row justify-between items-center -mt-2 w-full">
+				<div class="flex flex-row items-end space-x-1">
 					<NumberField.Root
 						value={value()}
 						onChange={setValue}
@@ -2469,7 +2515,7 @@ function SourceOffsetField(props: {
 					</NumberField.Root>
 					<span class="text-gray-11">ms</span>
 				</div>
-				<div class="text-gray-11 flex flex-row space-x-1">
+				<div class="flex flex-row space-x-1 text-gray-11">
 					{[-100, -10, 10, 100].map((v) => (
 						<button
 							type="button"

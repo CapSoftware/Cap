@@ -9,7 +9,6 @@ interface CommentInputProps {
 	placeholder?: string;
 	showCancelButton?: boolean;
 	buttonLabel?: string;
-	user?: typeof userSelectProps | null;
 	autoFocus?: boolean;
 	disabled?: boolean;
 }
@@ -20,7 +19,6 @@ const CommentInput: React.FC<CommentInputProps> = ({
 	placeholder,
 	showCancelButton = false,
 	buttonLabel = "Reply",
-	user,
 	autoFocus = false,
 	disabled,
 }) => {
