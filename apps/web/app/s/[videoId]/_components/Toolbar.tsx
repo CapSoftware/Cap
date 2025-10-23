@@ -58,6 +58,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: emoji,
 				videoId: data.id,
+				authorImage: user.imageUrl,
 				parentCommentId: Comment.CommentId.make(""),
 				type: "emoji",
 				timestamp: currentTime,
@@ -100,6 +101,7 @@ export const Toolbar = ({
 			const newCommentData = await newComment({
 				content: comment,
 				videoId: data.id,
+				authorImage: user.imageUrl,
 				parentCommentId: Comment.CommentId.make(""),
 				type: "text",
 				timestamp: currentTime,

@@ -1,4 +1,3 @@
-import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
 import { Comment, User, type Video } from "@cap/web-domain";
 import { faCommentSlash } from "@fortawesome/free-solid-svg-icons";
@@ -109,6 +108,7 @@ export const Comments = Object.assign(
 				const data = await newComment({
 					content,
 					videoId: props.videoId,
+					authorImage: user.imageUrl,
 					parentCommentId: Comment.CommentId.make(""),
 					type: "text",
 					timestamp: currentTime,
@@ -134,7 +134,7 @@ export const Comments = Object.assign(
 				id: Comment.CommentId.make(`temp-reply-${Date.now()}`),
 				authorId: user.id,
 				authorName: user.name,
-				authorImage: user.imageUrl ?? null,
+				authorImage: user.imageUrl,
 				content,
 				createdAt: new Date(),
 				videoId: props.videoId,
@@ -156,6 +156,7 @@ export const Comments = Object.assign(
 					parentCommentId: actualParentId,
 					type: "text",
 					timestamp: currentTime,
+					authorImage: user.imageUrl,
 				});
 
 				handleCommentSuccess(data);
