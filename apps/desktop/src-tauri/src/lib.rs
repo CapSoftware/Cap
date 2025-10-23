@@ -2179,7 +2179,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
-            app.manage(target_select_overlay::WindowFocusManager::default());
+            app.manage(target_select_overlay::State::default());
             app.manage(EditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
@@ -2422,10 +2422,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     }
                                 }
                                 return;
-                            }
-                            CapWindowId::TargetSelectOverlay { display_id } => {
-                                app.state::<target_select_overlay::WindowFocusManager>()
-                                    .destroy(&display_id, app.global_shortcut());
                             }
                             CapWindowId::Camera => {
                                 let app = app.clone();

@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     str::FromStr,
     sync::{Mutex, PoisonError},
     time::Duration,
@@ -16,8 +15,8 @@ use scap_targets::{
 };
 use serde::Serialize;
 use specta::Type;
-use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt};
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_specta::Event;
 use tokio::task::JoinHandle;
 use tracing::{error, instrument};
@@ -67,12 +66,15 @@ pub async fn init(app: &AppHandle) {
     .await;
 }
 
+#[derive(Default)]
+pub struct State(Mutex<Option<JoinHandle<()>>>);
+
 #[specta::specta]
 #[tauri::command]
 #[instrument(skip(app, state))]
 pub async fn open_target_select_overlays(
     app: AppHandle,
-    state: tauri::State<'_, WindowFocusManager>,
+    state: tauri::State<'_, State>,
     focused_target: Option<ScreenCaptureTarget>,
 ) -> Result<(), String> {
     join_all(
@@ -127,7 +129,7 @@ pub async fn open_target_select_overlays(
     });
 
     if let Some(task) = state
-        .task
+        .0
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .replace(handle)
@@ -146,8 +148,11 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
-#[instrument(skip(app))]
-pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
+#[instrument(skip(app, state))]
+pub async fn close_target_select_overlays(
+    app: AppHandle,
+    state: tauri::State<'_, State>,
+) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
             window
@@ -155,6 +160,19 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
                 .map_err(|err| error!("Error hiding target select overlay: {err}"))
                 .ok();
         }
+    }
+
+    if let Some(task) = state
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        task.abort();
+        app.global_shortcut()
+            .unregister("Escape")
+            .map_err(|err| error!("Error unregistering global keyboard shortcut for Escape: {err}"))
+            .ok();
     }
 
     Ok(())
@@ -246,86 +264,4 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-// Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
-#[derive(Default)]
-pub struct WindowFocusManager {
-    task: Mutex<Option<JoinHandle<()>>>,
-    tasks: Mutex<HashMap<String, JoinHandle<()>>>,
-}
-
-impl WindowFocusManager {
-    /// Called when a window is created to spawn it's task
-    pub fn spawn(&self, id: &DisplayId, window: WebviewWindow) {
-        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-        tasks.insert(
-            id.to_string(),
-            tokio::spawn(async move {
-                let app = window.app_handle();
-                loop {
-                    let cap_main = CapWindowId::Main.get(app);
-                    let cap_settings = CapWindowId::Settings.get(app);
-
-                    let has_cap_main = cap_main
-                        .as_ref()
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
-                    let has_cap_settings = cap_settings
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
-
-                    // Close the overlay if the cap main and settings are not available.
-                    if has_cap_main && has_cap_settings {
-                        window.hide().ok();
-                        break;
-                    }
-
-                    #[cfg(windows)]
-                    if let Some(cap_main) = cap_main {
-                        let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
-                            || window.is_focused().unwrap_or_default();
-
-                        // If a Cap window is not focused we know something is trying to steal the focus.
-                        // We need to move the overlay above it. We don't use `always_on_top` on the overlay because we need the Cap window to stay above it.
-                        if !should_refocus {
-                            window.set_focus().ok();
-                        }
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                }
-            }),
-        );
-    }
-
-    /// Called when a specific overlay window is destroyed to cleanup it's resources
-    pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
-        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(task) = tasks.remove(&id.to_string()) {
-            task.abort();
-        }
-
-        // When all overlay windows are closed cleanup shared resources.
-        if tasks.is_empty() {
-            // Unregister keyboard shortcut
-            // This messes with other applications if we don't remove it.
-            global_shortcut
-                .unregister("Escape")
-                .map_err(|err| {
-                    error!("Error unregistering global keyboard shortcut for Escape: {err}")
-                })
-                .ok();
-
-            // Shutdown the cursor tracking task
-            if let Some(task) = self
-                .task
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-            {
-                task.abort();
-            }
-        }
-    }
 }

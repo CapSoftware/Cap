@@ -25,7 +25,6 @@ use crate::{
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
-    target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
 
@@ -364,14 +363,6 @@ impl ShowCapWindow {
                             logical_size.height(),
                         ));
                     }
-                }
-
-                app.state::<WindowFocusManager>()
-                    .spawn(display_id, window.clone());
-
-                #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 45);
                 }
 
                 window
