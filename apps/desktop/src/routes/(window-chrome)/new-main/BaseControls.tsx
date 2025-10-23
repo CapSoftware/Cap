@@ -29,7 +29,7 @@ export function BaseControls() {
 	});
 
 	return (
-		<div class="space-x-2 grid grid-cols-3">
+		<div class="space-y-2 grid grid-rows-2">
 			<CameraSelect
 				disabled={cameras.isPending}
 				options={cameras.data ?? []}
@@ -48,7 +48,7 @@ export function BaseControls() {
 				}
 				onChange={(v) => setMicInput.mutate(v)}
 			/>
-			<SystemAudio />
+			{/*<SystemAudio />*/}
 		</div>
 	);
 }
