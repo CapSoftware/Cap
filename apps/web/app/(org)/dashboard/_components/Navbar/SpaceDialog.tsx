@@ -18,6 +18,7 @@ import type { ImageUpload } from "@cap/web-domain";
 import { faLayerGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -92,7 +93,6 @@ const SpaceDialog = ({
 						disabled={isSubmitting || !spaceName.trim().length}
 						spinner={isSubmitting}
 						onClick={() => formRef.current?.requestSubmit()}
-						type="submit"
 					>
 						{isSubmitting
 							? edit
@@ -132,6 +132,7 @@ const formSchema = z.object({
 
 export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const { edit = false, space } = props;
+	const router = useRouter();
 
 	const form = useForm<z.infer<typeof formSchema>>({
 		resolver: zodResolver(formSchema),
@@ -156,6 +157,22 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
 	const { activeOrganization } = useDashboardContext();
+
+	const handleFileChange = (file: File | null) => {
+		if (file) {
+			// Validate file size (1MB = 1024 * 1024 bytes)
+			if (file.size > 1024 * 1024) {
+				toast.error("File size must be less than 1MB");
+				return;
+			}
+			// Validate file type
+			if (!file.type.startsWith("image/")) {
+				toast.error("File must be an image");
+				return;
+			}
+		}
+		setSelectedFile(file);
+	};
 
 	return (
 		<Form {...form}>
@@ -188,11 +205,19 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							if (selectedFile === null && space.iconUrl) {
 								formData.append("removeIcon", "true");
 							}
-							await updateSpace(formData);
+							const result = await updateSpace(formData);
+							if (!result.success) {
+								throw new Error(result.error || "Failed to update space");
+							}
 							toast.success("Space updated successfully");
+							router.refresh();
 						} else {
-							await createSpace(formData);
+							const result = await createSpace(formData);
+							if (!result.success) {
+								throw new Error(result.error || "Failed to create space");
+							}
 							toast.success("Space created successfully");
+							router.refresh();
 						}
 
 						form.reset();
@@ -270,7 +295,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 					<div className="space-y-1">
 						<Label htmlFor="icon">Space Icon</Label>
 						<CardDescription className="w-full max-w-[400px]">
-							Upload a custom logo or icon for your space.
+							Upload a custom logo or icon for your space (max 1MB).
 						</CardDescription>
 					</div>
 
@@ -280,7 +305,7 @@ export const NewSpaceForm: React.FC<NewSpaceFormProps> = (props) => {
 							name="icon"
 							initialPreviewUrl={space?.iconUrl || null}
 							notDraggingClassName="hover:bg-gray-3"
-							onChange={setSelectedFile}
+							onChange={handleFileChange}
 							disabled={isUploading}
 							isLoading={isUploading}
 						/>

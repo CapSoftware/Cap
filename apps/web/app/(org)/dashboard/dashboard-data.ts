@@ -6,7 +6,6 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
-	spaceMembers,
 	spaces,
 	users,
 	videos,
@@ -135,7 +134,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				return yield* db
 					.use((db) =>
 						db
-							.selectDistinct({
+							.select({
 								id: spaces.id,
 								primary: spaces.primary,
 								privacy: spaces.privacy,
@@ -144,7 +143,6 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								organizationId: spaces.organizationId,
 								createdById: spaces.createdById,
 								iconUrl: spaces.iconUrl,
-								memberImage: users.image,
 								memberCount: sql<number>`(
           SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
         )`,
@@ -153,18 +151,20 @@ export async function getDashboardData(user: typeof userSelectProps) {
         )`,
 							})
 							.from(spaces)
-							.leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
-							.leftJoin(users, eq(spaceMembers.userId, users.id))
 							.where(
 								and(
 									eq(spaces.organizationId, activeOrganizationId),
 									or(
 										// User is the space creator
 										eq(spaces.createdById, user.id),
-										// User is a member of the space
-										eq(spaceMembers.userId, user.id),
 										// Space is public within the organization
 										eq(spaces.privacy, "Public"),
+										// User is a member of the space
+										sql`EXISTS (
+          SELECT 1 FROM space_members 
+          WHERE space_members.spaceId = spaces.id 
+          AND space_members.userId = ${user.id}
+        )`,
 									),
 								),
 							),

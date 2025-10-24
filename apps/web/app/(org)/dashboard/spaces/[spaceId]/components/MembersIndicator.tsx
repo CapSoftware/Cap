@@ -16,6 +16,7 @@ import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -44,6 +45,7 @@ export const MembersIndicator = ({
 	onAddVideos,
 }: MembersIndicatorProps) => {
 	const { user } = useDashboardContext();
+	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [isLoading, setIsLoading] = useState(false);
 
@@ -81,6 +83,7 @@ export const MembersIndicator = ({
 				role: "member",
 			});
 			toast.success("Members updated!");
+			router.refresh();
 		} catch (error) {
 			console.error("Failed to update members:", error);
 			toast.error("Failed to update members");
