@@ -8,9 +8,9 @@ import {
 	createEffect,
 	createMemo,
 	createRoot,
+	createSignal,
 	For,
 	Match,
-	mergeProps,
 	Show,
 	Switch,
 } from "solid-js";
@@ -204,18 +204,40 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-					const prevDuration = () =>
-						segments()
-							.slice(0, i())
-							.reduce((t, s) => t + (s.end - s.start) / s.timescale, 0);
+					const [isDragging, setIsDragging] = createSignal(false);
+					const [dragOffset, setDragOffset] = createSignal(0);
+					const [initialStart, setInitialStart] = createSignal(segment.start);
 
-					const relativeSegment = mergeProps(segment, () => ({
-						start: prevDuration(),
-						end: segment.end - segment.start + prevDuration(),
-					}));
+					const prefixOffsets = createMemo(() => {
+						const segs = segments();
+						const out: number[] = new Array(segs.length);
+						let sum = 0;
+						for (let k = 0; k < segs.length; k++) {
+							out[k] = sum;
+							sum += (segs[k].end - segs[k].start) / segs[k].timescale;
+						}
+						return out;
+					});
+					const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
-					const segmentX = useSegmentTranslateX(() => relativeSegment);
-					const segmentWidth = useSegmentWidth(() => relativeSegment);
+					const relativeSegment = createMemo(() => {
+						const offset = isDragging()
+							? dragOffset() / (segment.timescale || 1)
+							: 0;
+
+						return {
+							start: prevDuration() + offset,
+							end:
+								prevDuration() +
+								offset +
+								(segment.end - segment.start) / segment.timescale,
+							timescale: segment.timescale,
+							recordingSegment: segment.recordingSegment,
+						};
+					});
+
+					const segmentX = useSegmentTranslateX(relativeSegment);
+					const segmentWidth = useSegmentWidth(relativeSegment);
 
 					const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
@@ -358,7 +380,7 @@ export function ClipTrack(
 										: "border-transparent",
 								)}
 								innerClass="ring-blue-9"
-								segment={relativeSegment}
+								segment={relativeSegment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 
@@ -399,6 +421,8 @@ export function ClipTrack(
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										const start = segment.start;
+										setInitialStart(start);
+										setIsDragging(true);
 
 										if (split()) return;
 										const maxSegmentDuration =
@@ -432,21 +456,27 @@ export function ClipTrack(
 										function update(event: MouseEvent) {
 											const newStart =
 												start +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+												(event.clientX - downEvent.clientX) *
+													secsPerPixel() *
+													segment.timescale;
+
+											const clampedStart = Math.min(
+												Math.max(
+													newStart,
+													prevSegmentIsSameClip ? prevSegment.end : 0,
+													segment.end - maxDuration,
+												),
+												segment.end - 1,
+											);
+
+											setDragOffset(clampedStart - initialStart());
 
 											setProject(
 												"timeline",
 												"segments",
 												i(),
 												"start",
-												Math.min(
-													Math.max(
-														newStart,
-														prevSegmentIsSameClip ? prevSegment.end : 0,
-														segment.end - maxDuration,
-													),
-													segment.end - 1,
-												),
+												clampedStart,
 											);
 										}
 
@@ -458,6 +488,24 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
+
+													setIsDragging(false);
+													setDragOffset(0);
+
+													onHandleReleased();
+												},
+												blur: () => {
+													dispose();
+													resumeHistory();
+													setIsDragging(false);
+													setDragOffset(0);
+													onHandleReleased();
+												},
+												mouseleave: () => {
+													dispose();
+													resumeHistory();
+													setIsDragging(false);
+													setDragOffset(0);
 													onHandleReleased();
 												},
 											});
@@ -516,9 +564,11 @@ export function ClipTrack(
 												: false;
 
 										function update(event: MouseEvent) {
-											const newEnd =
-												end +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+											const deltaRecorded =
+												(event.clientX - downEvent.clientX) *
+													secsPerPixel() *
+													(segment.timescale || 1);
+											const newEnd = end + deltaRecorded;
 
 											setProject(
 												"timeline",
@@ -528,7 +578,8 @@ export function ClipTrack(
 												Math.max(
 													Math.min(
 														newEnd,
-														segment.end + availableTimelineDuration,
+														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
+														end + availableTimelineDuration * (segment.timescale || 1),
 														nextSegmentIsSameClip
 															? nextSegment.start
 															: maxSegmentDuration,
@@ -546,6 +597,16 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
+													onHandleReleased();
+												},
+												blur: () => {
+													dispose();
+													resumeHistory();
+													onHandleReleased();
+												},
+												mouseleave: () => {
+													dispose();
+													resumeHistory();
 													onHandleReleased();
 												},
 											});
@@ -649,7 +710,7 @@ function CutOffsetButton(props: {
 			{props.value === 0 ? (
 				<IconCapScissors class="size-3.5" />
 			) : (
-				<>{formatTime(props.value)}</>
+				formatTime(props.value)
 			)}
 		</button>
 	);
