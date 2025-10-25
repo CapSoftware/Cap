@@ -10,6 +10,11 @@ const packageJson = JSON.parse(
 );
 const { version } = packageJson;
 
+if (process.env.NODE_ENV === "development" && process.env.ENABLE_CLOUDFLARE_DEV) {
+	const { initOpenNextCloudflareForDev } = await import("@opennextjs/cloudflare");
+	initOpenNextCloudflareForDev();
+}
+
 const nextConfig = {
 	reactStrictMode: true,
 	transpilePackages: [
@@ -38,6 +43,8 @@ const nextConfig = {
 		],
 	},
 	images: {
+		loader: "custom",
+		loaderFile: "./image-loader.ts",
 		remotePatterns: [
 			{
 				protocol: "https",

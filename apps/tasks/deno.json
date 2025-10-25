@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-all --watch src/index-deno.ts",
+    "start": "deno run --allow-all src/index-deno.ts"
+  },
+  "imports": {
+    "hono": "https://deno.land/x/hono@v4.7.1/mod.ts",
+    "hono/": "https://deno.land/x/hono@v4.7.1/"
+  }
+}
