@@ -4,9 +4,14 @@
 	"private": true,
 	"scripts": {
 		"dev": "dotenv -e ../../.env -- next dev",
-		"build": "next build --turbopack",
-		"build:web": "next build --turbopack",
+		"build": "next build",
+		"build:web": "next build",
 		"build:web:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
+		"build:cloudflare": "next build && opennextjs-cloudflare build",
+		"preview:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+		"deploy:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare deploy -- --keep-vars",
+		"upload:cloudflare": "opennextjs-cloudflare build && opennextjs-cloudflare upload -- --keep-vars",
+		"cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
 		"start": "next start",
 		"compress-images": "bash tools/compress-images.sh"
 	},
@@ -131,6 +136,7 @@
 	"devDependencies": {
 		"@babel/plugin-transform-private-methods": "^7.27.1",
 		"@babel/plugin-transform-private-property-in-object": "^7.27.1",
+		"@opennextjs/cloudflare": "^1.11.0",
 		"@smithy/types": "^4.3.1",
 		"@types/canvas-confetti": "^1.9.0",
 		"@types/file-saver": "^2.0.7",
@@ -148,7 +154,8 @@
 		"eslint-config-next": "15.5.3",
 		"postcss": "^8.4.23",
 		"tailwindcss": "^3",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"wrangler": "^4.45.0"
 	},
 	"engines": {
 		"node": "20"

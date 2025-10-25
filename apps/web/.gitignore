@@ -34,3 +34,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 pnpm-lock.yaml
+
+# cloudflare
+.open-next/
+.wrangler/
+.dev.vars
+cloudflare-env.d.ts

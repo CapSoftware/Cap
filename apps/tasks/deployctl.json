@@ -1,0 +1,5 @@
+{
+  "name": "cap-tasks",
+  "entrypoint": "src/index-deno.ts",
+  "include": ["src/"]
+}
