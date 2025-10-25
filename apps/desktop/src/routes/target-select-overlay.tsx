@@ -35,6 +35,7 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import { BaseControls } from "./(window-chrome)/new-main/BaseControls";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
@@ -874,77 +875,86 @@ function RecordingControls(props: {
 				</div>
 			}
 		>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
-				<div
-					onClick={() => {
-						setOptions("targetMode", null);
-						commands.closeTargetSelectOverlays();
-					}}
-					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-				</div>
-				<div
-					data-inactive={
-						(rawOptions.mode === "instant" && !auth.data) ||
-						startRecording.isPending
-					}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
-					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
-							emit("start-sign-in");
-							return;
-						}
-						if (startRecording.isPending) return;
-
-						startRecording.mutate();
-					}}
-				>
+			<div class="grid grid-rows-2 gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+				<div class="flex gap-2.5 items-center justify-center w-full">
 					<div
-						class={cx(
-							"flex items-center py-1 pl-4 transition-colors",
-							!startRecording.isPending && "hover:bg-blue-10",
-						)}
+						onClick={() => {
+							setOptions("targetMode", null);
+							commands.closeTargetSelectOverlays();
+						}}
+						class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 					>
-						{rawOptions.mode === "studio" ? (
-							<IconCapFilmCut class="size-4" />
-						) : (
-							<IconCapInstant class="size-4" />
-						)}
-						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
-									? "Sign In To Use"
-									: "Start Recording"}
-							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
-							</span>
+						<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+					</div>
+					<div
+						data-inactive={
+							(rawOptions.mode === "instant" && !auth.data) ||
+							startRecording.isPending
+						}
+						class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
+						onClick={() => {
+							if (rawOptions.mode === "instant" && !auth.data) {
+								emit("start-sign-in");
+								return;
+							}
+							if (startRecording.isPending) return;
+
+							startRecording.mutate();
+						}}
+					>
+						<div
+							class={cx(
+								"flex items-center py-1 pl-4 transition-colors",
+								!startRecording.isPending && "hover:bg-blue-10",
+							)}
+						>
+							{rawOptions.mode === "studio" ? (
+								<IconCapFilmCut class="size-4" />
+							) : (
+								<IconCapInstant class="size-4" />
+							)}
+							<div class="flex flex-col mr-2 ml-3">
+								<span class="text-sm font-medium text-nowrap">
+									{rawOptions.mode === "instant" && !auth.data
+										? "Sign In To Use"
+										: "Start Recording"}
+								</span>
+								<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
+									{`${capitalize(rawOptions.mode)} Mode`}
+								</span>
+							</div>
+						</div>
+						<div
+							class={cx(
+								"pl-2.5 transition-colors pr-3 py-1.5 flex items-center",
+								!startRecording.isPending && "group-hover:bg-blue-10",
+							)}
+							onClick={(e) => {
+								e.stopPropagation();
+								menuModes().then((menu) => menu.popup());
+							}}
+						>
+							<IconCapCaretDown class="focus:rotate-90" />
 						</div>
 					</div>
 					<div
-						class={cx(
-							"pl-2.5 transition-colors pr-3 py-1.5 flex items-center",
-							!startRecording.isPending && "group-hover:bg-blue-10",
-						)}
 						onClick={(e) => {
 							e.stopPropagation();
-							menuModes().then((menu) => menu.popup());
+							preRecordingMenu().then((menu) => menu.popup());
 						}}
+						class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
 					>
-						<IconCapCaretDown class="focus:rotate-90" />
+						<IconCapGear class="will-change-transform size-5" />
 					</div>
 				</div>
-				<div
-					onClick={(e) => {
-						e.stopPropagation();
-						preRecordingMenu().then((menu) => menu.popup());
-					}}
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapGear class="will-change-transform size-5" />
-				</div>
+
+				<BaseControls />
 			</div>
+
+			{/*<div class="bg-gray-1 p-3 m-2 rounded-md">
+				<BaseControls />
+			</div>*/}
+
 			<div
 				onClick={() => props.setToggleModeSelect?.(true)}
 				class="flex gap-1 items-center mb-5 transition-opacity duration-200 hover:opacity-60"
@@ -994,10 +1004,4 @@ function ResizeHandle(
 			style={{ ...props.style, transform: "translate(-50%, -50%)" }}
 		/>
 	);
-}
-
-function getDisplayId(displayId: string | undefined) {
-	const id = Number(displayId);
-	if (Number.isNaN(id)) return 0;
-	return id;
 }

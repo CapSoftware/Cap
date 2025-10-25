@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
 import {
 	getAllWebviewWindows,
@@ -34,25 +34,17 @@ import { Input } from "~/routes/editor/ui";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
-	createCameraMutation,
 	createCurrentRecordingQuery,
 	createLicenseQuery,
-	listAudioDevices,
 	listDisplaysWithThumbnails,
-	listScreens,
-	listVideoDevices,
-	listWindows,
 	listWindowsWithThumbnails,
 } from "~/utils/queries";
 import {
-	type CameraInfo,
 	type CaptureDisplay,
 	type CaptureDisplayWithThumbnail,
 	type CaptureWindow,
 	type CaptureWindowWithThumbnail,
 	commands,
-	type DeviceOrModelID,
-	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
@@ -64,13 +56,12 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "../OptionsContext";
-import CameraSelect from "./CameraSelect";
+import { BaseControls } from "./BaseControls";
 import ChangelogButton from "./ChangeLogButton";
-import MicrophoneSelect from "./MicrophoneSelect";
-import SystemAudio from "./SystemAudio";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import { useSystemHardwareOptions } from "./useSystemHardwareOptions";
 
 function getWindowSize() {
 	return {
@@ -78,15 +69,6 @@ function getWindowSize() {
 		height: 256,
 	};
 }
-
-const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
-	return cameras.find((c) => {
-		if (!id) return false;
-		return "DeviceID" in id
-			? id.DeviceID === c.device_id
-			: id.ModelID === c.model_id;
-	});
-};
 
 type WindowListItem = Pick<
 	CaptureWindow,
@@ -326,9 +308,8 @@ function Page() {
 		refetchInterval: false,
 	}));
 
-	const screens = useQuery(() => listScreens);
-	const windows = useQuery(() => listWindows);
-
+	const { screens, windows, cameras, mics, options } =
+		useSystemHardwareOptions();
 	const hasDisplayTargetsData = () => displayTargets.status === "success";
 	const hasWindowTargetsData = () => windowTargets.status === "success";
 
@@ -449,9 +430,6 @@ function Page() {
 		if (!monitor) return;
 	});
 
-	const cameras = useQuery(() => listVideoDevices);
-	const mics = useQuery(() => listAudioDevices);
-
 	const windowListSignature = createMemo(() =>
 		createWindowSignature(windows.data),
 	);
@@ -494,74 +472,6 @@ function Page() {
 		void displayTargets.refetch();
 	});
 
-	cameras.promise.then((cameras) => {
-		if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
-			setOptions("cameraLabel", null);
-		}
-	});
-
-	mics.promise.then((mics) => {
-		if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
-			setOptions("micName", null);
-		}
-	});
-
-	const options = {
-		screen: () => {
-			let screen;
-
-			if (rawOptions.captureTarget.variant === "display") {
-				const screenId = rawOptions.captureTarget.id;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
-			} else if (rawOptions.captureTarget.variant === "area") {
-				const screenId = rawOptions.captureTarget.screen;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
-			}
-
-			return screen;
-		},
-		window: () => {
-			let win;
-
-			if (rawOptions.captureTarget.variant === "window") {
-				const windowId = rawOptions.captureTarget.id;
-				win = windows.data?.find((s) => s.id === windowId) ?? windows.data?.[0];
-			}
-
-			return win;
-		},
-		camera: () => {
-			if (!rawOptions.cameraID) return undefined;
-			return findCamera(cameras.data || [], rawOptions.cameraID);
-		},
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
-		target: (): ScreenCaptureTarget | undefined => {
-			switch (rawOptions.captureTarget.variant) {
-				case "display": {
-					const screen = options.screen();
-					if (!screen) return;
-					return { variant: "display", id: screen.id };
-				}
-				case "window": {
-					const window = options.window();
-					if (!window) return;
-					return { variant: "window", id: window.id };
-				}
-				case "area": {
-					const screen = options.screen();
-					if (!screen) return;
-					return {
-						variant: "area",
-						bounds: rawOptions.captureTarget.bounds,
-						screen: screen.id,
-					};
-				}
-			}
-		},
-	};
-
 	createEffect(() => {
 		const target = options.target();
 		if (!target) return;
@@ -576,50 +486,8 @@ function Page() {
 		}
 	});
 
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			await commands.setMicInput(name);
-			setOptions("micName", name);
-		},
-	}));
-
-	const setCamera = createCameraMutation();
-
-	onMount(() => {
-		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
-			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
-		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
-			setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
-		else setCamera.mutate(null);
-	});
-
 	const license = createLicenseQuery();
-
 	const signIn = createSignInMutation();
-
-	const BaseControls = () => (
-		<div class="space-y-2">
-			<CameraSelect
-				disabled={cameras.isPending}
-				options={cameras.data ?? []}
-				value={options.camera() ?? null}
-				onChange={(c) => {
-					if (!c) setCamera.mutate(null);
-					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-					else setCamera.mutate({ DeviceID: c.device_id });
-				}}
-			/>
-			<MicrophoneSelect
-				disabled={mics.isPending}
-				options={mics.isPending ? [] : (mics.data ?? [])}
-				value={
-					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-				}
-				onChange={(v) => setMicInput.mutate(v)}
-			/>
-			<SystemAudio />
-		</div>
-	);
 
 	const TargetSelectionHome = () => (
 		<Transition
