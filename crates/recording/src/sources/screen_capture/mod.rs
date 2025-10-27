@@ -295,7 +295,26 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let fps = max_fps.min(display.refresh_rate() as u32);
+        let reported_refresh_rate = display.refresh_rate();
+        let fallback_refresh = 60;
+        let rounded_refresh = reported_refresh_rate.round();
+        let is_invalid_refresh = !rounded_refresh.is_finite() || rounded_refresh <= 0.0;
+        let capped_refresh = if is_invalid_refresh {
+            fallback_refresh as f64
+        } else {
+            rounded_refresh.min(500.0)
+        };
+        let target_refresh = if is_invalid_refresh {
+            warn!(
+                ?reported_refresh_rate,
+                fallback = fallback_refresh,
+                "Display reported invalid refresh rate; falling back to default"
+            );
+            fallback_refresh
+        } else {
+            capped_refresh as u32
+        };
+        let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
         let output_size = crop_bounds
             .clone()
