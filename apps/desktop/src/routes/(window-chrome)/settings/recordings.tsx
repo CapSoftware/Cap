@@ -177,7 +177,7 @@ export default function Recordings() {
 							No {activeTab()} recordings
 						</p>
 					</Show>
-					<ul class="p-4 flex flex-col gap-5 w-full text-[--text-primary]">
+					<ul class="flex flex-col w-full text-[--text-primary]">
 						<For each={filteredRecordings()}>
 							{(recording) => (
 								<RecordingItem
@@ -219,9 +219,23 @@ function RecordingItem(props: {
 		mode().charAt(0).toUpperCase() + mode().slice(1);
 
 	const queryClient = useQueryClient();
+	const studioCompleteCheck = () =>
+		mode() === "studio" && props.recording.meta.status.status === "Complete";
 
 	return (
-		<li class="flex flex-row justify-between [&:not(:last-child)]:border-b [&:not(:last-child)]:pb-5 [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200 hover:bg-gray-2">
+		<li
+			onClick={() => {
+				if (studioCompleteCheck()) {
+					props.onOpenEditor();
+				}
+			}}
+			class={cx(
+				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
+				studioCompleteCheck()
+					? "cursor-pointer hover:bg-gray-3"
+					: "cursor-default",
+			)}
+		>
 			<div class="flex gap-5 items-center">
 				<Show
 					when={imageExists()}
@@ -242,7 +256,7 @@ function RecordingItem(props: {
 						<div
 							class={cx(
 								"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
-								mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+								mode() === "instant" ? "bg-blue-100" : "bg-gray-4",
 							)}
 						>
 							{mode() === "instant" ? (
