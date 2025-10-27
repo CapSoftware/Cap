@@ -219,20 +219,19 @@ function RecordingItem(props: {
 		mode().charAt(0).toUpperCase() + mode().slice(1);
 
 	const queryClient = useQueryClient();
+	const studioCompleteCheck = () =>
+		mode() === "studio" && props.recording.meta.status.status === "Complete";
 
 	return (
 		<li
 			onClick={() => {
-				if (
-					mode() === "studio" &&
-					props.recording.meta.status.status === "Complete"
-				) {
+				if (studioCompleteCheck()) {
 					props.onOpenEditor();
 				}
 			}}
 			class={cx(
 				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
-				mode() === "studio"
+				studioCompleteCheck()
 					? "cursor-pointer hover:bg-gray-3"
 					: "cursor-default",
 			)}
