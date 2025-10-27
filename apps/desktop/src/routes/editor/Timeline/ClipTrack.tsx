@@ -419,7 +419,9 @@ export function ClipTrack(
 
 														setEditorState("timeline", "selection", {
 															type: "clip" as const,
-															index: rangeIndices as number | number[],
+															index: (rangeIndices.length === 1
+																? rangeIndices[0]
+																: rangeIndices) as number | number[],
 														});
 													} else if (
 														isMultiSelect &&
@@ -450,18 +452,22 @@ export function ClipTrack(
 															}
 														} else {
 															// Add to selection
+															const newIndices = [
+																...existingIndices,
+																currentIndex,
+															];
 															setEditorState("timeline", "selection", {
 																type: "clip" as const,
-																index: [...existingIndices, currentIndex] as
-																	| number
-																	| number[],
+																index: (newIndices.length === 1
+																	? newIndices[0]
+																	: newIndices) as number | number[],
 															});
 														}
 													} else {
 														// Normal single selection
 														setEditorState("timeline", "selection", {
 															type: "clip" as const,
-															index: currentIndex as number | number[],
+															index: currentIndex,
 														});
 													}
 
