@@ -75,7 +75,7 @@ impl Muxer for WindowsMuxer {
                 let encoder_preferences = &config.encoder_preferences;
 
                 let encoder = (|| {
-                    let mut fallback = |reason: Option<String>| {
+                    let fallback = |reason: Option<String>| {
                         use tracing::{error, info};
 
                         encoder_preferences.force_software_only();
@@ -96,11 +96,19 @@ impl Muxer for WindowsMuxer {
                             video_config.height
                         };
 
-                        let mut output = output.lock().unwrap();
+                        let mut output_guard = match output.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => {
+                                return Err(anyhow!(
+                                    "ScreenSoftwareEncoder: failed to lock output mutex: {}",
+                                    poisoned
+                                ))
+                            }
+                        };
 
                         cap_enc_ffmpeg::H264Encoder::builder(video_config)
                             .with_output_size(fallback_width, fallback_height)
-                            .and_then(|builder| builder.build(&mut *output))
+                            .and_then(|builder| builder.build(&mut *output_guard))
                             .map(either::Right)
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
@@ -118,13 +126,42 @@ impl Muxer for WindowsMuxer {
                         config.bitrate_multiplier,
                     ) {
                         Ok(encoder) => {
+                            let width = match u32::try_from(output_size.Width) {
+                                Ok(width) if width > 0 => width,
+                                _ => {
+                                    return fallback(Some(format!(
+                                        "Invalid output width: {}",
+                                        output_size.Width
+                                    )))
+                                }
+                            };
+
+                            let height = match u32::try_from(output_size.Height) {
+                                Ok(height) if height > 0 => height,
+                                _ => {
+                                    return fallback(Some(format!(
+                                        "Invalid output height: {}",
+                                        output_size.Height
+                                    )))
+                                }
+                            };
+
                             let muxer = {
-                                let mut output = output.lock().unwrap();
+                                let mut output_guard = match output.lock() {
+                                    Ok(guard) => guard,
+                                    Err(poisoned) => {
+                                        return fallback(Some(format!(
+                                            "Failed to lock output mutex: {}",
+                                            poisoned
+                                        )))
+                                    }
+                                };
+
                                 cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                    &mut *output,
+                                    &mut *output_guard,
                                     cap_mediafoundation_ffmpeg::MuxerConfig {
-                                        width: output_size.Width as u32,
-                                        height: output_size.Height as u32,
+                                        width,
+                                        height,
                                         fps: config.frame_rate,
                                         bitrate: encoder.bitrate(),
                                     },
