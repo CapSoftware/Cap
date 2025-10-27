@@ -734,18 +734,65 @@ export function ConfigSidebar() {
 									const sceneSelection = selection();
 									if (sceneSelection.type !== "scene") return;
 
-									const segment =
-										project.timeline?.sceneSegments?.[sceneSelection.index];
-									if (!segment) return;
+									const segments = sceneSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.sceneSegments?.[idx],
+											index: idx,
+										}))
+										.filter((s) => s.segment !== undefined);
 
-									return { selection: sceneSelection, segment };
+									if (segments.length === 0) return;
+									return { selection: sceneSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<SceneSegmentConfig
-										segment={value().segment}
-										segmentIndex={value().selection.index}
-									/>
+									<Show
+										when={value().segments.length > 1}
+										fallback={
+											<SceneSegmentConfig
+												segment={value().segments[0].segment!}
+												segmentIndex={value().segments[0].index}
+											/>
+										}
+									>
+										<div class="space-y-4">
+											<div class="flex flex-row justify-between items-center">
+												<div class="flex gap-2 items-center">
+													<EditorButton
+														onClick={() =>
+															setEditorState("timeline", "selection", null)
+														}
+														leftIcon={<IconLucideCheck />}
+													>
+														Done
+													</EditorButton>
+													<span class="text-sm text-gray-10">
+														{value().segments.length} scene{" "}
+														{value().segments.length === 1
+															? "segment"
+															: "segments"}{" "}
+														selected
+													</span>
+												</div>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														const indices = value().selection.indices;
+
+														// Delete segments in reverse order to maintain indices
+														[...indices]
+															.sort((a, b) => b - a)
+															.forEach((idx) => {
+																projectActions.deleteSceneSegment(idx);
+															});
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
+											</div>
+										</div>
+									</Show>
 								)}
 							</Show>
 							<Show
@@ -753,102 +800,64 @@ export function ConfigSidebar() {
 									const clipSelection = selection();
 									if (clipSelection.type !== "clip") return;
 
-									// Handle multiple clip selection
-									if (Array.isArray(clipSelection.index)) {
-										const segments = clipSelection.index
-											.map((idx) => ({
-												segment: project.timeline?.segments?.[idx],
-												index: idx,
-											}))
-											.filter((s) => s.segment !== undefined);
+									const segments = clipSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.segments?.[idx],
+											index: idx,
+										}))
+										.filter((s) => s.segment !== undefined);
 
-										if (segments.length === 0) return;
-										return { selection: clipSelection, segments };
-									}
-
-									// Handle single clip selection
-									const segment =
-										project.timeline?.segments?.[clipSelection.index];
-									if (!segment) return;
-
-									return { selection: clipSelection, segment };
+									if (segments.length === 0) return;
+									return { selection: clipSelection, segments };
 								})()}
 							>
 								{(value) => (
 									<Show
-										when={(() => {
-											const v = value();
-											if ("segments" in v && Array.isArray(v.segments)) {
-												return v as {
-													selection: { type: "clip"; index: number[] };
-													segments: Array<{
-														segment: TimelineSegment | undefined;
-														index: number;
-													}>;
-												};
-											}
-											return undefined;
-										})()}
+										when={value().segments.length > 1}
 										fallback={
 											<ClipSegmentConfig
-												segment={
-													(
-														value() as {
-															selection: { type: "clip"; index: number };
-															segment: TimelineSegment;
-														}
-													).segment
-												}
-												segmentIndex={
-													(
-														value() as {
-															selection: { type: "clip"; index: number };
-															segment: TimelineSegment;
-														}
-													).selection.index
-												}
+												segment={value().segments[0].segment!}
+												segmentIndex={value().segments[0].index}
 											/>
 										}
 									>
-										{(multiValue) => (
-											<div class="space-y-4">
-												<div class="flex flex-row justify-between items-center">
-													<div class="flex gap-2 items-center">
-														<EditorButton
-															onClick={() =>
-																setEditorState("timeline", "selection", null)
-															}
-															leftIcon={<IconLucideCheck />}
-														>
-															Done
-														</EditorButton>
-														<span class="text-sm text-gray-10">
-															{multiValue().segments.length} clip{" "}
-															{multiValue().segments.length === 1
-																? "segment"
-																: "segments"}{" "}
-															selected
-														</span>
-													</div>
+										<div class="space-y-4">
+											<div class="flex flex-row justify-between items-center">
+												<div class="flex gap-2 items-center">
 													<EditorButton
-														variant="danger"
-														onClick={() => {
-															const indices = multiValue().selection.index;
-
-															// Delete segments in reverse order to maintain indices
-															[...indices]
-																.sort((a, b) => b - a)
-																.forEach((idx) => {
-																	projectActions.deleteClipSegment(idx);
-																});
-														}}
-														leftIcon={<IconCapTrash />}
+														onClick={() =>
+															setEditorState("timeline", "selection", null)
+														}
+														leftIcon={<IconLucideCheck />}
 													>
-														Delete
+														Done
 													</EditorButton>
+													<span class="text-sm text-gray-10">
+														{value().segments.length} clip{" "}
+														{value().segments.length === 1
+															? "segment"
+															: "segments"}{" "}
+														selected
+													</span>
 												</div>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														const indices = value().selection.indices;
+
+														// Delete segments in reverse order to maintain indices
+														[...indices]
+															.sort((a, b) => b - a)
+															.forEach((idx) => {
+																projectActions.deleteClipSegment(idx);
+															});
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
 											</div>
-										)}
+										</div>
 									</Show>
 								)}
 							</Show>

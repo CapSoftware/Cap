@@ -244,15 +244,7 @@ export function ClipTrack(
 
 						if (segmentIndex === undefined || segmentIndex === -1) return false;
 
-						// Support both single index and array of indices
-						if (typeof selection.index === "number") {
-							return segmentIndex === selection.index;
-						}
-
-						return (
-							Array.isArray(selection.index) &&
-							selection.index.includes(segmentIndex)
-						);
+						return selection.indices.includes(segmentIndex);
 					});
 
 					const micWaveform = () => {
@@ -403,11 +395,7 @@ export function ClipTrack(
 														selection.type === "clip"
 													) {
 														// Range selection: select from last selected to current
-														const existingIndices = Array.isArray(
-															selection.index,
-														)
-															? selection.index
-															: [selection.index];
+														const existingIndices = selection.indices;
 														const lastIndex =
 															existingIndices[existingIndices.length - 1];
 														const start = Math.min(lastIndex, currentIndex);
@@ -419,9 +407,7 @@ export function ClipTrack(
 
 														setEditorState("timeline", "selection", {
 															type: "clip" as const,
-															index: (rangeIndices.length === 1
-																? rangeIndices[0]
-																: rangeIndices) as number | number[],
+															indices: rangeIndices,
 														});
 													} else if (
 														isMultiSelect &&
@@ -429,11 +415,7 @@ export function ClipTrack(
 														selection.type === "clip"
 													) {
 														// Multi-select: toggle current index
-														const existingIndices = Array.isArray(
-															selection.index,
-														)
-															? selection.index
-															: [selection.index];
+														const existingIndices = selection.indices;
 
 														if (existingIndices.includes(currentIndex)) {
 															// Remove from selection
@@ -443,31 +425,23 @@ export function ClipTrack(
 															if (newIndices.length > 0) {
 																setEditorState("timeline", "selection", {
 																	type: "clip" as const,
-																	index: (newIndices.length === 1
-																		? newIndices[0]
-																		: newIndices) as number | number[],
+																	indices: newIndices,
 																});
 															} else {
 																setEditorState("timeline", "selection", null);
 															}
 														} else {
 															// Add to selection
-															const newIndices = [
-																...existingIndices,
-																currentIndex,
-															];
 															setEditorState("timeline", "selection", {
 																type: "clip" as const,
-																index: (newIndices.length === 1
-																	? newIndices[0]
-																	: newIndices) as number | number[],
+																indices: [...existingIndices, currentIndex],
 															});
 														}
 													} else {
 														// Normal single selection
 														setEditorState("timeline", "selection", {
 															type: "clip" as const,
-															index: currentIndex,
+															indices: [currentIndex],
 														});
 													}
 

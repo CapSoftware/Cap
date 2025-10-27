@@ -223,9 +223,16 @@ function RecordingItem(props: {
 	return (
 		<li
 			onClick={() => {
-				props.onOpenEditor();
+				if (mode() === "studio") {
+					props.onOpenEditor();
+				}
 			}}
-			class="flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200 hover:bg-gray-3"
+			class={cx(
+				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
+				mode() === "studio"
+					? "cursor-pointer hover:bg-gray-3"
+					: "cursor-default",
+			)}
 		>
 			<div class="flex gap-5 items-center">
 				<Show

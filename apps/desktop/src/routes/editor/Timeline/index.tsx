@@ -141,9 +141,19 @@ export function Timeline() {
 			if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "clip") {
-				projectActions.deleteClipSegment(selection.index);
+				// Delete all selected clips in reverse order
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteClipSegment(idx);
+					});
 			} else if (selection.type === "scene") {
-				projectActions.deleteSceneSegment(selection.index);
+				// Delete all selected scenes in reverse order
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteSceneSegment(idx);
+					});
 			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			// Allow cutting while playing: use playbackTime when previewTime is null

@@ -396,20 +396,9 @@ export function ZoomTrack(props: {
 						);
 
 						// Support both single selection (index) and multi-selection (indices)
-						if (
-							"indices" in selection &&
-							Array.isArray(selection.indices) &&
-							segmentIndex !== undefined
-						) {
-							return selection.indices.includes(segmentIndex);
-						} else if (
-							"index" in selection &&
-							typeof selection.index === "number"
-						) {
-							return segmentIndex === selection.index;
-						}
+						if (segmentIndex === undefined || segmentIndex === -1) return false;
 
-						return false;
+						return selection.indices.includes(segmentIndex);
 					});
 
 					return (
