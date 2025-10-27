@@ -75,9 +75,7 @@ impl Muxer for WindowsMuxer {
                 let encoder_preferences = &config.encoder_preferences;
 
                 let encoder = (|| {
-                    let mut output = output.lock().unwrap();
-
-                    let fallback = |reason: Option<String>| {
+                    let mut fallback = |reason: Option<String>| {
                         use tracing::{error, info};
 
                         encoder_preferences.force_software_only();
@@ -98,9 +96,11 @@ impl Muxer for WindowsMuxer {
                             video_config.height
                         };
 
+                        let mut output = output.lock().unwrap();
+
                         cap_enc_ffmpeg::H264Encoder::builder(video_config)
                             .with_output_size(fallback_width, fallback_height)
-                            .and_then(|builder| builder.build(&mut output))
+                            .and_then(|builder| builder.build(&mut *output))
                             .map(either::Right)
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
@@ -117,18 +117,25 @@ impl Muxer for WindowsMuxer {
                         config.frame_rate,
                         config.bitrate_multiplier,
                     ) {
-                        Ok(encoder) => match cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                            &mut output,
-                            cap_mediafoundation_ffmpeg::MuxerConfig {
-                                width: output_size.Width as u32,
-                                height: output_size.Height as u32,
-                                fps: config.frame_rate,
-                                bitrate: encoder.bitrate(),
-                            },
-                        ) {
-                            Ok(muxer) => Ok(either::Left((encoder, muxer))),
-                            Err(err) => fallback(Some(err.to_string())),
-                        },
+                        Ok(encoder) => {
+                            let muxer = {
+                                let mut output = output.lock().unwrap();
+                                cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+                                    &mut *output,
+                                    cap_mediafoundation_ffmpeg::MuxerConfig {
+                                        width: output_size.Width as u32,
+                                        height: output_size.Height as u32,
+                                        fps: config.frame_rate,
+                                        bitrate: encoder.bitrate(),
+                                    },
+                                )
+                            };
+
+                            match muxer {
+                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                                Err(err) => fallback(Some(err.to_string())),
+                            }
+                        }
                         Err(err) => fallback(Some(err.to_string())),
                     }
                 })();

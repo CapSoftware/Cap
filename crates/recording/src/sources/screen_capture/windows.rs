@@ -13,7 +13,6 @@ use futures::{
     FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
 };
-use kameo::prelude::*;
 use scap_direct3d::StopCapturerError;
 use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
@@ -179,7 +178,7 @@ impl output_pipeline::VideoSource for VideoSource {
     where
         Self: Sized,
     {
-        let (mut error_tx, mut error_rx) = mpsc::channel(1);
+        let (error_tx, mut error_rx) = mpsc::channel(1);
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
 
         let tokio_rt = tokio::runtime::Handle::current();
