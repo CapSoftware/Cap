@@ -314,29 +314,42 @@ export function ZoomTrack(props: {
 
 									const currentSelection = editorState.timeline.selection;
 									const segmentIndex = i();
+									const isMultiSelect = e.ctrlKey || e.metaKey;
+									const isRangeSelect = e.shiftKey;
 
-									// Handle multi-selection with Ctrl/Cmd+click
-									if (e.ctrlKey || e.metaKey) {
+									if (isRangeSelect && currentSelection?.type === "zoom") {
+										// Range selection: select from last selected to current
+										const existingIndices = currentSelection.indices;
+										const lastIndex =
+											existingIndices[existingIndices.length - 1];
+										const start = Math.min(lastIndex, segmentIndex);
+										const end = Math.max(lastIndex, segmentIndex);
+										const rangeIndices: number[] = [];
+										for (let idx = start; idx <= end; idx++) {
+											rangeIndices.push(idx);
+										}
+
+										setEditorState("timeline", "selection", {
+											type: "zoom",
+											indices: rangeIndices,
+										});
+									} else if (isMultiSelect) {
+										// Handle multi-selection with Ctrl/Cmd+click
 										if (currentSelection?.type === "zoom") {
-											// Normalize to indices[] from either indices[] or legacy index
-											const baseIndices =
-												"indices" in currentSelection &&
-												Array.isArray(currentSelection.indices)
-													? currentSelection.indices
-													: "index" in currentSelection &&
-															typeof currentSelection.index === "number"
-														? [currentSelection.index]
-														: [];
-
+											const baseIndices = currentSelection.indices;
 											const exists = baseIndices.includes(segmentIndex);
 											const newIndices = exists
 												? baseIndices.filter((idx) => idx !== segmentIndex)
 												: [...baseIndices, segmentIndex];
 
-											setEditorState("timeline", "selection", {
-												type: "zoom",
-												indices: newIndices,
-											});
+											if (newIndices.length > 0) {
+												setEditorState("timeline", "selection", {
+													type: "zoom",
+													indices: newIndices,
+												});
+											} else {
+												setEditorState("timeline", "selection", null);
+											}
 										} else {
 											// Start new multi-selection
 											setEditorState("timeline", "selection", {
@@ -345,6 +358,7 @@ export function ZoomTrack(props: {
 											});
 										}
 									} else {
+										// Normal single selection
 										setEditorState("timeline", "selection", {
 											type: "zoom",
 											indices: [segmentIndex],
