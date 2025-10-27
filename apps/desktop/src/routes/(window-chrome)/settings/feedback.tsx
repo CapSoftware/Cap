@@ -3,7 +3,9 @@ import { action, useAction, useSubmission } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { createSignal } from "solid-js";
+import toast from "solid-toast";
 
+import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 const sendFeedbackAction = action(async (feedback: string) => {
@@ -18,9 +20,23 @@ const sendFeedbackAction = action(async (feedback: string) => {
 
 export default function FeedbackTab() {
 	const [feedback, setFeedback] = createSignal("");
+	const [uploadingLogs, setUploadingLogs] = createSignal(false);
 
 	const submission = useSubmission(sendFeedbackAction);
 	const sendFeedback = useAction(sendFeedbackAction);
+
+	const handleUploadLogs = async () => {
+		setUploadingLogs(true);
+		try {
+			await commands.uploadLogs();
+			toast.success("Logs uploaded successfully");
+		} catch (error) {
+			toast.error("Failed to upload logs");
+			console.error("Failed to upload logs:", error);
+		} finally {
+			setUploadingLogs(false);
+		}
+	};
 
 	return (
 		<div class="flex flex-col w-full h-full">
@@ -73,6 +89,21 @@ export default function FeedbackTab() {
 							</Button>
 						</fieldset>
 					</form>
+
+					<div class="pt-6 border-t border-gray-2">
+						<h3 class="text-sm font-medium text-gray-12 mb-2">Debug Information</h3>
+						<p class="text-sm text-gray-10 mb-3">
+							Upload your logs to help us diagnose issues with Cap. No personal information is included.
+						</p>
+						<Button
+							onClick={handleUploadLogs}
+							size="md"
+							variant="gray"
+							disabled={uploadingLogs()}
+						>
+							{uploadingLogs() ? "Uploading..." : "Upload Logs"}
+						</Button>
+					</div>
 				</div>
 			</div>
 		</div>
