@@ -5,7 +5,7 @@ import { cva, cx } from "class-variance-authority";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import * as React from "react";
 
-type SelectVariant = "default" | "dark" | "white" | "gray" | "transparent";
+type SelectVariant = "default" | "dark" | "gray" | "transparent";
 
 const SelectVariantContext = React.createContext<SelectVariant>("default");
 
@@ -14,10 +14,11 @@ const selectTriggerVariants = cva(
 		"font-medium flex px-4 py-2 transition-all duration-200 text-[13px] outline-0",
 		"rounded-xl border-[1px] items-center justify-between gap-2 whitespace-nowrap",
 		"disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-gray-3 disabled:text-gray-9",
-		"ring-0 ring-gray-3 focus:ring-1 focus:ring-gray-12 focus:ring-offset-2 ring-offset-gray-4",
+		"ring-0 ring-gray-12 ring-offset-0 data-[state=open]:ring-offset-2 ring-offset-gray-1 data-[state=open]:ring-1",
 		"data-[placeholder]:text-gray-1 data-[size=default]:h-[44px] data-[size=sm]:h-[40px]",
 		"*:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2",
-		"[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+		"[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg]:transition-transform [&_svg]:duration-200",
+		"[&[data-state=open]_svg]:rotate-180",
 	),
 	{
 		defaultVariants: {
@@ -27,13 +28,13 @@ const selectTriggerVariants = cva(
 		variants: {
 			variant: {
 				default:
-					"bg-gray-2 border-gray-5 text-gray-12 hover:bg-gray-3 hover:border-gray-6 focus:bg-gray-3 focus:border-gray-6",
-				dark: "bg-gray-12 dark-button-border dark-button-shadow text-gray-1 border-gray-5 hover:bg-gray-11 hover:border-gray-6 focus:bg-gray-11 focus:border-gray-6",
+					"bg-gray-2 border-gray-5 text-gray-12 hover:bg-gray-3 hover:border-gray-6",
+				dark: "bg-gray-12 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-1 border-gray-5 hover:bg-gray-11 hover:border-gray-6",
 				white:
-					"bg-gray-1 text-gray-12 border-gray-5 hover:bg-gray-3 hover:border-gray-6 focus:bg-gray-3 focus:border-gray-6",
-				gray: "bg-gray-5 text-gray-12 border-gray-5 hover:bg-gray-7 hover:border-gray-6 focus:bg-gray-7 focus:border-gray-6",
+					"bg-gray-1 text-gray-12 border-gray-5 hover:bg-gray-3 hover:border-gray-6",
+				gray: "bg-gray-5 text-gray-12 border-gray-5 hover:bg-gray-7 hover:border-gray-6",
 				transparent:
-					"bg-transparent text-gray-12 border-transparent hover:bg-gray-3 hover:border-gray-6 focus:bg-gray-3 focus:border-gray-6",
+					"bg-transparent text-gray-12 border-transparent hover:bg-gray-3 hover:border-gray-6",
 			},
 			size: {
 				default: "w-full",
@@ -47,6 +48,11 @@ const selectContentVariants = cva(
 	cx(
 		"rounded-xl border-[1px] overflow-hidden",
 		"[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+		"data-[state=open]:animate-in data-[state=closed]:animate-out",
+		"data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+		"data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+		"data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2",
+		"data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
 	),
 	{
 		defaultVariants: {
@@ -55,10 +61,10 @@ const selectContentVariants = cva(
 		variants: {
 			variant: {
 				default: "bg-gray-2 border-gray-5 text-gray-12",
-				dark: "hover:bg-gray-11/50 bg-gray-12 dark-button-border dark-button-shadow text-gray-1 border-gray-5",
-				white: "bg-gray-1 text-gray-12 border-gray-5",
+				dark: "hover:bg-gray-11-50 bg-gray-12 dark-button-border dark-button-shadow text-gray-1 border-gray-5",
 				gray: "bg-gray-5 text-gray-12 border-gray-5",
-				transparent: "bg-transparent text-gray-12 border-transparent",
+				transparent:
+					"bg-transparent hover:bg-gray-3 text-gray-12 border-transparent",
 			},
 		},
 	},
@@ -78,10 +84,10 @@ const selectItemVariants = cva(
 		variants: {
 			variant: {
 				default: "text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
-				dark: "text-gray-1 hover:bg-[var(--gray-11-40)] focus:bg-[var(--gray-11-40)]",
-				white: "text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
-				gray: "text-gray-12 hover:bg-gray-6 focus:bg-gray-6",
-				transparent: "text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
+				dark: "text-gray-1 hover:text-gray-12 focus:text-gray-12 hover:bg-gray-1 focus:bg-gray-1",
+				gray: "text-gray-12 hover:text-gray-12 hover:bg-gray-6 focus:bg-gray-6",
+				transparent:
+					"text-gray-12 hover:text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
 			},
 		},
 	},
@@ -118,7 +124,7 @@ function Select({
 			<SelectTrigger variant={variant} size={size} className={className}>
 				<SelectValue placeholder={placeholder} />
 			</SelectTrigger>
-			<SelectContent className="mt-1" variant={variant}>
+			<SelectContent className="mt-2" variant={variant}>
 				{options.map((option) => (
 					<SelectItem key={option.value} value={option.value}>
 						<div className="flex gap-2 items-center">
