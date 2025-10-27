@@ -223,7 +223,10 @@ function RecordingItem(props: {
 	return (
 		<li
 			onClick={() => {
-				if (mode() === "studio") {
+				if (
+					mode() === "studio" &&
+					props.recording.meta.status.status === "Complete"
+				) {
 					props.onOpenEditor();
 				}
 			}}
