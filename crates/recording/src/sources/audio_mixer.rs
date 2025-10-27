@@ -68,29 +68,46 @@ impl AudioMixerBuilder {
     pub fn build(self, output: mpsc::Sender<AudioFrame>) -> Result<AudioMixer, ffmpeg::Error> {
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
-        let mut abuffers = self
-            .sources
-            .iter()
-            .enumerate()
-            .map(|(i, source)| {
-                let info = &source.info;
-                let args = format!(
-                    "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
-                    info.time_base,
-                    info.rate(),
-                    info.sample_format.name(),
-                    info.channel_layout().bits()
-                );
+        let mut abuffers = Vec::new();
+        let mut resamplers = Vec::new();
 
-                debug!("audio mixer input {i}: {args}");
+        let target_info = AudioMixer::INFO;
+        let target_rate = target_info.rate();
+        let target_sample_fmt = target_info.sample_format.name();
+        let target_channel_layout_bits = target_info.channel_layout().bits();
 
-                filter_graph.add(
-                    &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
-                    &format!("src{i}"),
-                    &args,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        for (i, source) in self.sources.iter().enumerate() {
+            let info = &source.info;
+            let args = format!(
+                "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
+                info.time_base,
+                info.rate(),
+                info.sample_format.name(),
+                info.channel_layout().bits()
+            );
+
+            debug!("audio mixer input {i}: {args}");
+
+            let mut abuffer = filter_graph.add(
+                &ffmpeg::filter::find("abuffer").expect("Failed to find abuffer filter"),
+                &format!("src{i}"),
+                &args,
+            )?;
+
+            let mut resample = filter_graph.add(
+                &ffmpeg::filter::find("aresample").expect("Failed to find aresample filter"),
+                &format!("resample{i}"),
+                &format!(
+                    "out_sample_rate={}:out_sample_fmt={}:out_chlayout=0x{:x}",
+                    target_rate, target_sample_fmt, target_channel_layout_bits
+                ),
+            )?;
+
+            abuffer.link(0, &mut resample, 0);
+
+            abuffers.push(abuffer);
+            resamplers.push(resample);
+        }
 
         let mut amix = filter_graph.add(
             &ffmpeg::filter::find("amix").expect("Failed to find amix filter"),
@@ -101,12 +118,15 @@ impl AudioMixerBuilder {
             ),
         )?;
 
-        let aformat_args = "sample_fmts=flt:sample_rates=48000:channel_layouts=stereo";
+        let aformat_args = format!(
+            "sample_fmts={}:sample_rates={}:channel_layouts=0x{:x}",
+            target_sample_fmt, target_rate, target_channel_layout_bits
+        );
 
         let mut aformat = filter_graph.add(
             &ffmpeg::filter::find("aformat").expect("Failed to find aformat filter"),
             "aformat",
-            aformat_args,
+            &aformat_args,
         )?;
 
         let mut abuffersink = filter_graph.add(
@@ -115,8 +135,8 @@ impl AudioMixerBuilder {
             "",
         )?;
 
-        for (i, abuffer) in abuffers.iter_mut().enumerate() {
-            abuffer.link(0, &mut amix, i as u32);
+        for (i, resample) in resamplers.iter_mut().enumerate() {
+            resample.link(0, &mut amix, i as u32);
         }
 
         amix.link(0, &mut aformat, 0);
@@ -136,6 +156,7 @@ impl AudioMixerBuilder {
             samples_out: 0,
             last_tick: None,
             abuffers,
+            resamplers,
             abuffersink,
             output,
             _filter_graph: filter_graph,
@@ -210,6 +231,7 @@ pub struct AudioMixer {
     last_tick: Option<Timestamp>,
     // sample_timestamps: VecDeque<(usize, Timestamp)>,
     abuffers: Vec<ffmpeg::filter::Context>,
+    resamplers: Vec<ffmpeg::filter::Context>,
     abuffersink: ffmpeg::filter::Context,
     _filter_graph: ffmpeg::filter::Graph,
     _amix: ffmpeg::filter::Context,
