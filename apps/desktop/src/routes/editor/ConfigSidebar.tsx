@@ -487,8 +487,8 @@ export function ConfigSidebar() {
 							}
 						/>
 						<Show when={project.cursor.hideWhenIdle}>
-							<Subfield name="Inactivity Delay" class="items-center gap-4">
-								<div class="flex items-center gap-3 flex-1">
+							<Subfield name="Inactivity Delay" class="gap-4 items-center">
+								<div class="flex flex-1 gap-3 items-center">
 									<Slider
 										class="flex-1"
 										value={[cursorIdleDelay()]}
@@ -750,21 +750,106 @@ export function ConfigSidebar() {
 							</Show>
 							<Show
 								when={(() => {
-									const clipSegment = selection();
-									if (clipSegment.type !== "clip") return;
+									const clipSelection = selection();
+									if (clipSelection.type !== "clip") return;
 
+									// Handle multiple clip selection
+									if (Array.isArray(clipSelection.index)) {
+										const segments = clipSelection.index
+											.map((idx) => ({
+												segment: project.timeline?.segments?.[idx],
+												index: idx,
+											}))
+											.filter((s) => s.segment !== undefined);
+
+										if (segments.length === 0) return;
+										return { selection: clipSelection, segments };
+									}
+
+									// Handle single clip selection
 									const segment =
-										project.timeline?.segments?.[clipSegment.index];
+										project.timeline?.segments?.[clipSelection.index];
 									if (!segment) return;
 
-									return { selection: clipSegment, segment };
+									return { selection: clipSelection, segment };
 								})()}
 							>
 								{(value) => (
-									<ClipSegmentConfig
-										segment={value().segment}
-										segmentIndex={value().selection.index}
-									/>
+									<Show
+										when={(() => {
+											const v = value();
+											if ("segments" in v && Array.isArray(v.segments)) {
+												return v as {
+													selection: { type: "clip"; index: number[] };
+													segments: Array<{
+														segment: TimelineSegment | undefined;
+														index: number;
+													}>;
+												};
+											}
+											return undefined;
+										})()}
+										fallback={
+											<ClipSegmentConfig
+												segment={
+													(
+														value() as {
+															selection: { type: "clip"; index: number };
+															segment: TimelineSegment;
+														}
+													).segment
+												}
+												segmentIndex={
+													(
+														value() as {
+															selection: { type: "clip"; index: number };
+															segment: TimelineSegment;
+														}
+													).selection.index
+												}
+											/>
+										}
+									>
+										{(multiValue) => (
+											<div class="space-y-4">
+												<div class="flex flex-row justify-between items-center">
+													<div class="flex gap-2 items-center">
+														<EditorButton
+															onClick={() =>
+																setEditorState("timeline", "selection", null)
+															}
+															leftIcon={<IconLucideCheck />}
+														>
+															Done
+														</EditorButton>
+														<span class="text-sm text-gray-10">
+															{multiValue().segments.length} clip{" "}
+															{multiValue().segments.length === 1
+																? "segment"
+																: "segments"}{" "}
+															selected
+														</span>
+													</div>
+													<EditorButton
+														variant="danger"
+														onClick={() => {
+															const indices = multiValue().selection.index;
+
+															// Delete segments in reverse order to maintain indices
+															[...indices]
+																.sort((a, b) => b - a)
+																.forEach((idx) => {
+																	projectActions.deleteClipSegment(idx);
+																});
+														}}
+														leftIcon={<IconCapTrash />}
+													>
+														Delete
+													</EditorButton>
+												</div>
+											</div>
+										)}
+									</Show>
 								)}
 							</Show>
 						</Suspense>
