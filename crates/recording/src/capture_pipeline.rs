@@ -8,11 +8,38 @@ use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
 
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(windows)]
+#[derive(Clone, Debug)]
+pub struct EncoderPreferences {
+    force_software: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl EncoderPreferences {
+    pub fn new() -> Self {
+        Self {
+            force_software: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn should_force_software(&self) -> bool {
+        self.force_software.load(Ordering::Relaxed)
+    }
+
+    pub fn force_software_only(&self) {
+        self.force_software.store(true, Ordering::Relaxed);
+    }
+}
+
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     async fn make_studio_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
@@ -23,6 +50,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         output_resolution: (u32, u32),
+        #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
@@ -76,6 +104,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
 
@@ -88,6 +117,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
                 output_size: None,
+                encoder_preferences,
             })
             .await
     }
@@ -98,6 +128,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         output_resolution: (u32, u32),
+        encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
@@ -122,6 +153,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     Width: output_resolution.0 as i32,
                     Height: output_resolution.1 as i32,
                 }),
+                encoder_preferences,
             })
             .await
     }

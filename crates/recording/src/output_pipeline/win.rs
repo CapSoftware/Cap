@@ -32,6 +32,7 @@ pub struct WindowsMuxerConfig {
     pub frame_rate: u32,
     pub bitrate_multiplier: f32,
     pub output_size: Option<SizeInt32>,
+    pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 }
 
 impl Muxer for WindowsMuxer {
@@ -71,21 +72,52 @@ impl Muxer for WindowsMuxer {
             tasks.spawn_thread("windows-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
 
+                let encoder_preferences = &config.encoder_preferences;
+
                 let encoder = (|| {
                     let mut output = output.lock().unwrap();
 
-                    let native_encoder =
-                        cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                            &config.d3d_device,
-                            config.pixel_format,
-                            input_size,
-                            output_size,
-                            config.frame_rate,
-                            config.bitrate_multiplier,
-                        );
+                    let fallback = |reason: Option<String>| {
+                        use tracing::{error, info};
 
-                    match native_encoder {
-                        Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+                        encoder_preferences.force_software_only();
+                        if let Some(reason) = reason.as_ref() {
+                            error!("Falling back to software H264 encoder: {reason}");
+                        } else {
+                            info!("Falling back to software H264 encoder");
+                        }
+
+                        let fallback_width = if output_size.Width > 0 {
+                            output_size.Width as u32
+                        } else {
+                            video_config.width
+                        };
+                        let fallback_height = if output_size.Height > 0 {
+                            output_size.Height as u32
+                        } else {
+                            video_config.height
+                        };
+
+                        cap_enc_ffmpeg::H264Encoder::builder(video_config)
+                            .with_output_size(fallback_width, fallback_height)
+                            .and_then(|builder| builder.build(&mut output))
+                            .map(either::Right)
+                            .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
+                    };
+
+                    if encoder_preferences.should_force_software() {
+                        return fallback(None);
+                    }
+
+                    match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+                        &config.d3d_device,
+                        config.pixel_format,
+                        input_size,
+                        output_size,
+                        config.frame_rate,
+                        config.bitrate_multiplier,
+                    ) {
+                        Ok(encoder) => match cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
                             &mut output,
                             cap_mediafoundation_ffmpeg::MuxerConfig {
                                 width: output_size.Width as u32,
@@ -93,32 +125,11 @@ impl Muxer for WindowsMuxer {
                                 fps: config.frame_rate,
                                 bitrate: encoder.bitrate(),
                             },
-                        )
-                        .map(|muxer| either::Left((encoder, muxer)))
-                        .map_err(|e| anyhow!("{e}")),
-                        Err(e) => {
-                            use tracing::{error, info};
-
-                            error!("Failed to create native encoder: {e}");
-                            info!("Falling back to software H264 encoder");
-
-                            let fallback_width = if output_size.Width > 0 {
-                                output_size.Width as u32
-                            } else {
-                                video_config.width
-                            };
-                            let fallback_height = if output_size.Height > 0 {
-                                output_size.Height as u32
-                            } else {
-                                video_config.height
-                            };
-
-                            cap_enc_ffmpeg::H264Encoder::builder(video_config)
-                                .with_output_size(fallback_width, fallback_height)
-                                .and_then(|builder| builder.build(&mut output))
-                                .map(either::Right)
-                                .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
-                        }
+                        ) {
+                            Ok(muxer) => Ok(either::Left((encoder, muxer))),
+                            Err(err) => fallback(Some(err.to_string())),
+                        },
+                        Err(err) => fallback(Some(err.to_string())),
                     }
                 })();
 
