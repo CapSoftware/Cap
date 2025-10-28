@@ -8,51 +8,112 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import posthog from "posthog-js";
-import { PostHogProvider as PHProvider } from "posthog-js/react";
-import { type PropsWithChildren, useEffect, useState } from "react";
+import type { PostHogConfig } from "posthog-js";
+import { PostHogProvider as PHProvider, usePostHog } from "posthog-js/react";
+import {
+	type PropsWithChildren,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import type { BootstrapData } from "@/utils/getBootstrapData";
 
 import PostHogPageView from "./PosthogPageView";
 
 export function PostHogProvider({
 	children,
 	bootstrapData,
-}: PropsWithChildren<{
-	bootstrapData?: {
-		distinctID: string;
-		featureFlags: Record<string, string | boolean>;
-	};
-}>) {
-	useEffect(() => {
-		const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
-		const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
+}: PropsWithChildren<{ bootstrapData?: BootstrapData }>) {
+	const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
+	const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
+	const initialBootstrap = useRef<BootstrapData | undefined>(undefined);
 
-		if (key && host) {
-			try {
-				posthog.init(key, {
-					api_host: host,
-					capture_pageview: false,
-					bootstrap: bootstrapData,
-					loaded: (posthogInstance) => {
-						console.log("PostHog loaded and ready to capture events");
-					},
-				});
-			} catch (error) {
-				console.error("Failed to initialize PostHog:", error);
-			}
-		} else {
+	if (!initialBootstrap.current && bootstrapData?.distinctID) {
+		initialBootstrap.current = bootstrapData;
+	}
+
+	const options = useMemo(() => {
+		if (!host) return undefined;
+		const base = {
+			api_host: host,
+			capture_pageview: false,
+			bootstrap: initialBootstrap.current?.distinctID
+				? initialBootstrap.current
+				: undefined,
+		} satisfies Partial<PostHogConfig>;
+
+		if (process.env.NEXT_PUBLIC_POSTHOG_DISABLE_SESSION_RECORDING === "true") {
+			(base as any).disable_session_recording = true;
+		}
+
+		return base;
+	}, [host]);
+
+	if (!key || !host || !options) {
+		if (process.env.NODE_ENV !== "production") {
 			console.warn(
 				"Missing PostHog environment variables. Events will not be tracked.",
 			);
 		}
-	}, [bootstrapData]);
+		return <>{children}</>;
+	}
 
 	return (
-		<PHProvider client={posthog}>
+		<PHProvider apiKey={key} options={options}>
 			<PostHogPageView />
+			<PostHogBootstrapSync bootstrapData={bootstrapData} />
 			{children}
 		</PHProvider>
 	);
+}
+
+function PostHogBootstrapSync({
+	bootstrapData,
+}: {
+	bootstrapData?: BootstrapData;
+}) {
+	const posthog = usePostHog();
+	const previousFlags = useRef<Record<string, string | boolean> | undefined>(
+		undefined,
+	);
+
+	useEffect(() => {
+		if (!posthog || !bootstrapData) {
+			return;
+		}
+
+		const nextFlags = bootstrapData.featureFlags ?? {};
+
+		if (areFlagMapsEqual(previousFlags.current, nextFlags)) {
+			return;
+		}
+
+		if (typeof posthog.featureFlags?.override === "function") {
+			posthog.featureFlags.override(nextFlags);
+			previousFlags.current = nextFlags;
+		}
+	}, [posthog, bootstrapData]);
+
+	return null;
+}
+
+function areFlagMapsEqual(
+	left?: Record<string, string | boolean>,
+	right?: Record<string, string | boolean>,
+) {
+	if (left === right) {
+		return true;
+	}
+	if (!left || !right) {
+		return !left && !right;
+	}
+	const leftKeys = Object.keys(left);
+	const rightKeys = Object.keys(right);
+	if (leftKeys.length !== rightKeys.length) {
+		return false;
+	}
+	return leftKeys.every((key) => left[key] === right[key]);
 }
 
 export function ReactQueryProvider({
@@ -76,7 +137,7 @@ import {
 	promoteToPro,
 	restartOnboarding,
 } from "./devtoolsServer";
-import { featureFlags, useFeatureFlags } from "./features";
+import { useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
 	return <NASessionProvider>{children}</NASessionProvider>;
@@ -107,6 +168,7 @@ export function Devtools() {
 
 function CapDevtools() {
 	const flags = useFeatureFlags();
+	void flags;
 
 	return (
 		<div className="flex flex-col p-4 space-y-4">
