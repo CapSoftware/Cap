@@ -25,7 +25,6 @@ pub struct AVFoundationMp4MuxerConfig {
 
 impl Muxer for AVFoundationMp4Muxer {
     type Config = AVFoundationMp4MuxerConfig;
-    type Finish = ();
 
     async fn setup(
         config: Self::Config,
@@ -52,12 +51,13 @@ impl Muxer for AVFoundationMp4Muxer {
         ))
     }
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<Self::Finish> {
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
         Ok(self
             .0
             .lock()
             .map_err(|e| anyhow!("{e}"))?
-            .finish(Some(timestamp))?)
+            .finish(Some(timestamp))
+            .map(Ok)?)
     }
 }
 

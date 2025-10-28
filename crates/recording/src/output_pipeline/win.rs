@@ -35,13 +35,8 @@ pub struct WindowsMuxerConfig {
     pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 }
 
-pub struct Finish {
-    audio_result: Result<(), ffmpeg::Error>,
-}
-
 impl Muxer for WindowsMuxer {
     type Config = WindowsMuxerConfig;
-    type Finish = Finish;
 
     async fn setup(
         config: Self::Config,
@@ -277,7 +272,7 @@ impl Muxer for WindowsMuxer {
         let _ = self.video_tx.send(None);
     }
 
-    fn finish(&mut self, _: Duration) -> anyhow::Result<Self::Finish> {
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let mut output = self
             .output
             .lock()
@@ -290,7 +285,7 @@ impl Muxer for WindowsMuxer {
 
         output.write_trailer()?;
 
-        Ok(Finish { audio_result })
+        Ok(audio_result.map_err(Into::into))
     }
 }
 

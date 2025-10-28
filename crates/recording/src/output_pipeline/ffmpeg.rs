@@ -37,7 +37,6 @@ pub struct Finish {
 
 impl Muxer for Mp4Muxer {
     type Config = ();
-    type Finish = Finish;
 
     async fn setup(
         _: Self::Config,
@@ -71,7 +70,7 @@ impl Muxer for Mp4Muxer {
         })
     }
 
-    fn finish(&mut self, _: Duration) -> anyhow::Result<Self::Finish> {
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
         let video_result = self
             .video_encoder
             .as_mut()
@@ -86,10 +85,13 @@ impl Muxer for Mp4Muxer {
 
         self.output.write_trailer().context("write_trailer")?;
 
-        Ok(Finish {
-            video_result,
-            audio_result,
-        })
+        if video_result.is_ok() && audio_result.is_ok() {
+            return Ok(Ok(()));
+        }
+
+        Ok(Err(anyhow!(
+            "Video: {video_result:#?}, Audio: {audio_result:#?}"
+        )))
     }
 }
 
@@ -123,7 +125,6 @@ pub struct OggMuxer(OggFile);
 
 impl Muxer for OggMuxer {
     type Config = ();
-    type Finish = Result<(), ffmpeg::Error>;
 
     async fn setup(
         _: Self::Config,
@@ -145,14 +146,16 @@ impl Muxer for OggMuxer {
         ))
     }
 
-    fn finish(&mut self, _: Duration) -> anyhow::Result<Self::Finish> {
-        Ok(self.0.finish()?)
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.0
+            .finish()
+            .map_err(Into::into)
+            .map(|r| r.map_err(Into::into))
     }
 }
 
 impl AudioMuxer for OggMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        self.0.queue_frame(frame.inner, timestamp);
-        Ok(())
+        Ok(self.0.queue_frame(frame.inner, timestamp)?)
     }
 }

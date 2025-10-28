@@ -362,7 +362,13 @@ async fn finish_build(
 
             let _ = done_tx.send(match (res, muxer_res) {
                 (Err(e), _) | (_, Err(e)) => Err(e),
-                _ => Ok(()),
+                (_, Ok(muxer_streams_res)) => {
+                    if let Err(e) = muxer_streams_res {
+                        warn!("Muxer streams had failure: {e:#}");
+                    }
+
+                    Ok(())
+                }
             });
         }),
     );
@@ -784,7 +790,6 @@ pub trait VideoFrame: Send + 'static {
 
 pub trait Muxer: Send + 'static {
     type Config;
-    type Finish;
 
     fn setup(
         config: Self::Config,
@@ -799,7 +804,7 @@ pub trait Muxer: Send + 'static {
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<Self::Finish>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>>;
 }
 
 pub trait AudioMuxer: Muxer {

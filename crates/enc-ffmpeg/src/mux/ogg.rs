@@ -41,8 +41,12 @@ impl OggFile {
         &self.encoder
     }
 
-    pub fn queue_frame(&mut self, frame: frame::Audio, timestamp: Duration) {
-        let _ = self.encoder.queue_frame(frame, timestamp, &mut self.output);
+    pub fn queue_frame(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+    ) -> Result<(), ffmpeg::Error> {
+        self.encoder.queue_frame(frame, timestamp, &mut self.output)
     }
 
     pub fn finish(&mut self) -> Result<Result<(), ffmpeg::Error>, FinishError> {
