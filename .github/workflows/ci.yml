@@ -216,7 +216,7 @@ jobs:
 
   rust-cache:
     name: Rust cache
-    if: github.ref == 'refs/heads/fix-rust-cache'
+    if: ${{ github.ref == 'refs/heads/fix-rust-cache' }}
     strategy:
       fail-fast: false
       matrix:
