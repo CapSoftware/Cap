@@ -56,8 +56,7 @@ impl Muxer for AVFoundationMp4Muxer {
         self.0
             .lock()
             .map_err(|e| anyhow!("{e}"))?
-            .finish(Some(timestamp));
-        Ok(())
+            .finish(Some(timestamp))
     }
 }
 

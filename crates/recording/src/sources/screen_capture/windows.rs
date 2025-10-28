@@ -23,8 +23,8 @@ use std::{
 use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
-const WINDOW_DURATION: Duration = Duration::from_secs(3);
-const LOG_INTERVAL: Duration = Duration::from_secs(5);
+// const WINDOW_DURATION: Duration = Duration::from_secs(3);
+// const LOG_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
 
 #[derive(Debug)]
@@ -53,24 +53,6 @@ impl ScreenCaptureFormat for Direct3DCapture {
         info
     }
 }
-
-#[derive(Clone, Debug, thiserror::Error)]
-enum SourceError {
-    #[error("NoDisplay: Id '{0}'")]
-    NoDisplay(DisplayId),
-    #[error("AsCaptureItem: {0}")]
-    AsCaptureItem(::windows::core::Error),
-    #[error("CreateAudioCapture/{0}")]
-    CreateAudioCapture(scap_cpal::CapturerError),
-    #[error("StartCapturingAudio/{0}")]
-    StartCapturingAudio(
-        String, /* SendError<audio::StartCapturing, cpal::PlayStreamError> */
-    ),
-    #[error("Closed")]
-    Closed,
-}
-
-struct CapturerHandle {}
 
 pub struct VideoFrame {
     pub frame: scap_direct3d::Frame,

@@ -2,7 +2,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::frame;
 use std::{ops::Sub, path::PathBuf, time::Duration};
-use tracing::{debug, error, info, trace};
+use tracing::*;
 
 // before pausing at all, subtract 0.
 // on pause, record last frame time.
@@ -58,6 +58,20 @@ pub enum QueueFrameError {
     #[error("NotReadyForMore")]
     NotReadyForMore,
 }
+
+#[derive(thiserror::Error, Debug)]
+pub enum FinishError {
+    #[error("NotReadyForMore")]
+    NotWriting,
+    #[error("NotReadyForMore")]
+    NoFrames,
+    #[error("NotReadyForMore")]
+    Failed,
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("NotReadyForMore")]
+pub struct NotReadyForMore;
 
 impl MP4Encoder {
     pub fn init(
@@ -215,7 +229,7 @@ impl MP4Encoder {
         };
 
         if !self.video_input.is_ready_for_more_media_data() {
-            return Err(QueueFrameError::NotReadyForMore);
+            return Err(NotReadyForMore.into());
         }
 
         if !self.is_writing {
@@ -437,13 +451,14 @@ impl MP4Encoder {
         self.is_paused = false;
     }
 
-    pub fn finish(&mut self, timestamp: Option<Duration>) {
+    pub fn finish(&mut self, timestamp: Option<Duration>) -> Result<(), FinishError> {
         if !self.is_writing {
-            return;
+            return Err(FinishError::NotWriting);
         }
 
         let Some(mut most_recent_frame) = self.most_recent_frame.take() else {
-            return;
+            warn!("Encoder attempted to finish with no frame");
+            return Err(FinishError::NoFrames);
         };
 
         // We extend the video to the provided timestamp if possible
@@ -477,13 +492,17 @@ impl MP4Encoder {
         debug!("Appended {} video frames", self.video_frames_appended);
         debug!("Appended {} audio frames", self.audio_frames_appended);
 
+        wait_for_writer_finished(&self.asset_writer).map_err(|_| FinishError::Failed)?;
+
         info!("Finished writing");
+
+        Ok(())
     }
 }
 
 impl Drop for MP4Encoder {
     fn drop(&mut self) {
-        self.finish(None);
+        let _ = self.finish(None);
     }
 }
 
@@ -618,9 +637,23 @@ fn append_sample_buf(
             if writer.status() == av::asset::writer::Status::Failed {
                 return Err(QueueFrameError::Failed);
             }
+            if writer.status() == av::asset::writer::Status::Writing {
+                return Err(QueueFrameError::NotReadyForMore);
+            }
         }
         Err(e) => return Err(QueueFrameError::AppendError(e.retained())),
     }
 
     Ok(())
+}
+
+fn wait_for_writer_finished(writer: &av::AssetWriter) -> Result<(), ()> {
+    use av::asset::writer::Status;
+    loop {
+        match writer.status() {
+            Status::Completed | Status::Cancelled => return Ok(()),
+            Status::Failed | Status::Unknown => return Err(()),
+            Status::Writing => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
 }
