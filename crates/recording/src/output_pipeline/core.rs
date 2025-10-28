@@ -308,6 +308,7 @@ fn setup_build() -> (
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_build(
     mut setup_ctx: SetupCtx,
     audio_sources: Vec<AudioSourceSetupFn>,
