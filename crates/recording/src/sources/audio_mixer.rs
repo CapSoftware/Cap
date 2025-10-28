@@ -193,7 +193,15 @@ impl AudioMixerBuilder {
                 break;
             }
 
-            if let Err(()) = mixer.tick(start, Timestamp::Instant(Instant::now())) {
+            #[cfg(target_os = "macos")]
+            let now = Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now());
+            #[cfg(windows)]
+            let now =
+                Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now());
+            #[cfg(not(any(target_os = "macos", windows)))]
+            let now = Timestamp::Instant(Instant::now());
+
+            if let Err(()) = mixer.tick(start, now) {
                 info!("Mixer tick errored");
                 break;
             }
