@@ -597,7 +597,6 @@ pub fn from_pending_file_to_chunks(
     .instrument(Span::current())
 }
 
-
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
@@ -712,18 +711,18 @@ fn multipart_uploader(
                             let url = Uri::from_str(&presigned_url).map_err(|err| {
                                 format!("uploader/part/{part_number}/invalid_url: {err:?}")
                             })?;
-                            let host = url.host()
+                            let host = url
+                                .host()
                                 .ok_or_else(|| format!("uploader/part/{part_number}/missing_host"))?
                                 .to_string();
-                            let client = get_retryable_client(host)
-                                .map_err(|err| {
-                                    format!("uploader/part/{part_number}/client: {err:?}")
-                                })?;
+                            let client = get_retryable_client(host).map_err(|err| {
+                                format!("uploader/part/{part_number}/client: {err:?}")
+                            })?;
                             let mut req = client
-                                    .put(&presigned_url)
-                                    .header("Content-Length", chunk.len())
-                                    .timeout(Duration::from_secs(5 * 60))
-                                    .body(chunk);
+                                .put(&presigned_url)
+                                .header("Content-Length", chunk.len())
+                                .timeout(Duration::from_secs(5 * 60))
+                                .body(chunk);
 
                             if let Some(md5_sum) = &md5_sum {
                                 req = req.header("Content-MD5", md5_sum);
@@ -798,11 +797,12 @@ pub async fn singlepart_uploader(
 
     let url = Uri::from_str(&presigned_url)
         .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let host = url.host()
+    let host = url
+        .host()
         .ok_or_else(|| "singlepart_uploader/missing_host".to_string())?
         .to_string();
-    let client = get_retryable_client(host)
-        .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?;
+    let client =
+        get_retryable_client(host).map_err(|err| format!("singlepart_uploader/client: {err:?}"))?;
     let resp = client
         .put(&presigned_url)
         .header("Content-Length", total_size)
