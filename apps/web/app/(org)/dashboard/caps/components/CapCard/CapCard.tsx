@@ -11,6 +11,7 @@ import {
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { HttpClient } from "@effect/platform";
 import {
+	faChartSimple,
 	faCheck,
 	faCopy,
 	faDownload,
@@ -33,7 +34,6 @@ import { type PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { useFeatureFlag } from "@/app/Layout/features";
 import ProgressCircle, {
 	useUploadProgress,
 } from "@/app/s/[videoId]/_components/ProgressCircle";
@@ -42,7 +42,6 @@ import {
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { usePublicEnv } from "@/utils/public-env";
 import { PasswordDialog } from "../PasswordDialog";
 import { SettingsDialog } from "../SettingsDialog";
@@ -362,26 +361,27 @@ export const CapCard = ({
 					)}
 				>
 					{isOwner && (
-						<CapCardButton
-							tooltipContent="Share"
-							onClick={(e) => {
-								e.stopPropagation();
-								setIsSharingDialogOpen(true);
-							}}
-							className="delay-0"
-							icon={<FontAwesomeIcon icon={faShare} />}
-						/>
+						<>
+							<CapCardButton
+								tooltipContent="Share"
+								onClick={(e) => {
+									e.stopPropagation();
+									setIsSharingDialogOpen(true);
+								}}
+								className="delay-0"
+								icon={<FontAwesomeIcon icon={faShare} />}
+							/>
+							<CapCardButton
+								tooltipContent="Analytics"
+								onClick={(e) => {
+									e.stopPropagation();
+									router.push(`/dashboard/analytics/s/${cap.id}`);
+								}}
+								className="delay-0"
+								icon={<FontAwesomeIcon icon={faChartSimple} />}
+							/>
+						</>
 					)}
-
-					<CapCardButton
-						tooltipContent="Download Cap"
-						onClick={(e) => {
-							e.stopPropagation();
-							handleDownload();
-						}}
-						className="delay-0"
-						icon={<FontAwesomeIcon icon={faDownload} />}
-					/>
 
 					{!isOwner && (
 						<CapCardButton
@@ -417,22 +417,22 @@ export const CapCard = ({
 						/>
 					)}
 
-					{isOwner && (
-						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
-							<DropdownMenuTrigger asChild suppressHydrationWarning>
-								<div>
-									<CapCardButton
-										tooltipContent="More options"
-										className="delay-75"
-										icon={<FontAwesomeIcon icon={faEllipsis} />}
-									/>
-								</div>
-							</DropdownMenuTrigger>
-							<DropdownMenuContent
-								align="end"
-								sideOffset={5}
-								suppressHydrationWarning
-							>
+					<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
+						<DropdownMenuTrigger asChild suppressHydrationWarning>
+							<div>
+								<CapCardButton
+									tooltipContent="More options"
+									className="delay-75"
+									icon={<FontAwesomeIcon icon={faEllipsis} />}
+								/>
+							</div>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent
+							align="end"
+							sideOffset={5}
+							suppressHydrationWarning
+						>
+							{isOwner && (
 								<DropdownMenuItem
 									onClick={(e) => {
 										e.stopPropagation();
@@ -443,59 +443,75 @@ export const CapCard = ({
 									<FontAwesomeIcon className="size-3" icon={faGear} />
 									<p className="text-sm text-gray-12">Settings</p>
 								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={(e) => {
-										e.stopPropagation();
-										copyLinkHandler();
-										toast.success("Link copied to clipboard");
-									}}
-									className="flex gap-2 items-center rounded-lg"
-								>
-									<FontAwesomeIcon className="size-3" icon={faLink} />
-									<p className="text-sm text-gray-12">Copy link</p>
-								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={() => {
-										toast.promise(duplicateMutation.mutateAsync(), {
-											loading: "Duplicating cap...",
-											success: "Cap duplicated successfully",
-											error: "Failed to duplicate cap",
-										});
-									}}
-									disabled={duplicateMutation.isPending || cap.hasActiveUpload}
-									className="flex gap-2 items-center rounded-lg"
-								>
-									<FontAwesomeIcon className="size-3" icon={faCopy} />
-									<p className="text-sm text-gray-12">Duplicate</p>
-								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={() => {
-										if (!user.isPro) setUpgradeModalOpen(true);
-										else setIsPasswordDialogOpen(true);
-									}}
-									className="flex gap-2 items-center rounded-lg"
-								>
-									<FontAwesomeIcon
-										className="size-3"
-										icon={passwordProtected ? faLock : faUnlock}
-									/>
-									<p className="text-sm text-gray-12">
-										{passwordProtected ? "Edit password" : "Add password"}
-									</p>
-								</DropdownMenuItem>
-								<DropdownMenuItem
-									onClick={(e) => {
-										e.stopPropagation();
-										setConfirmOpen(true);
-									}}
-									className="flex gap-2 items-center rounded-lg"
-								>
-									<FontAwesomeIcon className="size-3" icon={faTrash} />
-									<p className="text-sm text-gray-12">Delete Cap</p>
-								</DropdownMenuItem>
-							</DropdownMenuContent>
-						</DropdownMenu>
-					)}
+							)}
+							<DropdownMenuItem
+								onClick={(e) => {
+									e.stopPropagation();
+									handleDownload();
+								}}
+								className="flex gap-2 items-center rounded-lg"
+							>
+								<FontAwesomeIcon icon={faDownload} />
+								<p className="text-sm text-gray-12">Download</p>
+							</DropdownMenuItem>
+							<DropdownMenuItem
+								onClick={(e) => {
+									e.stopPropagation();
+									copyLinkHandler();
+									toast.success("Link copied to clipboard");
+								}}
+								className="flex gap-2 items-center rounded-lg"
+							>
+								<FontAwesomeIcon className="size-3" icon={faLink} />
+								<p className="text-sm text-gray-12">Copy link</p>
+							</DropdownMenuItem>
+							{isOwner && (
+								<>
+									<DropdownMenuItem
+										onClick={() => {
+											toast.promise(duplicateMutation.mutateAsync(), {
+												loading: "Duplicating cap...",
+												success: "Cap duplicated successfully",
+												error: "Failed to duplicate cap",
+											});
+										}}
+										disabled={
+											duplicateMutation.isPending || cap.hasActiveUpload
+										}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faCopy} />
+										<p className="text-sm text-gray-12">Duplicate</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={() => {
+											if (!user.isPro) setUpgradeModalOpen(true);
+											else setIsPasswordDialogOpen(true);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon
+											className="size-3"
+											icon={passwordProtected ? faLock : faUnlock}
+										/>
+										<p className="text-sm text-gray-12">
+											{passwordProtected ? "Edit password" : "Add password"}
+										</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											setConfirmOpen(true);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faTrash} />
+										<p className="text-sm text-gray-12">Delete Cap</p>
+									</DropdownMenuItem>
+								</>
+							)}
+						</DropdownMenuContent>
+					</DropdownMenu>
 
 					<ConfirmationDialog
 						open={confirmOpen}

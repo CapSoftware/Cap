@@ -17,7 +17,7 @@ import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
 	cloneElement,
@@ -53,6 +53,7 @@ const Top = () => {
 	const queryClient = useQueryClient();
 
 	const pathname = usePathname();
+	const params = useParams();
 
 	const titles: Record<string, string> = {
 		"/dashboard/caps": "Caps",
@@ -63,6 +64,7 @@ const Top = () => {
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
+		[`/dashboard/analytics/s/${params.id}`]: "Analytics: cap name",
 	};
 
 	const title = activeSpace
