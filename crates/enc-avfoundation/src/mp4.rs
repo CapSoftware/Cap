@@ -452,13 +452,25 @@ impl MP4Encoder {
             return Err(FinishError::NotWriting);
         }
 
+        let mut finish_timestamp = timestamp;
+
+        if let Some(pause_timestamp) = self.pause_timestamp {
+            finish_timestamp = Some(match finish_timestamp {
+                Some(ts) => ts.min(pause_timestamp),
+                None => pause_timestamp,
+            });
+        }
+
         let Some(mut most_recent_frame) = self.most_recent_frame.take() else {
             warn!("Encoder attempted to finish with no frame");
             return Err(FinishError::NoFrames);
         };
 
+        self.is_paused = false;
+        self.pause_timestamp = None;
+
         // We extend the video to the provided timestamp if possible
-        if let Some(timestamp) = timestamp
+        if let Some(timestamp) = finish_timestamp
             && let Some(diff) = timestamp.checked_sub(most_recent_frame.1)
             && diff > Duration::from_millis(500)
         {
