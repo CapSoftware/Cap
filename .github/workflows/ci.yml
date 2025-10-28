@@ -226,7 +226,7 @@ jobs:
   rust-cache:
     name: Rust cache
     needs: changes
-    if: needs.changes.outputs.branch == 'fix-rust-cache'
+    if: needs.changes.outputs.branch == 'main'
     strategy:
       fail-fast: false
       matrix:
