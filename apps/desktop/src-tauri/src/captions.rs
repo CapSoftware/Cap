@@ -5,7 +5,6 @@ use ffmpeg::{
     format::{self as avformat},
     software::resampling,
 };
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::File;
@@ -21,6 +20,8 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 // Re-export caption types from cap_project
 pub use cap_project::{CaptionSegment, CaptionSettings};
+
+use crate::client;
 
 // Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
@@ -1051,6 +1052,7 @@ impl DownloadProgress {
 #[specta::specta]
 #[instrument(skip(window))]
 pub async fn download_whisper_model(
+    app: AppHandle,
     window: Window,
     model_name: String,
     output_path: String,
@@ -1067,8 +1069,8 @@ pub async fn download_whisper_model(
     };
 
     // Create the client and download the model
-    let client = Client::new();
-    let response = client
+    let response = app
+        .state::<client::Client>()
         .get(model_url)
         .send()
         .await

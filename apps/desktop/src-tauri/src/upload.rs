@@ -3,6 +3,7 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    client::RetryableClient,
     posthog::{PostHogEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -21,7 +22,6 @@ use specta::Type;
 use std::{
     collections::HashMap,
     io,
-    ops::Deref,
     path::{Path, PathBuf},
     pin::pin,
     sync::{Arc, Mutex, PoisonError},
@@ -593,44 +593,6 @@ pub fn from_pending_file_to_chunks(
         }
     }
     .instrument(Span::current())
-}
-
-pub struct RetryableClient(reqwest::Result<reqwest::Client>);
-
-impl Default for RetryableClient {
-    fn default() -> Self {
-        Self(
-            reqwest::Client::builder()
-                .retry(
-                    reqwest::retry::always()
-                        .classify_fn(|req_rep| {
-                            match req_rep.status() {
-                                // Server errors
-                                Some(s)
-                                    if s.is_server_error()
-                                        || s == StatusCode::TOO_MANY_REQUESTS =>
-                                {
-                                    req_rep.retryable()
-                                }
-                                // Network errors
-                                None => req_rep.retryable(),
-                                _ => req_rep.success(),
-                            }
-                        })
-                        .max_retries_per_request(5)
-                        .max_extra_load(5.0),
-                )
-                .build(),
-        )
-    }
-}
-
-impl Deref for RetryableClient {
-    type Target = reqwest::Result<reqwest::Client>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
 }
 
 /// Takes an incoming stream of bytes and individually uploads them to S3.
