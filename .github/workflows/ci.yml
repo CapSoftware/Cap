@@ -250,6 +250,7 @@ jobs:
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
+          save-cache: true
 
       - name: Setup node
         uses: actions/setup-node@v3
