@@ -246,11 +246,18 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.settings.target }}
-          save-cache: true
 
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm -w cap-setup
 
       - name: Build debug
         run: cargo build --all
