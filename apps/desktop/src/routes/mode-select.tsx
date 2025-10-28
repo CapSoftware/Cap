@@ -21,7 +21,10 @@ const ModeSelectWindow = () => {
 			data-tauri-drag-region
 			class="flex relative justify-center items-center p-4 min-h-screen bg-gray-1"
 		>
-			<div class="relative z-10 space-y-10 w-full max-w-3xl">
+			<div
+				data-tauri-drag-region="none"
+				class="relative z-10 space-y-10 w-full max-w-3xl"
+			>
 				<h2 class="text-[24px] font-medium text-center text-gray-12">
 					Recording Modes
 				</h2>
