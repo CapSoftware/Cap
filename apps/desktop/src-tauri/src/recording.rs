@@ -592,11 +592,11 @@ pub async fn start_recording(
             }
         })
         .await
-        .map_err(|e| format!("Failed to spawn recording actor: {e}"))?
+        .map_err(|e| format!("Failed to spawn recording actor: {e}"))
     }
     .await;
 
-    let actor_done_fut = match spawn_actor_res {
+    let actor_done_fut = match spawn_actor_res.flatten() {
         Ok(rx) => rx,
         Err(err) => {
             let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
