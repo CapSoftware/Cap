@@ -133,9 +133,9 @@ impl MP4File {
             .unwrap_or(Ok(()));
 
         tracing::info!("MP4Encoder: Writing trailer");
-        if let Err(e) = self.output.write_trailer() {
-            tracing::error!("Failed to write MP4 trailer: {:?}", e);
-        }
+        self.output
+            .write_trailer()
+            .map_err(FinishError::WriteTrailerFailed)?;
 
         Ok(FinishResult {
             video_finish,
