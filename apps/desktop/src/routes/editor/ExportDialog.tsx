@@ -590,7 +590,7 @@ export function ExportDialog() {
 																	if (
 																		option.value === "Gif" &&
 																		GIF_FPS_OPTIONS.every(
-																			(v) => v.value === settings.fps,
+																			(v) => v.value !== settings.fps,
 																		)
 																	)
 																		newSettings.fps = 15;
@@ -607,7 +607,7 @@ export function ExportDialog() {
 														}}
 														autofocus={false}
 														data-selected={settings.format === option.value}
-														disabled={disabledReason() !== undefined}
+														disabled={!disabledReason()}
 													>
 														{option.label}
 													</Button>

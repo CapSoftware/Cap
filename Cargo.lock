@@ -1526,7 +1526,6 @@ dependencies = [
  "bytemuck",
  "cap-cursor-info",
  "cap-flags",
- "cap-media",
  "cap-project",
  "cap-video-decode",
  "cidre 0.11.0",

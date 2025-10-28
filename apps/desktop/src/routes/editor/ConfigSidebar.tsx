@@ -1492,7 +1492,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													style={{
 														background:
 															color === "#00000000"
-																? CHECKERD_BUTTON_BACKGROUND
+																? CHECKERED_BUTTON_BACKGROUND
 																: color,
 													}}
 												/>
@@ -2845,4 +2845,4 @@ function hexToRgb(hex: string): [number, number, number, number] | null {
 	return [...rgb, 255];
 }
 
-const CHECKERD_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;
+const CHECKERED_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;

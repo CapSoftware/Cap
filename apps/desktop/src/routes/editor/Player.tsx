@@ -342,7 +342,7 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, project } = useEditorContext();
+	const { latestFrame } = useEditorContext();
 
 	let canvasRef: HTMLCanvasElement | undefined;
 
