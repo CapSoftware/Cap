@@ -13,6 +13,7 @@ use std::{
     any::Any,
     future,
     marker::PhantomData,
+    ops::Deref,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -696,6 +697,14 @@ impl AudioFrame {
     }
 }
 
+impl Deref for AudioFrame {
+    type Target = ffmpeg::frame::Audio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 pub trait VideoSource: Send + 'static {
     type Config;
     type Frame: VideoFrame;
@@ -775,6 +784,7 @@ pub trait VideoFrame: Send + 'static {
 
 pub trait Muxer: Send + 'static {
     type Config;
+    type Finish;
 
     fn setup(
         config: Self::Config,
@@ -789,7 +799,7 @@ pub trait Muxer: Send + 'static {
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<Self::Finish>;
 }
 
 pub trait AudioMuxer: Muxer {

@@ -48,25 +48,15 @@ pub enum InitError {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum QueueVideoFrameError {
+pub enum QueueFrameError {
     #[error("AppendError/{0}")]
     AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum QueueAudioFrameError {
-    #[error("No audio input")]
-    NoAudioInput,
-    #[error("Not ready")]
-    NotReady,
-    #[error("Setup/{0}")]
-    Setup(cidre::os::Error),
-    #[error("AppendError/{0}")]
-    AppendError(&'static cidre::ns::Exception),
-    #[error("Failed")]
-    Failed,
+    #[error("Construct/{0}")]
+    Construct(cidre::os::Error),
+    #[error("NotReadyForMore")]
+    NotReadyForMore,
 }
 
 impl MP4Encoder {
@@ -219,10 +209,14 @@ impl MP4Encoder {
         &mut self,
         frame: arc::R<cm::SampleBuf>,
         timestamp: Duration,
-    ) -> Result<(), QueueVideoFrameError> {
-        if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
+    ) -> Result<(), QueueFrameError> {
+        if self.is_paused {
             return Ok(());
         };
+
+        if !self.video_input.is_ready_for_more_media_data() {
+            return Err(QueueFrameError::NotReadyForMore);
+        }
 
         if !self.is_writing {
             self.is_writing = true;
@@ -270,10 +264,7 @@ impl MP4Encoder {
         timing.pts = cm::Time::new(pts_duration.as_millis() as i64, 1_000);
         let frame = frame.copy_with_new_timing(&[timing]).unwrap();
 
-        self.video_input
-            .append_sample_buf(&frame)
-            .map_err(|e| QueueVideoFrameError::AppendError(e.retained()))
-            .and_then(|v| v.then_some(()).ok_or(QueueVideoFrameError::Failed))?;
+        append_sample_buf(&mut self.video_input, &self.asset_writer, &frame)?;
 
         self.video_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
@@ -285,12 +276,16 @@ impl MP4Encoder {
     /// in the timebase of 1 / sample rate
     pub fn queue_audio_frame(
         &mut self,
-        frame: frame::Audio,
+        frame: &frame::Audio,
         timestamp: Duration,
-    ) -> Result<(), QueueAudioFrameError> {
+    ) -> Result<(), QueueFrameError> {
         if self.is_paused || !self.is_writing {
             return Ok(());
         }
+
+        let Some(audio_input) = &mut self.audio_input else {
+            return Err(QueueFrameError::Failed);
+        };
 
         if let Some(pause_timestamp) = self.pause_timestamp
             && let Some(gap) = timestamp.checked_sub(pause_timestamp)
@@ -298,10 +293,6 @@ impl MP4Encoder {
             self.timestamp_offset += gap;
             self.pause_timestamp = None;
         }
-
-        let Some(audio_input) = &mut self.audio_input else {
-            return Err(QueueAudioFrameError::NoAudioInput);
-        };
 
         if !audio_input.is_ready_for_more_media_data() {
             return Ok(());
@@ -316,11 +307,11 @@ impl MP4Encoder {
         let total_data = frame.samples() * frame.channels() as usize * frame.format().bytes();
 
         let mut block_buf =
-            cm::BlockBuf::with_mem_block(total_data, None).map_err(QueueAudioFrameError::Setup)?;
+            cm::BlockBuf::with_mem_block(total_data, None).map_err(QueueFrameError::Construct)?;
 
         let block_buf_slice = block_buf
             .as_mut_slice()
-            .map_err(QueueAudioFrameError::Setup)?;
+            .map_err(QueueFrameError::Construct)?;
 
         if frame.is_planar() {
             let mut offset = 0;
@@ -335,7 +326,7 @@ impl MP4Encoder {
         }
 
         let format_desc =
-            cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
+            cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueFrameError::Construct)?;
 
         let mut pts_duration = timestamp
             .checked_sub(self.timestamp_offset)
@@ -344,7 +335,7 @@ impl MP4Encoder {
         if let Some(last_pts) = self.last_audio_pts
             && pts_duration <= last_pts
         {
-            let frame_duration = Self::audio_frame_duration(&frame);
+            let frame_duration = Self::audio_frame_duration(frame);
             let adjusted_pts = last_pts + frame_duration;
 
             trace!(
@@ -383,12 +374,9 @@ impl MP4Encoder {
             }],
             &[],
         )
-        .map_err(QueueAudioFrameError::Setup)?;
+        .map_err(QueueFrameError::Construct)?;
 
-        audio_input
-            .append_sample_buf(&buffer)
-            .map_err(QueueAudioFrameError::AppendError)
-            .and_then(|v| v.then_some(()).ok_or(QueueAudioFrameError::Failed))?;
+        append_sample_buf(audio_input, &self.asset_writer, &buffer)?;
 
         self.audio_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
@@ -488,9 +476,6 @@ impl MP4Encoder {
 
         debug!("Appended {} video frames", self.video_frames_appended);
         debug!("Appended {} audio frames", self.audio_frames_appended);
-
-        // debug!("First video timestamp: {:?}", self.first_timestamp);
-        // debug!("Last video timestamp: {:?}", self.last_pts);
 
         info!("Finished writing");
     }
@@ -620,4 +605,22 @@ impl SampleBufExt for cm::SampleBuf {
             })
         }
     }
+}
+
+fn append_sample_buf(
+    input: &mut av::AssetWriterInput,
+    writer: &av::AssetWriter,
+    frame: &cm::SampleBuf,
+) -> Result<(), QueueFrameError> {
+    match input.append_sample_buf(frame) {
+        Ok(true) => {}
+        Ok(false) => {
+            if writer.status() == av::asset::writer::Status::Failed {
+                return Err(QueueFrameError::Failed);
+            }
+        }
+        Err(e) => return Err(QueueFrameError::AppendError(e.retained())),
+    }
+
+    Ok(())
 }

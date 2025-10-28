@@ -1496,6 +1496,7 @@ dependencies = [
  "objc2-app-kit",
  "relative-path",
  "replace_with",
+ "retry",
  "ringbuf",
  "scap-cpal",
  "scap-direct3d",
@@ -7518,6 +7519,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "retry"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1e211f878258887b3e65dd3c8ff9f530fe109f441a117ee0cdc27f341355032"
+dependencies = [
+ "rand 0.9.2",
+]
+
+[[package]]
 name = "rfd"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7857,6 +7867,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation 0.3.1",
  "scap-targets",
+ "tokio",
  "tracing",
 ]
 

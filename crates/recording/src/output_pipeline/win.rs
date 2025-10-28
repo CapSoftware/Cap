@@ -275,7 +275,7 @@ impl Muxer for WindowsMuxer {
     fn finish(&mut self, _: Duration) -> anyhow::Result<()> {
         let mut output = self.output.lock().unwrap();
         if let Some(audio_encoder) = self.audio_encoder.as_mut() {
-            let _ = audio_encoder.finish(&mut output);
+            let _ = audio_encoder.flush(&mut output);
         }
         Ok(output.write_trailer()?)
     }

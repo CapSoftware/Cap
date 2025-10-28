@@ -64,6 +64,7 @@ percent-encoding = "2.3.1"
 [workspace.lints.rust]
 deprecated = "allow"
 unexpected_cfgs = "allow"
+unused_must_use = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

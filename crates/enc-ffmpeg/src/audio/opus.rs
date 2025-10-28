@@ -8,8 +8,9 @@ use ffmpeg::{
     threading::Config,
 };
 
-use super::AudioEncoder;
-use crate::audio::{base::AudioEncoderBase, buffered_resampler::BufferedResampler};
+use crate::audio::{
+    audio_encoder::AudioEncoder, base::AudioEncoderBase, buffered_resampler::BufferedResampler,
+};
 
 pub struct OpusEncoder {
     base: AudioEncoderBase,
@@ -97,8 +98,8 @@ impl OpusEncoder {
         self.base.send_frame(frame, timestamp, output)
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
-        self.base.finish(output)
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.flush(output)
     }
 }
 
@@ -108,6 +109,16 @@ fn select_output_rate(input_rate: i32, supported_rates: &[i32]) -> Option<i32> {
         .copied()
         .find(|&rate| rate >= input_rate)
         .or_else(|| supported_rates.iter().copied().max())
+}
+
+impl AudioEncoder for OpusEncoder {
+    fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
+        let _ = self.queue_frame(frame, Duration::MAX, output);
+    }
+
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.flush(output)
+    }
 }
 
 #[cfg(test)]
@@ -130,15 +141,5 @@ mod tests {
     fn clamps_to_lowest_supported_rate_when_input_is_lower() {
         let supported = [8_000, 12_000, 16_000, 24_000, 48_000];
         assert_eq!(select_output_rate(4_000, &supported), Some(8_000));
-    }
-}
-
-impl AudioEncoder for OpusEncoder {
-    fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        let _ = self.queue_frame(frame, Duration::MAX, output);
-    }
-
-    fn finish(&mut self, output: &mut format::context::Output) {
-        let _ = self.finish(output);
     }
 }
