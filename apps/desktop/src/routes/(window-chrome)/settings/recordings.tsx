@@ -7,13 +7,12 @@ import {
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -324,8 +323,21 @@ function RecordingItem(props: {
 					</Show>
 					<TooltipIconButton
 						tooltipText="Edit"
-						onClick={() => props.onOpenEditor()}
-						disabled={props.recording.meta.status.status !== "Complete"}
+						onClick={async () => {
+							if (
+								props.recording.meta.status.status === "Failed" &&
+								!(await confirm(
+									"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
+									{
+										title: "Recording is potentially corrupted",
+										kind: "warning",
+									},
+								))
+							)
+								return;
+							props.onOpenEditor();
+						}}
+						disabled={props.recording.meta.status.status === "InProgress"}
 					>
 						<IconLucideEdit class="size-4" />
 					</TooltipIconButton>
