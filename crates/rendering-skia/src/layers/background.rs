@@ -26,7 +26,7 @@ pub enum Background {
 impl From<BackgroundSource> for Background {
     fn from(source: BackgroundSource) -> Self {
         match source {
-            BackgroundSource::Color { value } => Background::Color(value),
+            BackgroundSource::Color { value, .. } => Background::Color(value),
             BackgroundSource::Gradient { from, to, angle } => {
                 Background::Gradient { from, to, angle }
             }

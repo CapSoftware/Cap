@@ -607,7 +607,7 @@ export function ExportDialog() {
 														}}
 														autofocus={false}
 														data-selected={settings.format === option.value}
-														disabled={!disabledReason()}
+														disabled={!!disabledReason()}
 													>
 														{option.label}
 													</Button>

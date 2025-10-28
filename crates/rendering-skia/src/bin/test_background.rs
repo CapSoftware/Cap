@@ -69,7 +69,10 @@ fn test_color_background(
     for (color, name) in colors {
         let uniforms = SkiaProjectUniforms {
             output_size: (width, height),
-            background: BackgroundSource::Color { value: color },
+            background: BackgroundSource::Color {
+                value: color,
+                alpha: 255,
+            },
             border: None,
         };
 
