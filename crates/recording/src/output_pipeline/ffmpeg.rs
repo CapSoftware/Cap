@@ -30,11 +30,6 @@ pub struct Mp4Muxer {
     audio_encoder: Option<AACEncoder>,
 }
 
-pub struct Finish {
-    pub video_result: Result<(), ffmpeg::Error>,
-    pub audio_result: Result<(), ffmpeg::Error>,
-}
-
 impl Muxer for Mp4Muxer {
     type Config = ();
 

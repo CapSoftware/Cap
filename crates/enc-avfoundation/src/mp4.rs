@@ -61,11 +61,11 @@ pub enum QueueFrameError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum FinishError {
-    #[error("NotReadyForMore")]
+    #[error("NotWriting")]
     NotWriting,
-    #[error("NotReadyForMore")]
+    #[error("NoFrames")]
     NoFrames,
-    #[error("NotReadyForMore")]
+    #[error("Failed")]
     Failed,
 }
 
