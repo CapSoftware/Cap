@@ -103,6 +103,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.settings.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Create .env file in root
         run: |
@@ -169,6 +170,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.settings.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: ./.github/actions/setup-js
 

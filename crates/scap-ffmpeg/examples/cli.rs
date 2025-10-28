@@ -72,9 +72,7 @@ pub async fn main() {
             ff_frame.height();
             ff_frame.format();
         })
-        .with_stop_with_err_cb(|stream, error| {
-            (stream, error);
-        })
+        .with_stop_with_err_cb(|_, _| {})
         .build()
         .expect("Failed to build capturer");
 

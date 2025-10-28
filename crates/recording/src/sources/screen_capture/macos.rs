@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use anyhow::{Context, anyhow};
+use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{

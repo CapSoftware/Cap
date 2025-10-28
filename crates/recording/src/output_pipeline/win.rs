@@ -1,6 +1,6 @@
 use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
 use anyhow::{Context, anyhow};
-use cap_enc_ffmpeg::AACEncoder;
+use cap_enc_ffmpeg::aac::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
 use futures::channel::oneshot;
 use std::{
@@ -106,7 +106,7 @@ impl Muxer for WindowsMuxer {
                             }
                         };
 
-                        cap_enc_ffmpeg::H264Encoder::builder(video_config)
+                        cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
                             .with_output_size(fallback_width, fallback_height)
                             .and_then(|builder| builder.build(&mut *output_guard))
                             .map(either::Right)
@@ -272,12 +272,20 @@ impl Muxer for WindowsMuxer {
         let _ = self.video_tx.send(None);
     }
 
-    fn finish(&mut self, _: Duration) -> anyhow::Result<()> {
-        let mut output = self.output.lock().unwrap();
-        if let Some(audio_encoder) = self.audio_encoder.as_mut() {
-            let _ = audio_encoder.finish(&mut output);
-        }
-        Ok(output.write_trailer()?)
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let mut output = self
+            .output
+            .lock()
+            .map_err(|_| anyhow!("Failed to lock output"))?;
+        let audio_result = self
+            .audio_encoder
+            .as_mut()
+            .map(|enc| enc.flush(&mut output))
+            .unwrap_or(Ok(()));
+
+        output.write_trailer()?;
+
+        Ok(audio_result.map_err(Into::into))
     }
 }
 

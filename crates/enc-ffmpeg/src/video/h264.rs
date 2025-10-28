@@ -262,10 +262,8 @@ impl H264Encoder {
         Ok(())
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) {
-        if let Err(e) = self.base.process_eof(output, &mut self.encoder) {
-            tracing::error!("Failed to send EOF to encoder: {:?}", e);
-        }
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
     }
 }
 
