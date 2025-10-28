@@ -20,6 +20,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      branch: ${{ steps.branch.outputs.branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +40,11 @@ jobs:
             tauri-plugins:
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'
+
+      - name: Output branch name
+        id: branch
+        run: |
+          echo "branch=${{ env.BRANCH_NAME }}" >> $GITHUB_OUTPUT
 
   typecheck:
     name: Typecheck
@@ -219,7 +225,8 @@ jobs:
 
   rust-cache:
     name: Rust cache
-    if: ${{ env.BRANCH_NAME == 'refs/heads/fix-rust-cache' }}
+    needs: changes
+    if: needs.changes.outputs.branch == 'refs/heads/fix-rust-cache'
     strategy:
       fail-fast: false
       matrix:
