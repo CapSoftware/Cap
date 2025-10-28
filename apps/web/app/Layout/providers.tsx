@@ -38,6 +38,7 @@ export function PostHogProvider({
 		const base = {
 			api_host: host,
 			capture_pageview: false,
+			capture_pageleave: true,
 			bootstrap: initialBootstrap.current?.distinctID
 				? initialBootstrap.current
 				: undefined,
