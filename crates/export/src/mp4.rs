@@ -111,9 +111,16 @@ impl Mp4ExportSettings {
 
             info!("Encoded {encoded_frames} video frames");
 
-            encoder
+            let res = encoder
                 .finish()
-                .map_err(|e| format!("Failed to finish encoding: {}", e))?;
+                .map_err(|e| format!("Failed to finish encoding: {e}"))?;
+
+            if let Err(e) = res.video_finish {
+                return Err(format!("Video encoding failed: {e}"));
+            }
+            if let Err(e) = res.audio_finish {
+                return Err(format!("Audio encoding failed: {e}"));
+            }
 
             Ok::<_, String>(base.output_path)
         })

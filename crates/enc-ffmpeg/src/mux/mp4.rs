@@ -127,7 +127,7 @@ impl MP4File {
             .map(|enc| {
                 tracing::info!("MP4Encoder: Flushing audio encoder");
                 enc.flush(&mut self.output).inspect_err(|e| {
-                    error!("Failed to finish video encoder: {e:#}");
+                    error!("Failed to finish audio encoder: {e:#}");
                 })
             })
             .unwrap_or(Ok(()));
