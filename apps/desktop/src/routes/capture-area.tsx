@@ -19,7 +19,8 @@ import Cropper, {
 	type Ratio,
 } from "~/components/Cropper";
 import { createOptionsQuery } from "~/utils/queries";
-import type { DisplayId } from "~/utils/tauri";
+import { type DisplayId } from "~/utils/tauri";
+import { emitTo } from "~/utils/tauriSpectaHack";
 
 const MIN_SIZE = { width: 150, height: 150 };
 
@@ -27,7 +28,8 @@ export default function CaptureArea() {
 	const webview = getCurrentWebviewWindow();
 
 	const setPendingState = (pending: boolean) =>
-		webview.emitTo("main", "setCaptureAreaPending", pending);
+		// events.setCaptureAreaPending(webview).emitTo("main", pending);
+		emitTo(webview, "setCaptureAreaPending", "main", pending);
 
 	onMount(async () => {
 		setPendingState(true);
