@@ -21,7 +21,7 @@ export const DownloadPage = () => {
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
 					Download Cap
 				</h1>
-				<p className="px-4 text-sm fade-in-down animate-delay-2 md:text-base md:px-0">
+				<p className="px-4 text-sm fade-in-down text-gray-11 animate-delay-2 md:text-base md:px-0">
 					The quickest way to share your screen. Pin to your dock and record in
 					seconds.
 				</p>
@@ -116,8 +116,8 @@ export const DownloadPage = () => {
 				</div>
 
 				{/* Discreet SEO Links */}
-				<div className="pt-8 mt-32 text-xs border-t border-gray-200 opacity-70 text-gray-1">
-					<div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
+				<div className="pt-8 mt-32 text-xs border-t border-gray-5 text-gray-12">
+					<div className="flex flex-wrap gap-y-2 gap-x-4 justify-center items-center mx-auto max-w-lg">
 						<Link
 							href="/screen-recorder"
 							className="text-xs hover:text-gray-8 hover:underline"

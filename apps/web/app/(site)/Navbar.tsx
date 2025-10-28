@@ -17,9 +17,9 @@ import { motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Suspense, use, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
-import { useAuthContext } from "../Layout/AuthContext";
+import { useCurrentUser } from "../Layout/AuthContext";
 
 const Links = [
 	{
@@ -115,7 +115,7 @@ const Links = [
 export const Navbar = () => {
 	const pathname = usePathname();
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
-	const auth = use(useAuthContext().user);
+	const auth = useCurrentUser();
 
 	const [hideLogoName, setHideLogoName] = useState(false);
 
@@ -138,7 +138,7 @@ export const Navbar = () => {
 							<Link passHref href="/home">
 								<Logo
 									hideLogoName={hideLogoName}
-									className="transition-all duration-[0.2s] ease-out"
+									className="transition-all duration-200 ease-out"
 									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
 									style={{
 										width: hideLogoName ? 45.5 : 90,
@@ -295,7 +295,7 @@ export const Navbar = () => {
 };
 
 function LoginOrDashboard() {
-	const auth = use(useAuthContext().user);
+	const auth = useCurrentUser();
 
 	return (
 		<Button

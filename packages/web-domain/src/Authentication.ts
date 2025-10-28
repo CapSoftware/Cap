@@ -1,12 +1,18 @@
 import { HttpApiError, HttpApiMiddleware } from "@effect/platform";
 import { RpcMiddleware } from "@effect/rpc";
-import { Context, Schema } from "effect";
+import { Context, type Option, Schema } from "effect";
 
 import { InternalError } from "./Errors.ts";
+import type { ImageUpload, Organisation, User } from "./index.ts";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
 	CurrentUser,
-	{ id: string; email: string; activeOrganizationId: string }
+	{
+		id: User.UserId;
+		email: string;
+		activeOrganizationId: Organisation.OrganisationId;
+		iconUrlOrKey: Option.Option<ImageUpload.ImageUrlOrKey>;
+	}
 >() {}
 
 export class HttpAuthMiddleware extends HttpApiMiddleware.Tag<HttpAuthMiddleware>()(

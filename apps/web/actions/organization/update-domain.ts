@@ -3,21 +3,23 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
+import { userIsPro } from "@cap/utils";
+import type { Organisation } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { addDomain, checkDomainStatus } from "./domain-utils";
 
-export async function updateDomain(domain: string, organizationId: string) {
+export async function updateDomain(
+	domain: string,
+	organizationId: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
 
 	if (!user) {
 		throw new Error("Unauthorized");
 	}
 
-	//check user subscription to prevent abuse
-	const isSubscribed = user.stripeSubscriptionStatus === "active";
-
-	if (!isSubscribed) {
+	if (!userIsPro(user)) {
 		throw new Error("User is not subscribed");
 	}
 

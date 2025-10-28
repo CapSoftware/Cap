@@ -1,11 +1,12 @@
 use cap_media_info::RawVideoFormat;
 use ffmpeg::{format, frame};
-use std::path::PathBuf;
-use tracing::{info, trace};
+use std::{path::PathBuf, time::Duration};
+use tracing::*;
 
 use crate::{
     audio::AudioEncoder,
-    video::{H264Encoder, H264EncoderError},
+    h264,
+    video::h264::{H264Encoder, H264EncoderError},
 };
 
 pub struct MP4File {
@@ -25,6 +26,19 @@ pub enum InitError {
     VideoInit(H264EncoderError),
     #[error("Audio/{0}")]
     AudioInit(Box<dyn std::error::Error>),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum FinishError {
+    #[error("Already finished")]
+    AlreadyFinished,
+    #[error("{0}")]
+    WriteTrailerFailed(ffmpeg::Error),
+}
+
+pub struct FinishResult {
+    pub video_finish: Result<(), ffmpeg::Error>,
+    pub audio_finish: Result<(), ffmpeg::Error>,
 }
 
 impl MP4File {
@@ -70,12 +84,16 @@ impl MP4File {
         RawVideoFormat::YUYV420
     }
 
-    pub fn queue_video_frame(&mut self, frame: frame::Video) {
+    pub fn queue_video_frame(
+        &mut self,
+        frame: frame::Video,
+        timestamp: Duration,
+    ) -> Result<(), h264::QueueFrameError> {
         if self.is_finished {
-            return;
+            return Ok(());
         }
 
-        self.video.queue_frame(frame, &mut self.output);
+        self.video.queue_frame(frame, timestamp, &mut self.output)
     }
 
     pub fn queue_audio_frame(&mut self, frame: frame::Audio) {
@@ -87,29 +105,42 @@ impl MP4File {
             return;
         };
 
-        audio.queue_frame(frame, &mut self.output);
+        audio.send_frame(frame, &mut self.output);
     }
 
-    pub fn finish(&mut self) {
+    pub fn finish(&mut self) -> Result<FinishResult, FinishError> {
         if self.is_finished {
-            return;
+            return Err(FinishError::AlreadyFinished);
         }
 
         self.is_finished = true;
 
         tracing::info!("MP4Encoder: Finishing encoding");
 
-        self.video.finish(&mut self.output);
+        let video_finish = self.video.flush(&mut self.output).inspect_err(|e| {
+            error!("Failed to finish video encoder: {e:#}");
+        });
 
-        if let Some(audio) = &mut self.audio {
-            tracing::info!("MP4Encoder: Flushing audio encoder");
-            audio.finish(&mut self.output);
-        }
+        let audio_finish = self
+            .audio
+            .as_mut()
+            .map(|enc| {
+                tracing::info!("MP4Encoder: Flushing audio encoder");
+                enc.flush(&mut self.output).inspect_err(|e| {
+                    error!("Failed to finish audio encoder: {e:#}");
+                })
+            })
+            .unwrap_or(Ok(()));
 
         tracing::info!("MP4Encoder: Writing trailer");
-        if let Err(e) = self.output.write_trailer() {
-            tracing::error!("Failed to write MP4 trailer: {:?}", e);
-        }
+        self.output
+            .write_trailer()
+            .map_err(FinishError::WriteTrailerFailed)?;
+
+        Ok(FinishResult {
+            video_finish,
+            audio_finish,
+        })
     }
 
     pub fn video(&self) -> &H264Encoder {
@@ -118,6 +149,12 @@ impl MP4File {
 
     pub fn video_mut(&mut self) -> &mut H264Encoder {
         &mut self.video
+    }
+}
+
+impl Drop for MP4File {
+    fn drop(&mut self) {
+        let _ = self.finish();
     }
 }
 

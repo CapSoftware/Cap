@@ -5,7 +5,6 @@ use ffmpeg::{
     format::{self as avformat},
     software::resampling,
 };
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::File;
@@ -15,6 +14,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Window};
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 pub use cap_project::{CaptionSegment, CaptionSettings};
@@ -45,6 +46,9 @@ fn is_silence_marker(text: &str) -> bool {
         || cleaned.is_empty()
 }
 
+use crate::http_client;
+
+// Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
     pub segments: Vec<CaptionSegment>,
@@ -64,12 +68,14 @@ const WHISPER_SAMPLE_RATE: u32 = 16000;
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn create_dir(path: String, _recursive: bool) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {e}"))
 }
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {e}"))
 }
@@ -810,6 +816,7 @@ fn process_with_whisper(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn transcribe_audio(
     video_path: String,
     model_path: String,
@@ -865,10 +872,11 @@ pub async fn transcribe_audio(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 pub async fn save_captions(
+    app: AppHandle,
     video_id: String,
     captions: CaptionData,
-    app: AppHandle,
 ) -> Result<(), String> {
     tracing::info!("Saving captions for video_id: {}", video_id);
 
@@ -1106,9 +1114,10 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 pub async fn load_captions(
-    video_id: String,
     app: AppHandle,
+    video_id: String,
 ) -> Result<Option<CaptionData>, String> {
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let captions_path = captions_dir.join("captions.json");
@@ -1176,7 +1185,9 @@ impl DownloadProgress {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(window))]
 pub async fn download_whisper_model(
+    app: AppHandle,
     window: Window,
     model_name: String,
     output_path: String,
@@ -1258,12 +1269,14 @@ pub async fn download_whisper_model(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn check_model_exists(model_path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&model_path).exists())
 }
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn delete_whisper_model(model_path: String) -> Result<(), String> {
     if !std::path::Path::new(&model_path).exists() {
         return Err(format!("Model file not found: {model_path}"));
@@ -1303,9 +1316,10 @@ fn format_srt_time(seconds: f64) -> String {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 pub async fn export_captions_srt(
-    video_id: String,
     app: AppHandle,
+    video_id: String,
 ) -> Result<Option<PathBuf>, String> {
     tracing::info!("Starting SRT export for video_id: {}", video_id);
 

@@ -3,7 +3,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { spaceMembers } from "@cap/database/schema";
+import { spaceMembers, spaces } from "@cap/database/schema";
+import { Space, User } from "@cap/web-domain";
 import { eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
@@ -12,14 +13,14 @@ import { z } from "zod";
 const spaceRole = z.union([z.literal("Admin"), z.literal("member")]);
 
 const addSpaceMemberSchema = z.object({
-	spaceId: z.string(),
-	userId: z.string(),
+	spaceId: z.string().transform((v) => Space.SpaceId.make(v)),
+	userId: z.string().transform((v) => User.UserId.make(v)),
 	role: spaceRole,
 });
 
 const addSpaceMembersSchema = z.object({
-	spaceId: z.string(),
-	userIds: z.array(z.string()),
+	spaceId: z.string().transform((v) => Space.SpaceId.make(v)),
+	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
 	role: spaceRole,
 });
 
@@ -149,8 +150,10 @@ export async function removeSpaceMember(
 
 // Replace all members for a space
 const setSpaceMembersSchema = z.object({
-	spaceId: z.string(),
-	userIds: z.array(z.string()),
+	spaceId: z
+		.string()
+		.transform((v) => Space.SpaceId.make(v) as Space.SpaceIdOrOrganisationId),
+	userIds: z.array(z.string().transform((v) => User.UserId.make(v))),
 	role: spaceRole.default("member"),
 });
 
@@ -167,25 +170,41 @@ export async function setSpaceMembers(
 	}
 	const { spaceId, userIds, role } = validation.data;
 
+	// Get the space creator to ensure they're always included
+	const [space] = await db()
+		.select({ createdById: spaces.createdById })
+		.from(spaces)
+		.where(eq(spaces.id, spaceId))
+		.limit(1);
+
+	if (!space) {
+		throw new Error("Space not found");
+	}
+
+	// Ensure creator is always included in the member list
+	const allMemberIds = Array.from(new Set([...userIds, space.createdById]));
+
 	// Remove all current members
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 
-	// Insert new members if any
-	if (userIds.length > 0) {
-		const now = new Date();
-		const values = userIds.map((userId) => ({
-			id: uuidv4().substring(0, nanoIdLength),
+	// Insert new members (always at least the creator)
+	const now = new Date();
+	const values = allMemberIds.map((userId) => {
+		// Creator is always Admin, others get the specified role
+		const memberRole = userId === space.createdById ? "Admin" : role;
+		return {
+			id: User.UserId.make(uuidv4().substring(0, nanoIdLength)),
 			spaceId,
 			userId,
-			role,
+			role: memberRole,
 			createdAt: now,
 			updatedAt: now,
-		}));
-		await db().insert(spaceMembers).values(values);
-	}
+		};
+	});
+	await db().insert(spaceMembers).values(values);
 
 	revalidatePath(`/dashboard/spaces/${spaceId}`);
-	return { success: true, count: userIds.length };
+	return { success: true, count: allMemberIds.length };
 }
 
 const batchRemoveSpaceMembersSchema = z.object({

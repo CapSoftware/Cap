@@ -240,7 +240,7 @@ mod test {
         };
     }
 
-    fn c(time: f64, segments: &[ZoomSegment]) -> SegmentsCursor {
+    fn c<'a>(time: f64, segments: &'a [ZoomSegment]) -> SegmentsCursor<'a> {
         SegmentsCursor::new(time, segments)
     }
 

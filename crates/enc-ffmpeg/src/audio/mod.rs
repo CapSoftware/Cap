@@ -1,9 +1,9 @@
 mod audio_encoder;
-mod buffered_resampler;
 pub use audio_encoder::*;
 
-mod opus;
-pub use opus::*;
+mod base;
 
-mod aac;
-pub use aac::*;
+pub mod buffered_resampler;
+
+pub mod aac;
+pub mod opus;

@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { Space, User, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect } from "effect";
 
@@ -10,9 +10,9 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 		const db = yield* Database;
 
 		return {
-			membershipForVideo: (userId: string, videoId: Video.VideoId) =>
+			membershipForVideo: (userId: User.UserId, videoId: Video.VideoId) =>
 				db
-					.execute((db) =>
+					.use((db) =>
 						db
 							.select({ membershipId: Db.spaceMembers.id })
 							.from(Db.spaceMembers)
@@ -28,9 +28,13 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 							),
 					)
 					.pipe(Effect.map(Array.get(0))),
-			membership: (userId: string, spaceId: string) =>
+
+			membership: (
+				userId: User.UserId,
+				spaceId: Space.SpaceIdOrOrganisationId,
+			) =>
 				db
-					.execute((db) =>
+					.use((db) =>
 						db
 							.select({
 								membershipId: Db.spaceMembers.id,
@@ -43,6 +47,13 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 									Dz.eq(Db.spaceMembers.spaceId, spaceId),
 								),
 							),
+					)
+					.pipe(Effect.map(Array.get(0))),
+
+			getById: (spaceId: Space.SpaceIdOrOrganisationId) =>
+				db
+					.use((db) =>
+						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
 					)
 					.pipe(Effect.map(Array.get(0))),
 		};

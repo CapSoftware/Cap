@@ -1,5 +1,5 @@
 import * as Db from "@cap/database/schema";
-import { S3Bucket, type Video } from "@cap/web-domain";
+import { S3Bucket, type User, type Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
@@ -14,7 +14,7 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 			const getForVideo = Effect.fn("S3BucketsRepo.getForVideo")(
 				(videoId: Video.VideoId) =>
 					Effect.gen(function* () {
-						const [res] = yield* db.execute((db) =>
+						const [res] = yield* db.use((db) =>
 							db
 								.select({ bucket: Db.s3Buckets })
 								.from(Db.s3Buckets)
@@ -33,7 +33,7 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 			const getById = Effect.fn("S3BucketsRepo.getById")(
 				(id: S3Bucket.S3BucketId) =>
 					Effect.gen(function* () {
-						const [res] = yield* db.execute((db) =>
+						const [res] = yield* db.use((db) =>
 							db
 								.select({ bucket: Db.s3Buckets })
 								.from(Db.s3Buckets)
@@ -49,9 +49,9 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 			);
 
 			const getForUser = Effect.fn("S3BucketsRepo.getForUser")(
-				(userId: string) =>
+				(userId: User.UserId) =>
 					Effect.gen(function* () {
-						const [res] = yield* db.execute((db) =>
+						const [res] = yield* db.use((db) =>
 							db
 								.select({ bucket: Db.s3Buckets })
 								.from(Db.s3Buckets)

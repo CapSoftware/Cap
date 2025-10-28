@@ -12,21 +12,24 @@
 		"db:drop": "drizzle-kit drop --config=drizzle.config.ts",
 		"db:studio": "drizzle-kit studio --config=drizzle.config.ts",
 		"db:check-integrity": "node scripts/check-migration-integrity.js",
-		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts"
+		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts",
+		"build": "tsdown"
 	},
 	"dependencies": {
 		"@cap/env": "workspace:*",
 		"@cap/web-domain": "workspace:*",
-		"@effect/sql-mysql2": "^0.45.1",
+		"@effect/sql-mysql2": "^0.47.0",
+		"@kubiks/otel-drizzle": "^2.1.0",
 		"@mattrax/mysql-planetscale": "^0.0.3",
 		"@paralleldrive/cuid2": "^2.2.2",
-		"@planetscale/database": "^1.13.0",
+		"@planetscale/database": "^1.19.0",
 		"@react-email/components": "^0.1.0",
 		"@react-email/render": "1.1.2",
 		"@react-email/tailwind": "^1.0.5",
-		"drizzle-orm": "0.44.5",
+		"drizzle-orm": "0.44.6",
 		"dub": "^0.64.0",
-		"effect": "^3.17.14",
+		"effect": "^3.18.4",
+		"mysql2": "^3.15.2",
 		"nanoid": "^5.0.4",
 		"next": "15.5.4",
 		"next-auth": "^4.24.5",
@@ -56,11 +59,21 @@
 		".": "./index.ts",
 		"./auth/auth-options": "./auth/auth-options.ts",
 		"./auth/session": "./auth/session.ts",
-		"./emails/config": "./emails/config.ts",
-		"./emails/*": "./emails/*.tsx",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
 		"./helpers": "./helpers.ts",
+		"./emails/config": "./emails/config.ts",
+		"./emails/*": "./emails/*.tsx",
 		"./types": "./types/index.ts"
+	},
+	"publishConfig": {
+		"exports": {
+			".": "./dist/index.js",
+			"./auth/auth-options": "./dist/auth/auth-options.js",
+			"./auth/session": "./dist/auth/session.js",
+			"./schema": "./dist/schema.js",
+			"./crypto": "./dist/crypto.js",
+			"./helpers": "./dist/helpers.js"
+		}
 	}
 }

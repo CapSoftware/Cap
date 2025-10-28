@@ -1,6 +1,6 @@
 use crate::ExporterBase;
 use cap_editor::{AudioRenderer, get_audio_segments};
-use cap_enc_ffmpeg::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
+use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
@@ -49,8 +49,8 @@ impl Mp4ExportSettings {
         info!("Exporting mp4 with settings: {:?}", &self);
         info!("Expected to render {} frames", base.total_frames(self.fps));
 
-        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
-        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
+        let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(8);
+        let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(8);
 
         let fps = self.fps;
 
@@ -79,13 +79,13 @@ impl Mp4ExportSettings {
                 "output",
                 base.output_path.clone(),
                 |o| {
-                    H264Encoder::builder("output_video", video_info)
+                    H264Encoder::builder(video_info)
                         .with_bpp(self.compression.bits_per_pixel())
                         .build(o)
                 },
                 |o| {
                     has_audio.then(|| {
-                        AACEncoder::init("output_audio", AudioRenderer::info(), o)
+                        AACEncoder::init(AudioRenderer::info(), o)
                             .map(|v| v.boxed())
                             .map_err(Into::into)
                     })
@@ -97,7 +97,12 @@ impl Mp4ExportSettings {
 
             let mut encoded_frames = 0;
             while let Ok(frame) = frame_rx.recv() {
-                encoder.queue_video_frame(frame.video);
+                encoder
+                    .queue_video_frame(
+                        frame.video,
+                        Duration::from_secs_f32(encoded_frames as f32 / fps as f32),
+                    )
+                    .map_err(|err| err.to_string())?;
                 encoded_frames += 1;
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);
@@ -106,7 +111,16 @@ impl Mp4ExportSettings {
 
             info!("Encoded {encoded_frames} video frames");
 
-            encoder.finish();
+            let res = encoder
+                .finish()
+                .map_err(|e| format!("Failed to finish encoding: {e}"))?;
+
+            if let Err(e) = res.video_finish {
+                return Err(format!("Video encoding failed: {e}"));
+            }
+            if let Err(e) = res.audio_finish {
+                return Err(format!("Audio encoding failed: {e}"));
+            }
 
             Ok::<_, String>(base.output_path)
         })

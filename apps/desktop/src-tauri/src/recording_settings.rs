@@ -1,5 +1,6 @@
-use cap_recording::{RecordingMode, feeds::camera::DeviceOrModelID, sources::ScreenCaptureTarget};
-use serde_json::json;
+use cap_recording::{
+    RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
+};
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 
@@ -38,23 +39,23 @@ impl RecordingSettingsStore {
     }
 
     // i don't trust anyone to not overwrite the whole store lols
-    pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
-        let Ok(store) = app.store("store") else {
-            return Err("Store not found".to_string());
-        };
+    // pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
+    //     let Ok(store) = app.store("store") else {
+    //         return Err("Store not found".to_string());
+    //     };
 
-        let mut settings = Self::get(app)?.unwrap_or_default();
-        update(&mut settings);
-        store.set(Self::KEY, json!(settings));
-        store.save().map_err(|e| e.to_string())
-    }
+    //     let mut settings = Self::get(app)?.unwrap_or_default();
+    //     update(&mut settings);
+    //     store.set(Self::KEY, json!(settings));
+    //     store.save().map_err(|e| e.to_string())
+    // }
 
-    fn save(&self, app: &AppHandle) -> Result<(), String> {
-        let Ok(store) = app.store("store") else {
-            return Err("Store not found".to_string());
-        };
+    // fn save(&self, app: &AppHandle) -> Result<(), String> {
+    //     let Ok(store) = app.store("store") else {
+    //         return Err("Store not found".to_string());
+    //     };
 
-        store.set(Self::KEY, json!(self));
-        store.save().map_err(|e| e.to_string())
-    }
+    //     store.set(Self::KEY, json!(self));
+    //     store.save().map_err(|e| e.to_string())
+    // }
 }

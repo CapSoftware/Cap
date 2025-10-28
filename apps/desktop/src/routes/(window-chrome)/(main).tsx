@@ -238,11 +238,14 @@ function Page() {
 					}
 				})();
 
-				await commands.startRecording({
-					capture_target,
-					mode: payload.mode,
-					capture_system_audio: rawOptions.captureSystemAudio,
-				});
+				await handleRecordingResult(
+					commands.startRecording({
+						capture_target,
+						mode: payload.mode,
+						capture_system_audio: rawOptions.captureSystemAudio,
+					}),
+					setOptions,
+				);
 			} else await commands.stopRecording();
 		},
 	}));
@@ -589,6 +592,7 @@ import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
 import {

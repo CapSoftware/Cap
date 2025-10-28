@@ -8,6 +8,6 @@ pub trait AudioEncoder {
         Box::new(self)
     }
 
-    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output);
-    fn finish(&mut self, output: &mut format::context::Output);
+    fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output);
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error>;
 }

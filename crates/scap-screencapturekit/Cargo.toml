@@ -21,3 +21,4 @@ workspace = true
 clap = { version = "4.5.40", features = ["derive"] }
 inquire = "0.7.5"
 scap-targets = { path = "../scap-targets" }
+tokio.workspace = true

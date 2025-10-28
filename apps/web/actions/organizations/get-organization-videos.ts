@@ -3,9 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { sharedVideos } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import type { Organisation } from "@cap/web-domain";
+import { and, eq, isNull } from "drizzle-orm";
 
-export async function getOrganizationVideoIds(organizationId: string) {
+export async function getOrganizationVideoIds(
+	organizationId: Organisation.OrganisationId,
+) {
 	try {
 		const user = await getCurrentUser();
 
@@ -22,7 +25,12 @@ export async function getOrganizationVideoIds(organizationId: string) {
 				videoId: sharedVideos.videoId,
 			})
 			.from(sharedVideos)
-			.where(eq(sharedVideos.organizationId, organizationId));
+			.where(
+				and(
+					eq(sharedVideos.organizationId, organizationId),
+					isNull(sharedVideos.folderId),
+				),
+			);
 
 		return {
 			success: true,

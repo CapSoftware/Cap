@@ -1,5 +1,5 @@
 "use client";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
@@ -9,9 +9,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
-import { updateFolder } from "@/actions/folders/updateFolder";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
@@ -22,8 +20,8 @@ export type FolderDataType = {
 	id: Folder.FolderId;
 	color: "normal" | "blue" | "red" | "yellow";
 	videoCount: number;
-	spaceId?: string | null;
-	parentId?: string | null;
+	spaceId?: Space.SpaceIdOrOrganisationId | null;
+	parentId: Folder.FolderId | null;
 };
 
 const FolderCard = ({
@@ -71,8 +69,10 @@ const FolderCard = ({
 		}),
 	});
 
+	const rpc = useRpcClient();
+
 	const deleteFolder = useEffectMutation({
-		mutationFn: (id: Folder.FolderId) => withRpc((r) => r.FolderDelete(id)),
+		mutationFn: (id: Folder.FolderId) => rpc.FolderDelete(id),
 		onSuccess: () => {
 			router.refresh();
 			toast.success("Folder deleted successfully");
@@ -81,6 +81,16 @@ const FolderCard = ({
 		onError: () => {
 			toast.error("Failed to delete folder");
 		},
+	});
+
+	const updateFolder = useEffectMutation({
+		mutationFn: (data: Folder.FolderUpdate) => rpc.FolderUpdate(data),
+		onSuccess: () => {
+			toast.success("Folder name updated successfully");
+			router.refresh();
+		},
+		onError: () => toast.error("Failed to update folder name"),
+		onSettled: () => setIsRenaming(false),
 	});
 
 	useEffect(() => {
@@ -175,17 +185,6 @@ const FolderCard = ({
 			document.removeEventListener("dragend", handleDragEnd);
 		};
 	}, [id, name, rive, isDragOver]);
-
-	const updateFolderNameHandler = async () => {
-		try {
-			await updateFolder({ folderId: id, name: updateName });
-			toast.success("Folder name updated successfully");
-		} catch (error) {
-			toast.error("Failed to update folder name");
-		} finally {
-			setIsRenaming(false);
-		}
-	};
 
 	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -342,18 +341,22 @@ const FolderCard = ({
 								rows={1}
 								value={updateName}
 								onChange={(e) => setUpdateName(e.target.value)}
-								onBlur={async () => {
+								onBlur={() => {
 									setIsRenaming(false);
-									if (updateName.trim() !== name) {
-										await updateFolderNameHandler();
-									}
+									if (updateName.trim() !== name)
+										updateFolder.mutate({
+											id,
+											name: updateName.trim(),
+										});
 								}}
-								onKeyDown={async (e) => {
+								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										setIsRenaming(false);
-										if (updateName.trim() !== name) {
-											await updateFolderNameHandler();
-										}
+										if (updateName.trim() !== name)
+											updateFolder.mutate({
+												id,
+												name: updateName.trim(),
+											});
 									}
 								}}
 								className="w-full resize-none bg-transparent border-none focus:outline-none

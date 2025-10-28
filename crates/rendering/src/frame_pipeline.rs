@@ -1,4 +1,3 @@
-use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderSession, RenderingError};
@@ -80,13 +79,8 @@ pub async fn finish_encoder(
     };
 
     let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
-
-    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        size: output_buffer_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        label: Some("Output Buffer"),
-        mapped_at_creation: false,
-    });
+    session.ensure_readback_buffers(device, output_buffer_size);
+    let output_buffer = session.current_readback_buffer();
 
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -102,7 +96,7 @@ pub async fn finish_encoder(
             aspect: wgpu::TextureAspect::All,
         },
         wgpu::TexelCopyBufferInfo {
-            buffer: &output_buffer,
+            buffer: output_buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_bytes_per_row),
@@ -115,21 +109,23 @@ pub async fn finish_encoder(
     queue.submit(std::iter::once(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
-    let (tx, rx) = oneshot_channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        tx.send(result).ok();
+        let _ = tx.send(result);
     });
+
     device.poll(wgpu::PollType::Wait)?;
 
-    rx.receive()
-        .await
-        .ok_or(RenderingError::BufferMapWaitingFailed)??;
+    rx.await
+        .map_err(|_| RenderingError::BufferMapWaitingFailed)??;
 
     let data = buffer_slice.get_mapped_range();
     let data_vec = data.to_vec();
 
     drop(data);
     output_buffer.unmap();
+
+    session.swap_readback_buffers();
 
     Ok(RenderedFrame {
         data: data_vec,

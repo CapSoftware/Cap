@@ -52,6 +52,7 @@ impl HwDevice {
                 let mut sw_frame = frame::Video::empty();
 
                 if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
+                    sw_frame.set_pts(src.pts());
                     return Some(sw_frame);
                 };
             }

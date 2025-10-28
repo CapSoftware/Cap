@@ -1,8 +1,9 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
+import type { Video } from "@cap/web-domain";
+import { faRectangleList } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEffect, useState } from "react";
 
 interface Chapter {
@@ -11,7 +12,7 @@ interface Chapter {
 }
 
 interface SummaryProps {
-	videoId: string;
+	videoId: Video.VideoId;
 	onSeek?: (time: number) => void;
 	initialAiData?: {
 		title?: string | null;
@@ -20,7 +21,8 @@ interface SummaryProps {
 		processing?: boolean;
 	};
 	aiGenerationEnabled?: boolean;
-	user: typeof userSelectProps | null;
+	isSummaryDisabled?: boolean;
+	ownerIsPro?: boolean;
 }
 
 const formatTime = (time: number) => {
@@ -34,24 +36,24 @@ const formatTime = (time: number) => {
 const SkeletonLoader = () => (
 	<div className="p-4 space-y-6 animate-pulse">
 		<div>
-			<div className="h-6 w-24 bg-gray-200 rounded mb-3"></div>
-			<div className="h-3 w-32 bg-gray-100 rounded mb-4"></div>
+			<div className="mb-3 w-24 h-6 bg-gray-200 rounded"></div>
+			<div className="mb-4 w-32 h-3 bg-gray-100 rounded"></div>
 			<div className="space-y-3">
-				<div className="h-4 bg-gray-200 rounded w-full"></div>
-				<div className="h-4 bg-gray-200 rounded w-5/6"></div>
-				<div className="h-4 bg-gray-200 rounded w-4/5"></div>
-				<div className="h-4 bg-gray-200 rounded w-full"></div>
-				<div className="h-4 bg-gray-200 rounded w-3/4"></div>
+				<div className="w-full h-4 bg-gray-200 rounded"></div>
+				<div className="w-5/6 h-4 bg-gray-200 rounded"></div>
+				<div className="w-4/5 h-4 bg-gray-200 rounded"></div>
+				<div className="w-full h-4 bg-gray-200 rounded"></div>
+				<div className="w-3/4 h-4 bg-gray-200 rounded"></div>
 			</div>
 		</div>
 
 		<div>
-			<div className="h-6 w-24 bg-gray-200 rounded mb-4"></div>
+			<div className="mb-4 w-24 h-6 bg-gray-200 rounded"></div>
 			<div className="space-y-2">
 				{[1, 2, 3, 4].map((i) => (
 					<div key={i} className="flex items-center p-2">
-						<div className="h-4 w-12 bg-gray-200 rounded mr-3"></div>
-						<div className="h-4 bg-gray-200 rounded flex-1"></div>
+						<div className="mr-3 w-12 h-4 bg-gray-200 rounded"></div>
+						<div className="flex-1 h-4 bg-gray-200 rounded"></div>
 					</div>
 				))}
 			</div>
@@ -62,8 +64,9 @@ const SkeletonLoader = () => (
 export const Summary: React.FC<SummaryProps> = ({
 	onSeek,
 	initialAiData,
+	isSummaryDisabled = false,
 	aiGenerationEnabled = false,
-	user,
+	ownerIsPro,
 }) => {
 	const [aiData, setAiData] = useState<{
 		title?: string | null;
@@ -91,17 +94,12 @@ export const Summary: React.FC<SummaryProps> = ({
 		}
 	};
 
-	const hasProAccess = userIsPro(user);
-
-	const hasExistingAiData =
-		aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
-
-	if (!hasProAccess && !hasExistingAiData) {
+	if (!ownerIsPro) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<div className="space-y-4 max-w-sm">
-					<div className="bg-gradient-to-br from-blue-50 to-purple-50 p-6 rounded-lg border border-blue-100">
-						<div className="text-blue-600 mb-3">
+					<div className="p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg border border-blue-100">
+						<div className="mb-3 text-blue-600">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								className="mx-auto w-12 h-12"
@@ -117,10 +115,10 @@ export const Summary: React.FC<SummaryProps> = ({
 								/>
 							</svg>
 						</div>
-						<h3 className="text-lg font-semibold text-gray-900 mb-2">
+						<h3 className="mb-2 text-lg font-semibold text-gray-900">
 							Unlock Cap AI
 						</h3>
-						<p className="text-sm text-gray-600 mb-4 leading-relaxed">
+						<p className="mb-4 text-sm leading-relaxed text-gray-600">
 							Upgrade to Cap Pro to access AI-powered features including
 							automatic titles, video summaries, and intelligent chapter
 							generation.
@@ -139,6 +137,8 @@ export const Summary: React.FC<SummaryProps> = ({
 		);
 	}
 
+	if (isSummaryDisabled) return null;
+
 	if (isLoading || aiData?.processing) {
 		return (
 			<div className="flex flex-col h-full">
@@ -152,22 +152,12 @@ export const Summary: React.FC<SummaryProps> = ({
 	if (!aiData?.summary && (!aiData?.chapters || aiData.chapters.length === 0)) {
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
-				<div className="space-y-2 text-gray-300">
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						className="mx-auto w-8 h-8"
-						fill="none"
-						viewBox="0 0 24 24"
-						stroke="currentColor"
-					>
-						<path
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							strokeWidth={1.5}
-							d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-						/>
-					</svg>
-					<h3 className="text-sm font-medium text-gray-12">
+				<FontAwesomeIcon
+					icon={faRectangleList}
+					className="mb-4 text-gray-12 size-8"
+				/>
+				<div className="space-y-1">
+					<h3 className="text-base font-medium text-gray-12">
 						No summary available
 					</h3>
 					<p className="text-sm text-gray-10">
@@ -203,10 +193,10 @@ export const Summary: React.FC<SummaryProps> = ({
 								{aiData.chapters.map((chapter) => (
 									<div
 										key={chapter.start}
-										className="p-2 cursor-pointer hover:bg-gray-100 rounded transition-colors flex items-center"
+										className="flex items-center p-2 rounded transition-colors cursor-pointer hover:bg-gray-100"
 										onClick={() => handleSeek(chapter.start)}
 									>
-										<span className="text-xs text-gray-500 w-16">
+										<span className="w-16 text-xs text-gray-500">
 											{formatTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>

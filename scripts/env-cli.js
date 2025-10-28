@@ -58,6 +58,7 @@ async function main() {
 		envs.VITE_SERVER_URL = "http://localhost:3000";
 		envs.WEB_URL = "http://localhost:3000";
 		envs.NEXTAUTH_URL = envs.WEB_URL;
+		envs.WORKFLOWS_RPC_SECRET = crypto.randomBytes(32).toString("base64");
 
 		if (!allEnvs.NEXTAUTH_SECRET) {
 			allEnvs.NEXTAUTH_SECRET = crypto.randomBytes(32).toString("base64");
@@ -127,18 +128,6 @@ async function main() {
 							defaultValue: allEnvs.CAP_AWS_BUCKET,
 							placeholder: allEnvs.CAP_AWS_BUCKET,
 						}),
-					CAP_AWS_REGION: () =>
-						text({
-							message: "CAP_AWS_REGION",
-							defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
-							placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_REGION,
-						}),
-					CAP_AWS_ENDPOINT: () =>
-						text({
-							message: "CAP_AWS_ENDPOINT",
-							defaultValue: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-							placeholder: allEnvs.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-						}),
 					CAP_AWS_BUCKET_URL: () => text({ message: "CAP_AWS_BUCKET_URL" }),
 					CAP_CLOUDFRONT_DISTRIBUTION_ID: () =>
 						text({ message: "CAP_CLOUDFRONT_DISTRIBUTION_ID" }),
@@ -159,8 +148,6 @@ async function main() {
 		}
 
 		envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
-		envs.NEXT_PUBLIC_CAP_AWS_BUCKET = envs.CAP_AWS_BUCKET;
-		envs.NEXT_PUBLIC_CAP_AWS_REGION = envs.CAP_AWS_REGION;
 	}
 
 	if (hasDesktop) {

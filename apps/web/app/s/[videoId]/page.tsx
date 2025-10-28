@@ -14,9 +14,20 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { provideOptionalAuth, Videos } from "@cap/web-backend";
+import {
+	Database,
+	ImageUploads,
+	provideOptionalAuth,
+	Videos,
+} from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import { Policy, type Video } from "@cap/web-domain";
+import {
+	Comment,
+	type ImageUpload,
+	type Organisation,
+	Policy,
+	type Video,
+} from "@cap/web-domain";
 import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -25,18 +36,19 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
+import {
+	getDashboardData,
+	type OrganizationSettings,
+} from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
 import * as EffectRuntime from "@/lib/server";
+import { runPromise } from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
+import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
-
-export const dynamic = "auto";
-export const dynamicParams = true;
-export const revalidate = 30;
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -95,11 +107,6 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-type Props = {
-	params: Promise<{ [key: string]: string | string[] | undefined }>;
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-};
-
 type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganization?: {
 		organizationId: string;
@@ -110,6 +117,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	password?: string | null;
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
+	orgSettings?: OrganizationSettings | null;
 };
 
 const ALLOWED_REFERRERS = [
@@ -133,7 +141,7 @@ export async function generateMetadata(
 		referrer.includes(domain),
 	);
 
-	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+	return Effect.flatMap(Videos, (v) => v.getByIdForViewing(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
@@ -269,6 +277,8 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					ownerName: users.name,
+					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -286,6 +296,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
+					videoSettings: videos.settings,
 					width: videos.width,
 					height: videos.height,
 					duration: videos.duration,
@@ -294,6 +305,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					orgSettings: organizations.settings,
 					ownerIsPro:
 						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 							Boolean,
@@ -306,6 +318,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+				.leftJoin(organizations, eq(videos.orgId, organizations.id))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -352,10 +365,17 @@ async function AuthorizedContent({
 	video,
 	searchParams,
 }: {
-	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
-		sharedOrganization: { organizationId: string } | null;
+	video: Omit<
+		InferSelectModel<typeof videos>,
+		"folderId" | "password" | "settings"
+	> & {
+		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
 		ownerIsPro?: boolean;
+		ownerName?: string | null;
+		ownerImageUrlOrKey?: ImageUpload.ImageUrlOrKey | null;
+		orgSettings?: OrganizationSettings | null;
+		videoSettings?: OrganizationSettings | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -376,8 +396,12 @@ async function AuthorizedContent({
 	}
 
 	const userId = user?.id;
-	const commentId = searchParams.comment as string | undefined;
-	const replyId = searchParams.reply as string | undefined;
+	const commentId = optionFromTOrFirst(searchParams.comment).pipe(
+		Option.map(Comment.CommentId.make),
+	);
+	const replyId = optionFromTOrFirst(searchParams.reply).pipe(
+		Option.map(Comment.CommentId.make),
+	);
 
 	// Fetch spaces data for the sharing dialog
 	let spacesData = null;
@@ -453,6 +477,8 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
+				ownerName: users.name,
+				ownerImageUrlOrKey: users.image,
 				ownerIsPro:
 					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 						Boolean,
@@ -474,10 +500,13 @@ async function AuthorizedContent({
 				sharedOrganization: {
 					organizationId: sharedVideos.organizationId,
 				},
+				orgSettings: organizations.settings,
+				videoSettings: videos.settings,
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 			.leftJoin(users, eq(videos.ownerId, users.id))
+			.leftJoin(organizations, eq(videos.orgId, organizations.id))
 			.where(eq(videos.id, videoId))
 			.execute();
 
@@ -610,44 +639,72 @@ async function AuthorizedContent({
 				)
 		: Promise.resolve([]);
 
-	const commentsPromise = (async () => {
-		let toplLevelCommentId: string | undefined;
+	const commentsPromise = Effect.gen(function* () {
+		const db = yield* Database;
+		const imageUploads = yield* ImageUploads;
 
-		if (replyId) {
-			const [parentComment] = await db()
-				.select({ parentCommentId: comments.parentCommentId })
-				.from(comments)
-				.where(eq(comments.id, replyId))
-				.limit(1);
-			toplLevelCommentId = parentComment?.parentCommentId;
+		let toplLevelCommentId = Option.none<Comment.CommentId>();
+
+		if (Option.isSome(replyId)) {
+			const [parentComment] = yield* db.use((db) =>
+				db
+					.select({ parentCommentId: comments.parentCommentId })
+					.from(comments)
+					.where(eq(comments.id, replyId.value))
+					.limit(1),
+			);
+			toplLevelCommentId = Option.fromNullable(parentComment?.parentCommentId);
 		}
 
-		const commentToBringToTheTop = toplLevelCommentId ?? commentId;
+		const commentToBringToTheTop = Option.orElse(
+			toplLevelCommentId,
+			() => commentId,
+		);
 
-		const allComments = await db()
-			.select({
-				id: comments.id,
-				content: comments.content,
-				timestamp: comments.timestamp,
-				type: comments.type,
-				authorId: comments.authorId,
-				videoId: comments.videoId,
-				createdAt: comments.createdAt,
-				updatedAt: comments.updatedAt,
-				parentCommentId: comments.parentCommentId,
-				authorName: users.name,
-			})
-			.from(comments)
-			.leftJoin(users, eq(comments.authorId, users.id))
-			.where(eq(comments.videoId, videoId))
-			.orderBy(
-				commentToBringToTheTop
-					? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
-					: comments.createdAt,
+		return yield* db
+			.use((db) =>
+				db
+					.select({
+						id: comments.id,
+						content: comments.content,
+						timestamp: comments.timestamp,
+						type: comments.type,
+						authorId: comments.authorId,
+						videoId: comments.videoId,
+						createdAt: comments.createdAt,
+						updatedAt: comments.updatedAt,
+						parentCommentId: comments.parentCommentId,
+						authorName: users.name,
+						authorImage: users.image,
+					})
+					.from(comments)
+					.leftJoin(users, eq(comments.authorId, users.id))
+					.where(eq(comments.videoId, videoId))
+					.orderBy(
+						Option.match(commentToBringToTheTop, {
+							onSome: (commentId) =>
+								sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`,
+							onNone: () => comments.createdAt,
+						}),
+					),
+			)
+			.pipe(
+				Effect.map((comments) =>
+					comments.map(
+						Effect.fn(function* (c) {
+							return Object.assign(c, {
+								authorImage: yield* Option.fromNullable(c.authorImage).pipe(
+									Option.map(imageUploads.resolveImageUrl),
+									Effect.transposeOption,
+									Effect.map(Option.getOrNull),
+								),
+							});
+						}),
+					),
+				),
+				Effect.flatMap(Effect.all),
 			);
-
-		return allComments;
-	})();
+	}).pipe(EffectRuntime.runPromise);
 
 	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -663,14 +720,24 @@ async function AuthorizedContent({
 		customDomainPromise,
 	]);
 
-	const videoWithOrganizationInfo: VideoWithOrganization = {
-		...video,
-		organizationMembers: membersList.map((member) => member.userId),
-		organizationId: video.sharedOrganization?.organizationId ?? undefined,
-		sharedOrganizations: sharedOrganizations,
-		password: null,
-		folderId: null,
-	};
+	const videoWithOrganizationInfo = await Effect.gen(function* () {
+		const imageUploads = yield* ImageUploads;
+
+		return {
+			...video,
+			ownerImage: video.ownerImageUrlOrKey
+				? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
+				: null,
+			organizationMembers: membersList.map((member) => member.userId),
+			organizationId: video.sharedOrganization?.organizationId ?? undefined,
+			sharedOrganizations: sharedOrganizations,
+			ownerIsPro: video.ownerIsPro ?? false,
+			password: null,
+			folderId: null,
+			orgSettings: video.orgSettings || null,
+			settings: video.videoSettings || null,
+		};
+	}).pipe(runPromise);
 
 	return (
 		<>
@@ -682,7 +749,6 @@ async function AuthorizedContent({
 							? new Date(video.metadata.customCreatedAt)
 							: video.createdAt,
 					}}
-					user={user}
 					customDomain={customDomain}
 					domainVerified={domainVerified}
 					sharedOrganizations={
@@ -695,7 +761,8 @@ async function AuthorizedContent({
 
 				<Share
 					data={videoWithOrganizationInfo}
-					user={user}
+					videoSettings={videoWithOrganizationInfo.settings}
+					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}

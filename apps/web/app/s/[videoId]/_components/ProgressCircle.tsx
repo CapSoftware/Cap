@@ -3,11 +3,10 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
-import { useFeatureFlag } from "@/app/Layout/features";
-import { useEffectQuery } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectQuery, useRpcClient } from "@/lib/EffectRuntime";
 
 type UploadProgress =
+	| { status: "fetching" }
 	| {
 			status: "uploading";
 			lastUpdated: Date;
@@ -23,16 +22,18 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
-	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
-	const enabled = enableBetaUploadProgress ? enabledRaw : false;
+export function useUploadProgress(
+	videoId: Video.VideoId,
+	enabled: boolean,
+): UploadProgress | null {
+	const rpc = useRpcClient();
 
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
-			withRpc((rpc) => rpc.GetUploadProgress(videoId)).pipe(
-				Effect.map((v) => Option.getOrNull(v ?? Option.none())),
-			),
+			rpc
+				.GetUploadProgress(videoId)
+				.pipe(Effect.map((v) => Option.getOrNull(v ?? Option.none()))),
 		enabled,
 		refetchInterval: (query) => {
 			if (!enabled || !query.state.data) return false;
@@ -44,11 +45,16 @@ export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
 			else return SECOND;
 		},
 	});
-	if (!enabled || !query.data) return null;
+
+	if (!enabled) return null;
+	if (query.isPending) return { status: "fetching" };
+	if (!query.data) return null;
+
 	const lastUpdated = new Date(query.data.updatedAt);
 
-	return (
-		Date.now() - lastUpdated.getTime() > 5 * MINUTE
+	return query.data.total > 0 && query.data.uploaded >= query.data.total
+		? null
+		: Date.now() - lastUpdated.getTime() > 5 * MINUTE
 			? {
 					status: "failed",
 					lastUpdated,
@@ -61,8 +67,7 @@ export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
 						query.data.total === 0
 							? 0
 							: (query.data.uploaded / query.data.total) * 100,
-				}
-	) satisfies UploadProgress;
+				};
 }
 
 const ProgressCircle = ({

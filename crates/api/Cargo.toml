@@ -1,0 +1,11 @@
+[package]
+name = "cap-api"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+reqwest = "0.12.24"
+
+[lints]
+workspace = true

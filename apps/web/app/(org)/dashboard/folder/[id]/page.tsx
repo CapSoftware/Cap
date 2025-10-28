@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import { CurrentUser, type Folder } from "@cap/web-domain";
+import { makeCurrentUserLayer } from "@cap/web-backend";
+import { Folder } from "@cap/web-domain";
 import { Effect } from "effect";
 import { notFound } from "next/navigation";
 import {
@@ -9,6 +10,7 @@ import {
 	getVideosByFolderId,
 } from "@/lib/folder";
 import { runPromise } from "@/lib/server";
+
 import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
 import {
@@ -18,22 +20,27 @@ import {
 } from "./components";
 import FolderVideosSection from "./components/FolderVideosSection";
 
-const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
+const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
+	const params = await props.params;
+	const folderId = Folder.FolderId.make(params.id);
+
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId) return notFound();
 
 	return Effect.gen(function* () {
 		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
-			getChildFolders(params.id, { variant: "user" }),
-			getFolderBreadcrumb(params.id),
-			getVideosByFolderId(params.id),
+			getChildFolders(folderId, { variant: "user" }),
+			getFolderBreadcrumb(folderId),
+			getVideosByFolderId(folderId, {
+				variant: "user",
+			}),
 		]);
 
 		return (
 			<div>
 				<div className="flex gap-2 items-center mb-10">
-					<NewSubfolderButton parentFolderId={params.id} />
-					<UploadCapButton size="sm" folderId={params.id} />
+					<NewSubfolderButton parentFolderId={folderId} />
+					<UploadCapButton size="sm" folderId={folderId} />
 				</div>
 				<div className="flex justify-between items-center mb-6 w-full">
 					<div className="flex overflow-x-auto items-center font-medium">
@@ -81,7 +88,7 @@ const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 				/>
 			</div>
 		);
-	}).pipe(Effect.provideService(CurrentUser, user), runPromise);
+	}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
 };
 
 export default FolderPage;

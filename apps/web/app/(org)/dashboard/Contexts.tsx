@@ -1,22 +1,28 @@
 "use client";
 
-import type { users } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import Cookies from "js-cookie";
-import { usePathname } from "next/navigation";
+import { redirect, usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
+import { type CurrentUser, useCurrentUser } from "@/app/Layout/AuthContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import type { Organization, Spaces, UserPreferences } from "./dashboard-data";
+import type {
+	Organization,
+	OrganizationSettings,
+	Spaces,
+	UserPreferences,
+} from "./dashboard-data";
 
 type SharedContext = {
 	organizationData: Organization[] | null;
 	activeOrganization: Organization | null;
+	organizationSettings: OrganizationSettings | null;
 	spacesData: Spaces[] | null;
 	userSpaces: Spaces[] | null;
 	sharedSpaces: Spaces[] | null;
 	activeSpace: Spaces | null;
-	user: typeof users.$inferSelect;
-	isSubscribed: boolean;
+	user: CurrentUser;
+	userCapsCount: number | null;
 	toggleSidebarCollapsed: () => void;
 	anyNewNotifications: boolean;
 	userPreferences: UserPreferences;
@@ -48,8 +54,8 @@ export function DashboardContexts({
 	organizationData,
 	activeOrganization,
 	spacesData,
-	user,
-	isSubscribed,
+	userCapsCount,
+	organizationSettings,
 	userPreferences,
 	anyNewNotifications,
 	initialTheme,
@@ -60,14 +66,17 @@ export function DashboardContexts({
 	organizationData: SharedContext["organizationData"];
 	activeOrganization: SharedContext["activeOrganization"];
 	spacesData: SharedContext["spacesData"];
-	user: SharedContext["user"];
-	isSubscribed: SharedContext["isSubscribed"];
+	userCapsCount: SharedContext["userCapsCount"];
+	organizationSettings: SharedContext["organizationSettings"];
 	userPreferences: SharedContext["userPreferences"];
 	anyNewNotifications: boolean;
 	initialTheme: ITheme;
 	initialSidebarCollapsed: boolean;
 	referClicked: boolean;
 }) {
+	const user = useCurrentUser();
+	if (!user) redirect("/login");
+
 	const [theme, setTheme] = useState<ITheme>(initialTheme);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(
 		initialSidebarCollapsed,
@@ -152,13 +161,14 @@ export function DashboardContexts({
 					organizationData,
 					activeOrganization,
 					spacesData,
+					userCapsCount,
 					anyNewNotifications,
 					userPreferences,
+					organizationSettings,
 					userSpaces,
 					sharedSpaces,
 					activeSpace,
 					user,
-					isSubscribed,
 					toggleSidebarCollapsed,
 					sidebarCollapsed,
 					upgradeModalOpen,

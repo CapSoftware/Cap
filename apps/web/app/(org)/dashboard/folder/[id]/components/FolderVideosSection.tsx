@@ -1,15 +1,13 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import { useQuery } from "@tanstack/react-query";
-import { useStore } from "@tanstack/react-store";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { Rpc, withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
@@ -31,11 +29,11 @@ export default function FolderVideosSection({
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
 
+	const rpc = useRpcClient();
+
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
-
-			const rpc = yield* Rpc;
 
 			const fiber = yield* Effect.gen(function* () {
 				const results = yield* Effect.all(
@@ -87,7 +85,7 @@ export default function FolderVideosSection({
 	});
 
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();
@@ -109,49 +107,10 @@ export default function FolderVideosSection({
 		});
 	};
 
-	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-		queryKey: ["analytics", initialVideos.map((video) => video.id)],
-		queryFn: async () => {
-			if (!dubApiKeyEnabled || initialVideos.length === 0) {
-				return {};
-			}
-
-			const analyticsPromises = initialVideos.map(async (video) => {
-				try {
-					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-						},
-					});
-
-					if (response.ok) {
-						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
-					}
-					return { videoId: video.id, count: 0 };
-				} catch (error) {
-					console.warn(
-						`Failed to fetch analytics for video ${video.id}:`,
-						error,
-					);
-					return { videoId: video.id, count: 0 };
-				}
-			});
-
-			const results = await Promise.allSettled(analyticsPromises);
-			const analyticsData: Record<string, number> = {};
-
-			results.forEach((result) => {
-				if (result.status === "fulfilled" && result.value) {
-					analyticsData[result.value.videoId] = result.value.count;
-				}
-			});
-			return analyticsData;
-		},
-		refetchOnWindowFocus: false,
-		refetchOnMount: true,
-	});
+	const analyticsQuery = useVideosAnalyticsQuery(
+		initialVideos.map((video) => video.id),
+		dubApiKeyEnabled,
+	);
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
@@ -162,7 +121,7 @@ export default function FolderVideosSection({
 		[initialVideos, isUploading, uploadingCapId],
 	);
 
-	const analytics = analyticsData || {};
+	const analytics = analyticsQuery.data || {};
 
 	return (
 		<>
@@ -186,7 +145,7 @@ export default function FolderVideosSection({
 								cap={video}
 								analytics={analytics[video.id] || 0}
 								userId={user?.id}
-								isLoadingAnalytics={isLoadingAnalytics}
+								isLoadingAnalytics={analyticsQuery.isLoading}
 								isSelected={selectedCaps.includes(video.id)}
 								anyCapSelected={selectedCaps.length > 0}
 								isDeleting={isDeletingCaps || isDeletingCap}

@@ -1,6 +1,7 @@
 "use client";
 
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
+import type { Space } from "@cap/web-domain";
 import {
 	faLayerGroup,
 	faPlus,
@@ -10,13 +11,13 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { deleteSpace } from "@/actions/organization/delete-space";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { useDashboardContext } from "../../Contexts";
 import type { Spaces } from "../../dashboard-data";
@@ -91,7 +92,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		setActiveDropTarget(null);
 	};
 
-	const handleDrop = async (e: React.DragEvent, spaceId: string) => {
+	const handleDrop = async (
+		e: React.DragEvent,
+		spaceId: Space.SpaceIdOrOrganisationId,
+	) => {
 		e.preventDefault();
 		setActiveDropTarget(null);
 
@@ -120,7 +124,8 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 		}
 	};
 
-	const activeSpaceParams = (spaceId: string) => params.spaceId === spaceId;
+	const activeSpaceParams = (spaceId: Space.SpaceIdOrOrganisationId) =>
+		params.spaceId === spaceId;
 
 	return (
 		<div className="flex flex-col mt-4">
@@ -274,26 +279,17 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 											space.primary ? "h-10" : "h-fit",
 										)}
 									>
-										{space.iconUrl ? (
-											<Image
-												src={space.iconUrl}
-												alt={space.name}
-												className="relative flex-shrink-0 rounded-full"
-												width={sidebarCollapsed ? 24 : 20}
-												height={sidebarCollapsed ? 24 : 20}
-											/>
-										) : (
-											<Avatar
-												letterClass={clsx(
-													sidebarCollapsed ? "text-sm" : "text-[11px]",
-												)}
-												className={clsx(
-													"relative flex-shrink-0",
-													sidebarCollapsed ? "size-6" : "size-5",
-												)}
-												name={space.name}
-											/>
-										)}
+										<SignedImageUrl
+											image={space.iconUrl}
+											name={space.name}
+											letterClass={clsx(
+												sidebarCollapsed ? "text-sm" : "text-[11px]",
+											)}
+											className={clsx(
+												"relative flex-shrink-0",
+												sidebarCollapsed ? "size-6" : "size-5",
+											)}
+										/>
 										{!sidebarCollapsed && (
 											<>
 												<span className="ml-2.5 text-sm truncate transition-colors text-gray-11 group-hover:text-gray-12">
@@ -353,6 +349,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 			<SpaceDialog
 				open={showSpaceDialog}
 				onClose={() => setShowSpaceDialog(false)}
+				onSpaceUpdated={() => {
+					router.refresh();
+					setShowSpaceDialog(false);
+				}}
 			/>
 		</div>
 	);

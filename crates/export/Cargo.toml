@@ -31,6 +31,7 @@ rgb = "0.8"
 
 [dev-dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
+directories = "6.0.0"
 inquire = "0.7.5"
 tokio.workspace = true
 

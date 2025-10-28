@@ -4,8 +4,6 @@
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
-use dirs;
-use tracing_appender;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
@@ -49,7 +47,7 @@ fn main() {
         (sentry_client, _guard)
     });
 
-    let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+    let (reload_layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
 
     let logs_dir = {
         #[cfg(target_os = "macos")]
@@ -69,18 +67,48 @@ fn main() {
 
     // Ensure logs directory exists
     std::fs::create_dir_all(&logs_dir).unwrap_or_else(|e| {
-        eprintln!("Failed to create logs directory: {}", e);
+        eprintln!("Failed to create logs directory: {e}");
     });
 
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
     let (non_blocking, _logger_guard) = tracing_appender::non_blocking(file_appender);
 
-    let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
-        (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
-    ));
+    let (otel_layer, _tracer) = if cfg!(debug_assertions) {
+        use opentelemetry::trace::TracerProvider;
+        use opentelemetry_otlp::WithExportConfig;
+        use tracing_subscriber::Layer;
 
-    registry
-        .with(layer)
+        let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_http()
+                    .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
+                    .build()
+                    .unwrap(),
+            )
+            .with_resource(
+                opentelemetry_sdk::Resource::builder()
+                    .with_service_name("cap-desktop")
+                    .build(),
+            )
+            .build();
+
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer.tracer("cap-desktop"))
+            .boxed();
+
+        opentelemetry::global::set_tracer_provider(tracer.clone());
+        (Some(layer), Some(tracer))
+    } else {
+        (None, None)
+    };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::filter_fn(
+            (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
+        ))
+        .with(reload_layer)
+        .with(otel_layer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(true)
@@ -106,5 +134,5 @@ fn main() {
         .enable_all()
         .build()
         .expect("Failed to build multi threaded tokio runtime")
-        .block_on(cap_desktop_lib::run(handle));
+        .block_on(cap_desktop_lib::run(handle, logs_dir));
 }

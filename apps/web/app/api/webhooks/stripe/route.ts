@@ -3,6 +3,7 @@ import { nanoId } from "@cap/database/helpers";
 import { users } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
+import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { PostHog } from "posthog-node";
@@ -17,16 +18,18 @@ const relevantEvents = new Set([
 async function createGuestUser(
 	email: string,
 ): Promise<typeof users.$inferSelect> {
-	const userId = nanoId();
+	const userId = User.UserId.make(nanoId());
 
-	await db().insert(users).values({
-		id: userId,
-		email: email,
-		emailVerified: null,
-		name: null,
-		image: null,
-		activeOrganizationId: "",
-	});
+	await db()
+		.insert(users)
+		.values({
+			id: userId,
+			email: email,
+			emailVerified: null,
+			name: null,
+			image: null,
+			activeOrganizationId: Organisation.OrganisationId.make(""),
+		});
 
 	const result = await db()
 		.select()
@@ -44,7 +47,7 @@ async function createGuestUser(
 
 async function findUserWithRetry(
 	email: string,
-	userId?: string,
+	userId?: User.UserId,
 	maxRetries = 5,
 ): Promise<typeof users.$inferSelect | null> {
 	for (let i = 0; i < maxRetries; i++) {
@@ -150,11 +153,13 @@ export const POST = async (req: Request) => {
 					metadata: "metadata" in customer ? customer.metadata : undefined,
 				});
 
-				let foundUserId: string | undefined;
+				let foundUserId: User.UserId | undefined;
 				let customerEmail: string | null | undefined;
 
 				if ("metadata" in customer) {
-					foundUserId = customer.metadata.userId;
+					foundUserId = customer.metadata.userId
+						? User.UserId.make(customer.metadata.userId)
+						: undefined;
 				}
 				if ("email" in customer) {
 					customerEmail = customer.email;
@@ -226,6 +231,7 @@ export const POST = async (req: Request) => {
 					(total, item) => total + (item.quantity || 1),
 					0,
 				);
+				const isOnBoarding = session.metadata?.isOnBoarding === "true";
 
 				console.log("Updating user in database with:", {
 					subscriptionId: session.subscription,
@@ -233,6 +239,8 @@ export const POST = async (req: Request) => {
 					customerId: customer.id,
 					inviteQuota,
 				});
+				console.log("Session metadata:", session.metadata);
+				console.log("Is onboarding:", isOnBoarding);
 
 				await db()
 					.update(users)
@@ -241,6 +249,7 @@ export const POST = async (req: Request) => {
 						stripeSubscriptionStatus: subscription.status,
 						stripeCustomerId: customer.id,
 						inviteQuota: inviteQuota,
+						onboarding_completed_at: isOnBoarding ? new Date() : undefined,
 					})
 					.where(eq(users.id, dbUser.id));
 
@@ -263,15 +272,8 @@ export const POST = async (req: Request) => {
 							invite_quota: inviteQuota,
 							price_id: subscription.items.data[0]?.price.id,
 							quantity: inviteQuota,
-							platform:
-								typeof session.metadata === "object" &&
-								session.metadata !== null &&
-								"platform" in session.metadata &&
-								typeof (session.metadata as Record<string, unknown>)
-									.platform === "string"
-									? ((session.metadata as Record<string, unknown>)
-											.platform as string)
-									: "web",
+							is_onboarding: session.metadata?.isOnBoarding === "true",
+							platform: session.metadata?.platform === "web",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
 						},
@@ -302,11 +304,13 @@ export const POST = async (req: Request) => {
 					metadata: "metadata" in customer ? customer.metadata : undefined,
 				});
 
-				let foundUserId: string | undefined;
+				let foundUserId: User.UserId | undefined;
 				let customerEmail: string | null | undefined;
 
 				if ("metadata" in customer) {
-					foundUserId = customer.metadata.userId;
+					foundUserId = customer.metadata.userId
+						? User.UserId.make(customer.metadata.userId)
+						: undefined;
 				}
 				if ("email" in customer) {
 					customerEmail = customer.email;
@@ -384,9 +388,11 @@ export const POST = async (req: Request) => {
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
-				let foundUserId: string | undefined;
+				let foundUserId: User.UserId | undefined;
 				if ("metadata" in customer) {
-					foundUserId = customer.metadata.userId;
+					foundUserId = customer.metadata.userId
+						? User.UserId.make(customer.metadata.userId)
+						: undefined;
 				}
 				if (!foundUserId) {
 					console.log("No user found in metadata, checking customer email");
@@ -447,7 +453,9 @@ export const POST = async (req: Request) => {
 			console.error("❌ Webhook handler failed:", error);
 			return new Response(
 				'Webhook error: "Webhook handler failed. View logs."',
-				{ status: 400 },
+				{
+					status: 400,
+				},
 			);
 		}
 	}

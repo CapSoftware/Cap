@@ -16,6 +16,7 @@ import {
 	For,
 	type JSX,
 	Match,
+	mergeProps,
 	on,
 	Show,
 	Switch,
@@ -24,6 +25,7 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import { SignInButton } from "~/components/SignInButton";
+import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
@@ -32,7 +34,6 @@ import {
 	commands,
 	type ExportCompression,
 	type ExportSettings,
-	events,
 	type FramesRendered,
 	type UploadProgress,
 } from "~/utils/tauri";
@@ -46,6 +47,8 @@ import {
 	PopperContent,
 	topSlideAnimateClasses,
 } from "./ui";
+
+class SilentError extends Error {}
 
 export const COMPRESSION_OPTIONS: Array<{
 	label: string;
@@ -91,7 +94,7 @@ export const EXPORT_TO_OPTIONS = [
 
 type ExportFormat = ExportSettings["format"];
 
-export const FORMAT_OPTIONS = [
+const FORMAT_OPTIONS = [
 	{ label: "MP4", value: "Mp4" },
 	{ label: "GIF", value: "Gif" },
 ] as { label: string; value: ExportFormat; disabled?: boolean }[];
@@ -118,7 +121,17 @@ export function ExportDialog() {
 
 	const auth = authStore.createQuery();
 
-	const [settings, setSettings] = makePersisted(
+	const hasTransparentBackground = () => {
+		const backgroundSource =
+			editorInstance.savedProjectConfig.background.source;
+		return (
+			backgroundSource.type === "color" &&
+			backgroundSource.alpha !== undefined &&
+			backgroundSource.alpha < 255
+		);
+	};
+
+	const [_settings, setSettings] = makePersisted(
 		createStore<Settings>({
 			format: "Mp4",
 			fps: 30,
@@ -129,7 +142,19 @@ export function ExportDialog() {
 		{ name: "export_settings" },
 	);
 
+	const settings = mergeProps(_settings, () => {
+		const ret: Partial<Settings> = {};
+		if (hasTransparentBackground() && _settings.format === "Mp4")
+			ret.format = "Gif";
+
+		return ret;
+	});
+
 	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
+
+	// Ensure GIF is not selected when exportTo is "link"
+	if (settings.format === "Gif" && settings.exportTo === "link")
+		setSettings("format", "Mp4");
 
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
@@ -157,8 +182,6 @@ export function ExportDialog() {
 		);
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
-
-	const selectedStyle = "bg-gray-7";
 
 	const projectPath = editorInstance.path;
 
@@ -319,9 +342,9 @@ export function ExportDialog() {
 			if (!canShare.allowed) {
 				if (canShare.reason === "upgrade_required") {
 					await commands.showWindow("Upgrade");
-					throw new Error(
-						"Upgrade required to share recordings longer than 5 minutes",
-					);
+					// The window takes a little to show and this prevents the user seeing it glitch
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					throw new SilentError();
 				}
 			}
 
@@ -376,9 +399,11 @@ export function ExportDialog() {
 		},
 		onError: (error) => {
 			console.error(error);
-			commands.globalMessageDialog(
-				error instanceof Error ? error.message : "Failed to upload recording",
-			);
+			if (!(error instanceof SilentError)) {
+				commands.globalMessageDialog(
+					error instanceof Error ? error.message : "Failed to upload recording",
+				);
+			}
 
 			setExportState(reconcile({ type: "idle" }));
 		},
@@ -492,7 +517,20 @@ export function ExportDialog() {
 									<For each={EXPORT_TO_OPTIONS}>
 										{(option) => (
 											<Button
-												onClick={() => setSettings("exportTo", option.value)}
+												onClick={() => {
+													setSettings(
+														produce((newSettings) => {
+															newSettings.exportTo = option.value;
+															// If switching to link and GIF is selected, change to MP4
+															if (
+																option.value === "link" &&
+																settings.format === "Gif"
+															) {
+																newSettings.format = "Mp4";
+															}
+														}),
+													);
+												}}
 												data-selected={settings.exportTo === option.value}
 												class="flex flex-1 gap-2 items-center text-nowrap"
 												variant="gray"
@@ -511,49 +549,71 @@ export function ExportDialog() {
 								<h3 class="text-gray-12">Format</h3>
 								<div class="flex flex-row gap-2">
 									<For each={FORMAT_OPTIONS}>
-										{(option) => (
-											<Button
-												variant="gray"
-												onClick={() => {
-													setSettings(
-														produce((newSettings) => {
-															newSettings.format = option.value as ExportFormat;
+										{(option) => {
+											const disabledReason = () => {
+												if (
+													option.value === "Mp4" &&
+													hasTransparentBackground()
+												)
+													return "MP4 format does not support transparent backgrounds";
+												if (
+													option.value === "Gif" &&
+													settings.exportTo === "link"
+												)
+													return "Shareable links cannot be made from GIFs";
+											};
 
-															if (
-																option.value === "Gif" &&
-																!(
-																	settings.resolution.value === "720p" ||
-																	settings.resolution.value === "1080p"
-																)
-															)
-																newSettings.resolution = {
-																	...RESOLUTION_OPTIONS._720p,
-																};
+											return (
+												<Tooltip
+													content={disabledReason()}
+													disabled={disabledReason() === undefined}
+												>
+													<Button
+														variant="gray"
+														onClick={() => {
+															setSettings(
+																produce((newSettings) => {
+																	newSettings.format =
+																		option.value as ExportFormat;
 
-															if (
-																option.value === "Gif" &&
-																GIF_FPS_OPTIONS.every(
-																	(v) => v.value === settings.fps,
-																)
-															)
-																newSettings.fps = 15;
+																	if (
+																		option.value === "Gif" &&
+																		!(
+																			settings.resolution.value === "720p" ||
+																			settings.resolution.value === "1080p"
+																		)
+																	)
+																		newSettings.resolution = {
+																			...RESOLUTION_OPTIONS._720p,
+																		};
 
-															if (
-																option.value === "Mp4" &&
-																FPS_OPTIONS.every(
-																	(v) => v.value !== settings.fps,
-																)
-															)
-																newSettings.fps = 30;
-														}),
-													);
-												}}
-												autofocus={false}
-												data-selected={settings.format === option.value}
-											>
-												{option.label}
-											</Button>
-										)}
+																	if (
+																		option.value === "Gif" &&
+																		GIF_FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
+																		newSettings.fps = 15;
+
+																	if (
+																		option.value === "Mp4" &&
+																		FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
+																		newSettings.fps = 30;
+																}),
+															);
+														}}
+														autofocus={false}
+														data-selected={settings.format === option.value}
+														disabled={!!disabledReason()}
+													>
+														{option.label}
+													</Button>
+												</Tooltip>
+											);
+										}}
 									</For>
 								</div>
 							</div>
@@ -888,7 +948,7 @@ export function ExportDialog() {
 								>
 									<div class="relative">
 										<a
-											href={meta().sharing!.link}
+											href={meta().sharing?.link}
 											target="_blank"
 											rel="noreferrer"
 											class="block"
@@ -899,7 +959,7 @@ export function ExportDialog() {
 													setTimeout(() => {
 														setCopyPressed(false);
 													}, 2000);
-													navigator.clipboard.writeText(meta().sharing!.link!);
+													navigator.clipboard.writeText(meta().sharing?.link!);
 												}}
 												variant="dark"
 												class="flex gap-2 justify-center items-center"

@@ -176,7 +176,6 @@ export function ClipTrack(
 		totalDuration,
 		micWaveforms,
 		systemAudioWaveforms,
-		metaQuery,
 	} = useEditorContext();
 
 	const { secsPerPixel, duration } = useTimelineContext();
@@ -195,8 +194,14 @@ export function ClipTrack(
 	const hasMultipleRecordingSegments = () =>
 		editorInstance.recordings.segments.length > 1;
 
+	const split = () => editorState.timeline.interactMode === "split";
+
 	return (
-		<TrackRoot ref={props.ref}>
+		<TrackRoot
+			ref={props.ref}
+			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
+			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
+		>
 			<For each={segments()}>
 				{(segment, i) => {
 					const prevDuration = () =>
@@ -237,7 +242,9 @@ export function ClipTrack(
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
-						return segmentIndex === selection.index;
+						if (segmentIndex === undefined || segmentIndex === -1) return false;
+
+						return selection.indices.includes(segmentIndex);
 					});
 
 					const micWaveform = () => {
@@ -366,27 +373,81 @@ export function ClipTrack(
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {
 										createRoot((dispose) => {
-											createEventListener(e.currentTarget, "mouseup", (e) => {
-												dispose();
+											createEventListener(
+												e.currentTarget,
+												"mouseup",
+												(upEvent) => {
+													dispose();
 
-												// // If there's only one segment, don't open the clip config panel
-												// // since there's nothing to configure - just let the normal click behavior happen
-												// const hasOnlyOneSegment = segments().length === 1;
+													const currentIndex = i();
+													const selection = editorState.timeline.selection;
+													const isMac =
+														navigator.platform.toUpperCase().indexOf("MAC") >=
+														0;
+													const isMultiSelect = isMac
+														? upEvent.metaKey
+														: upEvent.ctrlKey;
+													const isRangeSelect = upEvent.shiftKey;
 
-												// if (hasOnlyOneSegment) {
-												// 	// Clear any existing selection (zoom, layout, etc.) when clicking on a clip
-												// 	// This ensures the sidebar updates properly
-												// 	setEditorState("timeline", "selection", null);
-												// } else {
-												// When there are multiple segments, show the clip configuration
-												setEditorState("timeline", "selection", {
-													type: "clip",
-													index: i(),
-												});
+													if (
+														isRangeSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Range selection: select from last selected to current
+														const existingIndices = selection.indices;
+														const lastIndex =
+															existingIndices[existingIndices.length - 1];
+														const start = Math.min(lastIndex, currentIndex);
+														const end = Math.max(lastIndex, currentIndex);
+														const rangeIndices = Array.from(
+															{ length: end - start + 1 },
+															(_, idx) => start + idx,
+														);
 
-												// }
-												props.handleUpdatePlayhead(e);
-											});
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: rangeIndices,
+														});
+													} else if (
+														isMultiSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Multi-select: toggle current index
+														const existingIndices = selection.indices;
+
+														if (existingIndices.includes(currentIndex)) {
+															// Remove from selection
+															const newIndices = existingIndices.filter(
+																(idx) => idx !== currentIndex,
+															);
+															if (newIndices.length > 0) {
+																setEditorState("timeline", "selection", {
+																	type: "clip" as const,
+																	indices: newIndices,
+																});
+															} else {
+																setEditorState("timeline", "selection", null);
+															}
+														} else {
+															// Add to selection
+															setEditorState("timeline", "selection", {
+																type: "clip" as const,
+																indices: [...existingIndices, currentIndex],
+															});
+														}
+													} else {
+														// Normal single selection
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: [currentIndex],
+														});
+													}
+
+													props.handleUpdatePlayhead(upEvent);
+												},
+											);
 										});
 									}
 								}}
@@ -406,6 +467,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const start = segment.start;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
@@ -496,6 +558,7 @@ export function ClipTrack(
 									onMouseDown={(downEvent) => {
 										const end = segment.end;
 
+										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0

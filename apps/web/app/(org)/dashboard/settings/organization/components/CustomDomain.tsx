@@ -1,4 +1,5 @@
 import { Button } from "@cap/ui";
+import { Organisation } from "@cap/web-domain";
 import {
 	faCheckCircle,
 	faExclamationCircle,
@@ -20,7 +21,7 @@ import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
 
 export function CustomDomain() {
 	const router = useRouter();
-	const { activeOrganization, isSubscribed } = useDashboardContext();
+	const { activeOrganization, user } = useDashboardContext();
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 	const [showCustomDomainDialog, setShowCustomDomainDialog] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -32,7 +33,9 @@ export function CustomDomain() {
 
 	const removeDomainMutation = useMutation({
 		mutationFn: (organizationId: string) =>
-			removeOrganizationDomain(organizationId),
+			removeOrganizationDomain(
+				Organisation.OrganisationId.make(organizationId),
+			),
 		onSuccess: () => {
 			setIsVerified(false);
 			toast.success("Custom domain removed");
@@ -46,7 +49,7 @@ export function CustomDomain() {
 	});
 
 	const handleRemoveDomain = () => {
-		if (!isSubscribed) {
+		if (!user.isPro) {
 			setShowUpgradeModal(true);
 			return;
 		}

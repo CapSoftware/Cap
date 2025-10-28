@@ -1,11 +1,16 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, HttpAuthMiddleware, Policy } from "@cap/web-domain";
+import {
+	CurrentUser,
+	type DatabaseError,
+	HttpAuthMiddleware,
+	type ImageUpload,
+} from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { type Cause, Effect, Layer, Option, Schema } from "effect";
 
-import { Database, type DatabaseError } from "./Database.ts";
+import { Database } from "./Database.ts";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -15,7 +20,7 @@ export const getCurrentUser = Effect.gen(function* () {
 	).pipe(
 		Option.map((session) =>
 			Effect.gen(function* () {
-				const [currentUser] = yield* db.execute((db) =>
+				const [currentUser] = yield* db.use((db) =>
 					db
 						.select()
 						.from(Db.users)
@@ -29,6 +34,20 @@ export const getCurrentUser = Effect.gen(function* () {
 		Effect.map(Option.flatten),
 	);
 }).pipe(Effect.withSpan("getCurrentUser"));
+
+export const makeCurrentUser = (
+	user: Option.Option.Value<Effect.Effect.Success<typeof getCurrentUser>>,
+) =>
+	CurrentUser.of({
+		id: user.id,
+		email: user.email,
+		activeOrganizationId: user.activeOrganizationId,
+		iconUrlOrKey: Option.fromNullable(user.image),
+	});
+
+export const makeCurrentUserLayer = (
+	user: Option.Option.Value<Effect.Effect.Success<typeof getCurrentUser>>,
+) => Layer.succeed(CurrentUser, makeCurrentUser(user));
 
 export const HttpAuthMiddlewareLive = Layer.effect(
 	HttpAuthMiddleware,
@@ -46,7 +65,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 				if (authHeader?.length === 36) {
 					user = yield* database
-						.execute((db) =>
+						.use((db) =>
 							db
 								.select()
 								.from(Db.users)
@@ -62,11 +81,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 				}
 
 				return yield* user.pipe(
-					Option.map((user) => ({
-						id: user.id,
-						email: user.email,
-						activeOrganizationId: user.activeOrganizationId,
-					})),
+					Option.map(makeCurrentUser),
 					Effect.catchTag(
 						"NoSuchElementException",
 						() => new HttpApiError.Unauthorized(),
@@ -94,16 +109,9 @@ export const provideOptionalAuth = <A, E, R>(
 			yield* Effect.log(`Providing auth for user ${user.value.id}`);
 
 		return yield* user.pipe(
-			Option.map((user) =>
-				CurrentUser.context({
-					id: user.id,
-					email: user.email,
-					activeOrganizationId: user.activeOrganizationId,
-				}),
-			),
 			Option.match({
 				onNone: () => app,
-				onSome: (ctx) => app.pipe(Effect.provide(ctx)),
+				onSome: (user) => app.pipe(Effect.provide(makeCurrentUserLayer(user))),
 			}),
 		);
 	});

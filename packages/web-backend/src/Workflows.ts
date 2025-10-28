@@ -1,12 +1,23 @@
+import { Loom } from "@cap/web-domain";
 import { HttpApi, type HttpApiClient } from "@effect/platform";
 import * as Rpc from "@effect/rpc";
 import { WorkflowProxy, WorkflowProxyServer } from "@effect/workflow";
-import { Context, Layer } from "effect";
+import { Context, Layer, Schema } from "effect";
 
-import { LoomImportVideo, LoomImportVideoLive } from "./Loom/index.ts";
+import { LoomImportVideoLive } from "./Loom/index.ts";
 
-export const Workflows = [LoomImportVideo] as const;
-export const RpcGroup = WorkflowProxy.toRpcGroup(Workflows);
+export class InvalidRpcAuth extends Schema.TaggedError<InvalidRpcAuth>()(
+	"InvalidRpcAuth",
+	{},
+) {}
+export class SecretAuthMiddleware extends Rpc.RpcMiddleware.Tag<SecretAuthMiddleware>()(
+	"SecretAuthMiddleware",
+	{ requiredForClient: true, wrap: true, failure: InvalidRpcAuth },
+) {}
+
+export const Workflows = [Loom.ImportVideo] as const;
+export const RpcGroup =
+	WorkflowProxy.toRpcGroup(Workflows).middleware(SecretAuthMiddleware);
 export const RpcSerialization = Rpc.RpcSerialization.layerJson;
 
 export class RpcClient extends Context.Tag("Workflows/RpcClient")<

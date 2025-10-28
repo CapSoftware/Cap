@@ -2,16 +2,15 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { Rpc, withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
@@ -24,7 +23,7 @@ import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
-import { useUploadingContext, useUploadingStatus } from "./UploadingContext";
+import { useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -35,11 +34,14 @@ export type VideoData = {
 	totalComments: number;
 	totalReactions: number;
 	foldersData: FolderDataType[];
-	sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+	sharedOrganizations: {
+		id: string;
+		name: string;
+		iconUrl?: ImageUpload.ImageUrl | null;
+	}[];
 	sharedSpaces?: {
 		id: string;
 		name: string;
-		iconUrl: string;
 		isOrg: boolean;
 		organizationId: string;
 	}[];
@@ -52,15 +54,11 @@ export type VideoData = {
 export const Caps = ({
 	data,
 	count,
-	customDomain,
-	domainVerified,
 	dubApiKeyEnabled,
 	folders,
 }: {
 	data: VideoData;
 	count: number;
-	customDomain: string | null;
-	domainVerified: boolean;
 	folders: FolderDataType[];
 	dubApiKeyEnabled: boolean;
 }) => {
@@ -77,54 +75,11 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const videoIds = data.map((video) => video.id).sort();
-
-	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-		queryKey: ["analytics", videoIds],
-		queryFn: async () => {
-			if (!dubApiKeyEnabled || data.length === 0) {
-				return {};
-			}
-
-			const analyticsPromises = data.map(async (video) => {
-				try {
-					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-						},
-					});
-
-					if (response.ok) {
-						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
-					}
-					return { videoId: video.id, count: 0 };
-				} catch (error) {
-					console.warn(
-						`Failed to fetch analytics for video ${video.id}:`,
-						error,
-					);
-					return { videoId: video.id, count: 0 };
-				}
-			});
-
-			const results = await Promise.allSettled(analyticsPromises);
-			const analyticsData: Record<string, number> = {};
-
-			results.forEach((result) => {
-				if (result.status === "fulfilled" && result.value) {
-					analyticsData[result.value.videoId] = result.value.count;
-				}
-			});
-
-			return analyticsData;
-		},
-		refetchOnWindowFocus: false,
-		refetchOnMount: true,
-	});
-
-	const analytics = analyticsData || {};
+	const analyticsQuery = useVideosAnalyticsQuery(
+		data.map((video) => video.id),
+		dubApiKeyEnabled,
+	);
+	const analytics = analyticsQuery.data || {};
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -193,11 +148,11 @@ export const Caps = ({
 		});
 	};
 
+	const rpc = useRpcClient();
+
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
-
-			const rpc = yield* Rpc;
 
 			const fiber = yield* Effect.gen(function* () {
 				const results = yield* Effect.all(
@@ -249,7 +204,7 @@ export const Caps = ({
 	});
 
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();
@@ -266,7 +221,7 @@ export const Caps = ({
 		[data, isUploading, uploadingCapId],
 	);
 
-	if (count === 0) return <EmptyCapState />;
+	if (count === 0 && folders.length === 0) return <EmptyCapState />;
 
 	return (
 		<div className="flex relative flex-col w-full h-full">
@@ -322,9 +277,7 @@ export const Caps = ({
 										}
 									}}
 									userId={user?.id}
-									customDomain={customDomain}
-									isLoadingAnalytics={isLoadingAnalytics}
-									domainVerified={domainVerified}
+									isLoadingAnalytics={analyticsQuery.isLoading}
 									isSelected={selectedCaps.includes(video.id)}
 									anyCapSelected={anyCapSelected}
 									onSelectToggle={() => handleCapSelection(video.id)}

@@ -12,10 +12,13 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Video } from "@cap/web-domain";
+import { Database, ImageUploads } from "@cap/web-backend";
+import { type ImageUpload, Video } from "@cap/web-domain";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { type Array, Effect } from "effect";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { runPromise } from "@/lib/server";
 import { Caps } from "./Caps";
 
 export const metadata: Metadata = {
@@ -23,35 +26,45 @@ export const metadata: Metadata = {
 };
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+const getSharedSpacesForVideos = Effect.fn(function* (
+	videoIds: Video.VideoId[],
+) {
 	if (videoIds.length === 0) return {};
 
+	const db = yield* Database;
+
 	// Fetch space-level sharing
-	const spaceSharing = await db()
-		.select({
-			videoId: spaceVideos.videoId,
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-		.where(inArray(spaceVideos.videoId, videoIds));
+	const spaceSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+			.where(inArray(spaceVideos.videoId, videoIds)),
+	);
 
 	// Fetch organization-level sharing
-	const orgSharing = await db()
-		.select({
-			videoId: sharedVideos.videoId,
-			id: organizations.id,
-			name: organizations.name,
-			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(sharedVideos)
-		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.where(inArray(sharedVideos.videoId, videoIds));
+	const orgSharing = yield* db.use((db) =>
+		db
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(inArray(sharedVideos.videoId, videoIds)),
+	);
 
 	// Combine and group by videoId
 	const sharedSpacesMap: Record<
@@ -60,7 +73,6 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: string;
 			name: string;
 			organizationId: string;
-			iconUrl: string;
 			isOrg: boolean;
 		}>
 	> = {};
@@ -74,7 +86,6 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || "",
 			isOrg: false,
 		});
 	});
@@ -88,17 +99,14 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || "",
 			isOrg: true,
 		});
 	});
 
 	return sharedSpacesMap;
-}
+});
 
-export default async function CapsPage(props: {
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
+export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
 
@@ -106,41 +114,24 @@ export default async function CapsPage(props: {
 		redirect("/login");
 	}
 
-	const userId = user.id;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
+
+	const userId = user.id;
 	const offset = (page - 1) * limit;
 
 	const totalCountResult = await db()
 		.select({ count: count() })
 		.from(videos)
-		.where(eq(videos.ownerId, userId));
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(organizations.id, user.activeOrganizationId),
+			),
+		);
 
 	const totalCount = totalCountResult[0]?.count || 0;
-
-	// Get custom domain and verification status for the user's organization
-	const organizationData = await db()
-		.select({
-			customDomain: organizations.customDomain,
-			domainVerified: organizations.domainVerified,
-		})
-		.from(organizations)
-		.where(eq(organizations.id, user.activeOrganizationId))
-		.limit(1);
-
-	let customDomain: string | null = null;
-	let domainVerified = false;
-
-	if (
-		organizationData.length > 0 &&
-		organizationData[0] &&
-		organizationData[0].customDomain
-	) {
-		customDomain = organizationData[0].customDomain;
-		if (organizationData[0].domainVerified !== null) {
-			domainVerified = true;
-		}
-	}
 
 	const videoData = await db()
 		.select({
@@ -153,7 +144,13 @@ export default async function CapsPage(props: {
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
+			sharedOrganizations: sql<
+				{
+					id: string;
+					name: string;
+					iconUrl: ImageUpload.ImageUrlOrKey | null;
+				}[]
+			>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
@@ -176,20 +173,27 @@ export default async function CapsPage(props: {
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),
+			settings: videos.settings,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
-		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
 		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
+		.where(
+			and(
+				eq(videos.ownerId, userId),
+				eq(videos.orgId, user.activeOrganizationId),
+				isNull(videos.folderId),
+			),
+		)
 		.groupBy(
 			videos.id,
 			videos.ownerId,
 			videos.name,
 			videos.createdAt,
 			videos.metadata,
+			videos.orgId,
 			users.name,
 		)
 		.orderBy(
@@ -215,6 +219,7 @@ export default async function CapsPage(props: {
 		.where(
 			and(
 				eq(folders.organizationId, user.activeOrganizationId),
+				eq(folders.createdById, user.id),
 				isNull(folders.parentId),
 				isNull(folders.spaceId),
 			),
@@ -222,39 +227,52 @@ export default async function CapsPage(props: {
 
 	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
+	const sharedSpacesMap =
+		await getSharedSpacesForVideos(videoIds).pipe(runPromise);
 
-	const processedVideoData = videoData.map((video) => {
-		const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+	const processedVideoData = await Effect.all(
+		videoData.map(
+			Effect.fn(function* (video) {
+				const imageUploads = yield* ImageUploads;
 
-		return {
-			...videoWithoutEffectiveDate,
-			id: Video.VideoId.make(video.id),
-			foldersData,
-			sharedOrganizations: Array.isArray(video.sharedOrganizations)
-				? video.sharedOrganizations.filter(
-						(organization) => organization.id !== null,
-					)
-				: [],
-			sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
-				? sharedSpacesMap[video.id]
-				: [],
-			ownerName: video.ownerName ?? "",
-			metadata: video.metadata as
-				| {
-						customCreatedAt?: string;
-						[key: string]: any;
-				  }
-				| undefined,
-		};
-	});
+				const { effectiveDate, ...videoWithoutEffectiveDate } = video;
+
+				return {
+					...videoWithoutEffectiveDate,
+					id: Video.VideoId.make(video.id),
+					foldersData,
+					settings: video.settings,
+					sharedOrganizations: yield* Effect.all(
+						(video.sharedOrganizations ?? [])
+							.filter((organization) => organization.id !== null)
+							.map(
+								Effect.fn(function* (org) {
+									return {
+										...org,
+										iconUrl: org.iconUrl
+											? yield* imageUploads.resolveImageUrl(org.iconUrl)
+											: null,
+									};
+								}),
+							),
+					),
+					sharedSpaces: sharedSpacesMap[video.id] ?? [],
+					ownerName: video.ownerName ?? "",
+					metadata: video.metadata as
+						| {
+								customCreatedAt?: string;
+								[key: string]: any;
+						  }
+						| undefined,
+				};
+			}),
+		),
+	).pipe(runPromise);
 
 	return (
 		<Caps
 			data={processedVideoData}
 			folders={foldersData}
-			customDomain={customDomain}
-			domainVerified={domainVerified}
 			count={totalCount}
 			dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 		/>

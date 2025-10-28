@@ -8,51 +8,113 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import posthog from "posthog-js";
-import { PostHogProvider as PHProvider } from "posthog-js/react";
-import { type PropsWithChildren, useEffect, useState } from "react";
+import type { PostHogConfig } from "posthog-js";
+import { PostHogProvider as PHProvider, usePostHog } from "posthog-js/react";
+import {
+	type PropsWithChildren,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
+import type { BootstrapData } from "@/utils/getBootstrapData";
 
 import PostHogPageView from "./PosthogPageView";
 
 export function PostHogProvider({
 	children,
 	bootstrapData,
-}: PropsWithChildren<{
-	bootstrapData?: {
-		distinctID: string;
-		featureFlags: Record<string, string | boolean>;
-	};
-}>) {
-	useEffect(() => {
-		const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
-		const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
+}: PropsWithChildren<{ bootstrapData?: BootstrapData }>) {
+	const key = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
+	const host = buildEnv.NEXT_PUBLIC_POSTHOG_HOST;
+	const initialBootstrap = useRef<BootstrapData | undefined>(undefined);
 
-		if (key && host) {
-			try {
-				posthog.init(key, {
-					api_host: host,
-					capture_pageview: false,
-					bootstrap: bootstrapData,
-					loaded: (posthogInstance) => {
-						console.log("PostHog loaded and ready to capture events");
-					},
-				});
-			} catch (error) {
-				console.error("Failed to initialize PostHog:", error);
-			}
-		} else {
+	if (!initialBootstrap.current && bootstrapData?.distinctID) {
+		initialBootstrap.current = bootstrapData;
+	}
+
+	const options = useMemo(() => {
+		if (!host) return undefined;
+		const base = {
+			api_host: host,
+			capture_pageview: false,
+			capture_pageleave: true,
+			bootstrap: initialBootstrap.current?.distinctID
+				? initialBootstrap.current
+				: undefined,
+		} satisfies Partial<PostHogConfig>;
+
+		if (process.env.NEXT_PUBLIC_POSTHOG_DISABLE_SESSION_RECORDING === "true") {
+			(base as any).disable_session_recording = true;
+		}
+
+		return base;
+	}, [host]);
+
+	if (!key || !host || !options) {
+		if (process.env.NODE_ENV !== "production") {
 			console.warn(
 				"Missing PostHog environment variables. Events will not be tracked.",
 			);
 		}
-	}, [bootstrapData]);
+		return <>{children}</>;
+	}
 
 	return (
-		<PHProvider client={posthog}>
+		<PHProvider apiKey={key} options={options}>
 			<PostHogPageView />
+			<PostHogBootstrapSync bootstrapData={bootstrapData} />
 			{children}
 		</PHProvider>
 	);
+}
+
+function PostHogBootstrapSync({
+	bootstrapData,
+}: {
+	bootstrapData?: BootstrapData;
+}) {
+	const posthog = usePostHog();
+	const previousFlags = useRef<Record<string, string | boolean> | undefined>(
+		undefined,
+	);
+
+	useEffect(() => {
+		if (!posthog || !bootstrapData) {
+			return;
+		}
+
+		const nextFlags = bootstrapData.featureFlags ?? {};
+
+		if (areFlagMapsEqual(previousFlags.current, nextFlags)) {
+			return;
+		}
+
+		if (typeof posthog.featureFlags?.override === "function") {
+			posthog.featureFlags.override(nextFlags);
+			previousFlags.current = nextFlags;
+		}
+	}, [posthog, bootstrapData]);
+
+	return null;
+}
+
+function areFlagMapsEqual(
+	left?: Record<string, string | boolean>,
+	right?: Record<string, string | boolean>,
+) {
+	if (left === right) {
+		return true;
+	}
+	if (!left || !right) {
+		return !left && !right;
+	}
+	const leftKeys = Object.keys(left);
+	const rightKeys = Object.keys(right);
+	if (leftKeys.length !== rightKeys.length) {
+		return false;
+	}
+	return leftKeys.every((key) => left[key] === right[key]);
 }
 
 export function ReactQueryProvider({
@@ -71,8 +133,12 @@ export function ReactQueryProvider({
 }
 
 import { SessionProvider as NASessionProvider } from "next-auth/react";
-import { demoteFromPro, promoteToPro } from "./devtoolsServer";
-import { featureFlags, useFeatureFlags } from "./features";
+import {
+	demoteFromPro,
+	promoteToPro,
+	restartOnboarding,
+} from "./devtoolsServer";
+import { useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
 	return <NASessionProvider>{children}</NASessionProvider>;
@@ -103,11 +169,12 @@ export function Devtools() {
 
 function CapDevtools() {
 	const flags = useFeatureFlags();
+	void flags;
 
 	return (
-		<div className="flex flex-col space-y-4 p-4">
+		<div className="flex flex-col p-4 space-y-4">
 			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
-			<div className="space-y-2">
+			{/*<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Features</h1>
 				<label className="flex items-center space-x-2">
 					<input
@@ -122,7 +189,7 @@ function CapDevtools() {
 					/>
 					<span>Enable Upload Progress UI</span>
 				</label>
-			</div>
+			</div>*/}
 			<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Cap Pro</h1>
 				<p className="text-xs text-muted-foreground">
@@ -132,7 +199,7 @@ function CapDevtools() {
 					<form action={promoteToPro}>
 						<button
 							type="submit"
-							className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"
+							className="px-2 py-1 text-xs font-medium text-white bg-green-600 rounded hover:bg-green-700"
 						>
 							Promote to Pro
 						</button>
@@ -140,12 +207,26 @@ function CapDevtools() {
 					<form action={demoteFromPro}>
 						<button
 							type="submit"
-							className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+							className="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700"
 						>
 							Demote from Pro
 						</button>
 					</form>
 				</div>
+			</div>
+			<div className="space-y-2">
+				<h1 className="text-lg font-semibold">Onboarding</h1>
+				<p className="text-xs text-muted-foreground">
+					Restart the onboarding process for the current user (dev only)
+				</p>
+				<form action={restartOnboarding}>
+					<button
+						type="submit"
+						className="px-2 py-1 text-xs font-medium text-white bg-blue-600 rounded hover:bg-blue-700"
+					>
+						Restart Onboarding
+					</button>
+				</form>
 			</div>
 		</div>
 	);

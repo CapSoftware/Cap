@@ -9,7 +9,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Space } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type RiveFile, useRiveFile } from "@rive-app/react-canvas";
@@ -18,8 +18,7 @@ import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import {
 	BlueFolder,
 	type FolderHandle,
@@ -31,7 +30,7 @@ import {
 interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	spaceId?: string;
+	spaceId?: Space.SpaceIdOrOrganisationId;
 }
 
 const FolderOptions = [
@@ -101,16 +100,16 @@ export const NewFolderDialog: React.FC<Props> = ({
 		),
 	);
 
+	const rpc = useRpcClient();
+
 	const createFolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
-			withRpc((r) =>
-				r.FolderCreate({
-					name: data.name,
-					color: data.color,
-					spaceId: Option.fromNullable(spaceId),
-					parentId: Option.none(),
-				}),
-			),
+			rpc.FolderCreate({
+				name: data.name,
+				color: data.color,
+				spaceId: Option.fromNullable(spaceId),
+				parentId: Option.none(),
+			}),
 		onSuccess: () => {
 			setFolderName("");
 			setSelectedColor(null);

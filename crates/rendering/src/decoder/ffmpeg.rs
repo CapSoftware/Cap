@@ -1,4 +1,4 @@
-use ffmpeg::{format, frame, software, sys::AVHWDeviceType};
+use ffmpeg::{frame, sys::AVHWDeviceType};
 use log::debug;
 use std::{
     cell::RefCell,
@@ -9,48 +9,28 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
+use crate::DecodedFrame;
+
+use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
     data: Arc<Vec<u8>>,
+    width: u32,
+    height: u32,
 }
 
 impl CachedFrame {
-    fn process(&mut self, width: u32, height: u32) -> ProcessedFrame {
+    fn process(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
         match self {
             Self::Raw { frame, number } => {
-                let rgb_frame = if frame.format() != format::Pixel::RGBA {
-                    // Reinitialize the scaler with the new input format
-                    let mut scaler =
-                        software::converter((width, height), frame.format(), format::Pixel::RGBA)
-                            .unwrap();
-
-                    let mut rgb_frame = frame::Video::empty();
-                    scaler.run(frame, &mut rgb_frame).unwrap();
-                    rgb_frame
-                } else {
-                    std::mem::replace(frame, frame::Video::empty())
-                };
-
-                let width = rgb_frame.width() as usize;
-                let height = rgb_frame.height() as usize;
-                let stride = rgb_frame.stride(0);
-                let data = rgb_frame.data(0);
-
-                let expected_size = width * height * 4;
-
-                let mut frame_buffer = Vec::with_capacity(expected_size);
-
-                // account for stride > width
-                for line_data in data.chunks_exact(stride) {
-                    frame_buffer.extend_from_slice(&line_data[0..width * 4]);
-                }
-
+                let frame_buffer = converter.convert(frame);
                 let data = ProcessedFrame {
                     data: Arc::new(frame_buffer),
                     number: *number,
+                    width: frame.width(),
+                    height: frame.height(),
                 };
 
                 *self = Self::Processed(data.clone());
@@ -78,21 +58,30 @@ impl FfmpegDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
     ) -> Result<(), String> {
-        let mut this = cap_video_decode::FFmpegDecoder::new(
-            path,
-            Some(if cfg!(target_os = "macos") {
-                AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-            } else {
-                AVHWDeviceType::AV_HWDEVICE_TYPE_D3D12VA
-            }),
-        )?;
-
-        let time_base = this.decoder().time_base();
-        let start_time = this.start_time();
-        let width = this.decoder().width();
-        let height = this.decoder().height();
+        let (continue_tx, continue_rx) = mpsc::channel();
 
         std::thread::spawn(move || {
+            let mut this = match cap_video_decode::FFmpegDecoder::new(
+                path,
+                Some(if cfg!(target_os = "macos") {
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
+                } else {
+                    AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2
+                }),
+            ) {
+                Err(e) => {
+                    let _ = continue_tx.send(Err(e));
+                    return;
+                }
+                Ok(v) => {
+                    let _ = continue_tx.send(Ok(()));
+                    v
+                }
+            };
+
+            let time_base = this.decoder().time_base();
+            let start_time = this.start_time();
+
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
@@ -102,6 +91,7 @@ impl FfmpegDecoder {
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
             let mut frames = this.frames();
+            let mut converter = FrameConverter::new();
 
             let _ = ready_tx.send(Ok(()));
 
@@ -113,16 +103,24 @@ impl FfmpegDecoder {
                         // continue;
 
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                            let data = cached.process(width, height);
+                            let data = cached.process(&mut converter);
 
-                            sender.send(data.data.clone()).ok();
+                            let _ = sender.send(DecodedFrame {
+                                data: data.data.clone(),
+                                width: data.width,
+                                height: data.height,
+                            });
                             *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
                             let last_sent_frame = last_sent_frame.clone();
                             Some(move |data: ProcessedFrame| {
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = sender.send(data.data);
+                                let _ = sender.send(DecodedFrame {
+                                    data: data.data.clone(),
+                                    width: data.width,
+                                    height: data.height,
+                                });
                             })
                         };
 
@@ -169,7 +167,7 @@ impl FfmpegDecoder {
                                 cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
                                 && let Some(sender) = sender.take()
                             {
-                                (sender)(most_recent_prev_frame.1.process(width, height));
+                                (sender)(most_recent_prev_frame.1.process(&mut converter));
                             }
 
                             let exceeds_cache_bounds = current_frame > cache_max;
@@ -179,7 +177,7 @@ impl FfmpegDecoder {
                                 if current_frame == requested_frame
                                     && let Some(sender) = sender.take()
                                 {
-                                    let data = cache_frame.process(width, height);
+                                    let data = cache_frame.process(&mut converter);
                                     // info!("sending frame {requested_frame}");
 
                                     (sender)(data);
@@ -230,7 +228,7 @@ impl FfmpegDecoder {
                                     //     "sending forward frame {current_frame} for {requested_frame}",
                                     // );
 
-                                    (sender)(cache_frame.process(width, height));
+                                    (sender)(cache_frame.process(&mut converter));
                                 }
                             }
 
@@ -256,6 +254,8 @@ impl FfmpegDecoder {
                 }
             }
         });
+
+        continue_rx.recv().map_err(|e| e.to_string())??;
 
         Ok(())
     }

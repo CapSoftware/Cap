@@ -1,5 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Avatar, Button } from "@cap/ui";
+import type { Comment } from "@cap/web-domain";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
@@ -7,20 +8,24 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import type { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
 
-const Comment: React.FC<{
+const CommentComponent: React.FC<{
 	comment: CommentType;
 	replies: CommentType[];
-	onReply: (commentId: string) => void;
-	replyingToId: string | null;
+	onReply: (commentId: Comment.CommentId) => void;
+	replyingToId: Comment.CommentId | null;
 	handleReply: (content: string) => void;
 	onCancelReply: () => void;
-	onDelete: (commentId: string, parentId?: string) => void;
-	user: typeof userSelectProps | null;
+	onDelete: (
+		commentId: Comment.CommentId,
+		parentId: Comment.CommentId | null,
+	) => void;
 	level?: number;
 	onSeek?: (time: number) => void;
 }> = ({
@@ -31,10 +36,10 @@ const Comment: React.FC<{
 	handleReply,
 	onCancelReply,
 	onDelete,
-	user,
 	level = 0,
 	onSeek,
 }) => {
+	const user = useCurrentUser();
 	const isReplying = replyingToId === comment.id;
 	const isOwnComment = user?.id === comment.authorId;
 	const commentParams = useSearchParams().get("comment");
@@ -70,11 +75,14 @@ const Comment: React.FC<{
 			)}
 		>
 			<div className="flex items-start space-x-2.5">
-				<Avatar
-					className="size-6"
-					letterClass="text-sm"
-					name={comment.authorName}
-				/>
+				{comment.authorName && (
+					<SignedImageUrl
+						image={comment.authorImage}
+						name={comment.authorName}
+						className="size-6"
+						letterClass="text-sm"
+					/>
+				)}
 				<motion.div
 					viewport={{
 						once: true,
@@ -158,7 +166,6 @@ const Comment: React.FC<{
 						onCancel={onCancelReply}
 						placeholder="Write a reply..."
 						showCancelButton={true}
-						user={user}
 						autoFocus={true}
 					/>
 				</div>
@@ -167,7 +174,7 @@ const Comment: React.FC<{
 			{nestedReplies.length > 0 && (
 				<div className="mt-3 space-y-3">
 					{nestedReplies.map((reply) => (
-						<Comment
+						<CommentComponent
 							key={reply.id}
 							comment={reply}
 							replies={replies}
@@ -176,7 +183,6 @@ const Comment: React.FC<{
 							handleReply={handleReply}
 							onCancelReply={onCancelReply}
 							onDelete={onDelete}
-							user={user}
 							level={1}
 							onSeek={onSeek}
 						/>
@@ -187,4 +193,4 @@ const Comment: React.FC<{
 	);
 };
 
-export default Comment;
+export default CommentComponent;

@@ -4,7 +4,6 @@ import { organizationMembers, organizations } from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { getDashboardData } from "../../dashboard-data";
 import { Organization } from "./Organization";
 
 export const metadata: Metadata = {
@@ -35,7 +34,7 @@ export default async function OrganizationPage() {
 			),
 		);
 
-	if (member?.role !== "owner") {
+	if (!member || member.role !== "owner") {
 		redirect("/dashboard/caps");
 	}
 

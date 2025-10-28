@@ -120,11 +120,11 @@ const testimonialItems: TestimonialItem[] = [
 const Testimonials = () => {
 	return (
 		<div className="w-full max-w-[1200px] mx-auto md:px-5">
-			<div className="px-5 mb-16 text-center md:text-left">
-				<h2 className="mb-3 w-full max-w-[440px]">
+			<div className="px-5 mb-16 text-center">
+				<h1 className="mx-auto mb-3 w-full text-4xl font-medium text-gray-12 text-balance">
 					{homepageCopy.testimonials.title}
-				</h2>
-				<p className="text-lg leading-[1.75rem] w-full max-w-[500px]">
+				</h1>
+				<p className="text-lg text-gray-10 w-full max-w-[400px] mx-auto leading-[1.75rem]">
 					{homepageCopy.testimonials.subtitle}
 				</p>
 			</div>

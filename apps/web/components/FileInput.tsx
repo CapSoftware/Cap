@@ -1,6 +1,7 @@
 "use client";
 
-import { Button, Input } from "@cap/ui";
+import { Button, Input, LoadingSpinner } from "@cap/ui";
+import { ImageUpload } from "@cap/web-domain";
 import {
 	faCloudUpload,
 	faSpinner,
@@ -8,28 +9,35 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { SignedImageUrl } from "./SignedImageUrl";
 import { Tooltip } from "./Tooltip";
+
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
+const DEFAULT_MAX_FILE_SIZE_BYTES = 3 * 1024 * 1024;
+const ACCEPTED_IMAGE_TYPES = Array.from(ALLOWED_IMAGE_TYPES).join(",");
 
 export interface FileInputProps {
 	onChange?: (file: File | null) => void;
 	disabled?: boolean;
 	id?: string;
 	name?: string;
+	containerStyle?: React.CSSProperties;
 	className?: string;
 	notDraggingClassName?: string;
-	initialPreviewUrl?: string | null;
+	initialPreviewUrl?: ImageUpload.ImageUrl | null;
 	onRemove?: () => void;
 	isLoading?: boolean;
 	height?: string | number;
 	previewIconSize?: string | number;
+	maxFileSizeBytes?: number;
 }
 
 export const FileInput: React.FC<FileInputProps> = ({
 	onChange,
+	containerStyle,
 	disabled = false,
 	id = "file",
 	name = "file",
@@ -38,29 +46,46 @@ export const FileInput: React.FC<FileInputProps> = ({
 	initialPreviewUrl = null,
 	onRemove,
 	isLoading = false,
-	height = "44px",
+	height = 44,
 	previewIconSize = 20,
+	maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES,
 }) => {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [isDragging, setIsDragging] = useState(false);
-	const [selectedFile, setSelectedFile] = useState<File | null>(null);
-	const [previewUrl, setPreviewUrl] = useState<string | null>(
+	const [previewUrl, setPreviewUrl] = useState<ImageUpload.ImageUrl | null>(
 		initialPreviewUrl,
 	);
+	const [isLocalPreview, setIsLocalPreview] = useState(false);
+
+	const previousPreviewRef = useRef<{
+		url: string | null;
+		isLocal: boolean;
+	}>({ url: null, isLocal: false });
 
 	// Update preview URL when initialPreviewUrl changes
 	useEffect(() => {
+		// Clean up old blob URL if it exists
+		if (previousPreviewRef.current.url && previousPreviewRef.current.isLocal) {
+			URL.revokeObjectURL(previousPreviewRef.current.url);
+		}
+
 		setPreviewUrl(initialPreviewUrl);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: initialPreviewUrl,
+			isLocal: false,
+		};
 	}, [initialPreviewUrl]);
 
 	// Clean up the preview URL when component unmounts
 	useEffect(() => {
 		return () => {
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 		};
-	}, [previewUrl, initialPreviewUrl]);
+	}, [previewUrl, isLocalPreview]);
 
 	const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -117,39 +142,40 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const handleFileChange = () => {
 		const file = fileInputRef.current?.files?.[0];
 		if (file) {
-			// Validate file type - only allow jpg, jpeg, svg, and png
-			const allowedTypes = [
-				"image/jpeg",
-				"image/jpg",
-				"image/png",
-				"image/svg+xml",
-			];
-			if (!allowedTypes.includes(file.type)) {
-				toast.error("Please select a JPG, JPEG, PNG, or SVG file");
+			// Validate file type - only allow jpg, jpeg, and png
+			const normalizedType = file.type.toLowerCase();
+			if (!ALLOWED_IMAGE_TYPES.has(normalizedType)) {
+				toast.error("Please select a PNG or JPEG image");
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
 				return;
 			}
 
-			// Validate file size (limit to 2MB)
-			if (file.size > 2 * 1024 * 1024) {
-				toast.error("File size must be less than 2MB");
+			// Validate file size
+			if (file.size > maxFileSizeBytes) {
+				const maxSizeMB = maxFileSizeBytes / (1024 * 1024);
+				toast.error(`File size must be ${maxSizeMB}MB or less`);
 				if (fileInputRef.current) {
 					fileInputRef.current.value = "";
 				}
 				return;
 			}
 
-			// Clean up previous preview URL if it's not the initial preview URL
-			if (previewUrl && previewUrl !== initialPreviewUrl) {
+			// Clean up previous preview URL if it's a local blob URL
+			if (previewUrl && isLocalPreview) {
 				URL.revokeObjectURL(previewUrl);
 			}
 
 			// Create a new preview URL for immediate feedback
 			const newPreviewUrl = URL.createObjectURL(file);
-			setPreviewUrl(newPreviewUrl);
-			setSelectedFile(null);
+			setPreviewUrl(ImageUpload.ImageUrl.make(newPreviewUrl));
+			setIsLocalPreview(true);
+
+			previousPreviewRef.current = {
+				url: newPreviewUrl,
+				isLocal: true,
+			};
 
 			// Call the onChange callback
 			if (onChange) {
@@ -161,13 +187,18 @@ export const FileInput: React.FC<FileInputProps> = ({
 	const handleRemove = (e: React.MouseEvent) => {
 		e.stopPropagation();
 
-		// Clean up preview URL if it's not the initial preview URL
-		if (previewUrl && previewUrl !== initialPreviewUrl) {
+		// Clean up preview URL if it's a local blob URL
+		if (previewUrl && isLocalPreview) {
 			URL.revokeObjectURL(previewUrl);
 		}
 
 		setPreviewUrl(null);
-		setSelectedFile(null);
+		setIsLocalPreview(false);
+
+		previousPreviewRef.current = {
+			url: null,
+			isLocal: false,
+		};
 
 		if (fileInputRef.current) {
 			fileInputRef.current.value = "";
@@ -185,63 +216,54 @@ export const FileInput: React.FC<FileInputProps> = ({
 	};
 
 	return (
-		<div className={`relative ${className}`}>
+		<div className={clsx("relative", className)}>
 			<div
 				style={{
-					height: height,
+					height,
+					...containerStyle,
 				}}
 			>
-				{" "}
 				{/* Fixed height container to prevent resizing */}
-				{selectedFile || previewUrl ? (
-					<div className="flex gap-2 items-center p-1.5 rounded-xl border border-dashed bg-gray-1 border-gray-4 h-full">
-						<div className="flex flex-1 gap-1.5 items-center">
+				{isLoading ? (
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
+						<LoadingSpinner themeColors size={16} />
+						<p className="truncate text-[13px] text-gray-11">Uploading...</p>
+					</div>
+				) : previewUrl ? (
+					<div className="flex h-full items-center gap-2 rounded-xl border border-dashed border-gray-4 bg-gray-1 px-4 py-1.5">
+						<div className="flex flex-1 items-center gap-1.5">
 							<div className="flex flex-1 gap-1 items-center">
-								{selectedFile ? (
-									<>
-										<p className="text-xs font-medium w-fit max-w-[150px] truncate text-gray-12">
-											{selectedFile.name}
-										</p>
-										<p className="text-xs text-gray-10 min-w-fit">
-											{(selectedFile.size / 1024).toFixed(1)} KB
-										</p>
-									</>
-								) : (
-									<div className="flex gap-2 items-center px-2">
-										<p className="text-xs font-medium text-gray-12">
-											Current icon:{" "}
-										</p>
-										<div
-											style={{
-												width: previewIconSize,
-												height: previewIconSize,
-											}}
-											className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-md"
-										>
-											{previewUrl && (
-												<Image
-													src={previewUrl}
-													width={32}
-													height={32}
-													alt="File preview"
-													className="object-cover rounded-full"
-												/>
-											)}
-										</div>
+								<div className="flex gap-2 items-center">
+									<p className="text-xs font-medium text-gray-12">
+										Current icon:{" "}
+									</p>
+									<div
+										style={{
+											width: previewIconSize,
+											height: previewIconSize,
+										}}
+										className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-full"
+									>
+										<SignedImageUrl
+											image={previewUrl}
+											name="File preview"
+											letterClass="text-lg"
+											className="size-full"
+										/>
 									</div>
-								)}
+								</div>
 							</div>
 						</div>
 						<Tooltip content="Remove icon">
 							<Button
 								variant="outline"
 								size="xs"
-								className="!p-0 size-7 group mr-2"
+								className="!p-0 size-7 group"
 								disabled={isLoading || disabled}
 								onClick={handleRemove}
 							>
 								<FontAwesomeIcon
-									className="size-2.5 text-gray-12 group-hover:text-gray-1"
+									className="size-2.5 transition-colors text-gray-12 group-hover:text-gray-10"
 									icon={faTrash}
 								/>
 							</Button>
@@ -255,25 +277,25 @@ export const FileInput: React.FC<FileInputProps> = ({
 						onDragLeave={handleDragLeave}
 						onDrop={handleDrop}
 						className={clsx(
-							"flex gap-3 justify-center items-center px-4 w-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer h-full",
+							"flex gap-3 justify-center items-center px-4 w-full h-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer",
 							isDragging
 								? "border-blue-500 bg-gray-5"
-								: "hover:bg-gray-2 border-gray-5 " + notDraggingClassName,
-							isLoading || disabled ? "opacity-50 pointer-events-none" : "",
+								: `border-gray-5 hover:bg-gray-2 ${notDraggingClassName}`,
+							isLoading || disabled ? "pointer-events-none opacity-50" : "",
 						)}
 					>
 						{isLoading ? (
 							<FontAwesomeIcon
-								className="animate-spin text-gray-10 size-4"
+								className="animate-spin size-4 text-gray-10"
 								icon={faSpinner}
 							/>
 						) : (
 							<FontAwesomeIcon
-								className="text-gray-10 size-4"
+								className="size-4 text-gray-10"
 								icon={faCloudUpload}
 							/>
 						)}
-						<p className="text-[13px] truncate text-gray-11">
+						<p className="truncate text-[13px] text-gray-11">
 							{isLoading
 								? "Uploading..."
 								: "Choose a file or drag & drop it here"}
@@ -287,7 +309,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 				ref={fileInputRef}
 				id={id}
 				disabled={disabled || isLoading}
-				accept="image/jpeg, image/jpg, image/png, image/svg+xml"
+				accept={ACCEPTED_IMAGE_TYPES}
 				onChange={handleFileChange}
 				name={name}
 			/>
