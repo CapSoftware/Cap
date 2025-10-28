@@ -86,3 +86,6 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 
 # https://github.com/CapSoftware/posthog-rs/commit/c7e9712be2f9a9122b1df685d5a067afa5415288
 posthog-rs = { git = "https://github.com/CapSoftware/posthog-rs", rev = "c7e9712be2f9a9122b1df685d5a067afa5415288" }
+
+# https://github.com/CapSoftware/reqwest/commit/9b5ecbd5210a9510fde766015cabb724c1e70d2e
+reqwest = { git = "https://github.com/CapSoftware/reqwest", rev = "9b5ecbd5210a9510fde766015cabb724c1e70d2e" }
