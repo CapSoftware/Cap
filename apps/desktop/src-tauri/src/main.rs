@@ -67,7 +67,7 @@ fn main() {
 
     // Ensure logs directory exists
     std::fs::create_dir_all(&logs_dir).unwrap_or_else(|e| {
-        eprintln!("Failed to create logs directory: {}", e);
+        eprintln!("Failed to create logs directory: {e}");
     });
 
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");

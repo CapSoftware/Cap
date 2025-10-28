@@ -359,6 +359,7 @@ mod tests {
             background: BackgroundSource::Color {
                 value: [65535, 0, 0],
             },
+            border: None,
         };
 
         // Should need update on first check
@@ -382,6 +383,7 @@ mod tests {
             background: BackgroundSource::Color {
                 value: [0, 65535, 0],
             },
+            border: None,
         };
         assert!(layer.needs_update(&new_uniforms));
     }

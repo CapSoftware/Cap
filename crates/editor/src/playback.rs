@@ -326,16 +326,15 @@ impl AudioPlayback {
                     };
 
                     if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
+                        && clamped != desired
                     {
-                        if clamped != desired {
-                            info!(
-                                requested_frames = desired,
-                                clamped_frames = clamped,
-                                range_min = *min,
-                                range_max = *max,
-                                "Adjusted requested audio buffer to fit device capabilities",
-                            );
-                        }
+                        info!(
+                            requested_frames = desired,
+                            clamped_frames = clamped,
+                            range_min = *min,
+                            range_max = *max,
+                            "Adjusted requested audio buffer to fit device capabilities",
+                        );
                     }
 
                     config.buffer_size = BufferSize::Fixed(clamped);
@@ -404,22 +403,22 @@ impl AudioPlayback {
                 audio_renderer.prefill(&project_snapshot, headroom_samples);
             }
 
-            if let Some(hint) = static_latency_hint {
-                if hint.latency_secs > 0.0 {
-                    match hint.transport {
-                        cap_audio::OutputTransportKind::Airplay => info!(
-                            "Applying AirPlay output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                        transport if transport.is_wireless() => info!(
-                            "Applying wireless output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                        _ => info!(
-                            "Applying output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                    }
+            if let Some(hint) = static_latency_hint
+                && hint.latency_secs > 0.0
+            {
+                match hint.transport {
+                    cap_audio::OutputTransportKind::Airplay => info!(
+                        "Applying AirPlay output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    transport if transport.is_wireless() => info!(
+                        "Applying wireless output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    _ => info!(
+                        "Applying output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
                 }
             }
 

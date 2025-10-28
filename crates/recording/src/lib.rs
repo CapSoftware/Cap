@@ -1,4 +1,3 @@
-mod audio_buffer;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;
