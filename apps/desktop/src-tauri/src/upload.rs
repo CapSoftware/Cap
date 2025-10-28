@@ -3,11 +3,11 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    http_client::RetryableHttpClient,
     posthog::{PostHogEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
-use axum::http::Uri;
 use bytes::Bytes;
 use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
@@ -24,11 +24,10 @@ use std::{
     io,
     path::{Path, PathBuf},
     pin::pin,
-    str::FromStr,
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
-use tauri::{AppHandle, ipc::Channel};
+use tauri::{AppHandle, Manager, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
@@ -594,25 +593,6 @@ pub fn from_pending_file_to_chunks(
     .instrument(Span::current())
 }
 
-fn retryable_client(host: String) -> reqwest::ClientBuilder {
-    reqwest::Client::builder().retry(
-        reqwest::retry::for_host(host)
-            .classify_fn(|req_rep| {
-                match req_rep.status() {
-                    // Server errors
-                    Some(s) if s.is_server_error() || s == StatusCode::TOO_MANY_REQUESTS => {
-                        req_rep.retryable()
-                    }
-                    // Network errors
-                    None => req_rep.retryable(),
-                    _ => req_rep.success(),
-                }
-            })
-            .max_retries_per_request(5)
-            .max_extra_load(5.0),
-    )
-}
-
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
@@ -724,19 +704,16 @@ fn multipart_uploader(
                             }
 
                             let size = chunk.len();
-                            let url = Uri::from_str(&presigned_url).map_err(|err| {
-                                format!("uploader/part/{part_number}/invalid_url: {err:?}")
-                            })?;
-                            let mut req =
-                                retryable_client(url.host().unwrap_or("<unknown>").to_string())
-                                    .build()
-                                    .map_err(|err| {
-                                        format!("uploader/part/{part_number}/client: {err:?}")
-                                    })?
-                                    .put(&presigned_url)
-                                    .header("Content-Length", chunk.len())
-                                    .timeout(Duration::from_secs(5 * 60))
-                                    .body(chunk);
+                            let mut req = app
+                                .state::<RetryableHttpClient>()
+                                .as_ref()
+                                .map_err(|err| {
+                                    format!("uploader/part/{part_number}/client: {err:?}")
+                                })?
+                                .put(&presigned_url)
+                                .header("Content-Length", chunk.len())
+                                .timeout(Duration::from_secs(5 * 60))
+                                .body(chunk);
 
                             if let Some(md5_sum) = &md5_sum {
                                 req = req.header("Content-MD5", md5_sum);
@@ -809,10 +786,9 @@ pub async fn singlepart_uploader(
 ) -> Result<(), AuthedApiError> {
     let presigned_url = api::upload_signed(&app, request).await?;
 
-    let url = Uri::from_str(&presigned_url)
-        .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
-        .build()
+    let resp = app
+        .state::<RetryableHttpClient>()
+        .as_ref()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)
