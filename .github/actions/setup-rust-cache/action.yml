@@ -1,0 +1,18 @@
+name: Setup Rust Cache
+description: Configures Rust caching
+inputs:
+  target:
+    description: "Toolchain target triple"
+    required: true
+  save-cache:
+    description: "Whether to save the cache"
+    required: false
+    default: "false"
+runs:
+  using: "composite"
+  steps:
+    - name: Cache Rust Dependencies
+      uses: swatinem/rust-cache@v2
+      with:
+        save-if: ${{ inputs.save-cache }}
+        shared-key: ${{ inputs.target }}

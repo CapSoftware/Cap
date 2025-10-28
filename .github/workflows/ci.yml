@@ -99,11 +99,9 @@ jobs:
           targets: ${{ matrix.settings.target }}
           components: clippy
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          target: ${{ matrix.settings.target }}
 
       - name: Create .env file in root
         run: |
@@ -166,11 +164,9 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          target: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-js
 
@@ -217,3 +213,37 @@ jobs:
       - name: Run verify
         shell: bash
         run: node scripts/check-tauri-plugin-versions.js
+
+  rust-cache:
+    name: Rust cache
+    if: github.ref == 'refs/heads/fix-rust-cache'
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+          save-cache: true
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+
+      - name: Build debug
+        run: cargo build --all
+
+      - name: Build release
+        run: cargo build --all --release

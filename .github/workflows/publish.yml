@@ -169,11 +169,9 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          target: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-js
 
