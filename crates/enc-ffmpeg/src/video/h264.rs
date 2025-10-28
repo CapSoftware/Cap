@@ -99,9 +99,7 @@ impl H264EncoderBuilder {
             .video()
             .ok()
             .and_then(|codec_video| codec_video.formats())
-            .is_some_and(|mut formats| {
-                formats.any(|f| f == input_config.pixel_format)
-            });
+            .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
 
         let mut needs_pixel_conversion = false;
 

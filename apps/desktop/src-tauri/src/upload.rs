@@ -247,9 +247,10 @@ pub async fn create_or_get_video(
             .ok()
             .and_then(|body| serde_json::from_str::<CreateErrorResponse>(body).ok())
             && status == StatusCode::FORBIDDEN
-            && error.error == "upgrade_required" {
-                return Err(AuthedApiError::UpgradeRequired);
-            }
+            && error.error == "upgrade_required"
+        {
+            return Err(AuthedApiError::UpgradeRequired);
+        }
 
         return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
     }

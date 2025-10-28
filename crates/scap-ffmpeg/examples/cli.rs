@@ -68,7 +68,9 @@ pub async fn main() {
 
             let ff_frame = video_frame.as_ffmpeg().unwrap();
 
-            ff_frame.width();ff_frame.height();ff_frame.format();
+            ff_frame.width();
+            ff_frame.height();
+            ff_frame.format();
         })
         .with_stop_with_err_cb(|stream, error| {
             (stream, error);
