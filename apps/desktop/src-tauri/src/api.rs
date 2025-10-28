@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use specta::Type;
 use tauri::AppHandle;
 
 use crate::web_api::{AuthedApiError, ManagerExt};
@@ -30,7 +31,7 @@ pub async fn upload_multipart_initiate(
         .map_err(|err| format!("api/upload_multipart_initiate/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -72,7 +73,7 @@ pub async fn upload_multipart_presign_part(
         .map_err(|err| format!("api/upload_multipart_presign_part/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -144,7 +145,7 @@ pub async fn upload_multipart_complete(
         .map_err(|err| format!("api/upload_multipart_complete/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -199,7 +200,7 @@ pub async fn upload_signed(
         .map_err(|err| format!("api/upload_signed/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -232,7 +233,7 @@ pub async fn desktop_video_progress(
         .map_err(|err| format!("api/desktop_video_progress/request: {err}"))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let error_body = resp
             .text()
             .await
@@ -241,4 +242,32 @@ pub async fn desktop_video_progress(
     }
 
     Ok(())
+}
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+    pub owner_id: String,
+}
+
+pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, AuthedApiError> {
+    let resp = app
+        .authed_api_request("/api/desktop/organizations", |client, url| client.get(url))
+        .await
+        .map_err(|err| format!("api/fetch_organizations/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/fetch_organizations/{status}: {error_body}").into());
+    }
+
+    resp.json()
+        .await
+        .map_err(|err| format!("api/fetch_organizations/response: {err}").into())
 }
