@@ -224,6 +224,8 @@ async fn create_pipeline(
         mic_feed,
         output_path.clone(),
         output_resolution,
+        #[cfg(windows)]
+        crate::capture_pipeline::EncoderPreferences::new(),
     )
     .await?;
 

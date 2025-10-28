@@ -97,10 +97,12 @@ impl Mp4ExportSettings {
 
             let mut encoded_frames = 0;
             while let Ok(frame) = frame_rx.recv() {
-                encoder.queue_video_frame(
-                    frame.video,
-                    Duration::from_secs_f32(encoded_frames as f32 / fps as f32),
-                );
+                encoder
+                    .queue_video_frame(
+                        frame.video,
+                        Duration::from_secs_f32(encoded_frames as f32 / fps as f32),
+                    )
+                    .map_err(|err| err.to_string())?;
                 encoded_frames += 1;
                 if let Some(audio) = frame.audio {
                     encoder.queue_audio_frame(audio);

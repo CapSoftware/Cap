@@ -295,7 +295,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let fps = max_fps.min(display.refresh_rate() as u32);
+        let target_refresh = validated_refresh_rate(display.refresh_rate());
+        let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
         let output_size = crop_bounds
             .clone()
@@ -359,15 +360,43 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     }
 }
 
+fn validated_refresh_rate<T>(reported_refresh_rate: T) -> u32
+where
+    T: Into<f64>,
+{
+    let reported_refresh_rate = reported_refresh_rate.into();
+    let fallback_refresh = 60;
+    let rounded_refresh = reported_refresh_rate.round();
+    let is_invalid_refresh = !rounded_refresh.is_finite() || rounded_refresh <= 0.0;
+    let capped_refresh = if is_invalid_refresh {
+        fallback_refresh as f64
+    } else {
+        rounded_refresh.min(500.0)
+    };
+
+    if is_invalid_refresh {
+        warn!(
+            ?reported_refresh_rate,
+            fallback = fallback_refresh,
+            "Display reported invalid refresh rate; falling back to default"
+        );
+        fallback_refresh
+    } else {
+        capped_refresh as u32
+    }
+}
+
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
     scap_targets::Display::list()
         .into_iter()
         .filter_map(|display| {
+            let refresh_rate = validated_refresh_rate(display.raw_handle().refresh_rate());
+
             Some((
                 CaptureDisplay {
                     id: display.id(),
                     name: display.name()?,
-                    refresh_rate: display.raw_handle().refresh_rate() as u32,
+                    refresh_rate,
                 },
                 display,
             ))
@@ -409,13 +438,17 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
             #[cfg(not(target_os = "macos"))]
             let bundle_identifier = None;
 
+            let refresh_rate = v
+                .display()
+                .map(|display| validated_refresh_rate(display.raw_handle().refresh_rate()))?;
+
             Some((
                 CaptureWindow {
                     id: v.id(),
                     name,
                     owner_name,
                     bounds: v.display_relative_logical_bounds()?,
-                    refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
+                    refresh_rate,
                     bundle_identifier,
                 },
                 v,

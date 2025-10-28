@@ -587,6 +587,8 @@ struct SegmentPipelineFactory {
     start_time: Timestamps,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
+    #[cfg(windows)]
+    encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 }
 
 impl SegmentPipelineFactory {
@@ -607,6 +609,8 @@ impl SegmentPipelineFactory {
             start_time,
             index: 0,
             completion_tx,
+            #[cfg(windows)]
+            encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
         }
     }
 
@@ -624,6 +628,8 @@ impl SegmentPipelineFactory {
             next_cursors_id,
             self.custom_cursor_capture,
             self.start_time,
+            #[cfg(windows)]
+            self.encoder_preferences.clone(),
         )
         .await?;
 
@@ -682,6 +688,7 @@ async fn create_segment_pipeline(
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     start_time: Timestamps,
+    #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
@@ -718,6 +725,8 @@ async fn create_segment_pipeline(
         capture_source,
         screen_output_path.clone(),
         start_time,
+        #[cfg(windows)]
+        encoder_preferences,
     )
     .instrument(error_span!("screen-out"))
     .await
