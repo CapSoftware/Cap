@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
 jobs:
   changes:
     name: Detect Changes
@@ -216,7 +219,7 @@ jobs:
 
   rust-cache:
     name: Rust cache
-    if: ${{ github.ref == 'refs/heads/fix-rust-cache' }}
+    if: ${{ env.BRANCH_NAME == 'refs/heads/fix-rust-cache' }}
     strategy:
       fail-fast: false
       matrix:
