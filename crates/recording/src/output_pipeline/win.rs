@@ -102,7 +102,7 @@ impl Muxer for WindowsMuxer {
                                 return Err(anyhow!(
                                     "ScreenSoftwareEncoder: failed to lock output mutex: {}",
                                     poisoned
-                                ))
+                                ));
                             }
                         };
 
@@ -132,7 +132,7 @@ impl Muxer for WindowsMuxer {
                                     return fallback(Some(format!(
                                         "Invalid output width: {}",
                                         output_size.Width
-                                    )))
+                                    )));
                                 }
                             };
 
@@ -142,7 +142,7 @@ impl Muxer for WindowsMuxer {
                                     return fallback(Some(format!(
                                         "Invalid output height: {}",
                                         output_size.Height
-                                    )))
+                                    )));
                                 }
                             };
 
@@ -153,7 +153,7 @@ impl Muxer for WindowsMuxer {
                                         return fallback(Some(format!(
                                             "Failed to lock output mutex: {}",
                                             poisoned
-                                        )))
+                                        )));
                                     }
                                 };
 
