@@ -21,7 +21,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 // Re-export caption types from cap_project
 pub use cap_project::{CaptionSegment, CaptionSettings};
 
-use crate::client;
+use crate::http_client;
 
 // Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
@@ -1070,7 +1070,7 @@ pub async fn download_whisper_model(
 
     // Create the client and download the model
     let response = app
-        .state::<client::Client>()
+        .state::<http_client::HttpClient>()
         .get(model_url)
         .send()
         .await

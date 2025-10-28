@@ -4,15 +4,15 @@ use std::ops::Deref;
 
 use reqwest::StatusCode;
 
-pub struct Client(reqwest::Client);
+pub struct HttpClient(reqwest::Client);
 
-impl Default for Client {
+impl Default for HttpClient {
     fn default() -> Self {
         Self(reqwest::Client::new())
     }
 }
 
-impl Deref for Client {
+impl Deref for HttpClient {
     type Target = reqwest::Client;
 
     fn deref(&self) -> &Self::Target {
@@ -20,9 +20,9 @@ impl Deref for Client {
     }
 }
 
-pub struct RetryableClient(reqwest::Result<reqwest::Client>);
+pub struct RetryableHttpClient(reqwest::Result<reqwest::Client>);
 
-impl Default for RetryableClient {
+impl Default for RetryableHttpClient {
     fn default() -> Self {
         Self(
             reqwest::Client::builder()
@@ -50,7 +50,7 @@ impl Default for RetryableClient {
     }
 }
 
-impl Deref for RetryableClient {
+impl Deref for RetryableHttpClient {
     type Target = reqwest::Result<reqwest::Client>;
 
     fn deref(&self) -> &Self::Target {

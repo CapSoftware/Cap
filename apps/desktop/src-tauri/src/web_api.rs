@@ -6,7 +6,7 @@ use tracing::{error, warn};
 use crate::{
     ArcLock,
     auth::{AuthSecret, AuthStore},
-    client,
+    http_client,
 };
 
 #[derive(Error, Debug)]
@@ -110,7 +110,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
 
         let url = self.make_app_url(path.into()).await;
         let response =
-            do_authed_request(&self.state::<client::Client>(), &auth, build, url).await?;
+            do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
@@ -127,7 +127,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = self.make_app_url(path.into()).await;
 
-        apply_env_headers(build(&self.state::<client::Client>(), url))
+        apply_env_headers(build(&self.state::<http_client::HttpClient>(), url))
             .send()
             .await
     }

@@ -5,7 +5,6 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
-mod client;
 mod deeplink_actions;
 mod editor_window;
 mod export;
@@ -14,6 +13,7 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod http_client;
 mod logging;
 mod notifications;
 mod permissions;
@@ -2194,8 +2194,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(EditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
-            app.manage(client::Client::default());
-            app.manage(client::RetryableClient::default());
+            app.manage(http_client::HttpClient::default());
+            app.manage(http_client::RetryableHttpClient::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();

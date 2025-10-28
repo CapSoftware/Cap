@@ -3,7 +3,7 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
-    client::RetryableClient,
+    http_client::RetryableHttpClient,
     posthog::{PostHogEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
@@ -707,7 +707,7 @@ fn multipart_uploader(
 
                             let size = chunk.len();
                             let mut req = app
-                                .state::<RetryableClient>()
+                                .state::<RetryableHttpClient>()
                                 .as_ref()
                                 .map_err(|err| {
                                     format!("uploader/part/{part_number}/client: {err:?}")
@@ -789,7 +789,7 @@ pub async fn singlepart_uploader(
     let presigned_url = api::upload_signed(&app, request).await?;
 
     let resp = app
-        .state::<RetryableClient>()
+        .state::<RetryableHttpClient>()
         .as_ref()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
