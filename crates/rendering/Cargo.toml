@@ -13,6 +13,7 @@ cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
 cap-video-decode = { path = "../video-decode" }
 cap-cursor-info = { path = "../cursor-info" }
+cap-media = { path = "../media" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true
@@ -21,6 +22,7 @@ futures-intrusive = "0.5.0"
 image = "0.25.2"
 log = "0.4"
 serde = { workspace = true }
+serde_json = "1.0"
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
@@ -30,6 +32,7 @@ glyphon = "0.9.0"
 tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"
+clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

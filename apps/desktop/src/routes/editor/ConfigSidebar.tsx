@@ -113,6 +113,7 @@ const BACKGROUND_COLORS = [
 	"#A9A9A9", // Dark Gray
 	"#FFFFFF", // White
 	"#000000", // Black
+	"#00000000", // Transparent
 ];
 
 const BACKGROUND_GRADIENTS = [
@@ -1442,20 +1443,22 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							}
 						>
 							<div class="flex flex-col flex-wrap gap-3">
-								<div class="flex flex-row items-center w-full h-10">
-									<RgbInput
-										value={
-											project.background.source.type === "color"
-												? project.background.source.value
-												: [0, 0, 0]
-										}
-										onChange={(value) => {
-											setProject("background", "source", {
-												type: "color",
-												value,
-											});
-										}}
-									/>
+								<div class="flex flex-col gap-3">
+									<div class="flex flex-row items-center w-full h-10">
+										<RgbInput
+											value={
+												project.background.source.type === "color"
+													? project.background.source.value
+													: [0, 0, 0]
+											}
+											onChange={(value) => {
+												setProject("background", "source", {
+													type: "color",
+													value,
+												});
+											}}
+										/>
+									</div>
 								</div>
 
 								<div class="flex flex-wrap gap-2">
@@ -1468,21 +1471,48 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													name="colorPicker"
 													onChange={(e) => {
 														if (e.target.checked) {
-															backgrounds.color = {
-																type: "color",
-																value: hexToRgb(color) ?? [0, 0, 0],
-															};
-															setProject(
-																"background",
-																"source",
-																backgrounds.color,
-															);
+															const rgbValue = hexToRgb(color);
+															if (rgbValue) {
+																// Extract RGB part if RGBA is returned
+																if (rgbValue.length === 4) {
+																	const [r, g, b, a] = rgbValue as unknown as [
+																		number,
+																		number,
+																		number,
+																		number,
+																	];
+																	backgrounds.color = {
+																		type: "color",
+																		value: [r, g, b],
+																		alpha: a,
+																	};
+																} else {
+																	backgrounds.color = {
+																		type: "color",
+																		value: rgbValue as unknown as [
+																			number,
+																			number,
+																			number,
+																		],
+																	};
+																}
+																setProject(
+																	"background",
+																	"source",
+																	backgrounds.color,
+																);
+															}
 														}
 													}}
 												/>
 												<div
 													class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-													style={{ "background-color": color }}
+													style={{
+														background:
+															color === "#00000000"
+																? `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`
+																: color,
+													}}
 												/>
 											</label>
 										)}
@@ -2762,7 +2792,20 @@ function RgbInput(props: {
 				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
+					if (value) {
+						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+						if (value.length === 4) {
+							const [r, g, b] = value as unknown as [
+								number,
+								number,
+								number,
+								number,
+							];
+							props.onChange([r, g, b]);
+						} else {
+							props.onChange(value as unknown as [number, number, number]);
+						}
+					}
 				}}
 			/>
 			<TextInput
@@ -2775,14 +2818,54 @@ function RgbInput(props: {
 					setText(e.currentTarget.value);
 
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
+					if (value) {
+						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+						if (value.length === 4) {
+							const [r, g, b] = value as unknown as [
+								number,
+								number,
+								number,
+								number,
+							];
+							props.onChange([r, g, b]);
+						} else {
+							props.onChange(value as unknown as [number, number, number]);
+						}
+					}
 				}}
 				onBlur={(e) => {
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
-					else {
+					if (value) {
+						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+						if (value.length === 4) {
+							const [r, g, b] = value as unknown as [
+								number,
+								number,
+								number,
+								number,
+							];
+							props.onChange([r, g, b]);
+						} else {
+							props.onChange(value as unknown as [number, number, number]);
+						}
+					} else {
 						setText(prevHex);
-						props.onChange(hexToRgb(text())!);
+						const fallbackValue = hexToRgb(text());
+						if (fallbackValue) {
+							if (fallbackValue.length === 4) {
+								const [r, g, b] = fallbackValue as unknown as [
+									number,
+									number,
+									number,
+									number,
+								];
+								props.onChange([r, g, b]);
+							} else {
+								props.onChange(
+									fallbackValue as unknown as [number, number, number],
+								);
+							}
+						}
 					}
 				}}
 			/>
@@ -2797,8 +2880,24 @@ function rgbToHex(rgb: [number, number, number]) {
 		.toUpperCase()}`;
 }
 
-function hexToRgb(hex: string): [number, number, number] | null {
-	const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+function hexToRgb(hex: string): [number, number, number, number] | null {
+	// Support both 6-digit (RGB) and 8-digit (RGBA) hex colors
+	const match = hex.match(
+		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
+	);
 	if (!match) return null;
-	return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
+
+	const [, r, g, b, a] = match;
+	const rgb = [
+		Number.parseInt(r, 16),
+		Number.parseInt(g, 16),
+		Number.parseInt(b, 16),
+	] as const;
+
+	// If alpha is provided, return RGBA tuple
+	if (a) {
+		return [...rgb, Number.parseInt(a, 16)];
+	}
+
+	return [...rgb, 255];
 }

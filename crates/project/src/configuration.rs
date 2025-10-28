@@ -31,6 +31,8 @@ pub enum BackgroundSource {
     },
     Color {
         value: Color,
+        #[serde(default = "default_alpha")]
+        alpha: u8,
     },
     Gradient {
         from: Color,
@@ -42,6 +44,10 @@ pub enum BackgroundSource {
 
 fn default_gradient_angle() -> u16 {
     90
+}
+
+fn default_alpha() -> u8 {
+    u8::MAX
 }
 
 impl Default for BackgroundSource {
