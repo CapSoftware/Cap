@@ -7,11 +7,9 @@ use cap_project::{
     TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
     cursor::CursorEvents,
 };
-use cap_recording::PipelineDoneError;
 use cap_recording::feeds::camera::CameraFeedLock;
-use cap_recording::feeds::microphone::MicrophoneFeedLock;
 use cap_recording::{
-    RecordingError, RecordingMode,
+    RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
     sources::{
@@ -471,7 +469,7 @@ pub async fn start_recording(
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
                     .map_err(|e| format!("GetShareableContent: {e}"))?
-                    .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
+                    .ok_or_else(|| "GetShareableContent/NotAvailable".to_string())?;
 
                 let common = InProgressRecordingCommon {
                     target_name,
@@ -830,7 +828,7 @@ async fn handle_recording_end(
                         }
                     }
                     RecordingMetaInner::Instant(meta) => {
-                        *meta = InstantRecordingMeta::Failed { error: error };
+                        *meta = InstantRecordingMeta::Failed { error };
                     }
                 }
                 project_meta
@@ -983,7 +981,6 @@ async fn handle_recording_finish(
                                 if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload {
 	                                if let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
 	                                	error!("Failed to remove recording files after upload: {err:?}");
-		                                return;
 	                                }
                                 }
                             }

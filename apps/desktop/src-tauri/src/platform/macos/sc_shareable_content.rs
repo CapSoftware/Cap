@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::{Mutex, Notify};
-use tracing::{debug, info, trace};
+use tracing::trace;
 
 #[derive(Default)]
 struct CacheState {

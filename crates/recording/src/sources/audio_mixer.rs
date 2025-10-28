@@ -709,12 +709,12 @@ mod test {
             assert!(source.rx.is_empty());
 
             let item = &source.buffer[0];
-            assert_eq!(item.1.duration_since(start), ONE_SECOND / 2);
-            assert_eq!(item.0.samples(), SOURCE_INFO.rate() as usize / 2);
+            assert_eq!(item.timestamp.duration_since(start), ONE_SECOND / 2);
+            assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
 
             let item = &source.buffer[1];
-            assert_eq!(item.1.duration_since(start), ONE_SECOND);
-            assert_eq!(item.0.samples(), SOURCE_INFO.rate() as usize / 2);
+            assert_eq!(item.timestamp.duration_since(start), ONE_SECOND);
+            assert_eq!(item.inner.samples(), SOURCE_INFO.rate() as usize / 2);
         }
     }
 }

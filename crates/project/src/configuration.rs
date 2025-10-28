@@ -647,7 +647,7 @@ impl ProjectConfiguration {
 
         std::fs::rename(
             &temp_path,
-            &project_path.as_ref().join("project-config.json"),
+            project_path.as_ref().join("project-config.json"),
         )?;
 
         Ok(())

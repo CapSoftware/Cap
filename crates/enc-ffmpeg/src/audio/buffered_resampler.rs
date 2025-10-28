@@ -48,7 +48,7 @@ impl BufferedResampler {
             pts += buffer.0.samples() as i64;
         }
 
-        return remaining_samples;
+        remaining_samples
     }
 
     pub fn output(&self) -> resampling::context::Definition {
@@ -75,7 +75,7 @@ impl BufferedResampler {
 
         self.buffer.push_back((resampled_frame, resampled_pts));
 
-        while let Some(_) = self.resampler.delay() {
+        while self.resampler.delay().is_some() {
             let mut resampled_frame = ffmpeg::frame::Audio::new(
                 self.resampler.output().format,
                 0,
@@ -89,7 +89,7 @@ impl BufferedResampler {
 
             self.buffer.push_back((resampled_frame, next_pts));
 
-            next_pts = next_pts + samples as i64;
+            next_pts += samples as i64;
         }
 
         self.min_next_pts = Some(pts + frame.samples() as i64);

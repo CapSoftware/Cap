@@ -68,11 +68,11 @@ pub async fn open_target_select_overlays(
                     let display = focused_target
                         .as_ref()
                         .map(|v| v.display())
-                        .unwrap_or_else(|| scap_targets::Display::get_containing_cursor());
+                        .unwrap_or_else(scap_targets::Display::get_containing_cursor);
                     let window = focused_target
                         .as_ref()
                         .map(|v| v.window().and_then(|id| scap_targets::Window::from_id(&id)))
-                        .unwrap_or_else(|| scap_targets::Window::get_topmost_at_cursor());
+                        .unwrap_or_else(scap_targets::Window::get_topmost_at_cursor);
 
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
@@ -129,7 +129,7 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
 pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> {
     let window_id = window_id
         .parse::<WindowId>()
-        .map_err(|err| format!("Invalid window ID: {}", err))?;
+        .map_err(|err| format!("Invalid window ID: {err}"))?;
 
     Ok(Window::from_id(&window_id)
         .ok_or("Window not found")?
@@ -143,7 +143,7 @@ pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> 
 pub async fn display_information(display_id: &str) -> Result<DisplayInformation, String> {
     let display_id = display_id
         .parse::<DisplayId>()
-        .map_err(|err| format!("Invalid display ID: {}", err))?;
+        .map_err(|err| format!("Invalid display ID: {err}"))?;
     let display = Display::from_id(&display_id).ok_or("Display not found")?;
 
     Ok(DisplayInformation {

@@ -71,7 +71,7 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+    let upload_id = api::upload_multipart_initiate(app, &video_id).await?;
 
     let video_fut = async {
         let stream = progress(
@@ -105,7 +105,7 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+        api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
             .await?;
 
         Ok(metadata)
@@ -225,7 +225,7 @@ pub async fn create_or_get_video(
         s3_config_url.push_str(&format!("&width={}", meta.width));
         s3_config_url.push_str(&format!("&height={}", meta.height));
         if let Some(fps) = meta.fps {
-            s3_config_url.push_str(&format!("&fps={}", fps));
+            s3_config_url.push_str(&format!("&fps={fps}"));
         }
     }
 
@@ -245,13 +245,11 @@ pub async fn create_or_get_video(
         if let Some(error) = body
             .as_ref()
             .ok()
-            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(&*body).ok())
+            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(body).ok())
             && status == StatusCode::FORBIDDEN
-        {
-            if error.error == "upgrade_required" {
+            && error.error == "upgrade_required" {
                 return Err(AuthedApiError::UpgradeRequired);
             }
-        }
 
         return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
     }
@@ -494,7 +492,7 @@ pub fn from_pending_file_to_chunks(
             }
         })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to open file. The recording pipeline may have crashed?"))?;
+        .map_err(|_| io::Error::other("Failed to open file. The recording pipeline may have crashed?"))?;
 
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
@@ -680,7 +678,7 @@ fn multipart_uploader(
                                 part_number,
                                 chunk,
                             } = item.map_err(|err| {
-                                format!("uploader/part/{:?}/fs: {err:?}", expected_part_number)
+                                format!("uploader/part/{expected_part_number:?}/fs: {err:?}")
                             })?;
                             trace!(
                                 "Uploading chunk {part_number} ({} bytes) for video {video_id:?}",

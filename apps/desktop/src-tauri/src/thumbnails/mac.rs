@@ -22,7 +22,7 @@ pub async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<S
 async fn capture_thumbnail_from_filter(filter: arc::R<sc::ContentFilter>) -> Option<String> {
     use cidre::{cv, sc};
     use image::{ImageEncoder, RgbaImage, codecs::png::PngEncoder};
-    use std::{io::Cursor, slice};
+    use std::io::Cursor;
 
     let mut config = sc::StreamCfg::new();
     config.set_width(THUMBNAIL_WIDTH as usize);
@@ -187,12 +187,12 @@ fn convert_nv12_pixel_buffer(
 
     let y_plane_height = lock.height_of_plane(0);
     let uv_plane_height = lock.height_of_plane(1);
-    if y_plane_height < height || uv_plane_height < (height + 1) / 2 {
+    if y_plane_height < height || uv_plane_height < height.div_ceil(2) {
         warn!(
             y_plane_height,
             uv_plane_height,
             expected_y = height,
-            expected_uv = (height + 1) / 2,
+            expected_uv = height.div_ceil(2),
             "NV12 plane height smaller than expected",
         );
         return None;
