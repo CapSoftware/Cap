@@ -278,7 +278,10 @@ impl Muxer for WindowsMuxer {
     }
 
     fn finish(&mut self, _: Duration) -> anyhow::Result<Self::Finish> {
-        let mut output = self.output.lock()?;
+        let mut output = self
+            .output
+            .lock()
+            .map_err(|_| anyhow!("Failed to lock output"))?;
         let audio_result = self
             .audio_encoder
             .as_mut()
