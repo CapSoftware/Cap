@@ -3,180 +3,182 @@ import { makePersisted } from "@solid-primitives/storage";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-	createEffect,
-	createResource,
-	createSignal,
-	For,
-	Match,
-	onCleanup,
-	onMount,
-	Show,
-	Switch,
-	startTransition,
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Switch,
+  startTransition,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import {
-	commands,
-	type OSPermission,
-	type OSPermissionStatus,
+  commands,
+  type OSPermission,
+  type OSPermissionStatus,
 } from "~/utils/tauri";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
-	return status === "granted" || status === "notNeeded";
+  return status === "granted" || status === "notNeeded";
 }
 
 const permissions = [
-	{
-		name: "Screen Recording",
-		key: "screenRecording" as const,
-		description: "This permission is required to record your screen.",
-	},
-	{
-		name: "Accessibility",
-		key: "accessibility" as const,
-		description:
-			"During recording, Cap collects mouse activity locally to generate automatic zoom in segments.",
-	},
+  {
+    name: "Screen Recording",
+    key: "screenRecording" as const,
+    description: "This permission is required to record your screen.",
+  },
+  {
+    name: "Accessibility",
+    key: "accessibility" as const,
+    description:
+      "During recording, Cap collects mouse activity locally to generate automatic zoom in segments.",
+  },
 ] as const;
 
 export default function () {
-	const [initialCheck, setInitialCheck] = createSignal(true);
-	const [check, checkActions] = createResource(() =>
-		commands.doPermissionsCheck(initialCheck()),
-	);
-	const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">(
-		"permissions",
-	);
+  const [initialCheck, setInitialCheck] = createSignal(true);
+  const [check, checkActions] = createResource(() =>
+    commands.doPermissionsCheck(initialCheck())
+  );
+  const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">(
+    "permissions"
+  );
 
-	createEffect(() => {
-		if (!initialCheck()) {
-			createTimer(
-				() => startTransition(() => checkActions.refetch()),
-				250,
-				setInterval,
-			);
-		}
-	});
+  createEffect(() => {
+    if (!initialCheck()) {
+      createTimer(
+        () => startTransition(() => checkActions.refetch()),
+        250,
+        setInterval
+      );
+    }
+  });
 
-	const requestPermission = (permission: OSPermission) => {
-		console.log({ permission });
-		try {
-			commands.requestPermission(permission);
-		} catch (err) {
-			console.error(`Error occurred while requesting permission: ${err}`);
-		}
-		setInitialCheck(false);
-	};
+  const requestPermission = (permission: OSPermission) => {
+    console.log({ permission });
+    try {
+      commands.requestPermission(permission);
+    } catch (err) {
+      console.error(`Error occurred while requesting permission: ${err}`);
+    }
+    setInitialCheck(false);
+  };
 
-	const openSettings = (permission: OSPermission) => {
-		commands.openPermissionSettings(permission);
-		setInitialCheck(false);
-	};
+  const openSettings = (permission: OSPermission) => {
+    commands.openPermissionSettings(permission);
+    setInitialCheck(false);
+  };
 
-	const [showStartup, showStartupActions] = createResource(() =>
-		generalSettingsStore.get().then((s) => {
-			if (s === undefined) return true;
-			return !s.hasCompletedStartup;
-		}),
-	);
+  const [showStartup, showStartupActions] = createResource(() =>
+    generalSettingsStore.get().then((s) => {
+      if (s === undefined) return true;
+      return !s.hasCompletedStartup;
+    })
+  );
 
-	const handleContinue = () => {
-		// Just proceed to the main window without saving mode to store
-		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
-			getCurrentWindow().close();
-		});
-	};
+  const handleContinue = () => {
+    // Just proceed to the main window without saving mode to store
+    commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
+      getCurrentWindow().close();
+    });
+  };
 
-	return (
-		<div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
-			{showStartup() && (
-				<Startup
-					onClose={() => {
-						showStartupActions.mutate(false);
-					}}
-				/>
-			)}
+  return (
+    <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
+      {showStartup() && (
+        <Startup
+          onClose={() => {
+            showStartupActions.mutate(false);
+          }}
+        />
+      )}
 
-			<Show when={currentStep() === "permissions"}>
-				<div class="flex flex-col items-center">
-					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Permissions Required
-					</h1>
-					<p class="text-gray-11">Cap needs permissions to run properly.</p>
-				</div>
+      <Show when={currentStep() === "permissions"}>
+        <div class="flex flex-col items-center">
+          <IconCapLogo class="size-14 mb-3" />
+          <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+            Permissions Required
+          </h1>
+          <p class="text-gray-11">Cap needs permissions to run properly.</p>
+        </div>
 
-				<ul class="flex flex-col gap-4 py-8">
-					<For each={permissions}>
-						{(permission) => {
-							const permissionCheck = () => check()?.[permission.key];
+        <ul class="flex flex-col gap-4 py-8">
+          <For each={permissions}>
+            {(permission) => {
+              const permissionCheck = () => check()?.[permission.key];
 
-							return (
-								<Show when={permissionCheck() !== "notNeeded"}>
-									<li class="flex flex-row items-center gap-4">
-										<div class="flex flex-col flex-[2]">
-											<span class="font-[500] text-[0.875rem] text-[--text-primary]">
-												{permission.name} Permission
-											</span>
-											<span class="text-[--text-secondary]">
-												{permission.description}
-											</span>
-										</div>
-										<Button
-											class="flex-1 shrink-0"
-											onClick={() =>
-												permissionCheck() !== "denied"
-													? requestPermission(permission.key)
-													: openSettings(permission.key)
-											}
-											disabled={isPermitted(permissionCheck())}
-										>
-											{permissionCheck() === "granted"
-												? "Granted"
-												: permissionCheck() !== "denied"
-													? "Grant Permission"
-													: "Request Permission"}
-										</Button>
-									</li>
-								</Show>
-							);
-						}}
-					</For>
-				</ul>
+              return (
+                <Show when={permissionCheck() !== "notNeeded"}>
+                  <li class="flex flex-row items-center gap-4">
+                    <div class="flex flex-col flex-[2]">
+                      <span class="font-[500] text-[0.875rem] text-[--text-primary]">
+                        {permission.name} Permission
+                      </span>
+                      <span class="text-[--text-secondary]">
+                        {permission.description}
+                      </span>
+                    </div>
+                    <Button
+                      class="flex-1 shrink-0"
+                      onClick={() =>
+                        permissionCheck() !== "denied"
+                          ? requestPermission(permission.key)
+                          : openSettings(permission.key)
+                      }
+                      disabled={isPermitted(permissionCheck())}
+                    >
+                      {permissionCheck() === "granted"
+                        ? "Granted"
+                        : permissionCheck() !== "denied"
+                        ? "Grant Permission"
+                        : "Request Permission"}
+                    </Button>
+                  </li>
+                </Show>
+              );
+            }}
+          </For>
+        </ul>
 
-				<Button
-					class="px-12"
-					size="lg"
-					disabled={
-						permissions.find((p) => !isPermitted(check()?.[p.key])) !==
-						undefined
-					}
-					onClick={() => setCurrentStep("mode")}
-				>
-					Continue
-				</Button>
-			</Show>
+        <Button
+          class="px-12"
+          size="lg"
+          disabled={
+            permissions.find((p) => !isPermitted(check()?.[p.key])) !==
+            undefined
+          }
+          onClick={() => setCurrentStep("mode")}
+        >
+          Continue
+        </Button>
+      </Show>
 
-			<Show when={currentStep() === "mode"}>
-				<div class="flex flex-col items-center">
-					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Select Recording Mode
-					</h1>
-					<p class="text-gray-11">Choose how you want to record with Cap.</p>
-				</div>
+      <Show when={currentStep() === "mode"}>
+        <div class="flex flex-col items-center">
+          <IconCapLogo class="size-14 mb-3" />
+          <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+            Select Recording Mode
+          </h1>
+          <p class="text-gray-11">
+            Choose how you want to record with Cap. You can change this later.
+          </p>
+        </div>
 
-				<div class="w-full py-4">
-					<ModeSelect />
-				</div>
+        <div class="w-full py-4">
+          <ModeSelect />
+        </div>
 
-				<Button class="px-12" size="lg" onClick={handleContinue}>
-					Continue to Cap
-				</Button>
-			</Show>
-		</div>
-	);
+        <Button class="px-12" size="lg" onClick={handleContinue}>
+          Continue to Cap
+        </Button>
+      </Show>
+    </div>
+  );
 }
 
 import { type as ostype } from "@tauri-apps/plugin-os";
@@ -190,140 +192,140 @@ import cloud3 from "../../assets/illustrations/cloud-3.png";
 import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
 
 function Startup(props: { onClose: () => void }) {
-	const [audioState, setAudioState] = makePersisted(
-		createStore({ isMuted: false }),
-		{ name: "audioSettings" },
-	);
+  const [audioState, setAudioState] = makePersisted(
+    createStore({ isMuted: false }),
+    { name: "audioSettings" }
+  );
 
-	const [isExiting, setIsExiting] = createSignal(false);
+  const [isExiting, setIsExiting] = createSignal(false);
 
-	const audio = new Audio(startupAudio);
-	if (!audioState.isMuted) audio.play();
+  const audio = new Audio(startupAudio);
+  if (!audioState.isMuted) audio.play();
 
-	// Add refs to store animation objects
-	let cloud1Animation: Animation | undefined;
-	let cloud2Animation: Animation | undefined;
-	let cloud3Animation: Animation | undefined;
+  // Add refs to store animation objects
+  let cloud1Animation: Animation | undefined;
+  let cloud2Animation: Animation | undefined;
+  let cloud3Animation: Animation | undefined;
 
-	const [isLogoAnimating, setIsLogoAnimating] = createSignal(false);
+  const [isLogoAnimating, setIsLogoAnimating] = createSignal(false);
 
-	const handleLogoClick = () => {
-		if (!isLogoAnimating()) {
-			setIsLogoAnimating(true);
-			setTimeout(() => setIsLogoAnimating(false), 1000);
-		}
-	};
+  const handleLogoClick = () => {
+    if (!isLogoAnimating()) {
+      setIsLogoAnimating(true);
+      setTimeout(() => setIsLogoAnimating(false), 1000);
+    }
+  };
 
-	const handleStartupCompleted = () =>
-		generalSettingsStore.set({
-			hasCompletedStartup: true,
-		});
+  const handleStartupCompleted = () =>
+    generalSettingsStore.set({
+      hasCompletedStartup: true,
+    });
 
-	const handleGetStarted = async () => {
-		setIsExiting(true);
+  const handleGetStarted = async () => {
+    setIsExiting(true);
 
-		// Cancel ongoing cloud animations
-		cloud1Animation?.cancel();
-		cloud2Animation?.cancel();
-		cloud3Animation?.cancel();
+    // Cancel ongoing cloud animations
+    cloud1Animation?.cancel();
+    cloud2Animation?.cancel();
+    cloud3Animation?.cancel();
 
-		await handleStartupCompleted();
+    await handleStartupCompleted();
 
-		// Wait for animation to complete before showing new window and closing
-		setTimeout(async () => {
-			props.onClose();
-		}, 600);
-	};
+    // Wait for animation to complete before showing new window and closing
+    setTimeout(async () => {
+      props.onClose();
+    }, 600);
+  };
 
-	onCleanup(() => audio.pause());
+  onCleanup(() => audio.pause());
 
-	onMount(() => {
-		const cloud1El = document.getElementById("cloud-1");
-		const cloud2El = document.getElementById("cloud-2");
-		const cloud3El = document.getElementById("cloud-3");
+  onMount(() => {
+    const cloud1El = document.getElementById("cloud-1");
+    const cloud2El = document.getElementById("cloud-2");
+    const cloud3El = document.getElementById("cloud-3");
 
-		// Top right cloud - gentle diagonal movement
-		cloud1Animation = cloud1El?.animate(
-			[
-				{ transform: "translate(0, 0)" },
-				{ transform: "translate(-20px, 10px)" },
-				{ transform: "translate(0, 0)" },
-			],
-			{
-				duration: 30000,
-				iterations: Infinity,
-				easing: "linear",
-			},
-		);
+    // Top right cloud - gentle diagonal movement
+    cloud1Animation = cloud1El?.animate(
+      [
+        { transform: "translate(0, 0)" },
+        { transform: "translate(-20px, 10px)" },
+        { transform: "translate(0, 0)" },
+      ],
+      {
+        duration: 30000,
+        iterations: Infinity,
+        easing: "linear",
+      }
+    );
 
-		// Top left cloud - gentle diagonal movement
-		cloud2Animation = cloud2El?.animate(
-			[
-				{ transform: "translate(0, 0)" },
-				{ transform: "translate(20px, 10px)" },
-				{ transform: "translate(0, 0)" },
-			],
-			{
-				duration: 35000,
-				iterations: Infinity,
-				easing: "linear",
-			},
-		);
+    // Top left cloud - gentle diagonal movement
+    cloud2Animation = cloud2El?.animate(
+      [
+        { transform: "translate(0, 0)" },
+        { transform: "translate(20px, 10px)" },
+        { transform: "translate(0, 0)" },
+      ],
+      {
+        duration: 35000,
+        iterations: Infinity,
+        easing: "linear",
+      }
+    );
 
-		// Bottom cloud - slow rise up with subtle horizontal movement
-		cloud3Animation = cloud3El?.animate(
-			[
-				{ transform: "translate(-50%, 20px)" },
-				{ transform: "translate(-48%, 0)" },
-				{ transform: "translate(-50%, 0)" },
-			],
-			{
-				duration: 60000,
-				iterations: 1,
-				easing: "cubic-bezier(0.4, 0, 0.2, 1)",
-				fill: "forwards",
-			},
-		);
-	});
+    // Bottom cloud - slow rise up with subtle horizontal movement
+    cloud3Animation = cloud3El?.animate(
+      [
+        { transform: "translate(-50%, 20px)" },
+        { transform: "translate(-48%, 0)" },
+        { transform: "translate(-50%, 0)" },
+      ],
+      {
+        duration: 60000,
+        iterations: 1,
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        fill: "forwards",
+      }
+    );
+  });
 
-	const toggleMute = async () => {
-		setAudioState("isMuted", (m) => !m);
+  const toggleMute = async () => {
+    setAudioState("isMuted", (m) => !m);
 
-		audio.muted = audioState.isMuted;
-	};
+    audio.muted = audioState.isMuted;
+  };
 
-	return (
-		<Portal>
-			<div class="absolute inset-0 z-40">
-				<header
-					class="absolute top-0 inset-x-0 h-12 z-10"
-					data-tauri-drag-region
-				>
-					<div
-						class={cx(
-							"flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
-							ostype() === "windows" ? "flex-row" : "flex-row-reverse",
-						)}
-						data-tauri-drag-region
-					>
-						<button
-							onClick={toggleMute}
-							class={cx(
-								"mx-4 text-solid-white hover:text-[#DDD] transition-colors",
-								isExiting() && "opacity-0",
-							)}
-						>
-							{audioState.isMuted ? (
-								<IconLucideVolumeX class="w-6 h-6" />
-							) : (
-								<IconLucideVolume2 class="w-6 h-6" />
-							)}
-						</button>
-						{ostype() === "windows" && <CaptionControlsWindows11 />}
-					</div>
-				</header>
-				<style>
-					{`
+  return (
+    <Portal>
+      <div class="absolute inset-0 z-40">
+        <header
+          class="absolute top-0 inset-x-0 h-12 z-10"
+          data-tauri-drag-region
+        >
+          <div
+            class={cx(
+              "flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
+              ostype() === "windows" ? "flex-row" : "flex-row-reverse"
+            )}
+            data-tauri-drag-region
+          >
+            <button
+              onClick={toggleMute}
+              class={cx(
+                "mx-4 text-solid-white hover:text-[#DDD] transition-colors",
+                isExiting() && "opacity-0"
+              )}
+            >
+              {audioState.isMuted ? (
+                <IconLucideVolumeX class="w-6 h-6" />
+              ) : (
+                <IconLucideVolume2 class="w-6 h-6" />
+              )}
+            </button>
+            {ostype() === "windows" && <CaptionControlsWindows11 />}
+          </div>
+        </header>
+        <style>
+          {`
           body {
             background: transparent !important;
           }
@@ -412,110 +414,110 @@ function Startup(props: { onClose: () => void }) {
             animation: bounce 1s cubic-bezier(0.36, 0, 0.66, -0.56) forwards;
           }
         `}
-				</style>
-				{/* Add the fade overlay */}
-				<div class={`fade-overlay ${isExiting() ? "exiting" : ""}`} />
-				<div
-					style={{ "transition-duration": "600ms" }}
-					class={cx(
-						"flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity text-solid-white",
-						isExiting() && "exiting opacity-0",
-					)}
-				>
-					<div class="grain" />
+        </style>
+        {/* Add the fade overlay */}
+        <div class={`fade-overlay ${isExiting() ? "exiting" : ""}`} />
+        <div
+          style={{ "transition-duration": "600ms" }}
+          class={cx(
+            "flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity text-solid-white",
+            isExiting() && "exiting opacity-0"
+          )}
+        >
+          <div class="grain" />
 
-					{/* Floating clouds */}
-					<div
-						id="cloud-1"
-						class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${
-							isExiting() ? "exiting" : ""
-						}`}
-					>
-						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
-							src={cloud1}
-							alt="Cloud One"
-						/>
-					</div>
-					<div
-						id="cloud-2"
-						class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${
-							isExiting() ? "exiting" : ""
-						}`}
-					>
-						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
-							src={cloud2}
-							alt="Cloud Two"
-						/>
-					</div>
-					<div
-						id="cloud-3"
-						class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${
-							isExiting() ? "exiting" : ""
-						}`}
-					>
-						<img
-							class="cloud-image w-[180vw] md:w-[180vw]"
-							src={cloud3}
-							alt="Cloud Three"
-						/>
-					</div>
+          {/* Floating clouds */}
+          <div
+            id="cloud-1"
+            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${
+              isExiting() ? "exiting" : ""
+            }`}
+          >
+            <img
+              class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
+              src={cloud1}
+              alt="Cloud One"
+            />
+          </div>
+          <div
+            id="cloud-2"
+            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${
+              isExiting() ? "exiting" : ""
+            }`}
+          >
+            <img
+              class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
+              src={cloud2}
+              alt="Cloud Two"
+            />
+          </div>
+          <div
+            id="cloud-3"
+            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${
+              isExiting() ? "exiting" : ""
+            }`}
+          >
+            <img
+              class="cloud-image w-[180vw] md:w-[180vw]"
+              src={cloud3}
+              alt="Cloud Three"
+            />
+          </div>
 
-					{/* Main content */}
-					<div
-						class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${
-							isExiting() ? "exiting" : ""
-						}`}
-					>
-						<div class="text-center mb-8">
-							<div
-								onClick={handleLogoClick}
-								class="cursor-pointer inline-block"
-							>
-								<IconCapLogo
-									class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]
+          {/* Main content */}
+          <div
+            class={`content-container flex flex-col items-center justify-center flex-1 relative px-4 ${
+              isExiting() ? "exiting" : ""
+            }`}
+          >
+            <div class="text-center mb-8">
+              <div
+                onClick={handleLogoClick}
+                class="cursor-pointer inline-block"
+              >
+                <IconCapLogo
+                  class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
-								/>
-							</div>
-							<h1 class="text-5xl md:text-5xl font-bold mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
-								Welcome to Cap
-							</h1>
-							<p class="text-2xl opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
-								Beautiful screen recordings, owned by you.
-							</p>
-						</div>
+                />
+              </div>
+              <h1 class="text-5xl md:text-5xl font-bold mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+                Welcome to Cap
+              </h1>
+              <p class="text-2xl opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+                Beautiful screen recordings, owned by you.
+              </p>
+            </div>
 
-						<Switch>
-							<Match when={ostype() !== "windows"}>
-								<Button
-									class="px-12 text-lg shadow-[0_0_30px_rgba(0,0,0,0.1)]"
-									variant="gray"
-									size="lg"
-									onClick={handleGetStarted}
-								>
-									Get Started
-								</Button>
-							</Match>
-							<Match when={ostype() === "windows"}>
-								<Button
-									class="px-12"
-									size="lg"
-									onClick={async () => {
-										handleStartupCompleted();
-										await commands.showWindow({
-											Main: { init_target_mode: null },
-										});
-										getCurrentWindow().close();
-									}}
-								>
-									Continue to Cap
-								</Button>
-							</Match>
-						</Switch>
-					</div>
-				</div>
-			</div>
-		</Portal>
-	);
+            <Switch>
+              <Match when={ostype() !== "windows"}>
+                <Button
+                  class="px-12 text-lg shadow-[0_0_30px_rgba(0,0,0,0.1)]"
+                  variant="gray"
+                  size="lg"
+                  onClick={handleGetStarted}
+                >
+                  Get Started
+                </Button>
+              </Match>
+              <Match when={ostype() === "windows"}>
+                <Button
+                  class="px-12"
+                  size="lg"
+                  onClick={async () => {
+                    handleStartupCompleted();
+                    await commands.showWindow({
+                      Main: { init_target_mode: null },
+                    });
+                    getCurrentWindow().close();
+                  }}
+                >
+                  Continue to Cap
+                </Button>
+              </Match>
+            </Switch>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
 }
