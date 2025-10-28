@@ -998,11 +998,11 @@ function RecordingControls(props: {
 			</div>
 			<button
 				onClick={() => props.setToggleModeSelect?.(true)}
-				class="cursor-pointer flex gap-1 items-center mb-5 transition-all duration-200"
+				class="cursor-pointer flex gap-1 items-center mb-5 transition-all duration-200 relative z-20"
 				classList={{
 					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
 						props.showBackground,
-					"hover:opacity-60": props.showBackground,
+					"hover:opacity-60": !props.showBackground,
 				}}
 			>
 				<IconCapInfo class="opacity-70 will-change-transform size-3" />
