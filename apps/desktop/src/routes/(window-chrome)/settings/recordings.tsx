@@ -7,11 +7,10 @@ import {
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
 	createMemo,
