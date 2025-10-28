@@ -16,10 +16,16 @@ interface ModeOptionProps {
 const ModeOption = (props: ModeOptionProps) => {
 	return (
 		<div
+			data-tauri-drag-region="none"
 			onClick={() => props.onSelect(props.mode)}
 			class={cx(
-				`p-5 space-y-3 rounded-lg border transition-all duration-200 border-gray-4 dark:border-gray-3 h-fit bg-gray-3 dark:bg-gray-2`,
+				"p-5 space-y-3 rounded-lg border transition-all duration-200 cursor-pointer h-fit",
+				props.isSelected
+					? "border-blue-7 bg-blue-3/60 dark:border-blue-6 dark:bg-blue-4/40"
+					: "border-gray-4 dark:border-gray-3 dark:bg-gray-2 hover:border-gray-6 dark:hover:border-gray-4 hover:bg-gray-2 dark:hover:bg-gray-3",
 			)}
+			role="button"
+			aria-pressed={props.isSelected}
 		>
 			<div class="flex flex-col items-center mb-2 text-center">
 				{props.icon({
@@ -28,7 +34,12 @@ const ModeOption = (props: ModeOptionProps) => {
 				<h3 class="text-lg font-medium text-gray-12">{props.title}</h3>
 			</div>
 
-			<p class={`mx-auto w-full text-sm text-gray-11 max-w-[300px]`}>
+			<p
+				class={cx(
+					"mx-auto w-full text-sm max-w-[300px]",
+					props.isSelected ? "text-gray-12" : "text-gray-11",
+				)}
+			>
 				{props.description}
 			</p>
 		</div>
@@ -47,20 +58,21 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 			mode: "instant" as const,
 			title: "Instant Mode",
 			description:
-				"Share your screen instantly with a magic link — no waiting for rendering, just capture and share in seconds.",
+				"Share your screen instantly with a shareable link. No waiting for rendering, just capture and share. Uploads in the background as you record.",
 			icon: IconCapInstant,
 		},
 		{
 			mode: "studio" as const,
 			title: "Studio Mode",
 			description:
-				"Records at the highest quality/framerate. Captures both your screen and camera separately for editing later.",
+				"Records at the highest quality and framerate, completely locally. Captures both your screen and camera separately for editing and exporting later.",
 			icon: IconCapFilmCut,
 		},
 	];
 
 	return (
 		<div
+			data-tauri-drag-region="none"
 			class={cx(
 				"grid grid-cols-2 gap-8 items-center text-center bg-gray-1",
 				props.standalone

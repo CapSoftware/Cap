@@ -91,9 +91,12 @@ export default function FeedbackTab() {
 					</form>
 
 					<div class="pt-6 border-t border-gray-2">
-						<h3 class="text-sm font-medium text-gray-12 mb-2">Debug Information</h3>
+						<h3 class="text-sm font-medium text-gray-12 mb-2">
+							Debug Information
+						</h3>
 						<p class="text-sm text-gray-10 mb-3">
-							Upload your logs to help us diagnose issues with Cap. No personal information is included.
+							Upload your logs to help us diagnose issues with Cap. No personal
+							information is included.
 						</p>
 						<Button
 							onClick={handleUploadLogs}
