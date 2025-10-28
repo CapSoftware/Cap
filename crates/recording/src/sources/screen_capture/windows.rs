@@ -1,33 +1,26 @@
 use crate::{
-    AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig, SetupCtx,
-    output_pipeline,
+    AudioFrame, SetupCtx, output_pipeline,
     screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
 };
 use ::windows::Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device};
 use anyhow::anyhow;
-use cap_fail::fail_err;
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_timestamp::{PerformanceCounterTimestamp, Timestamp, Timestamps};
+use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
     FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
 };
-use scap_direct3d::StopCapturerError;
 use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
-    collections::VecDeque,
     sync::{
         Arc,
         atomic::{self, AtomicU32},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tokio_util::{
-    future::FutureExt as _,
-    sync::{CancellationToken, DropGuard},
-};
+use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
 const WINDOW_DURATION: Duration = Duration::from_secs(3);

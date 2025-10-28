@@ -60,8 +60,6 @@ pub struct H264Encoder {
     output_stream_id: u32,
     output_type: IMFMediaType,
     bitrate: u32,
-
-    first_time: Option<TimeSpan>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -298,7 +296,6 @@ impl H264Encoder {
             bitrate,
 
             output_type,
-            first_time: None,
         })
     }
 

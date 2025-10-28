@@ -12,7 +12,6 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
-use scap_targets::WindowId;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -253,7 +252,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     max_output_size: Option<u32>,
     #[cfg(target_os = "macos")]
-    excluded_windows: Vec<WindowId>,
+    excluded_windows: Vec<scap_targets::WindowId>,
 }
 
 impl ActorBuilder {
@@ -285,7 +284,7 @@ impl ActorBuilder {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }
