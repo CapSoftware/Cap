@@ -325,14 +325,18 @@ function RecordingItem(props: {
 					<TooltipIconButton
 						tooltipText="Edit"
 						onClick={async () => {
-							const confirmation = await confirm(
-								"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
-								{
-									title: "Recording is potentially corrupted",
-									kind: "warning",
-								},
-							);
-							if (confirmation) props.onOpenEditor();
+							if (
+								props.recording.meta.status.status === "Failed" &&
+								!(await confirm(
+									"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
+									{
+										title: "Recording is potentially corrupted",
+										kind: "warning",
+									},
+								))
+							)
+								return;
+							props.onOpenEditor();
 						}}
 						disabled={props.recording.meta.status.status === "InProgress"}
 					>
