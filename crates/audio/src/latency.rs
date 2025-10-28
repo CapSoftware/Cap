@@ -258,7 +258,7 @@ impl OutputLatencyEstimator {
     }
 
     pub fn with_bias(bias_secs: f64) -> Self {
-        let bias_secs = bias_secs.max(0.0).min(MAX_LATENCY_SECS);
+        let bias_secs = bias_secs.clamp(0.0, MAX_LATENCY_SECS);
         Self {
             smoothed_latency_secs: if bias_secs > 0.0 {
                 Some(bias_secs)
@@ -292,7 +292,7 @@ impl OutputLatencyEstimator {
     }
 
     pub fn set_bias_secs(&mut self, bias_secs: f64) {
-        self.bias_secs = bias_secs.max(0.0).min(MAX_LATENCY_SECS);
+        self.bias_secs = bias_secs.clamp(0.0, MAX_LATENCY_SECS);
     }
 
     pub fn set_floor_and_ceiling(&mut self, min_floor_secs: f64, max_ceiling_secs: f64) {
@@ -367,14 +367,13 @@ impl OutputLatencyEstimator {
             return;
         }
 
-        if let Some(prev_raw) = self.last_raw_latency_secs {
-            if self.update_count < WARMUP_GUARD_SAMPLES as u64
-                && clamped > prev_raw * WARMUP_SPIKE_RATIO
-            {
-                self.last_raw_latency_secs = Some(clamped);
-                self.update_count = self.update_count.saturating_add(1);
-                return;
-            }
+        if let Some(prev_raw) = self.last_raw_latency_secs
+            && self.update_count < WARMUP_GUARD_SAMPLES as u64
+            && clamped > prev_raw * WARMUP_SPIKE_RATIO
+        {
+            self.last_raw_latency_secs = Some(clamped);
+            self.update_count = self.update_count.saturating_add(1);
+            return;
         }
 
         let now = Instant::now();
@@ -586,10 +585,10 @@ mod macos {
         let mut max_latency = 0u32;
 
         for stream in streams {
-            if is_output_stream(&stream)? {
-                if let Ok(latency) = stream.latency() {
-                    max_latency = max_latency.max(latency);
-                }
+            if is_output_stream(&stream)?
+                && let Ok(latency) = stream.latency()
+            {
+                max_latency = max_latency.max(latency);
             }
         }
 

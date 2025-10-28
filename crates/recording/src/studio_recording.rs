@@ -53,10 +53,7 @@ pub struct ActorHandle {
 #[derive(kameo::Actor)]
 pub struct Actor {
     recording_dir: PathBuf,
-    capture_target: screen_capture::ScreenCaptureTarget,
-    video_info: VideoInfo,
     state: Option<ActorState>,
-    fps: u32,
     segment_factory: SegmentPipelineFactory,
     segments: Vec<RecordingSegment>,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -295,10 +292,10 @@ impl Pipeline {
 
         tokio::spawn(async move {
             while let Some(res) = futures.next().await {
-                if let Err(err) = res {
-                    if completion_tx.borrow().is_none() {
-                        let _ = completion_tx.send(Some(Err(err)));
-                    }
+                if let Err(err) = res
+                    && completion_tx.borrow().is_none()
+                {
+                    let _ = completion_tx.send(Some(Err(err)));
                 }
             }
         });
@@ -464,13 +461,9 @@ async fn spawn_studio_recording_actor(
     trace!("spawning recording actor");
 
     let base_inputs = base_inputs.clone();
-    let fps = pipeline.screen.video_info().unwrap().fps();
 
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
-        fps,
-        capture_target: base_inputs.capture_target.clone(),
-        video_info: pipeline.screen.video_info().unwrap(),
         state: Some(ActorState::Recording {
             pipeline,
             /*pipeline_done_rx,*/
@@ -680,7 +673,7 @@ pub enum CreateSegmentPipelineError {
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
 #[allow(clippy::too_many_arguments)]
 async fn create_segment_pipeline(
-    segments_dir: &PathBuf,
+    segments_dir: &Path,
     cursors_dir: &Path,
     index: u32,
     base_inputs: RecordingBaseInputs,
@@ -798,11 +791,6 @@ async fn create_segment_pipeline(
         cursor,
         system_audio,
     })
-}
-
-struct CameraPipelineInfo {
-    inner: OutputPipeline,
-    fps: u32,
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {

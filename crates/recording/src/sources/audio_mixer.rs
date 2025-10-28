@@ -156,36 +156,15 @@ impl AudioMixerBuilder {
             samples_out: 0,
             last_tick: None,
             abuffers,
-            resamplers,
             abuffersink,
             output,
+            _resamplers: resamplers,
             _filter_graph: filter_graph,
             _amix: amix,
             _aformat: aformat,
             start_timestamp: None,
             timestamps: Timestamps::now(),
             max_buffer_timeout,
-        })
-    }
-
-    async fn spawn(self, output: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioMixerHandle> {
-        let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-
-        let thread_handle = std::thread::spawn({
-            let stop_flag = stop_flag.clone();
-            move || self.run(output, ready_tx, stop_flag)
-        });
-
-        ready_rx
-            .await
-            .map_err(|_| anyhow::format_err!("Audio mixer crashed"))??;
-
-        info!("Audio mixer ready");
-
-        Ok(AudioMixerHandle {
-            thread_handle,
-            stop_flag,
         })
     }
 
@@ -231,8 +210,8 @@ pub struct AudioMixer {
     last_tick: Option<Timestamp>,
     // sample_timestamps: VecDeque<(usize, Timestamp)>,
     abuffers: Vec<ffmpeg::filter::Context>,
-    resamplers: Vec<ffmpeg::filter::Context>,
     abuffersink: ffmpeg::filter::Context,
+    _resamplers: Vec<ffmpeg::filter::Context>,
     _filter_graph: ffmpeg::filter::Graph,
     _amix: ffmpeg::filter::Context,
     _aformat: ffmpeg::filter::Context,
@@ -363,44 +342,43 @@ impl AudioMixer {
                 .map(|v| v.timestamp);
         }
 
-        if let Some(start_timestamp) = self.start_timestamp {
-            if let Some(elapsed_since_start) = now
+        if let Some(start_timestamp) = self.start_timestamp
+            && let Some(elapsed_since_start) = now
                 .duration_since(self.timestamps)
                 .checked_sub(start_timestamp.duration_since(self.timestamps))
-                && elapsed_since_start > self.max_buffer_timeout
-            {
-                for source in &mut self.sources {
-                    if source.buffer_last.is_none() {
-                        let rate = source.info.rate();
-                        let buffer_timeout = source.buffer_timeout;
+            && elapsed_since_start > self.max_buffer_timeout
+        {
+            for source in &mut self.sources {
+                if source.buffer_last.is_none() {
+                    let rate = source.info.rate();
+                    let buffer_timeout = source.buffer_timeout;
 
-                        let mut remaining = elapsed_since_start;
-                        while remaining > buffer_timeout {
-                            let chunk_samples = samples_for_timeout(rate, buffer_timeout);
-                            let frame_duration = duration_from_samples(chunk_samples, rate);
+                    let mut remaining = elapsed_since_start;
+                    while remaining > buffer_timeout {
+                        let chunk_samples = samples_for_timeout(rate, buffer_timeout);
+                        let frame_duration = duration_from_samples(chunk_samples, rate);
 
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                source.info.sample_format,
-                                chunk_samples,
-                                source.info.channel_layout(),
-                            );
+                        let mut frame = ffmpeg::frame::Audio::new(
+                            source.info.sample_format,
+                            chunk_samples,
+                            source.info.channel_layout(),
+                        );
 
-                            for i in 0..frame.planes() {
-                                frame.data_mut(i).fill(0);
-                            }
-
-                            frame.set_rate(source.info.rate() as u32);
-
-                            let timestamp = start_timestamp + (elapsed_since_start - remaining);
-                            source.buffer_last = Some((timestamp, frame_duration));
-                            source.buffer.push_front(AudioFrame::new(frame, timestamp));
-
-                            if frame_duration.is_zero() {
-                                break;
-                            }
-
-                            remaining = remaining.saturating_sub(frame_duration);
+                        for i in 0..frame.planes() {
+                            frame.data_mut(i).fill(0);
                         }
+
+                        frame.set_rate(source.info.rate() as u32);
+
+                        let timestamp = start_timestamp + (elapsed_since_start - remaining);
+                        source.buffer_last = Some((timestamp, frame_duration));
+                        source.buffer.push_front(AudioFrame::new(frame, timestamp));
+
+                        if frame_duration.is_zero() {
+                            break;
+                        }
+
+                        remaining = remaining.saturating_sub(frame_duration);
                     }
                 }
             }
@@ -497,30 +475,6 @@ fn duration_from_samples(samples: usize, rate: i32) -> Duration {
     }
 
     Duration::from_secs_f64(samples as f64 / rate as f64)
-}
-
-pub struct AudioMixerHandle {
-    thread_handle: std::thread::JoinHandle<()>,
-    stop_flag: Arc<AtomicBool>,
-}
-
-impl AudioMixerHandle {
-    pub fn new(thread_handle: std::thread::JoinHandle<()>, stop_flag: Arc<AtomicBool>) -> Self {
-        Self {
-            thread_handle,
-            stop_flag,
-        }
-    }
-
-    pub fn stop(&self) {
-        self.stop_flag.store(true, Ordering::Relaxed);
-    }
-}
-
-impl Drop for AudioMixerHandle {
-    fn drop(&mut self) {
-        self.stop_flag.store(true, Ordering::Relaxed);
-    }
 }
 
 #[cfg(test)]

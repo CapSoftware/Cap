@@ -289,7 +289,7 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         height: video.height(),
         fps: video
             .frame_rate()
-            .map(|v| (v.numerator() as f32 / v.denominator() as f32)),
+            .map(|v| v.numerator() as f32 / v.denominator() as f32),
     })
 }
 
@@ -503,8 +503,7 @@ pub fn from_pending_file_to_chunks(
 
         loop {
             // Check if realtime recording is done
-            if !realtime_is_done.unwrap_or(true) {
-                if let Some(ref realtime_receiver) = realtime_upload_done {
+            if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
@@ -513,7 +512,7 @@ pub fn from_pending_file_to_chunks(
                         // It possibly means something has gone wrong but that's not the uploader's problem.
                         Err(_) => realtime_is_done = Some(true),
                     }
-                }
+
             }
 
             let file_size = match file.metadata().await {

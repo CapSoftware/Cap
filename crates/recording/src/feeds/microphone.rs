@@ -96,7 +96,7 @@ impl MicrophoneFeed {
         }
     }
 
-    pub fn default() -> Option<(String, Device, SupportedStreamConfig)> {
+    pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
         host.default_input_device().and_then(get_usable_device)
     }
@@ -158,7 +158,7 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     && config.min_sample_rate().0 <= preferred_rate.0
                     && config.max_sample_rate().0 >= preferred_rate.0
             }) {
-                return Some(config.clone().with_sample_rate(preferred_rate));
+                return Some(config.with_sample_rate(preferred_rate));
             }
 
             configs.into_iter().find_map(|config| {

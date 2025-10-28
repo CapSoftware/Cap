@@ -56,10 +56,10 @@ impl BufferedResampler {
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
-        if let Some(min_next_pts) = self.min_next_pts {
-            if let Some(pts) = frame.pts() {
-                frame.set_pts(Some(pts.max(min_next_pts)));
-            }
+        if let Some(min_next_pts) = self.min_next_pts
+            && let Some(pts) = frame.pts()
+        {
+            frame.set_pts(Some(pts.max(min_next_pts)));
         }
 
         let pts = frame.pts().unwrap();

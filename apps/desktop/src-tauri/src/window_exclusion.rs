@@ -21,13 +21,12 @@ impl WindowExclusion {
         owner_name: Option<&str>,
         window_title: Option<&str>,
     ) -> bool {
-        if let Some(identifier) = self.bundle_identifier.as_deref() {
-            if bundle_identifier
+        if let Some(identifier) = self.bundle_identifier.as_deref()
+            && bundle_identifier
                 .map(|candidate| candidate == identifier)
                 .unwrap_or(false)
-            {
-                return true;
-            }
+        {
+            return true;
         }
 
         if let Some(expected_owner) = self.owner_name.as_deref() {

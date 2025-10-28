@@ -13,7 +13,7 @@ use std::{
     any::Any,
     future,
     marker::PhantomData,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{self, AtomicBool},
@@ -298,7 +298,7 @@ fn setup_build() -> (
         done_tx,
         done_rx
             .map(|v| {
-                v.map_err(|s| anyhow::Error::from(s))
+                v.map_err(anyhow::Error::from)
                     .and_then(|v| v)
                     .map_err(|e| PipelineDoneError(Arc::new(e)))
             })
@@ -312,11 +312,11 @@ async fn finish_build(
     mut setup_ctx: SetupCtx,
     audio_sources: Vec<AudioSourceSetupFn>,
     stop_token: CancellationToken,
-    muxer: Arc<Mutex<impl Muxer + AudioMuxer>>,
+    muxer: Arc<Mutex<impl AudioMuxer>>,
     timestamps: Timestamps,
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     first_tx: Option<oneshot::Sender<Timestamp>>,
-    path: &PathBuf,
+    path: &Path,
 ) -> anyhow::Result<()> {
     configure_audio(
         &mut setup_ctx,
@@ -382,7 +382,7 @@ async fn setup_video_source<TVideo: VideoSource>(
 
 async fn setup_muxer<TMuxer: Muxer>(
     muxer_config: TMuxer::Config,
-    path: &PathBuf,
+    path: &Path,
     video_info: Option<VideoInfo>,
     audio_info: Option<AudioInfo>,
     pause_flag: &Arc<AtomicBool>,
@@ -391,7 +391,7 @@ async fn setup_muxer<TMuxer: Muxer>(
     let muxer = Arc::new(Mutex::new(
         TMuxer::setup(
             muxer_config,
-            path.clone(),
+            path.to_path_buf(),
             video_info,
             audio_info,
             pause_flag.clone(),
@@ -466,7 +466,7 @@ async fn configure_audio<TMutex: AudioMuxer>(
     timestamps: Timestamps,
     mut first_tx: Option<oneshot::Sender<Timestamp>>,
 ) -> anyhow::Result<()> {
-    if audio_sources.len() < 1 {
+    if audio_sources.is_empty() {
         return Ok(());
     }
 
@@ -493,7 +493,8 @@ async fn configure_audio<TMutex: AudioMuxer>(
             Ok(())
         }
     });
-    let _ = ready_rx
+
+    ready_rx
         .await
         .map_err(|_| anyhow::format_err!("Audio mixer crashed"))??;
 
@@ -774,14 +775,14 @@ pub trait VideoFrame: Send + 'static {
 pub trait Muxer: Send + 'static {
     type Config;
 
-    async fn setup(
+    fn setup(
         config: Self::Config,
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
         pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
-    ) -> anyhow::Result<Self>
+    ) -> impl Future<Output = anyhow::Result<Self>> + Send
     where
         Self: Sized;
 

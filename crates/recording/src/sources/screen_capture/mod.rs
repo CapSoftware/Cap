@@ -299,7 +299,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
         let output_size = crop_bounds
-            .clone()
             .and_then(|b| {
                 #[cfg(target_os = "macos")]
                 {

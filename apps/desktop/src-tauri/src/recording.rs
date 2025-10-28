@@ -978,11 +978,10 @@ async fn handle_recording_finish(
 	                                return;
                                 }
 
-                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload {
-	                                if let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
+                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
 	                                	error!("Failed to remove recording files after upload: {err:?}");
 	                                }
-                                }
+
                             }
                     } else if let Ok(meta) = build_video_meta(&output_path)
                         .map_err(|err| error!("Error getting video metadata: {}", err))

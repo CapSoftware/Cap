@@ -162,7 +162,7 @@ fn convert_32bit_pixel_buffer(
 #[derive(Copy, Clone)]
 enum Nv12Range {
     Video,
-    Full,
+    _Full,
 }
 
 fn convert_nv12_pixel_buffer(
@@ -228,7 +228,7 @@ fn convert_nv12_pixel_buffer(
         }
         let uv_row = &uv_plane[uv_row_start..uv_row_start + width];
 
-        for x in 0..width {
+        for (x, y_val) in y_row.iter().enumerate().take(width) {
             let uv_index = (x / 2) * 2;
             if uv_index + 1 >= uv_row.len() {
                 warn!(
@@ -239,10 +239,9 @@ fn convert_nv12_pixel_buffer(
                 return None;
             }
 
-            let y_val = y_row[x];
             let cb = uv_row[uv_index];
             let cr = uv_row[uv_index + 1];
-            let (r, g, b) = ycbcr_to_rgb(y_val, cb, cr, range);
+            let (r, g, b) = ycbcr_to_rgb(*y_val, cb, cr, range);
             let out = (y_idx * width + x) * 4;
             rgba_data[out] = r;
             rgba_data[out + 1] = g;
@@ -261,7 +260,7 @@ fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
 
     let (y_value, scale) = match range {
         Nv12Range::Video => ((y - 16.0).max(0.0), 1.164383_f32),
-        Nv12Range::Full => (y, 1.0_f32),
+        Nv12Range::_Full => (y, 1.0_f32),
     };
 
     let r = scale * y_value + 1.596027_f32 * cr;
@@ -272,7 +271,7 @@ fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
 }
 
 fn clamp_channel(value: f32) -> u8 {
-    value.max(0.0).min(255.0) as u8
+    value.clamp(0.0, 255.0) as u8
 }
 
 struct PixelBufferLock<'a> {
