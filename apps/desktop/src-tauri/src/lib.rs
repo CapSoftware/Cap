@@ -13,6 +13,7 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod http_client;
 mod logging;
 mod notifications;
 mod permissions;
@@ -84,8 +85,6 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-#[cfg(target_os = "macos")]
-use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, instrument, trace, warn};
 use upload::{create_or_get_video, upload_image, upload_video};
@@ -236,6 +235,12 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
     }
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
+    logging::upload_log_file(&app_handle).await
 }
 
 #[tauri::command]
@@ -891,8 +896,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         let raw_duration = input.duration();
         if raw_duration <= 0 {
             return Err(format!(
-                "Unknown or invalid duration for video file: {:?}",
-                path
+                "Unknown or invalid duration for video file: {path:?}"
             ));
         }
 
@@ -1189,7 +1193,7 @@ async fn upload_exported_video(
                 .map_err(|e| error!("Failed to save recording meta: {e}"))
                 .ok();
 
-            Err(e.to_string().into())
+            Err(e.to_string())
         }
     }
 }
@@ -1949,6 +1953,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            upload_logs,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
@@ -2186,6 +2191,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(EditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
+            app.manage(http_client::HttpClient::default());
+            app.manage(http_client::RetryableHttpClient::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2247,7 +2254,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                 // This ensures settings reflects the correct value if it's set at startup
                 if should_update {
-                    GeneralSettingsStore::update(&app, |mut s| {
+                    GeneralSettingsStore::update(&app, |s| {
                         s.server_url = server_url.clone();
                     })
                     .map_err(|err| warn!("Error updating server URL into settings store: {err}"))
@@ -2576,7 +2583,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
     }
 
     let entries = std::fs::read_dir(&recordings_dir)
-        .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
+        .map_err(|e| format!("Failed to read recordings directory: {e}"))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {

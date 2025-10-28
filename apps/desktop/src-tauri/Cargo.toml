@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.77"
+version = "0.3.78"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -65,7 +65,7 @@ rodio = "0.19.0"
 png = "0.17.13"
 device_query = "4.0.1"
 base64 = "0.22.1"
-reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.7.0"
 rand = "0.8.5"

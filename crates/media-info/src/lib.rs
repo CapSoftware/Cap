@@ -73,7 +73,7 @@ impl AudioInfo {
         let channels = if Self::channel_layout_raw(raw_channels).is_some() {
             raw_channels
         } else {
-            raw_channels.min(Self::MAX_AUDIO_CHANNELS).max(1)
+            raw_channels.clamp(1, Self::MAX_AUDIO_CHANNELS)
         };
 
         Self {

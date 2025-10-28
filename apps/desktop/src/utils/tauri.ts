@@ -11,6 +11,9 @@ async setMicInput(label: string | null) : Promise<null> {
 async setCameraInput(id: DeviceOrModelID | null) : Promise<null> {
     return await TAURI_INVOKE("set_camera_input", { id });
 },
+async uploadLogs() : Promise<null> {
+    return await TAURI_INVOKE("upload_logs");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },

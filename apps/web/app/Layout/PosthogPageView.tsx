@@ -3,30 +3,37 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { usePostHog } from "posthog-js/react";
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, useMemo } from "react";
+
+let lastTrackedUrl: string | null = null;
 
 function PostHogPageView(): null {
 	const pathname = usePathname();
 	const searchParams = useSearchParams();
 	const posthog = usePostHog();
+	const search = useMemo(() => searchParams?.toString() ?? "", [searchParams]);
 
-	// Track pageviews
 	useEffect(() => {
 		if (!pathname || !posthog) {
 			return;
 		}
 
 		try {
-			let url = window.origin + pathname;
-			if (searchParams?.toString()) {
-				url = url + `?${searchParams.toString()}`;
+			let url = window.location.origin + pathname;
+			if (search) {
+				url = `${url}?${search}`;
+			}
+
+			if (lastTrackedUrl === url) {
+				return;
 			}
 
 			posthog.capture("$pageview", { $current_url: url });
+			lastTrackedUrl = url;
 		} catch (error) {
 			console.error("Error capturing pageview:", error);
 		}
-	}, [pathname, searchParams, posthog]);
+	}, [pathname, search, posthog]);
 
 	return null;
 }

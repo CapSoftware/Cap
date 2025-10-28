@@ -3,11 +3,11 @@
 use crate::{
     UploadProgress, VideoUploadInfo,
     api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    http_client::RetryableHttpClient,
     posthog::{PostHogEvent, async_capture_event},
     web_api::{AuthedApiError, ManagerExt},
 };
 use async_stream::{stream, try_stream};
-use axum::http::Uri;
 use bytes::Bytes;
 use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
@@ -24,11 +24,10 @@ use std::{
     io,
     path::{Path, PathBuf},
     pin::pin,
-    str::FromStr,
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
-use tauri::{AppHandle, ipc::Channel};
+use tauri::{AppHandle, Manager, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
@@ -71,7 +70,7 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+    let upload_id = api::upload_multipart_initiate(app, &video_id).await?;
 
     let video_fut = async {
         let stream = progress(
@@ -105,7 +104,7 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
+        api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
             .await?;
 
         Ok(metadata)
@@ -225,7 +224,7 @@ pub async fn create_or_get_video(
         s3_config_url.push_str(&format!("&width={}", meta.width));
         s3_config_url.push_str(&format!("&height={}", meta.height));
         if let Some(fps) = meta.fps {
-            s3_config_url.push_str(&format!("&fps={}", fps));
+            s3_config_url.push_str(&format!("&fps={fps}"));
         }
     }
 
@@ -245,12 +244,11 @@ pub async fn create_or_get_video(
         if let Some(error) = body
             .as_ref()
             .ok()
-            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(&*body).ok())
+            .and_then(|body| serde_json::from_str::<CreateErrorResponse>(body).ok())
             && status == StatusCode::FORBIDDEN
+            && error.error == "upgrade_required"
         {
-            if error.error == "upgrade_required" {
-                return Err(AuthedApiError::UpgradeRequired);
-            }
+            return Err(AuthedApiError::UpgradeRequired);
         }
 
         return Err(format!("create_or_get_video/error/{status}: {body:?}").into());
@@ -290,7 +288,7 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         height: video.height(),
         fps: video
             .frame_rate()
-            .map(|v| (v.numerator() as f32 / v.denominator() as f32)),
+            .map(|v| v.numerator() as f32 / v.denominator() as f32),
     })
 }
 
@@ -494,7 +492,7 @@ pub fn from_pending_file_to_chunks(
             }
         })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Failed to open file. The recording pipeline may have crashed?"))?;
+        .map_err(|_| io::Error::other("Failed to open file. The recording pipeline may have crashed?"))?;
 
         let mut part_number = 1;
         let mut last_read_position: u64 = 0;
@@ -504,8 +502,7 @@ pub fn from_pending_file_to_chunks(
 
         loop {
             // Check if realtime recording is done
-            if !realtime_is_done.unwrap_or(true) {
-                if let Some(ref realtime_receiver) = realtime_upload_done {
+            if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
@@ -514,7 +511,7 @@ pub fn from_pending_file_to_chunks(
                         // It possibly means something has gone wrong but that's not the uploader's problem.
                         Err(_) => realtime_is_done = Some(true),
                     }
-                }
+
             }
 
             let file_size = match file.metadata().await {
@@ -596,25 +593,6 @@ pub fn from_pending_file_to_chunks(
     .instrument(Span::current())
 }
 
-fn retryable_client(host: String) -> reqwest::ClientBuilder {
-    reqwest::Client::builder().retry(
-        reqwest::retry::for_host(host)
-            .classify_fn(|req_rep| {
-                match req_rep.status() {
-                    // Server errors
-                    Some(s) if s.is_server_error() || s == StatusCode::TOO_MANY_REQUESTS => {
-                        req_rep.retryable()
-                    }
-                    // Network errors
-                    None => req_rep.retryable(),
-                    _ => req_rep.success(),
-                }
-            })
-            .max_retries_per_request(5)
-            .max_extra_load(5.0),
-    )
-}
-
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
@@ -680,7 +658,7 @@ fn multipart_uploader(
                                 part_number,
                                 chunk,
                             } = item.map_err(|err| {
-                                format!("uploader/part/{:?}/fs: {err:?}", expected_part_number)
+                                format!("uploader/part/{expected_part_number:?}/fs: {err:?}")
                             })?;
                             trace!(
                                 "Uploading chunk {part_number} ({} bytes) for video {video_id:?}",
@@ -726,19 +704,16 @@ fn multipart_uploader(
                             }
 
                             let size = chunk.len();
-                            let url = Uri::from_str(&presigned_url).map_err(|err| {
-                                format!("uploader/part/{part_number}/invalid_url: {err:?}")
-                            })?;
-                            let mut req =
-                                retryable_client(url.host().unwrap_or("<unknown>").to_string())
-                                    .build()
-                                    .map_err(|err| {
-                                        format!("uploader/part/{part_number}/client: {err:?}")
-                                    })?
-                                    .put(&presigned_url)
-                                    .header("Content-Length", chunk.len())
-                                    .timeout(Duration::from_secs(5 * 60))
-                                    .body(chunk);
+                            let mut req = app
+                                .state::<RetryableHttpClient>()
+                                .as_ref()
+                                .map_err(|err| {
+                                    format!("uploader/part/{part_number}/client: {err:?}")
+                                })?
+                                .put(&presigned_url)
+                                .header("Content-Length", chunk.len())
+                                .timeout(Duration::from_secs(5 * 60))
+                                .body(chunk);
 
                             if let Some(md5_sum) = &md5_sum {
                                 req = req.header("Content-MD5", md5_sum);
@@ -811,10 +786,9 @@ pub async fn singlepart_uploader(
 ) -> Result<(), AuthedApiError> {
     let presigned_url = api::upload_signed(&app, request).await?;
 
-    let url = Uri::from_str(&presigned_url)
-        .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
-    let resp = retryable_client(url.host().unwrap_or("<unknown>").to_string())
-        .build()
+    let resp = app
+        .state::<RetryableHttpClient>()
+        .as_ref()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
         .put(&presigned_url)
         .header("Content-Length", total_size)

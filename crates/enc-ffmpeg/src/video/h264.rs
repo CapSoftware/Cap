@@ -99,9 +99,7 @@ impl H264EncoderBuilder {
             .video()
             .ok()
             .and_then(|codec_video| codec_video.formats())
-            .map_or(false, |mut formats| {
-                formats.any(|f| f == input_config.pixel_format)
-            });
+            .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
 
         let mut needs_pixel_conversion = false;
 
@@ -267,7 +265,6 @@ impl H264Encoder {
     pub fn finish(&mut self, output: &mut format::context::Output) {
         if let Err(e) = self.base.process_eof(output, &mut self.encoder) {
             tracing::error!("Failed to send EOF to encoder: {:?}", e);
-            return;
         }
     }
 }

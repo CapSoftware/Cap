@@ -79,7 +79,7 @@ impl ImageBufProcessor {
     fn ensure_scratch(&mut self, format: format::Pixel, width: u32, height: u32) {
         let needs_new =
             self.scratch_spec
-                .map_or(true, |(current_format, current_width, current_height)| {
+                .is_none_or(|(current_format, current_width, current_height)| {
                     current_format != format || current_width != width || current_height != height
                 });
 
@@ -98,8 +98,8 @@ impl ImageBufProcessor {
         }
 
         let bytes_per_row = image_buf.plane_bytes_per_row(0);
-        let width = image_buf.width() as usize;
-        let height = image_buf.height() as usize;
+        let width = image_buf.width();
+        let height = image_buf.height();
 
         let slice = unsafe {
             std::slice::from_raw_parts::<'static, _>(

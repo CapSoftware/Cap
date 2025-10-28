@@ -270,22 +270,51 @@ function Inner() {
 					const [controlsHeight, setControlsHeight] = createSignal<
 						number | undefined
 					>(undefined);
-					// Recompute placement when bounds change or window resizes
-					const placeControlsAbove = createMemo(() => {
+					const [controlsWidth, setControlsWidth] = createSignal<
+						number | undefined
+					>(undefined);
+
+					// Determine the best placement for controls
+					const controlsPlacement = createMemo(() => {
 						const top = bounds.position.y;
+						const left = bounds.position.x;
+						const width = bounds.size.width;
 						const height = bounds.size.height;
-						// Measure controls height (fallback to 64px if not yet mounted)
+						// Measure controls dimensions (fallback if not yet mounted)
 						const ctrlH = controlsHeight() ?? 64;
+						const ctrlW = controlsWidth() ?? 300;
 						const margin = 16;
 
+						// Check if selection spans full height (or nearly full height)
+						const isFullHeight = height >= window.innerHeight * 0.9;
+
+						if (isFullHeight) {
+							// Try to place on the right side
+							const rightSpace = window.innerWidth - (left + width);
+							if (rightSpace >= ctrlW + margin)
+								return { position: "right" as const };
+
+							// Try to place on the left side
+							if (left >= ctrlW + margin) return { position: "left" as const };
+
+							// Fall back to inside at the bottom
+							return { position: "inside-bottom" as const };
+						}
+
+						// For non-full-height selections, use original logic
 						const wouldOverflow =
 							top + height + margin + ctrlH > window.innerHeight;
-						return wouldOverflow;
+						return { position: wouldOverflow ? "above" : "below" } as const;
 					});
-					onMount(() => setControlsHeight(controlsEl?.offsetHeight));
-					createEventListener(window, "resize", () =>
-						setControlsHeight(controlsEl?.offsetHeight),
-					);
+
+					onMount(() => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
+					createEventListener(window, "resize", () => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
 
 					function createOnMouseDown(
 						onDrag: (
@@ -725,9 +754,24 @@ function Inner() {
 										ref={controlsEl}
 										class={cx(
 											"flex absolute flex-col items-center m-2",
-											placeControlsAbove() ? "bottom-full" : "top-full",
+											controlsPlacement().position === "above" && "bottom-full",
+											controlsPlacement().position === "below" && "top-full",
+											controlsPlacement().position === "right" &&
+												"left-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "left" &&
+												"right-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "inside-bottom" &&
+												"bottom-2 left-1/2 -translate-x-1/2",
 										)}
-										style={{ width: `${bounds.size.width}px` }}
+										style={{
+											width:
+												controlsPlacement().position === "right" ||
+												controlsPlacement().position === "left"
+													? "auto"
+													: controlsPlacement().position === "inside-bottom"
+														? "auto"
+														: `${bounds.size.width}px`,
+										}}
 									>
 										<RecordingControls
 											target={{
@@ -735,6 +779,10 @@ function Inner() {
 												screen: params.displayId!,
 												bounds,
 											}}
+											setToggleModeSelect={setToggleModeSelect}
+											showBackground={
+												controlsPlacement().position === "inside-bottom"
+											}
 										/>
 										<ShowCapFreeWarning
 											isInstantMode={rawOptions.mode === "instant"}
@@ -764,9 +812,11 @@ function Inner() {
 									</p>
 								</Show>
 								<Show when={hasArea()}>
-									<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
-										Click and drag to create new area
-									</p>
+									<Show when={controlsPlacement().position !== "inside-bottom"}>
+										<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
+											Click and drag to create new area
+										</p>
+									</Show>
 								</Show>
 							</Show>
 						</div>
@@ -780,6 +830,7 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	showBackground?: boolean;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -945,16 +996,21 @@ function RecordingControls(props: {
 					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
-			<div
+			<button
 				onClick={() => props.setToggleModeSelect?.(true)}
-				class="flex gap-1 items-center mb-5 transition-opacity duration-200 hover:opacity-60"
+				class="cursor-pointer flex gap-1 items-center mb-5 transition-all duration-200 relative z-20"
+				classList={{
+					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
+						props.showBackground,
+					"hover:opacity-60": !props.showBackground,
+				}}
 			>
 				<IconCapInfo class="opacity-70 will-change-transform size-3" />
 				<p class="text-sm text-white">
 					<span class="opacity-70">What is </span>
 					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
 				</p>
-			</div>
+			</button>
 		</Show>
 	);
 }

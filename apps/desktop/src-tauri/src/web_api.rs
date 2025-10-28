@@ -6,6 +6,7 @@ use tracing::{error, warn};
 use crate::{
     ArcLock,
     auth::{AuthSecret, AuthStore},
+    http_client,
 };
 
 #[derive(Error, Debug)]
@@ -58,12 +59,11 @@ fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 }
 
 async fn do_authed_request(
+    client: &reqwest::Client,
     auth: &AuthStore,
-    build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     url: String,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
-
     let req = build(client, url).header(
         "Authorization",
         format!(
@@ -82,13 +82,13 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError>;
 
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
@@ -100,7 +100,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError> {
         let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
         else {
@@ -109,7 +109,8 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         };
 
         let url = self.make_app_url(path.into()).await;
-        let response = do_authed_request(&auth, build, url).await?;
+        let response =
+            do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
@@ -122,12 +123,13 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = self.make_app_url(path.into()).await;
-        let client = reqwest::Client::new();
 
-        apply_env_headers(build(client, url)).send().await
+        apply_env_headers(build(&self.state::<http_client::HttpClient>(), url))
+            .send()
+            .await
     }
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {

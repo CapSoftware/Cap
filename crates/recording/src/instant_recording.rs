@@ -224,6 +224,8 @@ async fn create_pipeline(
         mic_feed,
         output_path.clone(),
         output_resolution,
+        #[cfg(windows)]
+        crate::capture_pipeline::EncoderPreferences::new(),
     )
     .await?;
 
@@ -402,13 +404,13 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     // 16/9-ish
     if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) <= 16.0 / 9.0 {
         let mut width = max.0.min(input.0);
-        if width % 2 != 0 {
+        if width.is_multiple_of(2) {
             width -= 1;
         }
 
         let height_ratio = input.1 as f64 / input.0 as f64;
         let mut height = (height_ratio * width as f64).round() as u32;
-        if height % 2 != 0 {
+        if height.is_multiple_of(2) {
             height -= 1;
         }
 
@@ -417,13 +419,13 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     // 9/16-ish
     else if input.0 <= input.1 && (input.0 as f64 / input.1 as f64) >= 9.0 / 16.0 {
         let mut height = max.0.min(input.1);
-        if height % 2 != 0 {
+        if height.is_multiple_of(2) {
             height -= 1;
         }
 
         let width_ratio = input.0 as f64 / input.1 as f64;
         let mut width = (width_ratio * height as f64).round() as u32;
-        if width % 2 != 0 {
+        if width.is_multiple_of(2) {
             width -= 1;
         }
 
@@ -432,13 +434,13 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     // ultrawide
     else if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) > 16.0 / 9.0 {
         let mut height = max.1.min(input.1);
-        if height % 2 != 0 {
+        if height.is_multiple_of(2) {
             height -= 1;
         }
 
         let width_ratio = input.0 as f64 / input.1 as f64;
         let mut width = (width_ratio * height as f64).round() as u32;
-        if width % 2 != 0 {
+        if width.is_multiple_of(2) {
             width -= 1;
         }
 
@@ -448,13 +450,13 @@ fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     else if input.0 < input.1 && (input.0 as f64 / input.1 as f64) <= 9.0 / 16.0 {
         // swapped since max_width/height assume horizontal
         let mut width = max.1.min(input.0);
-        if width % 2 != 0 {
+        if width.is_multiple_of(2) {
             width -= 1;
         }
 
         let height_ratio = input.1 as f64 / input.0 as f64;
         let mut height = (height_ratio * width as f64).round() as u32;
-        if height % 2 != 0 {
+        if height.is_multiple_of(2) {
             height -= 1;
         }
 

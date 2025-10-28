@@ -1,13 +1,7 @@
 use cidre::{arc, ns, sc};
-use core_graphics::{display::CGDirectDisplayID, window::CGWindowID};
-use std::sync::Arc;
-use std::{
-    collections::HashMap,
-    sync::{OnceLock, RwLock},
-    time::Instant,
-};
+use std::sync::{Arc, OnceLock, RwLock};
 use tokio::sync::{Mutex, Notify};
-use tracing::{debug, info, trace};
+use tracing::trace;
 
 #[derive(Default)]
 struct CacheState {
@@ -62,8 +56,6 @@ pub async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
 
 pub async fn get_shareable_content()
 -> Result<Option<arc::R<sc::ShareableContent>>, arc::R<ns::Error>> {
-    let lookup_start = Instant::now();
-
     if let Some(content) = state()
         .cache
         .read()
@@ -82,14 +74,10 @@ pub async fn get_shareable_content()
 
 async fn run_warmup(task: WarmupTask) {
     let result = async {
-        let warm_start = Instant::now();
-
         let content = sc::ShareableContent::current().await?;
         let cache = ShareableContentCache::new(content);
-        let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
 
         let mut guard = state().cache.write().unwrap();
-        let replaced = guard.is_some();
         *guard = Some(cache);
 
         Ok::<(), arc::R<ns::Error>>(())
@@ -115,8 +103,6 @@ async fn run_warmup(task: WarmupTask) {
 struct ShareableContentCache {
     #[allow(dead_code)]
     content: arc::R<sc::ShareableContent>,
-    displays: HashMap<CGDirectDisplayID, arc::R<sc::Display>>,
-    windows: HashMap<CGWindowID, arc::R<sc::Window>>,
 }
 
 unsafe impl Send for ShareableContentCache {}
@@ -124,31 +110,7 @@ unsafe impl Sync for ShareableContentCache {}
 
 impl ShareableContentCache {
     fn new(content: arc::R<sc::ShareableContent>) -> Self {
-        let displays = content
-            .displays()
-            .iter()
-            .map(|display| (display.display_id().0, display.retained()))
-            .collect();
-
-        let windows = content
-            .windows()
-            .iter()
-            .map(|window| (window.id(), window.retained()))
-            .collect();
-
-        Self {
-            content,
-            displays,
-            windows,
-        }
-    }
-
-    fn display(&self, id: CGDirectDisplayID) -> Option<arc::R<sc::Display>> {
-        self.displays.get(&id).cloned()
-    }
-
-    fn window(&self, id: CGWindowID) -> Option<arc::R<sc::Window>> {
-        self.windows.get(&id).cloned()
+        Self { content }
     }
 }
 

@@ -232,36 +232,36 @@ impl MP4Encoder {
 
         self.most_recent_frame = Some((frame.clone(), timestamp));
 
-        if let Some(pause_timestamp) = self.pause_timestamp {
-            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
-                self.timestamp_offset += gap;
-                self.pause_timestamp = None;
-            }
+        if let Some(pause_timestamp) = self.pause_timestamp
+            && let Some(gap) = timestamp.checked_sub(pause_timestamp)
+        {
+            self.timestamp_offset += gap;
+            self.pause_timestamp = None;
         }
 
         let mut pts_duration = timestamp
             .checked_sub(self.timestamp_offset)
             .unwrap_or(Duration::ZERO);
 
-        if let Some(last_pts) = self.last_video_pts {
-            if pts_duration <= last_pts {
-                let frame_duration = self.video_frame_duration();
-                let adjusted_pts = last_pts + frame_duration;
+        if let Some(last_pts) = self.last_video_pts
+            && pts_duration <= last_pts
+        {
+            let frame_duration = self.video_frame_duration();
+            let adjusted_pts = last_pts + frame_duration;
 
-                trace!(
-                    ?timestamp,
-                    ?last_pts,
-                    adjusted_pts = ?adjusted_pts,
-                    frame_duration_ns = frame_duration.as_nanos(),
-                    "Monotonic video pts correction",
-                );
+            trace!(
+                ?timestamp,
+                ?last_pts,
+                adjusted_pts = ?adjusted_pts,
+                frame_duration_ns = frame_duration.as_nanos(),
+                "Monotonic video pts correction",
+            );
 
-                if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
-                    self.timestamp_offset = new_offset;
-                }
-
-                pts_duration = adjusted_pts;
+            if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
+                self.timestamp_offset = new_offset;
             }
+
+            pts_duration = adjusted_pts;
         }
 
         self.last_video_pts = Some(pts_duration);
@@ -292,11 +292,11 @@ impl MP4Encoder {
             return Ok(());
         }
 
-        if let Some(pause_timestamp) = self.pause_timestamp {
-            if let Some(gap) = timestamp.checked_sub(pause_timestamp) {
-                self.timestamp_offset += gap;
-                self.pause_timestamp = None;
-            }
+        if let Some(pause_timestamp) = self.pause_timestamp
+            && let Some(gap) = timestamp.checked_sub(pause_timestamp)
+        {
+            self.timestamp_offset += gap;
+            self.pause_timestamp = None;
         }
 
         let Some(audio_input) = &mut self.audio_input else {
@@ -341,27 +341,27 @@ impl MP4Encoder {
             .checked_sub(self.timestamp_offset)
             .unwrap_or(Duration::ZERO);
 
-        if let Some(last_pts) = self.last_audio_pts {
-            if pts_duration <= last_pts {
-                let frame_duration = Self::audio_frame_duration(&frame);
-                let adjusted_pts = last_pts + frame_duration;
+        if let Some(last_pts) = self.last_audio_pts
+            && pts_duration <= last_pts
+        {
+            let frame_duration = Self::audio_frame_duration(&frame);
+            let adjusted_pts = last_pts + frame_duration;
 
-                trace!(
-                    ?timestamp,
-                    ?last_pts,
-                    adjusted_pts = ?adjusted_pts,
-                    frame_duration_ns = frame_duration.as_nanos(),
-                    samples = frame.samples(),
-                    sample_rate = frame.rate(),
-                    "Monotonic audio pts correction",
-                );
+            trace!(
+                ?timestamp,
+                ?last_pts,
+                adjusted_pts = ?adjusted_pts,
+                frame_duration_ns = frame_duration.as_nanos(),
+                samples = frame.samples(),
+                sample_rate = frame.rate(),
+                "Monotonic audio pts correction",
+            );
 
-                if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
-                    self.timestamp_offset = new_offset;
-                }
-
-                pts_duration = adjusted_pts;
+            if let Some(new_offset) = timestamp.checked_sub(adjusted_pts) {
+                self.timestamp_offset = new_offset;
             }
+
+            pts_duration = adjusted_pts;
         }
 
         self.last_audio_pts = Some(pts_duration);

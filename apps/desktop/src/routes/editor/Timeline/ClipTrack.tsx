@@ -242,7 +242,9 @@ export function ClipTrack(
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
-						return segmentIndex === selection.index;
+						if (segmentIndex === undefined || segmentIndex === -1) return false;
+
+						return selection.indices.includes(segmentIndex);
 					});
 
 					const micWaveform = () => {
@@ -371,16 +373,81 @@ export function ClipTrack(
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {
 										createRoot((dispose) => {
-											createEventListener(e.currentTarget, "mouseup", (e) => {
-												dispose();
+											createEventListener(
+												e.currentTarget,
+												"mouseup",
+												(upEvent) => {
+													dispose();
 
-												setEditorState("timeline", "selection", {
-													type: "clip",
-													index: i(),
-												});
+													const currentIndex = i();
+													const selection = editorState.timeline.selection;
+													const isMac =
+														navigator.platform.toUpperCase().indexOf("MAC") >=
+														0;
+													const isMultiSelect = isMac
+														? upEvent.metaKey
+														: upEvent.ctrlKey;
+													const isRangeSelect = upEvent.shiftKey;
 
-												props.handleUpdatePlayhead(e);
-											});
+													if (
+														isRangeSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Range selection: select from last selected to current
+														const existingIndices = selection.indices;
+														const lastIndex =
+															existingIndices[existingIndices.length - 1];
+														const start = Math.min(lastIndex, currentIndex);
+														const end = Math.max(lastIndex, currentIndex);
+														const rangeIndices = Array.from(
+															{ length: end - start + 1 },
+															(_, idx) => start + idx,
+														);
+
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: rangeIndices,
+														});
+													} else if (
+														isMultiSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Multi-select: toggle current index
+														const existingIndices = selection.indices;
+
+														if (existingIndices.includes(currentIndex)) {
+															// Remove from selection
+															const newIndices = existingIndices.filter(
+																(idx) => idx !== currentIndex,
+															);
+															if (newIndices.length > 0) {
+																setEditorState("timeline", "selection", {
+																	type: "clip" as const,
+																	indices: newIndices,
+																});
+															} else {
+																setEditorState("timeline", "selection", null);
+															}
+														} else {
+															// Add to selection
+															setEditorState("timeline", "selection", {
+																type: "clip" as const,
+																indices: [...existingIndices, currentIndex],
+															});
+														}
+													} else {
+														// Normal single selection
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: [currentIndex],
+														});
+													}
+
+													props.handleUpdatePlayhead(upEvent);
+												},
+											);
 										});
 									}
 								}}
