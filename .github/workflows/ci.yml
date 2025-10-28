@@ -256,7 +256,7 @@ jobs:
         with:
           node-version: 24
 
-      - run: pnpm -w cap-setup
+      - run: node scripts/setup.js
 
       - name: Build debug
         run: cargo build --all
