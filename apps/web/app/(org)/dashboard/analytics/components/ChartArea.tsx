@@ -13,7 +13,7 @@ export const description = "An area chart with gradient fill";
 
 const chartData = Array.from({ length: 24 }, (_, i) => ({
 	hour: i + 1,
-	desktop: Math.floor(Math.random() * 100),
+	desktop: Math.floor(Math.random() * 100).toFixed(0),
 }));
 
 const chartConfig = {
@@ -34,25 +34,26 @@ function ChartArea() {
 				data={chartData}
 				margin={{
 					left: 20,
-					right: 0,
+					right: 20,
 					top: 20,
-					bottom: 0,
+					bottom: 10,
 				}}
 			>
 				<CartesianGrid
 					vertical={false}
 					strokeDasharray="3 3"
-					stroke="var(--gray-6)"
+					stroke="var(--gray-8)"
 					opacity={0.3}
 				/>
 				<XAxis
 					dataKey="hour"
-					tickLine={false}
 					axisLine={false}
-					tickMargin={8}
+					tickMargin={10}
+					interval={0}
+					height={40}
+					tick={{ fontSize: 11 }}
 				/>
 				<YAxis
-					tickLine={false}
 					axisLine={false}
 					tickMargin={8}
 					domain={[0, 100]}

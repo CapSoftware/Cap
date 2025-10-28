@@ -27,11 +27,18 @@ export default function StatsBox() {
 	const chatsBoxRef = useRef<CapIconHandle | null>(null);
 	const reactionsBoxRef = useRef<CapIconHandle | null>(null);
 
+	const selectHandler = (box: "caps" | "views" | "chats" | "reactions") => {
+		setSelectedBox(box);
+		if (selectedBox === box) {
+			setSelectedBox(null);
+		}
+	};
+
 	return (
-		<div className="flex flex-col gap-4 p-8 w-full rounded-xl border bg-gray-1 border-gray-3">
+		<div className="flex flex-col gap-4 px-8 pt-8 w-full rounded-xl border bg-gray-1 border-gray-3">
 			<div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
 				<StatBox
-					onClick={() => setSelectedBox("caps")}
+					onClick={() => selectHandler("caps")}
 					isSelected={selectedBox === "caps"}
 					title="Caps"
 					value="100"
@@ -40,7 +47,7 @@ export default function StatsBox() {
 					icon={<CapIcon ref={capsBoxRef} size={20} />}
 				/>
 				<StatBox
-					onClick={() => setSelectedBox("views")}
+					onClick={() => selectHandler("views")}
 					isSelected={selectedBox === "views"}
 					title="Views"
 					value="2,768"
@@ -49,7 +56,7 @@ export default function StatsBox() {
 					icon={<ClapIcon ref={viewsBoxRef} size={20} />}
 				/>
 				<StatBox
-					onClick={() => setSelectedBox("chats")}
+					onClick={() => selectHandler("chats")}
 					isSelected={selectedBox === "chats"}
 					title="Comments"
 					value="100"
@@ -58,7 +65,7 @@ export default function StatsBox() {
 					icon={<ChatIcon ref={chatsBoxRef} size={20} />}
 				/>
 				<StatBox
-					onClick={() => setSelectedBox("reactions")}
+					onClick={() => selectHandler("reactions")}
 					isSelected={selectedBox === "reactions"}
 					title="Reactions"
 					value="100"
@@ -90,7 +97,7 @@ function StatBox({
 			{...props}
 			className={classNames(
 				"flex flex-col flex-1 gap-2 px-8 py-6 bg-transparent rounded-xl border transition-all duration-200 cursor-pointer group h-fit hover:bg-gray-3 border-gray-5",
-				isSelected && "bg-gray-3 border-gray-6",
+				isSelected && "bg-gray-3 border-gray-8",
 			)}
 		>
 			<div className="flex gap-2 items-center h-fit">

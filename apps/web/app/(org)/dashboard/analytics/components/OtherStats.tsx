@@ -1,6 +1,8 @@
 "use client";
 
 import {
+	Logo,
+	LogoBadge,
 	Table,
 	TableBody,
 	TableCell,
@@ -10,10 +12,13 @@ import {
 } from "@cap/ui";
 import {
 	faAppleWhole,
+	faCamera,
 	faDesktop,
 	faGlobe,
 	faMobileScreen,
+	faRecordVinyl,
 	faTablet,
+	faUserGroup,
 } from "@fortawesome/free-solid-svg-icons";
 import {
 	FontAwesomeIcon,
@@ -22,6 +27,7 @@ import {
 import clsx from "clsx";
 import getUnicodeFlagIcon from "country-flag-icons/unicode";
 import Image from "next/image";
+import CapIcon from "../../_components/AnimatedIcons/Cap";
 
 const countryCodeToIcon = (countryCode: string) => {
 	return getUnicodeFlagIcon(countryCode.toUpperCase());
@@ -39,50 +45,50 @@ export default function OtherStats() {
 							{
 								icon: countryCodeToIcon("US"),
 								name: "United States",
-								views: "1,234",
-								percentage: "45.6%",
+								views: "8,452",
+								percentage: "34.2%",
 							},
 							{
 								icon: countryCodeToIcon("GB"),
 								name: "United Kingdom",
-								views: "892",
-								percentage: "23.4%",
+								views: "3,891",
+								percentage: "15.7%",
 							},
 							{
 								icon: countryCodeToIcon("CA"),
 								name: "Canada",
-								views: "567",
-								percentage: "30.9%",
+								views: "2,764",
+								percentage: "11.2%",
 							},
 							{
 								icon: countryCodeToIcon("DE"),
 								name: "Germany",
-								views: "432",
-								percentage: "15.6%",
+								views: "2,143",
+								percentage: "8.7%",
 							},
 							{
 								icon: countryCodeToIcon("FR"),
 								name: "France",
-								views: "389",
-								percentage: "10.9%",
+								views: "1,876",
+								percentage: "7.6%",
 							},
 							{
 								icon: countryCodeToIcon("AU"),
 								name: "Australia",
-								views: "276",
-								percentage: "10.9%",
+								views: "1,542",
+								percentage: "6.2%",
 							},
 							{
 								icon: countryCodeToIcon("JP"),
 								name: "Japan",
-								views: "198",
-								percentage: "10.9%",
+								views: "1,298",
+								percentage: "5.2%",
 							},
 							{
 								icon: countryCodeToIcon("BR"),
 								name: "Brazil",
-								views: "156",
-								percentage: "10.9%",
+								views: "987",
+								percentage: "4.0%",
 							},
 						]}
 					/>
@@ -93,68 +99,68 @@ export default function OtherStats() {
 							{
 								name: "New York",
 								icon: countryCodeToIcon("US"),
-								views: "1,234",
-								percentage: "45.6%",
+								views: "3,421",
+								percentage: "18.7%",
 							},
 							{
 								name: "Los Angeles",
 								icon: countryCodeToIcon("US"),
-								views: "892",
-								percentage: "23.4%",
+								views: "2,876",
+								percentage: "15.7%",
 							},
 							{
-								name: "Chicago",
-								icon: countryCodeToIcon("US"),
-								views: "567",
-								percentage: "30.9%",
+								name: "London",
+								icon: countryCodeToIcon("GB"),
+								views: "2,145",
+								percentage: "11.7%",
 							},
 							{
-								name: "Houston",
-								icon: countryCodeToIcon("US"),
-								views: "432",
-								percentage: "15.6%",
-							},
-							{
-								name: "Miami",
-								icon: countryCodeToIcon("US"),
-								views: "389",
-								percentage: "10.9%",
+								name: "Toronto",
+								icon: countryCodeToIcon("CA"),
+								views: "1,892",
+								percentage: "10.3%",
 							},
 							{
 								name: "San Francisco",
 								icon: countryCodeToIcon("US"),
-								views: "389",
-								percentage: "10.9%",
+								views: "1,654",
+								percentage: "9.0%",
+							},
+							{
+								name: "Chicago",
+								icon: countryCodeToIcon("US"),
+								views: "1,432",
+								percentage: "7.8%",
+							},
+							{
+								name: "Berlin",
+								icon: countryCodeToIcon("DE"),
+								views: "1,198",
+								percentage: "6.5%",
 							},
 							{
 								name: "Seattle",
 								icon: countryCodeToIcon("US"),
-								views: "389",
-								percentage: "10.9%",
+								views: "987",
+								percentage: "5.4%",
+							},
+							{
+								name: "Sydney",
+								icon: countryCodeToIcon("AU"),
+								views: "876",
+								percentage: "4.8%",
+							},
+							{
+								name: "Paris",
+								icon: countryCodeToIcon("FR"),
+								views: "743",
+								percentage: "4.1%",
 							},
 							{
 								name: "Boston",
 								icon: countryCodeToIcon("US"),
-								views: "389",
-								percentage: "10.9%",
-							},
-							{
-								name: "Washington, D.C. asd asd asdsa d",
-								icon: countryCodeToIcon("US"),
-								views: "1,000",
-								percentage: "10.9%",
-							},
-							{
-								name: "Atlanta",
-								icon: countryCodeToIcon("US"),
-								views: "1,000",
-								percentage: "10.9%",
-							},
-							{
-								name: "Denver",
-								icon: countryCodeToIcon("US"),
-								views: "1,000",
-								percentage: "10.9%",
+								views: "621",
+								percentage: "3.4%",
 							},
 						]}
 					/>
@@ -169,56 +175,56 @@ export default function OtherStats() {
 							{
 								icon: <BrowserIcon browser="google-chrome" />,
 								name: "Chrome",
-								percentage: "45.6%",
-								views: "1,234",
-							},
-							{
-								icon: <BrowserIcon browser="firefox" />,
-								name: "Firefox",
-								percentage: "23.4%",
-								views: "892",
+								views: "12,456",
+								percentage: "42.3%",
 							},
 							{
 								icon: <BrowserIcon browser="safari" />,
 								name: "Safari",
-								percentage: "30.9%",
-								views: "567",
+								views: "6,234",
+								percentage: "21.2%",
+							},
+							{
+								icon: <BrowserIcon browser="firefox" />,
+								name: "Firefox",
+								views: "4,187",
+								percentage: "14.2%",
 							},
 							{
 								icon: <BrowserIcon browser="explorer" />,
 								name: "Edge",
-								percentage: "15.6%",
-								views: "432",
-							},
-							{
-								icon: <BrowserIcon browser="opera" />,
-								name: "Opera",
-								percentage: "10.9%",
-								views: "432",
+								views: "3,542",
+								percentage: "12.0%",
 							},
 							{
 								icon: <BrowserIcon browser="brave" />,
 								name: "Brave",
-								percentage: "5.6%",
-								views: "432",
+								views: "1,876",
+								percentage: "6.4%",
+							},
+							{
+								icon: <BrowserIcon browser="opera" />,
+								name: "Opera",
+								views: "654",
+								percentage: "2.2%",
 							},
 							{
 								icon: <BrowserIcon browser="vivaldi" />,
 								name: "Vivaldi",
-								percentage: "3.4%",
-								views: "432",
+								views: "298",
+								percentage: "1.0%",
 							},
 							{
 								icon: <BrowserIcon browser="yandex" />,
 								name: "Yandex",
-								percentage: "2.9%",
-								views: "432",
+								views: "143",
+								percentage: "0.5%",
 							},
 							{
 								icon: <BrowserIcon browser="duckduckgo" />,
 								name: "DuckDuckGo",
-								percentage: "1.6%",
-								views: "432",
+								views: "67",
+								percentage: "0.2%",
 							},
 						]}
 					/>
@@ -229,32 +235,32 @@ export default function OtherStats() {
 							{
 								icon: <OperatingSystemIcon operatingSystem="windows" />,
 								name: "Windows",
-								views: "1,234",
-								percentage: "45.6%",
+								views: "9,876",
+								percentage: "38.7%",
 							},
 							{
 								icon: <OperatingSystemIcon operatingSystem="ios" />,
-								name: "iOS",
-								views: "892",
-								percentage: "23.4%",
+								name: "macOS",
+								views: "7,432",
+								percentage: "29.1%",
 							},
 							{
 								icon: <OperatingSystemIcon operatingSystem="linux" />,
 								name: "Linux",
-								views: "892",
-								percentage: "15.6%",
-							},
-							{
-								icon: <OperatingSystemIcon operatingSystem="fedora" />,
-								name: "Fedora",
-								views: "892",
-								percentage: "10.9%",
+								views: "3,654",
+								percentage: "14.3%",
 							},
 							{
 								icon: <OperatingSystemIcon operatingSystem="ubuntu" />,
 								name: "Ubuntu",
-								views: "892",
-								percentage: "10.9%",
+								views: "2,187",
+								percentage: "8.6%",
+							},
+							{
+								icon: <OperatingSystemIcon operatingSystem="fedora" />,
+								name: "Fedora",
+								views: "1,243",
+								percentage: "4.9%",
 							},
 						]}
 					/>
@@ -267,7 +273,6 @@ export default function OtherStats() {
 			>
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
-						tableClassname="h-fit"
 						title="Device Type"
 						columns={["Device", "Views", "Percentage"]}
 						rows={[
@@ -297,6 +302,74 @@ export default function OtherStats() {
 								name: "Mobile",
 								views: "1,789",
 								percentage: "30.9%",
+							},
+						]}
+					/>
+				</div>
+			</OtherStatBox>
+			<OtherStatBox
+				className="col-span-2"
+				title="Top Caps"
+				icon={faRecordVinyl}
+			>
+				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
+					<TableCard
+						title="Caps"
+						columns={["Cap", "Views", "Percentage"]}
+						rows={[
+							{
+								name: "Product Demo - Q4 2024",
+								views: "5,842",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "28.3%",
+							},
+							{
+								name: "Tutorial: Getting Started",
+								views: "4,156",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "20.1%",
+							},
+							{
+								name: "Team Meeting Highlights",
+								views: "3,421",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "16.6%",
+							},
+							{
+								name: "Bug Fix Walkthrough",
+								views: "2,789",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "13.5%",
+							},
+							{
+								name: "Feature Announcement",
+								views: "1,923",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "9.3%",
+							},
+							{
+								name: "Customer Feedback Review",
+								views: "1,245",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "6.0%",
+							},
+							{
+								name: "Sprint Retrospective",
+								views: "876",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "4.2%",
+							},
+							{
+								name: "Design System Update",
+								views: "543",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "2.6%",
+							},
+							{
+								name: "API Documentation Demo",
+								views: "289",
+								icon: <LogoBadge className="size-4" />,
+								percentage: "1.4%",
 							},
 						]}
 					/>
@@ -343,6 +416,8 @@ interface TableCardProps {
 		icon?: string | React.ReactNode;
 		name: string;
 		views: string;
+		comments?: string;
+		reactions?: string;
 		percentage?: string;
 	}[];
 }
@@ -381,10 +456,11 @@ const TableCard = ({
 								<span className="flex-shrink-0 fill-[var(--gray-12)]">
 									{row.icon}
 								</span>
-								<span className="truncate text-nowrap max-w-[100px]">
+								<span className="truncate text-nowrap max-w-[200px]">
 									{row.name}
 								</span>
 							</TableCell>
+
 							<TableCell className="p-2.5 text-sm w-full text-gray-11 bg-gray-3 border-y border-gray-5 group-hover:bg-gray-6 group-hover:border-gray-8 transition-colors duration-200">
 								{row.views}
 							</TableCell>
