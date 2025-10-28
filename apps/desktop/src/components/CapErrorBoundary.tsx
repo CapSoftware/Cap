@@ -34,13 +34,10 @@ export function CapErrorBoundary(props: ParentProps) {
 								Reload
 							</Button>
 							<Button
-								onClick={() => {
-									getCurrentWebviewWindow().close();
-									window.close();
-								}}
+								onClick={() => getCurrentWebviewWindow().close()}
 								variant="destructive"
 							>
-								Try Close
+								Close
 							</Button>
 						</div>
 
