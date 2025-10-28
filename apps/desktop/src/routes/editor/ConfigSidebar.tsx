@@ -1443,22 +1443,20 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							}
 						>
 							<div class="flex flex-col flex-wrap gap-3">
-								<div class="flex flex-col gap-3">
-									<div class="flex flex-row items-center w-full h-10">
-										<RgbInput
-											value={
-												project.background.source.type === "color"
-													? project.background.source.value
-													: [0, 0, 0]
-											}
-											onChange={(value) => {
-												setProject("background", "source", {
-													type: "color",
-													value,
-												});
-											}}
-										/>
-									</div>
+								<div class="flex flex-row items-center w-full h-10">
+									<RgbInput
+										value={
+											project.background.source.type === "color"
+												? project.background.source.value
+												: [0, 0, 0]
+										}
+										onChange={(value) => {
+											setProject("background", "source", {
+												type: "color",
+												value,
+											});
+										}}
+									/>
 								</div>
 
 								<div class="flex flex-wrap gap-2">
@@ -1470,39 +1468,23 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													class="sr-only peer"
 													name="colorPicker"
 													onChange={(e) => {
-														if (e.target.checked) {
-															const rgbValue = hexToRgb(color);
-															if (rgbValue) {
-																// Extract RGB part if RGBA is returned
-																if (rgbValue.length === 4) {
-																	const [r, g, b, a] = rgbValue as unknown as [
-																		number,
-																		number,
-																		number,
-																		number,
-																	];
-																	backgrounds.color = {
-																		type: "color",
-																		value: [r, g, b],
-																		alpha: a,
-																	};
-																} else {
-																	backgrounds.color = {
-																		type: "color",
-																		value: rgbValue as unknown as [
-																			number,
-																			number,
-																			number,
-																		],
-																	};
-																}
-																setProject(
-																	"background",
-																	"source",
-																	backgrounds.color,
-																);
-															}
-														}
+														if (!e.target.checked) return;
+
+														const rgbValue = hexToRgb(color);
+														if (!rgbValue) return;
+
+														const [r, g, b, a] = rgbValue;
+														backgrounds.color = {
+															type: "color",
+															value: [r, g, b],
+															alpha: a,
+														};
+
+														setProject(
+															"background",
+															"source",
+															backgrounds.color,
+														);
 													}}
 												/>
 												<div
@@ -1510,7 +1492,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													style={{
 														background:
 															color === "#00000000"
-																? `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`
+																? CHECKERD_BUTTON_BACKGROUND
 																: color,
 													}}
 												/>
@@ -2792,20 +2774,11 @@ function RgbInput(props: {
 				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
-					if (value) {
-						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-						if (value.length === 4) {
-							const [r, g, b] = value as unknown as [
-								number,
-								number,
-								number,
-								number,
-							];
-							props.onChange([r, g, b]);
-						} else {
-							props.onChange(value as unknown as [number, number, number]);
-						}
-					}
+					if (!value) return;
+
+					// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+					const [r, g, b] = value;
+					props.onChange([r, g, b]);
 				}}
 			/>
 			<TextInput
@@ -2818,54 +2791,24 @@ function RgbInput(props: {
 					setText(e.currentTarget.value);
 
 					const value = hexToRgb(e.target.value);
-					if (value) {
-						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-						if (value.length === 4) {
-							const [r, g, b] = value as unknown as [
-								number,
-								number,
-								number,
-								number,
-							];
-							props.onChange([r, g, b]);
-						} else {
-							props.onChange(value as unknown as [number, number, number]);
-						}
-					}
+					if (!value) return;
+
+					const [r, g, b] = value;
+					props.onChange([r, g, b]);
 				}}
 				onBlur={(e) => {
 					const value = hexToRgb(e.target.value);
 					if (value) {
+						const [r, g, b] = value;
 						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
-						if (value.length === 4) {
-							const [r, g, b] = value as unknown as [
-								number,
-								number,
-								number,
-								number,
-							];
-							props.onChange([r, g, b]);
-						} else {
-							props.onChange(value as unknown as [number, number, number]);
-						}
+						props.onChange([r, g, b]);
 					} else {
 						setText(prevHex);
 						const fallbackValue = hexToRgb(text());
-						if (fallbackValue) {
-							if (fallbackValue.length === 4) {
-								const [r, g, b] = fallbackValue as unknown as [
-									number,
-									number,
-									number,
-									number,
-								];
-								props.onChange([r, g, b]);
-							} else {
-								props.onChange(
-									fallbackValue as unknown as [number, number, number],
-								);
-							}
-						}
+						if (!fallbackValue) return;
+
+						const [r, g, b] = fallbackValue;
+						props.onChange([r, g, b]);
 					}
 				}}
 			/>
@@ -2901,3 +2844,5 @@ function hexToRgb(hex: string): [number, number, number, number] | null {
 
 	return [...rgb, 255];
 }
+
+const CHECKERD_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;
