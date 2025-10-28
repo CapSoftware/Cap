@@ -53,10 +53,11 @@ impl Muxer for AVFoundationMp4Muxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<Self::Finish> {
-        self.0
+        Ok(self
+            .0
             .lock()
             .map_err(|e| anyhow!("{e}"))?
-            .finish(Some(timestamp))
+            .finish(Some(timestamp))?)
     }
 }
 

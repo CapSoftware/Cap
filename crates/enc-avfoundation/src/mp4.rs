@@ -69,10 +69,6 @@ pub enum FinishError {
     Failed,
 }
 
-#[derive(thiserror::Error, Debug)]
-#[error("NotReadyForMore")]
-pub struct NotReadyForMore;
-
 impl MP4Encoder {
     pub fn init(
         output: PathBuf,
@@ -229,7 +225,7 @@ impl MP4Encoder {
         };
 
         if !self.video_input.is_ready_for_more_media_data() {
-            return Err(NotReadyForMore.into());
+            return Err(QueueFrameError::NotReadyForMore);
         }
 
         if !self.is_writing {
