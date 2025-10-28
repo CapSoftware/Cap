@@ -295,7 +295,7 @@ impl MP4Encoder {
         }
 
         if !audio_input.is_ready_for_more_media_data() {
-            return Ok(());
+            return Err(QueueFrameError::NotReadyForMore);
         }
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
