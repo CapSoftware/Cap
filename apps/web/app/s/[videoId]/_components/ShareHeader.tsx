@@ -1,11 +1,9 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
-import type { ImageUpload } from "@cap/web-domain";
+import { type ImageUpload, User } from "@cap/web-domain";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
@@ -21,6 +19,7 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
+import type { VideoData } from "../types";
 
 export const ShareHeader = ({
 	data,
@@ -30,11 +29,7 @@ export const ShareHeader = ({
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect & {
-		ownerName?: string | null;
-		ownerImage?: ImageUpload.ImageUrl | null;
-		ownerIsPro?: boolean;
-	};
+	data: VideoData;
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
@@ -65,7 +60,7 @@ export const ShareHeader = ({
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-	const isOwner = user && user.id === data.ownerId;
+	const isOwner = user && user.id === data.owner.id;
 
 	const { webUrl } = usePublicEnv();
 
@@ -132,8 +127,6 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isVideoOwnerPro: boolean = data.ownerIsPro ?? false;
-
 	const handleSharingUpdated = () => {
 		refresh();
 	};
@@ -182,9 +175,11 @@ export const ShareHeader = ({
 		}
 	};
 
+	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+
 	return (
 		<>
-			{isOwner && !isVideoOwnerPro && (
+			{userIsOwnerAndNotPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -238,16 +233,16 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									{data.ownerName && (
+									{data.name && (
 										<SignedImageUrl
-											name={data.ownerName}
-											image={data.ownerImage}
+											name={data.name}
+											image={data.owner.image}
 											className="size-8"
 											letterClass="text-base"
 										/>
 									)}
 									<div className="flex flex-col text-left">
-										<p className="text-sm text-gray-12">{data.ownerName}</p>
+										<p className="text-sm text-gray-12">{data.name}</p>
 										<p className="text-xs text-gray-10">
 											{moment(data.createdAt).fromNow()}
 										</p>
@@ -285,7 +280,7 @@ export const ShareHeader = ({
 										)}
 									</Button>
 								</div>
-								{!isVideoOwnerPro && (
+								{userIsOwnerAndNotPro && (
 									<button
 										type="button"
 										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"

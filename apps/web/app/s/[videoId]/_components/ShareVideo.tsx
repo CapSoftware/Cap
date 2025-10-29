@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import type { VideoData } from "../types";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
@@ -36,10 +37,8 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect & {
-			ownerIsPro?: boolean;
+		data: VideoData & {
 			hasActiveUpload?: boolean;
-			orgSettings?: OrganizationSettings | null;
 		};
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
@@ -166,7 +165,7 @@ export const ShareVideo = forwardRef<
 		let enableCrossOrigin = false;
 
 		if (data.source.type === "desktopMP4") {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=mp4`;
 			// Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
 			enableCrossOrigin = true;
 		} else if (
@@ -174,11 +173,11 @@ export const ShareVideo = forwardRef<
 			((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
 				data.source.type === "MediaConvert")
 		) {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=master`;
 		} else if (data.source.type === "MediaConvert") {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		} else {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+			videoSrc = `/api/playlist?userId=${data.owner.id}&videoId=${data.id}&videoType=video`;
 		}
 
 		return (
@@ -221,7 +220,7 @@ export const ShareVideo = forwardRef<
 					)}
 				</div>
 
-				{!data.ownerIsPro && (
+				{!data.owner.isPro && (
 					<div className="absolute top-4 left-4 z-30">
 						<div
 							className="block cursor-pointer"

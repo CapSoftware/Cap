@@ -22,6 +22,7 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
+import type { VideoData } from "./types";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -34,16 +35,8 @@ export type CommentType = typeof commentsSchema.$inferSelect & {
 	sending?: boolean;
 };
 
-type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
-	organizationMembers?: string[];
-	organizationId?: string;
-	sharedOrganizations?: { id: string; name: string }[];
-	hasPassword?: boolean;
-	orgSettings?: OrganizationSettings | null;
-};
-
 interface ShareProps {
-	data: VideoWithOrganizationInfo;
+	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	customDomain: string | null;
