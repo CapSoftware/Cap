@@ -720,17 +720,19 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
+		const ownerIsPro = userIsPro(video.owner);
 
 		return {
 			...video,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
-				isPro: userIsPro(video.owner),
+				isPro: ownerIsPro,
 				image: video.ownerImageUrlOrKey
 					? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
 					: null,
 			},
+			ownerIsPro,
 			organization: {
 				organizationMembers: membersList.map((member) => member.userId),
 				organizationId: video.sharedOrganization?.organizationId ?? undefined,

@@ -242,7 +242,7 @@ export const ShareHeader = ({
 										/>
 									)}
 									<div className="flex flex-col text-left">
-										<p className="text-sm text-gray-12">{data.name}</p>
+										<p className="text-sm text-gray-12">{data.owner.name}</p>
 										<p className="text-xs text-gray-10">
 											{moment(data.createdAt).fromNow()}
 										</p>
