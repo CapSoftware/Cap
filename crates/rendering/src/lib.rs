@@ -1143,7 +1143,7 @@ impl RendererLayers {
         {
             let mut pass = render_pass!(
                 session.current_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             );
             self.background.render(&mut pass);
         }

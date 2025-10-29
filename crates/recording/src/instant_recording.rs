@@ -12,7 +12,6 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
-use scap_targets::WindowId;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -253,7 +252,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     max_output_size: Option<u32>,
     #[cfg(target_os = "macos")]
-    excluded_windows: Vec<WindowId>,
+    excluded_windows: Vec<scap_targets::WindowId>,
 }
 
 impl ActorBuilder {
@@ -285,7 +284,7 @@ impl ActorBuilder {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }
@@ -400,65 +399,46 @@ fn current_time_f64() -> f64 {
         .as_secs_f64()
 }
 
+fn ensure_even(value: u32) -> u32 {
+    let adjusted = value - (value % 2);
+    if adjusted == 0 { 2 } else { adjusted }
+}
+
 fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
     // 16/9-ish
     if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) <= 16.0 / 9.0 {
-        let mut width = max.0.min(input.0);
-        if width.is_multiple_of(2) {
-            width -= 1;
-        }
+        let width = ensure_even(max.0.min(input.0));
 
         let height_ratio = input.1 as f64 / input.0 as f64;
-        let mut height = (height_ratio * width as f64).round() as u32;
-        if height.is_multiple_of(2) {
-            height -= 1;
-        }
+        let height = ensure_even((height_ratio * width as f64).round() as u32);
 
         (width, height)
     }
     // 9/16-ish
     else if input.0 <= input.1 && (input.0 as f64 / input.1 as f64) >= 9.0 / 16.0 {
-        let mut height = max.0.min(input.1);
-        if height.is_multiple_of(2) {
-            height -= 1;
-        }
+        let height = ensure_even(max.0.min(input.1));
 
         let width_ratio = input.0 as f64 / input.1 as f64;
-        let mut width = (width_ratio * height as f64).round() as u32;
-        if width.is_multiple_of(2) {
-            width -= 1;
-        }
+        let width = ensure_even((width_ratio * height as f64).round() as u32);
 
         (width, height)
     }
     // ultrawide
     else if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) > 16.0 / 9.0 {
-        let mut height = max.1.min(input.1);
-        if height.is_multiple_of(2) {
-            height -= 1;
-        }
+        let height = ensure_even(max.1.min(input.1));
 
         let width_ratio = input.0 as f64 / input.1 as f64;
-        let mut width = (width_ratio * height as f64).round() as u32;
-        if width.is_multiple_of(2) {
-            width -= 1;
-        }
+        let width = ensure_even((width_ratio * height as f64).round() as u32);
 
         (width, height)
     }
     // ultratall
     else if input.0 < input.1 && (input.0 as f64 / input.1 as f64) <= 9.0 / 16.0 {
         // swapped since max_width/height assume horizontal
-        let mut width = max.1.min(input.0);
-        if width.is_multiple_of(2) {
-            width -= 1;
-        }
+        let width = ensure_even(max.1.min(input.0));
 
         let height_ratio = input.1 as f64 / input.0 as f64;
-        let mut height = (height_ratio * width as f64).round() as u32;
-        if height.is_multiple_of(2) {
-            height -= 1;
-        }
+        let height = ensure_even((height_ratio * width as f64).round() as u32);
 
         (width, height)
     } else {

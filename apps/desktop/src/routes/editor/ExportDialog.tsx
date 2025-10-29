@@ -16,6 +16,7 @@ import {
 	For,
 	type JSX,
 	Match,
+	mergeProps,
 	on,
 	Show,
 	Switch,
@@ -24,6 +25,7 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
 import { SignInButton } from "~/components/SignInButton";
+import Tooltip from "~/components/Tooltip";
 import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
@@ -92,7 +94,7 @@ export const EXPORT_TO_OPTIONS = [
 
 type ExportFormat = ExportSettings["format"];
 
-export const FORMAT_OPTIONS = [
+const FORMAT_OPTIONS = [
 	{ label: "MP4", value: "Mp4" },
 	{ label: "GIF", value: "Gif" },
 ] as { label: string; value: ExportFormat; disabled?: boolean }[];
@@ -119,7 +121,17 @@ export function ExportDialog() {
 
 	const auth = authStore.createQuery();
 
-	const [settings, setSettings] = makePersisted(
+	const hasTransparentBackground = () => {
+		const backgroundSource =
+			editorInstance.savedProjectConfig.background.source;
+		return (
+			backgroundSource.type === "color" &&
+			backgroundSource.alpha !== undefined &&
+			backgroundSource.alpha < 255
+		);
+	};
+
+	const [_settings, setSettings] = makePersisted(
 		createStore<Settings>({
 			format: "Mp4",
 			fps: 30,
@@ -129,6 +141,14 @@ export function ExportDialog() {
 		}),
 		{ name: "export_settings" },
 	);
+
+	const settings = mergeProps(_settings, () => {
+		const ret: Partial<Settings> = {};
+		if (hasTransparentBackground() && _settings.format === "Mp4")
+			ret.format = "Gif";
+
+		return ret;
+	});
 
 	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
 
@@ -530,59 +550,68 @@ export function ExportDialog() {
 								<div class="flex flex-row gap-2">
 									<For each={FORMAT_OPTIONS}>
 										{(option) => {
-											const isGifDisabled = () =>
-												option.value === "Gif" && settings.exportTo === "link";
+											const disabledReason = () => {
+												if (
+													option.value === "Mp4" &&
+													hasTransparentBackground()
+												)
+													return "MP4 format does not support transparent backgrounds";
+												if (
+													option.value === "Gif" &&
+													settings.exportTo === "link"
+												)
+													return "Shareable links cannot be made from GIFs";
+											};
 
 											return (
-												<Button
-													variant="gray"
-													disabled={isGifDisabled()}
-													onClick={() => {
-														if (isGifDisabled()) return;
-														setSettings(
-															produce((newSettings) => {
-																newSettings.format =
-																	option.value as ExportFormat;
-
-																if (
-																	option.value === "Gif" &&
-																	!(
-																		settings.resolution.value === "720p" ||
-																		settings.resolution.value === "1080p"
-																	)
-																)
-																	newSettings.resolution = {
-																		...RESOLUTION_OPTIONS._720p,
-																	};
-
-																if (
-																	option.value === "Gif" &&
-																	GIF_FPS_OPTIONS.every(
-																		(v) => v.value === settings.fps,
-																	)
-																)
-																	newSettings.fps = 15;
-
-																if (
-																	option.value === "Mp4" &&
-																	FPS_OPTIONS.every(
-																		(v) => v.value !== settings.fps,
-																	)
-																)
-																	newSettings.fps = 30;
-															}),
-														);
-													}}
-													autofocus={false}
-													data-selected={settings.format === option.value}
-													class={
-														isGifDisabled()
-															? "opacity-50 cursor-not-allowed"
-															: ""
-													}
+												<Tooltip
+													content={disabledReason()}
+													disabled={disabledReason() === undefined}
 												>
-													{option.label}
-												</Button>
+													<Button
+														variant="gray"
+														onClick={() => {
+															setSettings(
+																produce((newSettings) => {
+																	newSettings.format =
+																		option.value as ExportFormat;
+
+																	if (
+																		option.value === "Gif" &&
+																		!(
+																			settings.resolution.value === "720p" ||
+																			settings.resolution.value === "1080p"
+																		)
+																	)
+																		newSettings.resolution = {
+																			...RESOLUTION_OPTIONS._720p,
+																		};
+
+																	if (
+																		option.value === "Gif" &&
+																		GIF_FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
+																		newSettings.fps = 15;
+
+																	if (
+																		option.value === "Mp4" &&
+																		FPS_OPTIONS.every(
+																			(v) => v.value !== settings.fps,
+																		)
+																	)
+																		newSettings.fps = 30;
+																}),
+															);
+														}}
+														autofocus={false}
+														data-selected={settings.format === option.value}
+														disabled={!!disabledReason()}
+													>
+														{option.label}
+													</Button>
+												</Tooltip>
 											);
 										}}
 									</For>
@@ -919,7 +948,7 @@ export function ExportDialog() {
 								>
 									<div class="relative">
 										<a
-											href={meta().sharing!.link}
+											href={meta().sharing?.link}
 											target="_blank"
 											rel="noreferrer"
 											class="block"
@@ -930,7 +959,7 @@ export function ExportDialog() {
 													setTimeout(() => {
 														setCopyPressed(false);
 													}, 2000);
-													navigator.clipboard.writeText(meta().sharing!.link!);
+													navigator.clipboard.writeText(meta().sharing?.link!);
 												}}
 												variant="dark"
 												class="flex gap-2 justify-center items-center"

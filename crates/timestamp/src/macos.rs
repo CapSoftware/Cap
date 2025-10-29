@@ -58,16 +58,3 @@ impl Sub<Duration> for MachAbsoluteTimestamp {
         Self((self.0 as f64 - rhs.as_nanos() as f64 * freq) as u64)
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test() {
-        let a = MachAbsoluteTimestamp::new(0);
-
-        dbg!(MachAbsoluteTimestamp::now());
-        dbg!(a + Duration::from_secs(1));
-    }
-}

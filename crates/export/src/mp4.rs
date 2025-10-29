@@ -1,6 +1,6 @@
 use crate::ExporterBase;
 use cap_editor::{AudioRenderer, get_audio_segments};
-use cap_enc_ffmpeg::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
+use cap_enc_ffmpeg::{AudioEncoder, aac::AACEncoder, h264::H264Encoder, mp4::*};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
@@ -111,7 +111,16 @@ impl Mp4ExportSettings {
 
             info!("Encoded {encoded_frames} video frames");
 
-            encoder.finish();
+            let res = encoder
+                .finish()
+                .map_err(|e| format!("Failed to finish encoding: {e}"))?;
+
+            if let Err(e) = res.video_finish {
+                return Err(format!("Video encoding failed: {e}"));
+            }
+            if let Err(e) = res.audio_finish {
+                return Err(format!("Audio encoding failed: {e}"));
+            }
 
             Ok::<_, String>(base.output_path)
         })

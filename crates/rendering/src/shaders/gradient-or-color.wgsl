@@ -20,7 +20,7 @@ fn gradient(uv: vec2<f32>) -> vec4<f32> {
 
 		let t = clamp(proj, 0.0, 1.0);
 
-		return mix(vec4<f32>(u.start.rgb, 1.0), vec4<f32>(u.end.rgb, 1.0), t);
+		return mix(u.start, u.end, t);
 }
 
 struct VertexOutput {

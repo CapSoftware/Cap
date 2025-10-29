@@ -10,7 +10,7 @@ use std::{
     ptr::{self, null, null_mut},
     time::{Duration, Instant},
 };
-use tracing::{trace, warn};
+use tracing::*;
 use windows::{
     Win32::{
         Foundation::*,

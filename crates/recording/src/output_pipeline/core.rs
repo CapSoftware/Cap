@@ -13,6 +13,7 @@ use std::{
     any::Any,
     future,
     marker::PhantomData,
+    ops::Deref,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -361,7 +362,13 @@ async fn finish_build(
 
             let _ = done_tx.send(match (res, muxer_res) {
                 (Err(e), _) | (_, Err(e)) => Err(e),
-                _ => Ok(()),
+                (_, Ok(muxer_streams_res)) => {
+                    if let Err(e) = muxer_streams_res {
+                        warn!("Muxer streams had failure: {e:#}");
+                    }
+
+                    Ok(())
+                }
             });
         }),
     );
@@ -696,6 +703,14 @@ impl AudioFrame {
     }
 }
 
+impl Deref for AudioFrame {
+    type Target = ffmpeg::frame::Audio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 pub trait VideoSource: Send + 'static {
     type Config;
     type Frame: VideoFrame;
@@ -789,7 +804,7 @@ pub trait Muxer: Send + 'static {
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>>;
 }
 
 pub trait AudioMuxer: Muxer {

@@ -193,7 +193,15 @@ impl AudioMixerBuilder {
                 break;
             }
 
-            if let Err(()) = mixer.tick(start, Timestamp::Instant(Instant::now())) {
+            #[cfg(target_os = "macos")]
+            let now = Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::now());
+            #[cfg(windows)]
+            let now =
+                Timestamp::PerformanceCounter(cap_timestamp::PerformanceCounterTimestamp::now());
+            #[cfg(not(any(target_os = "macos", windows)))]
+            let now = Timestamp::Instant(Instant::now());
+
+            if let Err(()) = mixer.tick(start, now) {
                 info!("Mixer tick errored");
                 break;
             }
@@ -479,6 +487,8 @@ fn duration_from_samples(samples: usize, rate: i32) -> Duration {
 
 #[cfg(test)]
 mod test {
+    use futures::{SinkExt, StreamExt};
+
     use super::*;
 
     const SAMPLE_RATE: u32 = 48_000;
@@ -490,29 +500,31 @@ mod test {
     const ONE_SECOND: Duration = Duration::from_secs(1);
     const SAMPLES_SECOND: usize = SOURCE_INFO.rate() as usize;
 
-    #[test]
-    fn mix_sources() {
-        let (tx, output_rx) = flume::bounded(4);
-        let mut mixer = AudioMixerBuilder::new(tx);
+    #[tokio::test]
+    async fn mix_sources() {
+        let (tx, mut output_rx) = mpsc::channel(4);
+        let mut mixer = AudioMixerBuilder::new();
 
-        let (tx1, rx) = flume::bounded(4);
+        let (mut tx1, rx) = mpsc::channel(4);
         mixer.add_source(SOURCE_INFO, rx);
 
-        let (tx2, rx) = flume::bounded(4);
+        let (mut tx2, rx) = mpsc::channel(4);
         mixer.add_source(SOURCE_INFO, rx);
 
-        let mut mixer = mixer.build().unwrap();
+        let mut mixer = mixer.build(tx).unwrap();
         let start = mixer.timestamps;
 
-        tx1.send((
-            SOURCE_INFO.wrap_frame(&vec![128, 255, 255, 255]),
+        tx1.send(AudioFrame::new(
+            SOURCE_INFO.wrap_frame(&[128, 255, 255, 255]),
             Timestamp::Instant(start.instant()),
         ))
+        .await
         .unwrap();
-        tx2.send((
-            SOURCE_INFO.wrap_frame(&vec![128, 128, 1, 255]),
+        tx2.send(AudioFrame::new(
+            SOURCE_INFO.wrap_frame(&[128, 128, 1, 255]),
             Timestamp::Instant(start.instant()),
         ))
+        .await
         .unwrap();
 
         let _ = mixer.tick(
@@ -520,7 +532,7 @@ mod test {
             Timestamp::Instant(start.instant() + Duration::from_secs_f64(4.0 / SAMPLE_RATE as f64)),
         );
 
-        let (frame, _) = output_rx.recv().expect("No output frame");
+        let frame = output_rx.next().await.expect("No output frame");
 
         let byte_count = frame.samples() * frame.channels() as usize;
         let samples: &[f32] = unsafe { std::mem::transmute(&frame.data(0)[0..byte_count]) };
@@ -535,132 +547,135 @@ mod test {
     mod source_buffer {
         use super::*;
 
-        #[test]
-        fn single_frame() {
-            let (output_tx, _) = flume::bounded(4);
-            let mut mixer = AudioMixerBuilder::new(output_tx);
+        #[tokio::test]
+        async fn single_frame() {
+            let (output_tx, _) = mpsc::channel::<AudioFrame>(4);
+            let mut mixer = AudioMixerBuilder::new();
             let start = Timestamps::now();
 
-            let (tx, rx) = flume::bounded(4);
+            let (mut tx, rx) = mpsc::channel(4);
             mixer.add_source(SOURCE_INFO, rx);
 
-            let mut mixer = mixer.build().unwrap();
+            let mut mixer = mixer.build(output_tx).unwrap();
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(start.instant()),
             ))
+            .await
             .unwrap();
 
             mixer.buffer_sources(Timestamp::Instant(start.instant()));
 
             assert_eq!(mixer.sources[0].buffer.len(), 1);
-            assert!(mixer.sources[0].rx.is_empty());
+            assert!(mixer.sources[0].rx.try_next().is_err());
         }
 
-        #[test]
-        fn frame_gap() {
-            let (output_tx, _) = flume::bounded(4);
-            let mut mixer = AudioMixerBuilder::new(output_tx);
+        #[tokio::test]
+        async fn frame_gap() {
+            let (output_tx, _) = mpsc::channel(4);
+            let mut mixer = AudioMixerBuilder::new();
 
-            let (tx, rx) = flume::bounded(4);
+            let (mut tx, rx) = mpsc::channel(4);
             mixer.add_source(SOURCE_INFO, rx);
 
-            let mut mixer = mixer.build().unwrap();
+            let mut mixer = mixer.build(output_tx).unwrap();
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(mixer.timestamps.instant()),
             ))
+            .await
             .unwrap();
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(mixer.timestamps.instant() + ONE_SECOND),
             ))
+            .await
             .unwrap();
 
             mixer.buffer_sources(Timestamp::Instant(mixer.timestamps.instant()));
 
-            let source = &mixer.sources[0];
+            let source = &mut mixer.sources[0];
 
             assert_eq!(source.buffer.len(), 3);
-            assert!(source.rx.is_empty());
+            assert!(source.rx.try_next().is_err());
 
             assert_eq!(
-                source.buffer[1].1.duration_since(mixer.timestamps),
+                source.buffer[1].timestamp.duration_since(mixer.timestamps),
                 ONE_SECOND / 2
             );
-            assert_eq!(
-                source.buffer[1].0.samples(),
-                SOURCE_INFO.rate() as usize / 2
-            );
+            assert_eq!(source.buffer[1].samples(), SOURCE_INFO.rate() as usize / 2);
         }
 
-        #[test]
-        fn start_gap() {
-            let (output_tx, _) = flume::bounded(4);
-            let mut mixer = AudioMixerBuilder::new(output_tx);
+        #[tokio::test]
+        async fn start_gap() {
+            let (output_tx, _) = mpsc::channel(4);
+            let mut mixer = AudioMixerBuilder::new();
 
-            let (tx, rx) = flume::bounded(4);
+            let (mut tx, rx) = mpsc::channel(4);
             mixer.add_source(SOURCE_INFO, rx);
 
-            let mut mixer = mixer.build().unwrap();
+            let mut mixer = mixer.build(output_tx).unwrap();
             let start = mixer.timestamps;
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(start.instant() + ONE_SECOND / 2),
             ))
+            .await
             .unwrap();
 
             mixer.buffer_sources(Timestamp::Instant(start.instant()));
 
-            let source = &mixer.sources[0];
+            let source = &mut mixer.sources[0];
 
             assert_eq!(source.buffer.len(), 1);
-            assert!(source.rx.is_empty());
+            assert!(source.rx.try_next().is_err());
 
-            assert_eq!(source.buffer[0].1.duration_since(start), ONE_SECOND / 2);
             assert_eq!(
-                source.buffer[0].0.samples(),
-                SOURCE_INFO.rate() as usize / 2
+                source.buffer[0].timestamp.duration_since(start),
+                ONE_SECOND / 2
             );
+            assert_eq!(source.buffer[0].samples(), SOURCE_INFO.rate() as usize / 2);
         }
 
-        #[test]
-        fn after_draining() {
-            let (output_tx, _) = flume::bounded(4);
-            let mut mixer = AudioMixerBuilder::new(output_tx);
+        #[tokio::test]
+        async fn after_draining() {
+            let (output_tx, _) = mpsc::channel(4);
+            let mut mixer = AudioMixerBuilder::new();
 
-            let (tx, rx) = flume::bounded(4);
+            let (mut tx, rx) = mpsc::channel(4);
             mixer.add_source(SOURCE_INFO, rx);
 
-            let mut mixer = mixer.build().unwrap();
+            let mut mixer = mixer.build(output_tx).unwrap();
             let start = mixer.timestamps;
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(start.instant()),
             ))
+            .await
             .unwrap();
 
             mixer.buffer_sources(Timestamp::Instant(start.instant()));
 
             mixer.sources[0].buffer.clear();
 
-            tx.send((
+            tx.send(AudioFrame::new(
                 SOURCE_INFO.wrap_frame(&vec![0; SAMPLES_SECOND / 2]),
                 Timestamp::Instant(start.instant() + ONE_SECOND),
             ))
+            .await
             .unwrap();
 
             mixer.buffer_sources(Timestamp::Instant(start.instant() + ONE_SECOND));
 
-            let source = &mixer.sources[0];
+            let source = &mut mixer.sources[0];
 
             assert_eq!(source.buffer.len(), 2);
-            assert!(source.rx.is_empty());
+            assert!(source.rx.try_next().is_err());
 
             let item = &source.buffer[0];
             assert_eq!(item.timestamp.duration_since(start), ONE_SECOND / 2);

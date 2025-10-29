@@ -230,6 +230,7 @@ const WARMUP_GUARD_SAMPLES: u32 = 3;
 const WARMUP_SPIKE_RATIO: f64 = 50.0;
 #[cfg(not(target_os = "macos"))]
 const FALLBACK_WIRED_LATENCY_SECS: f64 = 0.03;
+#[cfg(target_os = "macos")]
 const WIRELESS_FALLBACK_LATENCY_SECS: f64 = 0.20;
 const WIRELESS_MIN_LATENCY_SECS: f64 = 0.12;
 
@@ -615,6 +616,7 @@ mod macos {
 }
 
 #[cfg(test)]
+#[allow(clippy::unchecked_duration_subtraction)]
 mod tests {
     use super::*;
     use std::time::Instant;

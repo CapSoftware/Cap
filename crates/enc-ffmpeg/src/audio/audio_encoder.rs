@@ -9,5 +9,5 @@ pub trait AudioEncoder {
     }
 
     fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output);
-    fn finish(&mut self, output: &mut format::context::Output);
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error>;
 }
