@@ -98,6 +98,8 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
+    env:
+      target: aarch64-apple-darwin
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -105,12 +107,12 @@ jobs:
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.target }}
+          targets: ${{ env.target }}
           components: clippy
 
       - uses: ./.github/actions/setup-rust-cache
         with:
-          target: ${{ matrix.settings.target }}
+          target: ${{ env.target }}
 
       - name: Create .env file in root
         run: |

@@ -60,43 +60,52 @@ class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
 	"WorkflowRpcSecret",
 	{
 		sync: () => ({
-			authSecret: Redacted.make(serverEnv().WORKFLOWS_RPC_SECRET),
+			authSecret: Option.fromNullable(serverEnv().WORKFLOWS_RPC_SECRET).pipe(
+				Option.map(Redacted.make),
+			),
 		}),
 	},
 ) {}
 
-const WorkflowRpcLive = Layer.scoped(
-	Workflows.RpcClient,
+const WorkflowRpcLive = Layer.unwrapScoped(
 	Effect.gen(function* () {
 		const url = Option.getOrElse(
 			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
 			() => "http://127.0.0.1:42169",
 		);
 
-		return yield* RpcClient.make(Workflows.RpcGroup).pipe(
+		const { authSecret } = yield* WorkflowRpcSecret;
+
+		if (Option.isNone(authSecret)) return Layer.empty;
+
+		const authMiddleware = RpcMiddleware.layerClient(
+			Workflows.SecretAuthMiddleware,
+			({ request }) =>
+				Effect.gen(function* () {
+					return {
+						...request,
+						headers: Headers.set(
+							request.headers,
+							"authorization",
+							Redacted.value(authSecret.value),
+						),
+					};
+				}),
+		);
+
+		const client = yield* RpcClient.make(Workflows.RpcGroup).pipe(
 			Effect.provide(
-				RpcClient.layerProtocolHttp({ url }).pipe(
-					Layer.provide(Workflows.RpcSerialization),
+				Layer.mergeAll(
+					RpcClient.layerProtocolHttp({ url }).pipe(
+						Layer.provide(Workflows.RpcSerialization),
+					),
+					authMiddleware,
 				),
 			),
 		);
+
+		return Layer.succeed(Workflows.RpcClient, client);
 	}),
-).pipe(
-	Layer.provide(
-		RpcMiddleware.layerClient(Workflows.SecretAuthMiddleware, ({ request }) =>
-			Effect.gen(function* () {
-				const { authSecret } = yield* WorkflowRpcSecret;
-				return {
-					...request,
-					headers: Headers.set(
-						request.headers,
-						"authorization",
-						Redacted.value(authSecret),
-					),
-				};
-			}),
-		),
-	),
 );
 
 export const Dependencies = Layer.mergeAll(

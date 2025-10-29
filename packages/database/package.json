@@ -64,7 +64,8 @@
 		"./helpers": "./helpers.ts",
 		"./emails/config": "./emails/config.ts",
 		"./emails/*": "./emails/*.tsx",
-		"./types": "./types/index.ts"
+		"./types": "./types/index.ts",
+		"./migrate": "./migrate.ts"
 	},
 	"publishConfig": {
 		"exports": {
