@@ -1,6 +1,8 @@
 use cap_media_info::AudioInfo;
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::channel::{mpsc, oneshot};
+#[cfg(not(any(target_os = "macos", windows)))]
+use std::time::Instant;
 use std::{
     collections::VecDeque,
     sync::{
@@ -9,8 +11,6 @@ use std::{
     },
     time::Duration,
 };
-#[cfg(not(any(target_os = "macos", windows)))]
-use std::time::Instant;
 use tracing::{debug, info};
 
 use crate::output_pipeline::AudioFrame;
