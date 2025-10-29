@@ -14,7 +14,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Window};
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -90,92 +89,86 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .map_err(|e| format!("Failed to parse recording metadata: {e}"))?;
 
         let base_path = std::path::Path::new(video_path);
-        let mut audio_sources = Vec::new();
+
         let mut earliest_audio_start = f32::MAX;
+        let mut earliest_display_start = f32::MAX;
+        let mut sources: Vec<(Vec<f32>, f32)> = Vec::new();
 
         if let Some(segments) = meta["segments"].as_array() {
             for segment in segments {
-                if let Some(mic_start) = segment["mic"]["start_time"].as_f64() {
-                    if segment["mic"]["path"].as_str().is_some() {
-                        earliest_audio_start = earliest_audio_start.min(mic_start as f32);
-                    }
-                }
+                let mut consider_stream = |stream_key: &str| {
+                    if let Some(start) = segment[stream_key]["start_time"].as_f64() {
+                        if let Some(path) = segment[stream_key]["path"].as_str() {
+                            earliest_audio_start = earliest_audio_start.min(start as f32);
+                            let full_path = base_path.join(path);
+                            match AudioData::from_file(&full_path) {
+                                Ok(audio) => {
+                                    let mut samples = if audio.channels() > 1 {
+                                        convert_to_mono(audio.samples(), audio.channels() as usize)
+                                    } else {
+                                        audio.samples().to_vec()
+                                    };
 
-                if let Some(audio_start) = segment["audio"]["start_time"].as_f64() {
-                    if segment["audio"]["path"].as_str().is_some() {
-                        earliest_audio_start = earliest_audio_start.min(audio_start as f32);
-                    }
-                }
+                                    if samples.is_empty() {
+                                        return;
+                                    }
 
-                if earliest_audio_start == f32::MAX {
-                    if let Some(system_audio_start) = segment["system_audio"]["start_time"].as_f64()
-                    {
-                        if segment["system_audio"]["path"].as_str().is_some() {
-                            earliest_audio_start =
-                                earliest_audio_start.min(system_audio_start as f32);
+                                    sources.push((samples, start as f32));
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to load audio {full_path:?}: {e}");
+                                }
+                            }
                         }
                     }
-                }
+                };
 
-                if let Some(system_audio) = segment["system_audio"]["path"].as_str() {
-                    audio_sources.push(base_path.join(system_audio));
-                }
+                consider_stream("system_audio");
+                consider_stream("audio");
+                consider_stream("mic");
 
-                if let Some(audio) = segment["audio"]["path"].as_str() {
-                    audio_sources.push(base_path.join(audio));
-                }
-                if let Some(mic) = segment["mic"]["path"].as_str() {
-                    audio_sources.push(base_path.join(mic));
+                if let Some(display_start) = segment["display"]["start_time"].as_f64() {
+                    earliest_display_start = earliest_display_start.min(display_start as f32);
                 }
             }
         }
 
-        if audio_sources.is_empty() {
+        if sources.is_empty() {
             return Err("No audio sources found in the recording metadata".to_string());
         }
 
-        let mut mixed_samples = Vec::new();
-        let mut channel_count = 0;
+        let earliest = if earliest_audio_start == f32::MAX {
+            log::warn!("No audio timing information found in metadata, using 0 offset");
+            0.0
+        } else {
+            earliest_audio_start
+        };
 
-        for source in audio_sources {
-            match AudioData::from_file(&source) {
-                Ok(audio) => {
-                    if mixed_samples.is_empty() {
-                        mixed_samples = audio.samples().to_vec();
-                        channel_count = audio.channels() as usize;
-                    } else {
-                        if audio.channels() as usize != channel_count {
-                            if channel_count > 1 {
-                                let mono_samples = convert_to_mono(&mixed_samples, channel_count);
-                                mixed_samples = mono_samples;
-                                channel_count = 1;
-                            }
+        if earliest_display_start == f32::MAX {
+            log::warn!(
+                "No display timing information found in metadata, assuming display starts at 0"
+            );
+            earliest_display_start = 0.0;
+        }
 
-                            let samples = if audio.channels() > 1 {
-                                convert_to_mono(audio.samples(), audio.channels() as usize)
-                            } else {
-                                audio.samples().to_vec()
-                            };
+        let mut timeline: Vec<f32> = Vec::new();
+        let sr = AudioData::SAMPLE_RATE as usize;
 
-                            mix_samples(&mut mixed_samples, &samples);
-                        } else {
-                            mix_samples(&mut mixed_samples, audio.samples());
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to process audio source {source:?}: {e}");
-                    continue;
-                }
+        for (samples, start_time) in sources.into_iter() {
+            let offset_samples = ((start_time - earliest).max(0.0) * (sr as f32)) as usize;
+            let needed_len = offset_samples.saturating_add(samples.len());
+            if timeline.len() < needed_len {
+                timeline.resize(needed_len, 0.0);
+            }
+
+            for i in 0..samples.len() {
+                let dst = offset_samples + i;
+                let mixed = (timeline[dst] + samples[i]) * 0.5;
+                timeline[dst] = mixed;
             }
         }
 
-        if channel_count > 1 {
-            mixed_samples = convert_to_mono(&mixed_samples, channel_count);
-            channel_count = 1;
-        }
-
-        if mixed_samples.is_empty() {
+        if timeline.is_empty() {
             return Err("Failed to process any audio sources".to_string());
         }
 
@@ -221,62 +214,52 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         let frame_size = encoder.frame_size() as usize;
         let frame_size = if frame_size == 0 { 1024 } else { frame_size };
 
-        let mut frame = ffmpeg::frame::Audio::new(
-            avformat::Sample::I16(avformat::sample::Type::Packed),
-            frame_size,
-            ChannelLayout::MONO,
-        );
-        frame.set_rate(WHISPER_SAMPLE_RATE);
+        if frame_size == 0 {
+            return Err("Invalid encoder frame size".to_string());
+        }
 
-        if !mixed_samples.is_empty() && frame_size * channel_count > 0 {
-            for (chunk_idx, chunk) in mixed_samples.chunks(frame_size * channel_count).enumerate() {
-                if chunk_idx % 100 == 0 {}
+        for (chunk_idx, chunk) in timeline.chunks(frame_size).enumerate() {
+            let mut input_frame = ffmpeg::frame::Audio::new(
+                avformat::Sample::F32(avformat::sample::Type::Packed),
+                chunk.len(),
+                channel_layout,
+            );
+            input_frame.set_rate(AudioData::SAMPLE_RATE);
 
-                let mut input_frame = ffmpeg::frame::Audio::new(
-                    avformat::Sample::F32(avformat::sample::Type::Packed),
-                    chunk.len() / channel_count,
-                    channel_layout,
-                );
-                input_frame.set_rate(AudioData::SAMPLE_RATE);
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    chunk.as_ptr() as *const u8,
+                    std::mem::size_of_val(chunk),
+                )
+            };
+            input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
 
-                let bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        chunk.as_ptr() as *const u8,
-                        std::mem::size_of_val(chunk),
-                    )
-                };
-                input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
+            let mut output_frame = ffmpeg::frame::Audio::new(
+                avformat::Sample::I16(avformat::sample::Type::Packed),
+                frame_size,
+                ChannelLayout::MONO,
+            );
+            output_frame.set_rate(WHISPER_SAMPLE_RATE);
 
-                let mut output_frame = ffmpeg::frame::Audio::new(
-                    avformat::Sample::I16(avformat::sample::Type::Packed),
-                    frame_size,
-                    ChannelLayout::MONO,
-                );
-                output_frame.set_rate(WHISPER_SAMPLE_RATE);
+            if let Err(e) = resampler.run(&input_frame, &mut output_frame) {
+                log::error!("Failed to resample chunk {chunk_idx}: {e}");
+                continue;
+            }
 
-                match resampler.run(&input_frame, &mut output_frame) {
-                    Ok(_) => if chunk_idx % 100 == 0 {},
-                    Err(e) => {
-                        log::error!("Failed to resample chunk {chunk_idx}: {e}");
-                        continue;
-                    }
-                }
+            if let Err(e) = encoder.send_frame(&output_frame) {
+                log::error!("Failed to send frame to encoder: {e}");
+                continue;
+            }
 
-                if let Err(e) = encoder.send_frame(&output_frame) {
-                    log::error!("Failed to send frame to encoder: {e}");
-                    continue;
-                }
-
-                loop {
-                    let mut packet = ffmpeg::Packet::empty();
-                    match encoder.receive_packet(&mut packet) {
-                        Ok(_) => {
-                            if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {e}");
-                            }
+            loop {
+                let mut packet = ffmpeg::Packet::empty();
+                match encoder.receive_packet(&mut packet) {
+                    Ok(_) => {
+                        if let Err(e) = packet.write_interleaved(&mut output) {
+                            log::error!("Failed to write packet: {e}");
                         }
-                        Err(_) => break,
                     }
+                    Err(_) => break,
                 }
             }
         }
@@ -287,16 +270,11 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         loop {
             let mut packet = ffmpeg::Packet::empty();
-            let received = encoder.receive_packet(&mut packet);
-
-            if received.is_err() {
+            if encoder.receive_packet(&mut packet).is_err() {
                 break;
             }
-
-            {
-                if let Err(e) = packet.write_interleaved(&mut output) {
-                    return Err(format!("Failed to write final packet: {e}"));
-                }
+            if let Err(e) = packet.write_interleaved(&mut output) {
+                return Err(format!("Failed to write final packet: {e}"));
             }
         }
 
@@ -304,14 +282,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .write_trailer()
             .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
-        let final_offset = if earliest_audio_start == f32::MAX {
-            log::warn!("No audio timing information found in metadata, using 0 offset");
-            0.0
-        } else {
-            earliest_audio_start
-        };
-
-        Ok(final_offset)
+        Ok(earliest - earliest_display_start)
     } else {
         let mut input =
             avformat::input(&video_path).map_err(|e| format!("Failed to open video file: {e}"))?;
@@ -555,42 +526,63 @@ fn process_with_whisper(
         if !text_trimmed.is_empty() && n_tokens > 0 {
             let mut current_word = String::new();
             let mut word_start_time: Option<f32> = None;
+            let mut last_token_end_time: Option<f32> = None;
 
             for j in 0..n_tokens {
-                if let Ok(token_text) = state.full_get_token_text(i, j) {
+                if let Ok(raw_token_text) = state.full_get_token_text(i, j) {
                     if let Ok(token_info) = state.full_get_token_data(i, j) {
                         let token_start = (token_info.t0 as f32) / 100.0 + time_offset;
-                        let _token_end = (token_info.t1 as f32) / 100.0 + time_offset;
+                        let token_end = (token_info.t1 as f32) / 100.0 + time_offset;
 
+                        // Skip special tokens entirely
                         let is_special_token =
-                            token_text.starts_with("[_") && token_text.ends_with("]");
-
-                        if !is_special_token {
-                            let is_word_boundary = token_text.starts_with(' ')
-                                || token_text.starts_with('\n')
-                                || (j == 0 && !current_word.is_empty());
-
-                            if is_word_boundary && !current_word.is_empty() {
-                                if let Some(start) = word_start_time {
-                                    let cleaned_word = clean_special_tokens(&current_word);
-                                    if !cleaned_word.is_empty() {
-                                        words.push(cap_project::CaptionWord {
-                                            text: cleaned_word,
-                                            start,
-                                            end: token_start,
-                                        });
-                                    }
-                                }
-                                current_word.clear();
-                                word_start_time = None;
-                            }
-
-                            current_word.push_str(&token_text);
-
-                            if word_start_time.is_none() {
-                                word_start_time = Some(token_start);
-                            }
+                            raw_token_text.starts_with("[_") && raw_token_text.ends_with("]");
+                        if is_special_token {
+                            continue;
                         }
+
+                        // Treat leading whitespace as a boundary but keep the remaining content
+                        let token_text = raw_token_text.trim_start();
+                        let had_leading_space = token_text.len() != raw_token_text.len();
+
+                        if had_leading_space && !current_word.is_empty() {
+                            if let Some(start) = word_start_time {
+                                let cleaned_word = clean_special_tokens(&current_word);
+                                if !cleaned_word.is_empty() {
+                                    let end_time = last_token_end_time.unwrap_or(token_start);
+                                    words.push(cap_project::CaptionWord {
+                                        text: cleaned_word,
+                                        start,
+                                        end: end_time,
+                                    });
+                                }
+                            }
+                            current_word.clear();
+                            word_start_time = None;
+                            last_token_end_time = None;
+                        }
+
+                        if token_text.is_empty() {
+                            continue;
+                        }
+
+                        let is_punct_only = token_text
+                            .chars()
+                            .all(|c| !c.is_alphanumeric());
+
+                        if is_punct_only {
+                            if !current_word.is_empty() {
+                                current_word.push_str(token_text);
+                                last_token_end_time = Some(token_end);
+                            }
+                            continue;
+                        }
+
+                        if word_start_time.is_none() {
+                            word_start_time = Some(token_start);
+                        }
+                        last_token_end_time = Some(token_end);
+                        current_word.push_str(token_text);
                     }
                 }
             }
@@ -599,10 +591,11 @@ fn process_with_whisper(
                 if let Some(start) = word_start_time {
                     let cleaned_word = clean_special_tokens(&current_word);
                     if !cleaned_word.is_empty() {
+                        let end = last_token_end_time.unwrap_or(end_time);
                         words.push(cap_project::CaptionWord {
                             text: cleaned_word,
                             start,
-                            end: end_time,
+                            end,
                         });
                     }
                 }
@@ -808,10 +801,225 @@ fn process_with_whisper(
         }
     }
 
+    let merged_segments = merge_trailing_duplicates(split_segments);
+
     Ok(CaptionData {
-        segments: split_segments,
+        segments: merged_segments,
         settings: Some(cap_project::CaptionSettings::default()),
     })
+}
+
+fn normalize_for_merge(text: &str) -> String {
+    text.trim()
+        .trim_matches(|c: char| {
+            // Preserve apostrophes/letters/digits, trim other punctuation
+            !(c.is_alphanumeric() || c == '\'')
+        })
+        .to_lowercase()
+}
+
+fn merge_segment_text(base: &mut CaptionSegment, trailing_text: &str) {
+    let trailing_trimmed = trailing_text.trim();
+    if trailing_trimmed.is_empty() {
+        return;
+    }
+
+    let trailing_norm = normalize_for_merge(trailing_trimmed);
+    if trailing_norm.is_empty() {
+        return;
+    }
+
+    let base_trimmed = base.text.trim_end();
+
+    if base_trimmed.is_empty() {
+        base.text = trailing_trimmed.to_string();
+        return;
+    }
+
+    if let Some(idx) = base_trimmed.rfind(char::is_whitespace) {
+        let (prefix, last_word) = base_trimmed.split_at(idx + 1);
+        if normalize_for_merge(last_word) == trailing_norm {
+            base.text = format!("{}{}", prefix, trailing_trimmed);
+            return;
+        }
+    } else if normalize_for_merge(base_trimmed) == trailing_norm {
+        base.text = trailing_trimmed.to_string();
+        return;
+    }
+
+    if base.text.ends_with(char::is_whitespace) {
+        base.text.push_str(trailing_trimmed);
+    } else {
+        base.text.push(' ');
+        base.text.push_str(trailing_trimmed);
+    }
+}
+
+fn should_merge_trailing_duplicate(
+    previous: &CaptionSegment,
+    current: &CaptionSegment,
+    tolerance: f32,
+) -> bool {
+    if current.words.len() != 1 {
+        return false;
+    }
+
+    if current.start > previous.end + tolerance {
+        return false;
+    }
+
+    let Some(prev_word) = previous.words.last() else {
+        return false;
+    };
+
+    let current_word = &current.words[0];
+
+    let prev_norm = normalize_for_merge(&prev_word.text);
+    let current_norm = normalize_for_merge(&current_word.text);
+
+    if prev_norm.is_empty() || current_norm.is_empty() {
+        return false;
+    }
+
+    prev_norm == current_norm
+}
+
+fn merge_trailing_duplicates(segments: Vec<CaptionSegment>) -> Vec<CaptionSegment> {
+    if segments.len() <= 1 {
+        return segments;
+    }
+
+    let mut merged = Vec::with_capacity(segments.len());
+    const MERGE_TOLERANCE: f32 = 0.05;
+
+    for mut segment in segments.into_iter() {
+        if let Some(previous) = merged.last_mut() {
+            if should_merge_trailing_duplicate(previous, &segment, MERGE_TOLERANCE) {
+                previous.end = previous.end.max(segment.end);
+
+                if let (Some(prev_word), Some(current_word)) =
+                    (previous.words.last_mut(), segment.words.first())
+                {
+                    prev_word.end = prev_word.end.max(current_word.end);
+                    if current_word.start < prev_word.start {
+                        prev_word.start = current_word.start;
+                    }
+
+                    if current_word.text.len() > prev_word.text.len() {
+                        prev_word.text = current_word.text.clone();
+                    }
+                }
+
+                merge_segment_text(previous, &segment.text);
+                continue;
+            }
+        }
+
+        merged.push(segment);
+    }
+
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::CaptionWord;
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn merges_trailing_duplicate_word_segment() {
+        let base_segment = CaptionSegment {
+            id: "segment-2".to_string(),
+            start: 4.1458936,
+            end: 6.1458936,
+            text: "Stop in the recording now".to_string(),
+            words: vec![
+                CaptionWord {
+                    text: "Stop".to_string(),
+                    start: 4.1458936,
+                    end: 4.5758934,
+                },
+                CaptionWord {
+                    text: "in".to_string(),
+                    start: 4.5758934,
+                    end: 4.695894,
+                },
+                CaptionWord {
+                    text: "the".to_string(),
+                    start: 4.695894,
+                    end: 5.2858934,
+                },
+                CaptionWord {
+                    text: "recording".to_string(),
+                    start: 5.2858934,
+                    end: 6.1358933,
+                },
+                CaptionWord {
+                    text: "now".to_string(),
+                    start: 6.1358933,
+                    end: 6.1458936,
+                },
+            ],
+        };
+
+        let trailing_segment = CaptionSegment {
+            id: "segment-3".to_string(),
+            start: 6.1458936,
+            end: 6.6458936,
+            text: "now.".to_string(),
+            words: vec![CaptionWord {
+                text: "now.".to_string(),
+                start: 6.1458936,
+                end: 6.6458936,
+            }],
+        };
+
+        let merged = merge_trailing_duplicates(vec![base_segment, trailing_segment]);
+        assert_eq!(merged.len(), 1);
+        let merged_segment = &merged[0];
+        assert_eq!(merged_segment.text, "Stop in the recording now.");
+        assert!(approx_eq(merged_segment.end, 6.6458936));
+        assert_eq!(merged_segment.words.len(), 5);
+        let last_word = merged_segment.words.last().unwrap();
+        assert_eq!(last_word.text, "now.");
+        assert!(approx_eq(last_word.end, 6.6458936));
+    }
+
+    #[test]
+    fn does_not_merge_distinct_following_word() {
+        let first = CaptionSegment {
+            id: "segment-a".to_string(),
+            start: 0.0,
+            end: 1.0,
+            text: "Hello".to_string(),
+            words: vec![CaptionWord {
+                text: "Hello".to_string(),
+                start: 0.0,
+                end: 1.0,
+            }],
+        };
+
+        let second = CaptionSegment {
+            id: "segment-b".to_string(),
+            start: 1.0,
+            end: 2.0,
+            text: "world".to_string(),
+            words: vec![CaptionWord {
+                text: "world".to_string(),
+                start: 1.0,
+                end: 2.0,
+            }],
+        };
+
+        let merged = merge_trailing_duplicates(vec![first.clone(), second.clone()]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].text, first.text);
+        assert_eq!(merged[1].text, second.text);
+    }
 }
 
 #[tauri::command]
@@ -921,6 +1129,31 @@ pub async fn save_captions(
                     "text".to_string(),
                     serde_json::Value::String(seg.text.clone()),
                 );
+                let words = seg
+                    .words
+                    .iter()
+                    .map(|w| {
+                        let mut wobj = serde_json::Map::new();
+                        wobj.insert(
+                            "text".to_string(),
+                            serde_json::Value::String(w.text.clone()),
+                        );
+                        wobj.insert(
+                            "start".to_string(),
+                            serde_json::Value::Number(
+                                serde_json::Number::from_f64(w.start as f64).unwrap(),
+                            ),
+                        );
+                        wobj.insert(
+                            "end".to_string(),
+                            serde_json::Value::Number(
+                                serde_json::Number::from_f64(w.end as f64).unwrap(),
+                            ),
+                        );
+                        serde_json::Value::Object(wobj)
+                    })
+                    .collect::<Vec<_>>();
+                segment.insert("words".to_string(), serde_json::Value::Array(words));
                 segment
             })
             .collect::<Vec<_>>(),
@@ -1011,12 +1244,31 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         segment.get("end").and_then(|v| v.as_f64()),
                         segment.get("text").and_then(|v| v.as_str()),
                     ) {
+                        let words = segment
+                            .get("words")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|w| {
+                                        let text = w.get("text").and_then(|v| v.as_str())?;
+                                        let start = w.get("start").and_then(|v| v.as_f64())?;
+                                        let end = w.get("end").and_then(|v| v.as_f64())?;
+                                        Some(cap_project::CaptionWord {
+                                            text: text.to_string(),
+                                            start: start as f32,
+                                            end: end as f32,
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+
                         segments.push(cap_project::CaptionSegment {
                             id: id.to_string(),
                             start: start as f32,
                             end: end as f32,
                             text: text.to_string(),
-                            words: Vec::new(),
+                            words,
                         });
                     }
                 }
@@ -1202,7 +1454,7 @@ pub async fn download_whisper_model(
         _ => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
     };
 
-    let client = Client::new();
+    let client = http_client::HttpClient::default();
     let response = client
         .get(model_url)
         .send()
@@ -1323,7 +1575,7 @@ pub async fn export_captions_srt(
 ) -> Result<Option<PathBuf>, String> {
     tracing::info!("Starting SRT export for video_id: {}", video_id);
 
-    let captions = match load_captions(video_id.clone(), app.clone()).await? {
+    let captions = match load_captions(app.clone(), video_id.clone()).await? {
         Some(c) => {
             tracing::info!("Found {} caption segments to export", c.segments.len());
             c

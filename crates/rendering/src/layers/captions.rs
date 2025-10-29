@@ -361,22 +361,28 @@ impl CaptionsLayer {
                     }
                 }
             } else {
-                if relative_time < transition_duration {
-                    let progress = relative_time / transition_duration;
+                let fade_duration = (segment_duration * 0.5).min(transition_duration);
+
+                if fade_duration > 0.0 && relative_time < fade_duration {
+                    let progress = (relative_time / fade_duration).clamp(0.0, 1.0);
                     let ease_progress = progress * progress;
                     current_opacity = ease_progress;
                     y_offset = 5.0 * (1.0 - ease_progress);
                     blur_amount = 2.0 * (1.0 - ease_progress);
-                } else if relative_time > segment_duration - transition_duration
+                } else if fade_duration > 0.0
+                    && relative_time > segment_duration - fade_duration
                     && relative_time <= segment_duration
                 {
-                    let progress = (segment_duration - relative_time) / transition_duration;
+                    let remaining = (segment_duration - relative_time).max(0.0);
+                    let progress = (remaining / fade_duration).clamp(0.0, 1.0);
                     let ease_progress = progress * progress;
                     current_opacity = ease_progress;
                     y_offset = -5.0 * (1.0 - ease_progress);
                     blur_amount = 2.0 * (1.0 - ease_progress);
                 } else if relative_time > segment_duration {
                     current_opacity = 0.0;
+                } else {
+                    current_opacity = 1.0;
                 }
             }
 

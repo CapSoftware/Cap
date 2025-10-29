@@ -27,7 +27,7 @@ thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
-glyphon = "0.9.0"
+glyphon = { git = "https://github.com/CapSoftware/glyphon", rev = "4c17a745f4475cd230f6ed96018cdb1f0af413ad" }
 tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"

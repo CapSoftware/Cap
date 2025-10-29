@@ -87,6 +87,13 @@ const fontOptions = [
   { value: "System Serif", label: "System Serif" },
   { value: "System Monospace", label: "System Monospace" },
 ];
+
+const fontWeightButtonClass = (active: boolean) =>
+  `px-3 py-1.5 rounded-md text-sm border transition-colors ${
+    active
+      ? "bg-blue-500 border-blue-500 text-white"
+      : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+  }`;
 const CAPTION_STYLE_KEYS: ReadonlyArray<keyof CaptionSettings> = [
   "enabled",
   "font",
@@ -114,13 +121,13 @@ export function CaptionsTab() {
   const [captionSettings, setCaptionSettings] = createStore(
     project?.captions?.settings || {
       enabled: false,
-      font: "Arial",
-      size: 24,
+      font: "System Sans-Serif",
+      size: 28,
       color: "#FFFFFF",
       backgroundColor: "#000000",
-      backgroundOpacity: 80,
+      backgroundOpacity: 90,
       position: "bottom",
-      bold: true,
+      bold: false,
       italic: false,
       outline: false,
       outlineColor: "#000000",
@@ -179,8 +186,9 @@ export function CaptionsTab() {
     localStorage.getItem("selectedTranscriptionLanguage") || "en"
   );
   const [downloadedModels, setDownloadedModels] = createSignal<string[]>([]);
+  const [showDownloadSelect, setShowDownloadSelect] = createSignal(false);
 
-  const [modelExists, setModelExists] = createSignal(false);
+  const [, setModelExists] = createSignal(false);
   const [isDownloading, setIsDownloading] = createSignal(false);
   const [downloadProgress, setDownloadProgress] = createSignal(0);
   const [downloadingModel, setDownloadingModel] = createSignal<string | null>(
@@ -191,6 +199,12 @@ export function CaptionsTab() {
   const [modelPath, setModelPath] = createSignal("");
   const [currentCaption, setCurrentCaption] = createSignal<string | null>(null);
 
+  const hasDownloadedSelectedModel = () =>
+    downloadedModels().includes(selectedModel());
+
+  const downloadSelectVisible = () =>
+    showDownloadSelect() || !hasDownloadedSelectedModel();
+
   createEffect(() => {
     if (!project || !editorInstance) return;
 
@@ -199,13 +213,13 @@ export function CaptionsTab() {
         segments: [],
         settings: {
           enabled: false,
-          font: "Arial",
-          size: 24,
+          font: "System Sans-Serif",
+          size: 28,
           color: "#FFFFFF",
           backgroundColor: "#000000",
-          backgroundOpacity: 80,
+          backgroundOpacity: 90,
           position: "bottom",
-          bold: true,
+          bold: false,
           italic: false,
           outline: false,
           outlineColor: "#000000",
@@ -361,6 +375,7 @@ export function CaptionsTab() {
 
       setDownloadedModels((prev) => [...prev, modelToDownload]);
       setModelExists(true);
+      setShowDownloadSelect(false);
       toast.success("Transcription model downloaded successfully!");
     } catch (error) {
       console.error("Error downloading model:", error);
@@ -552,106 +567,133 @@ export function CaptionsTab() {
                   </div>
 
                   <div class="space-y-2">
-                    <label class="text-xs text-gray-500">
-                      Download New Model
-                    </label>
-                    <KSelect<string>
-                      options={MODEL_OPTIONS.map((m) => m.name)}
-                      value={selectedModel()}
-                      onChange={(value: string | null) => {
-                        if (value) {
-                          setSelectedModel(value);
-                          localStorage.setItem(
-                            "selectedTranscriptionModel",
-                            value
-                          );
-                        }
-                      }}
-                      disabled={isDownloading()}
-                      itemComponent={(props) => (
-                        <MenuItem<typeof KSelect.Item>
-                          as={KSelect.Item}
-                          item={props.item}
+                    <Show
+                      when={downloadSelectVisible()}
+                      fallback={
+                        <button
+                          type="button"
+                          class="mt-1 text-xs font-medium text-blue-500 hover:text-blue-600 transition-colors w-fit"
+                          onClick={() => setShowDownloadSelect(true)}
                         >
-                          <KSelect.ItemLabel class="flex-1">
-                            {
-                              MODEL_OPTIONS.find(
-                                (m) => m.name === props.item.rawValue
-                              )?.label
-                            }
-                            {downloadedModels().includes(props.item.rawValue)
-                              ? " (Downloaded)"
-                              : ""}
-                          </KSelect.ItemLabel>
-                        </MenuItem>
-                      )}
+                          Switch model
+                        </button>
+                      }
                     >
-                      <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
-                        <KSelect.Value<string> class="flex-1 text-left truncate">
-                          {(state) => {
-                            const model = MODEL_OPTIONS.find(
-                              (m) => m.name === state.selectedOption()
-                            );
-                            return (
-                              <span>{model?.label || "Select a model"}</span>
-                            );
+                      <>
+                        <label class="text-xs text-gray-500">
+                          Download New Model
+                        </label>
+                        <KSelect<string>
+                          options={MODEL_OPTIONS.map((m) => m.name)}
+                          value={selectedModel()}
+                          onChange={(value: string | null) => {
+                            if (value) {
+                              setSelectedModel(value);
+                              localStorage.setItem(
+                                "selectedTranscriptionModel",
+                                value
+                              );
+                            }
                           }}
-                        </KSelect.Value>
-                        <KSelect.Icon>
-                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
-                        </KSelect.Icon>
-                      </KSelect.Trigger>
-                      <KSelect.Portal>
-                        <PopperContent<typeof KSelect.Content>
-                          as={KSelect.Content}
-                          class={topLeftAnimateClasses}
+                          disabled={isDownloading()}
+                          itemComponent={(props) => (
+                            <MenuItem<typeof KSelect.Item>
+                              as={KSelect.Item}
+                              item={props.item}
+                            >
+                              <KSelect.ItemLabel class="flex-1">
+                                {
+                                  MODEL_OPTIONS.find(
+                                    (m) => m.name === props.item.rawValue
+                                  )?.label
+                                }
+                                {downloadedModels().includes(props.item.rawValue)
+                                  ? " (Downloaded)"
+                                  : ""}
+                              </KSelect.ItemLabel>
+                            </MenuItem>
+                          )}
                         >
-                          <MenuItemList<typeof KSelect.Listbox>
-                            class="max-h-48 overflow-y-auto"
-                            as={KSelect.Listbox}
-                          />
-                        </PopperContent>
-                      </KSelect.Portal>
-                    </KSelect>
-                  </div>
+                          <KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
+                            <KSelect.Value<string> class="flex-1 text-left truncate">
+                              {(state) => {
+                                const model = MODEL_OPTIONS.find(
+                                  (m) => m.name === state.selectedOption()
+                                );
+                                return (
+                                  <span>{model?.label || "Select a model"}</span>
+                                );
+                              }}
+                            </KSelect.Value>
+                            <KSelect.Icon>
+                              <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+                            </KSelect.Icon>
+                          </KSelect.Trigger>
+                          <KSelect.Portal>
+                            <PopperContent<typeof KSelect.Content>
+                              as={KSelect.Content}
+                              class={topLeftAnimateClasses}
+                            >
+                              <MenuItemList<typeof KSelect.Listbox>
+                                class="max-h-48 overflow-y-auto"
+                                as={KSelect.Listbox}
+                              />
+                            </PopperContent>
+                          </KSelect.Portal>
+                        </KSelect>
 
-                  <Show
-                    when={isDownloading()}
-                    fallback={
-                      <Button
-                        class="w-full"
-                        onClick={downloadModel}
-                        disabled={
-                          isDownloading() ||
-                          downloadedModels().includes(selectedModel())
-                        }
-                      >
-                        Download{" "}
-                        {
-                          MODEL_OPTIONS.find((m) => m.name === selectedModel())
-                            ?.label
-                        }
-                      </Button>
-                    }
-                  >
-                    <div class="space-y-2">
-                      <div class="w-full bg-gray-100 rounded-full h-2">
-                        <div
-                          class="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                          style={{ width: `${downloadProgress()}%` }}
-                        />
-                      </div>
-                      <p class="text-xs text-center text-gray-500">
-                        Downloading{" "}
-                        {
-                          MODEL_OPTIONS.find(
-                            (m) => m.name === downloadingModel()
-                          )?.label
-                        }
-                        : {Math.round(downloadProgress())}%
-                      </p>
-                    </div>
-                  </Show>
+                        <Show
+                          when={isDownloading()}
+                          fallback={
+                            <Button
+                              class="w-full"
+                              onClick={downloadModel}
+                              disabled={
+                                isDownloading() || hasDownloadedSelectedModel()
+                              }
+                            >
+                              Download{" "}
+                              {
+                                MODEL_OPTIONS.find(
+                                  (m) => m.name === selectedModel()
+                                )?.label
+                              }
+                            </Button>
+                          }
+                        >
+                          <div class="space-y-2">
+                            <div class="w-full bg-gray-100 rounded-full h-2">
+                              <div
+                                class="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${downloadProgress()}%` }}
+                              />
+                            </div>
+                            <p class="text-xs text-center text-gray-500">
+                              Downloading{" "}
+                              {
+                                MODEL_OPTIONS.find(
+                                  (m) => m.name === downloadingModel()
+                                )?.label
+                              }
+                              : {Math.round(downloadProgress())}%
+                            </p>
+                          </div>
+                        </Show>
+
+                        <Show
+                          when={showDownloadSelect() && hasDownloadedSelectedModel()}
+                        >
+                          <button
+                            type="button"
+                            class="mt-1 text-xs text-gray-500 hover:text-gray-700 transition-colors w-fit"
+                            onClick={() => setShowDownloadSelect(false)}
+                          >
+                            Cancel
+                          </button>
+                        </Show>
+                      </>
+                    </Show>
+                  </div>
                 </div>
 
                 <Subfield name="Language">
@@ -776,9 +818,37 @@ export function CaptionsTab() {
                     </div>
 
                     <div class="flex flex-col gap-2">
+                      <span class="text-gray-500 text-sm">Font Weight</span>
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          class={fontWeightButtonClass(!captionSettings.bold)}
+                          onClick={() => {
+                            if (captionSettings.bold) {
+                              updateCaptionSetting("bold", false);
+                            }
+                          }}
+                        >
+                          Regular
+                        </button>
+                        <button
+                          type="button"
+                          class={fontWeightButtonClass(captionSettings.bold)}
+                          onClick={() => {
+                            if (!captionSettings.bold) {
+                              updateCaptionSetting("bold", true);
+                            }
+                          }}
+                        >
+                          Bold
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="flex flex-col gap-2">
                       <span class="text-gray-500 text-sm">Size</span>
                       <Slider
-                        value={[captionSettings.size || 24]}
+                        value={[captionSettings.size || 28]}
                         onChange={(v) => updateCaptionSetting("size", v[0])}
                         minValue={12}
                         maxValue={48}
@@ -798,7 +868,7 @@ export function CaptionsTab() {
                         Background Opacity
                       </span>
                       <Slider
-                        value={[captionSettings.backgroundOpacity || 80]}
+                        value={[captionSettings.backgroundOpacity || 90]}
                         onChange={(v) =>
                           updateCaptionSetting("backgroundOpacity", v[0])
                         }
@@ -980,4 +1050,3 @@ function IconDelete() {
     </svg>
   );
 }
-
