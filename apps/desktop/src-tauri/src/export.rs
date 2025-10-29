@@ -1,9 +1,16 @@
-use crate::{FramesRendered, get_video_metadata};
+use crate::{
+    FramesRendered, UploadMode,
+    auth::AuthStore,
+    get_video_metadata,
+    upload::{InstantMultipartUpload, build_video_meta, create_or_get_video},
+    web_api::{AuthedApiError, ManagerExt},
+};
 use cap_export::ExporterBase;
-use cap_project::{RecordingMeta, XY};
+use cap_project::{RecordingMeta, S3UploadMeta, VideoUploadInfo, XY};
 use serde::Deserialize;
 use specta::Type;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
+use tauri::AppHandle;
 use tracing::{info, instrument};
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -24,13 +31,15 @@ impl ExportSettings {
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(progress))]
+#[instrument(skip(app, progress))]
 pub async fn export_video(
+    app: AppHandle,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
+    upload: bool,
 ) -> Result<PathBuf, String> {
-    let exporter_base = ExporterBase::builder(project_path)
+    let exporter_base = ExporterBase::builder(project_path.clone())
         .build()
         .await
         .map_err(|e| {
@@ -44,6 +53,96 @@ pub async fn export_video(
         rendered_count: 0,
         total_frames,
     });
+
+    if upload {
+        println!("RUNNING MULTIPART UPLOADER");
+
+        let mode = UploadMode::Initial {
+            pre_created_video: None,
+        }; // TODO: Fix this
+
+        let meta = RecordingMeta::load_for_project(&project_path).map_err(|v| v.to_string())?;
+
+        let file_path = meta.output_path();
+        if !file_path.exists() {
+            // notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+            // return Err("Failed to upload video: Rendered video not found".to_string());
+            todo!();
+        }
+
+        let Ok(Some(auth)) = AuthStore::get(&app) else {
+            AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+            // return Ok(UploadResult::NotAuthenticated);
+            todo!();
+        };
+
+        let metadata = build_video_meta(&file_path)
+            .map_err(|err| format!("Error getting output video meta: {err}"))?;
+
+        if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
+            // return Ok(UploadResult::UpgradeRequired);
+            todo!();
+        }
+
+        let s3_config = match async {
+            let video_id = match mode {
+                UploadMode::Initial { pre_created_video } => {
+                    if let Some(pre_created) = pre_created_video {
+                        return Ok(pre_created.config);
+                    }
+                    None
+                }
+                UploadMode::Reupload => {
+                    let Some(sharing) = meta.sharing.clone() else {
+                        return Err("No sharing metadata found".into());
+                    };
+
+                    Some(sharing.id)
+                }
+            };
+
+            create_or_get_video(
+                &app,
+                false,
+                video_id,
+                Some(meta.pretty_name.clone()),
+                Some(metadata.clone()),
+            )
+            .await
+        }
+        .await
+        {
+            Ok(data) => data,
+            Err(AuthedApiError::InvalidAuthentication) => {
+                // return Ok(UploadResult::NotAuthenticated);
+                todo!();
+            }
+            Err(AuthedApiError::UpgradeRequired) => todo!(), // return Ok(UploadResult::UpgradeRequired),
+            Err(err) => return Err(err.to_string()),
+        };
+
+        // TODO: Properly hook this up with the `ExportDialog`
+        let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
+
+        // TODO: Cleanup `handle` when this is cancelled
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await; // TODO: Do this properly
+            let handle = InstantMultipartUpload::spawn(
+                app,
+                file_path.join("output").join("result.mp4"),
+                VideoUploadInfo {
+                    id: s3_config.id.clone(),
+                    link: link.clone(),
+                    config: s3_config, // S3UploadMeta { id: s3_config.id },
+                },
+                file_path,
+                None,
+            );
+
+            let result = handle.handle.await;
+            println!("MULTIPART UPLOAD COMPLETE {link} {result:?}");
+        });
+    }
 
     let output_path = match settings {
         ExportSettings::Mp4(settings) => {

@@ -348,16 +348,16 @@ export function ExportDialog() {
 				}
 			}
 
-			const uploadChannel = new Channel<UploadProgress>((progress) => {
-				console.log("Upload progress:", progress);
-				setExportState(
-					produce((state) => {
-						if (state.type !== "uploading") return;
+			// const uploadChannel = new Channel<UploadProgress>((progress) => {
+			// 	console.log("Upload progress:", progress);
+			// 	// setExportState(
+			// 	// 	produce((state) => {
+			// 	// 		if (state.type !== "uploading") return;
 
-						state.progress = Math.round(progress.progress * 100);
-					}),
-				);
-			});
+			// 	// 		state.progress = Math.round(progress.progress * 100);
+			// 	// 	}),
+			// 	// );
+			// });
 
 			await exportWithSettings((progress) =>
 				setExportState({ type: "rendering", progress }),
@@ -366,26 +366,26 @@ export function ExportDialog() {
 			setExportState({ type: "uploading", progress: 0 });
 
 			// Now proceed with upload
-			const result = meta().sharing
-				? await commands.uploadExportedVideo(
-						projectPath,
-						"Reupload",
-						uploadChannel,
-					)
-				: await commands.uploadExportedVideo(
-						projectPath,
-						{
-							Initial: { pre_created_video: null },
-						},
-						uploadChannel,
-					);
+			// const result = meta().sharing
+			// 	? await commands.uploadExportedVideo(
+			// 			projectPath,
+			// 			"Reupload",
+			// 			uploadChannel,
+			// 		)
+			// 	: await commands.uploadExportedVideo(
+			// 			projectPath,
+			// 			{
+			// 				Initial: { pre_created_video: null },
+			// 			},
+			// 			uploadChannel,
+			// 		);
 
-			if (result === "NotAuthenticated")
-				throw new Error("You need to sign in to share recordings");
-			else if (result === "PlanCheckFailed")
-				throw new Error("Failed to verify your subscription status");
-			else if (result === "UpgradeRequired")
-				throw new Error("This feature requires an upgraded plan");
+			// if (result === "NotAuthenticated")
+			// 	throw new Error("You need to sign in to share recordings");
+			// else if (result === "PlanCheckFailed")
+			// 	throw new Error("Failed to verify your subscription status");
+			// else if (result === "UpgradeRequired")
+			// 	throw new Error("This feature requires an upgraded plan");
 		},
 		onSuccess: async () => {
 			const d = dialog();
