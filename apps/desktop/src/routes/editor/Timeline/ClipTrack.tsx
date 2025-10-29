@@ -11,6 +11,7 @@ import {
 	createSignal,
 	For,
 	Match,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -204,9 +205,10 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-					const [isDragging, setIsDragging] = createSignal(false);
-					const [dragOffset, setDragOffset] = createSignal(0);
-					const [initialStart, setInitialStart] = createSignal(segment.start);
+					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
+						offset: number;
+						initialStart: number;
+					}>(null);
 
 					const prefixOffsets = createMemo(() => {
 						const segs = segments();
@@ -221,12 +223,11 @@ export function ClipTrack(
 					const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
 					const relativeSegment = createMemo(() => {
-						const offset = isDragging()
-							? dragOffset() / (segment.timescale || 1)
-							: 0;
+						const ds = startHandleDrag();
+						const offset = ds ? ds.offset / segment.timescale : 0;
 
 						return {
-							start: prevDuration() + offset,
+							start: Math.max(prevDuration() + offset, 0),
 							end:
 								prevDuration() +
 								offset +
@@ -420,11 +421,14 @@ export function ClipTrack(
 									position="start"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
-										const start = segment.start;
-										setInitialStart(start);
-										setIsDragging(true);
-
 										if (split()) return;
+
+										const initialStart = segment.start;
+										setStartHandleDrag({
+											offset: 0,
+											initialStart,
+										});
+
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
@@ -455,7 +459,7 @@ export function ClipTrack(
 
 										function update(event: MouseEvent) {
 											const newStart =
-												start +
+												initialStart +
 												(event.clientX - downEvent.clientX) *
 													secsPerPixel() *
 													segment.timescale;
@@ -469,7 +473,10 @@ export function ClipTrack(
 												segment.end - 1,
 											);
 
-											setDragOffset(clampedStart - initialStart());
+											setStartHandleDrag({
+												offset: clampedStart - initialStart,
+												initialStart,
+											});
 
 											setProject(
 												"timeline",
@@ -482,32 +489,21 @@ export function ClipTrack(
 
 										const resumeHistory = projectHistory.pause();
 										createRoot((dispose) => {
+											onCleanup(() => {
+												resumeHistory();
+												console.log("NUL");
+												setStartHandleDrag(null);
+												onHandleReleased();
+											});
+
 											createEventListenerMap(window, {
 												mousemove: update,
 												mouseup: (e) => {
-													dispose();
-													resumeHistory();
 													update(e);
-
-													setIsDragging(false);
-													setDragOffset(0);
-
-													onHandleReleased();
-												},
-												blur: () => {
 													dispose();
-													resumeHistory();
-													setIsDragging(false);
-													setDragOffset(0);
-													onHandleReleased();
 												},
-												mouseleave: () => {
-													dispose();
-													resumeHistory();
-													setIsDragging(false);
-													setDragOffset(0);
-													onHandleReleased();
-												},
+												blur: () => dispose(),
+												mouseleave: () => dispose(),
 											});
 										});
 									}}
@@ -566,8 +562,8 @@ export function ClipTrack(
 										function update(event: MouseEvent) {
 											const deltaRecorded =
 												(event.clientX - downEvent.clientX) *
-													secsPerPixel() *
-													(segment.timescale || 1);
+												secsPerPixel() *
+												segment.timescale;
 											const newEnd = end + deltaRecorded;
 
 											setProject(
@@ -579,7 +575,7 @@ export function ClipTrack(
 													Math.min(
 														newEnd,
 														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
-														end + availableTimelineDuration * (segment.timescale || 1),
+														end + availableTimelineDuration * segment.timescale,
 														nextSegmentIsSameClip
 															? nextSegment.start
 															: maxSegmentDuration,
