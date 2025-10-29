@@ -13,7 +13,7 @@ export default function Header() {
 				onOpenChange={setOpenCompareDataDialog}
 			/>
 			<div className="flex gap-2 items-center">
-				<Select
+				{/* <Select
 					variant="dark"
 					size="fit"
 					options={[
@@ -23,7 +23,7 @@ export default function Header() {
 					]}
 					onValueChange={() => {}}
 					placeholder="Metric"
-				/>
+				/> */}
 				<Select
 					variant="dark"
 					size="fit"
