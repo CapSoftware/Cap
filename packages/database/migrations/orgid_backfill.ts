@@ -47,7 +47,7 @@ async function backfillVideoOrgIds() {
 				),
 			);
 
-		const rowsUpdated = updateResult.rowsAffected || 0;
+		const rowsUpdated = updateResult[0].affectedRows || 0;
 		updated += rowsUpdated;
 
 		console.log(`📹 Assigned orgId to ${updated} videos`);
@@ -62,12 +62,12 @@ async function backfillUserDefaultOrgIds() {
 	const updateResult = await db()
 		.update(users)
 		.set({
-			defaultOrgId: users.activeOrganizationId,
+			defaultOrgId: users.activeOrganizationId.getSQL(),
 		})
 		.where(
 			and(isNull(users.defaultOrgId), isNotNull(users.activeOrganizationId)),
 		);
-	const rowsUpdated = updateResult.rowsAffected || 0;
+	const rowsUpdated = updateResult[0].affectedRows || 0;
 	updated += rowsUpdated;
 
 	console.log(`👥 Assigned defaultOrgId to ${updated} users`);

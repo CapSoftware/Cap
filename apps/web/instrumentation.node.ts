@@ -8,8 +8,8 @@ import {
 	PutBucketPolicyCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import { buildEnv, serverEnv } from "@cap/env";
 import { migrateDb } from "@cap/database/migrate";
+import { buildEnv, serverEnv } from "@cap/env";
 
 export async function register() {
 	if (process.env.NEXT_PUBLIC_IS_CAP) return;
@@ -90,7 +90,7 @@ async function runMigrations() {
 			console.log("🔍 DB migrations triggered");
 			console.log("💿 Running DB migrations...");
 
-			await migrateDb()
+			await migrateDb();
 
 			console.log("💿 Migrations run successfully!");
 		} catch (error) {
