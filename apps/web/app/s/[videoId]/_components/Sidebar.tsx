@@ -7,6 +7,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
+import type { VideoData } from "../types";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -19,14 +20,8 @@ type CommentType = typeof commentsSchema.$inferSelect & {
 	authorImage?: ImageUpload.ImageUrl | null;
 };
 
-type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
-	organizationMembers?: string[];
-	organizationId?: string;
-	orgSettings?: OrganizationSettings | null;
-};
-
 interface SidebarProps {
-	data: VideoWithOrganizationInfo;
+	data: VideoData;
 	commentsData: CommentType[];
 	optimisticComments: CommentType[];
 	handleCommentSuccess: (comment: CommentType) => void;
@@ -91,10 +86,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	) => {
 		const user = useCurrentUser();
 
-		const isOwnerOrMember: boolean = Boolean(
-			user?.id === data.ownerId ||
-				(data.organizationId &&
-					data.organizationMembers?.includes(user?.id ?? "")),
+		const isOwnerOrMember = Boolean(
+			user?.id === data.owner.id ||
+				(user && data.organizationMembers?.includes(user.id)),
 		);
 
 		const defaultTab = !(
@@ -106,7 +100,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				: !(
 							videoSettings?.disableTranscript ??
 							data.orgSettings?.disableTranscript
-						)
+					  )
 					? "transcript"
 					: "activity";
 
@@ -182,7 +176,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						/>
 					);
 				case "transcript":
-					return <Transcript data={data} onSeek={onSeek} user={user} />;
+					return <Transcript data={data} onSeek={onSeek} />;
 				case "settings":
 					return <Settings />;
 				default:
