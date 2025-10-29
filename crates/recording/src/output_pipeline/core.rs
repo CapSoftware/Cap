@@ -219,10 +219,11 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         Ok(OutputPipeline {
             path,
             first_timestamp_rx: first_rx,
-            stop_token: Some(stop_token.drop_guard()),
+            stop_token: Some(stop_token.clone().drop_guard()),
             video_info: Some(video_info),
             done_fut: done_rx,
             pause_flag,
+            cancel_token: stop_token,
         })
     }
 }
@@ -272,10 +273,11 @@ impl OutputPipelineBuilder<NoVideo> {
         Ok(OutputPipeline {
             path,
             first_timestamp_rx: first_rx,
-            stop_token: Some(stop_token.drop_guard()),
+            stop_token: Some(stop_token.clone().drop_guard()),
             video_info: None,
             done_fut: done_rx,
             pause_flag,
+            cancel_token: stop_token,
         })
     }
 }
@@ -559,6 +561,7 @@ pub struct OutputPipeline {
     video_info: Option<VideoInfo>,
     done_fut: DoneFut,
     pause_flag: Arc<AtomicBool>,
+    cancel_token: CancellationToken,
 }
 
 pub struct FinishedOutputPipeline {
@@ -613,6 +616,14 @@ impl OutputPipeline {
 
     pub fn done_fut(&self) -> DoneFut {
         self.done_fut.clone()
+    }
+
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
     }
 }
 

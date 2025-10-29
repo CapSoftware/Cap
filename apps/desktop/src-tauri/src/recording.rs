@@ -594,9 +594,9 @@ pub async fn start_recording(
     }
     .await;
 
-    let actor_done_fut = match spawn_actor_res.flatten() {
-        Ok(rx) => rx,
-        Err(err) => {
+    let actor_done_fut = match spawn_actor_res {
+        Ok(Ok(rx)) => rx,
+        Ok(Err(err)) | Err(err) => {
             let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
 
             let mut dialog = MessageDialogBuilder::new(
