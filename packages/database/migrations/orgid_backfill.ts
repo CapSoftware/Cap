@@ -76,12 +76,11 @@ async function backfillUserDefaultOrgIds() {
 async function validateBackfill(): Promise<void> {
 	console.log("🔍 Validating backfill results...");
 
-	// Count videos still missing orgId where owner has activeOrganizationId
+	// Count videos still missing orgId
 	const videosWithoutOrgId = await db()
 		.select({ count: sql<number>`count(*)` })
 		.from(videos)
-		.innerJoin(users, eq(videos.ownerId, users.id))
-		.where(and(isNull(videos.orgId), isNotNull(users.activeOrganizationId)));
+		.where(isNull(videos.orgId));
 
 	// Count users still missing defaultOrgId where they have activeOrganizationId
 	const usersWithoutDefaultOrgId = await db()
@@ -179,29 +178,17 @@ async function getInitialStats(): Promise<void> {
 	console.log("");
 }
 
-async function main(): Promise<void> {
+export async function runOrgIdBackfill() {
 	console.log("🚀 Starting orgId backfill script");
 	console.log(`📦 Processing in chunks of ${CHUNK_SIZE} rows\n`);
 
-	try {
-		await getInitialStats();
+	await getInitialStats();
 
-		await backfillVideoOrgIds();
-		console.log(`✅ Video backfill complete\n`);
+	await backfillVideoOrgIds();
+	console.log(`✅ Video backfill complete\n`);
 
-		await backfillUserDefaultOrgIds();
-		console.log(`✅ User backfill complete\n`);
+	await backfillUserDefaultOrgIds();
+	console.log(`✅ User backfill complete\n`);
 
-		await validateBackfill();
-		process.exit(0);
-	} catch (error) {
-		console.error("❌ Error during backfill:", error);
-		process.exit(1);
-	}
+	await validateBackfill();
 }
-
-// Run the script
-main().catch((error) => {
-	console.error("❌ Unhandled error:", error);
-	process.exit(1);
-});
