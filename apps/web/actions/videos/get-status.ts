@@ -11,6 +11,7 @@ import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
+import { serverEnv } from "@cap/env";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
@@ -45,7 +46,7 @@ export async function getVideoStatus(
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-	if (!video.transcriptionStatus) {
+	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
 		console.log(
 			`[Get Status] Transcription not started for video ${videoId}, triggering transcription`,
 		);
