@@ -1,7 +1,6 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { comments as commentsSchema } from "@cap/database/schema";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
