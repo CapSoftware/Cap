@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -11,7 +12,6 @@ import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
-import { serverEnv } from "@cap/env";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
