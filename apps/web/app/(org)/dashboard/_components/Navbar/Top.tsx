@@ -64,14 +64,11 @@ const Top = () => {
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
 		"/dashboard/analytics": "Analytics",
-		[`/dashboard/analytics/s/${params.id}`]: "Analytics: cap name",
+		[`/dashboard/folder/${params.id}`]: "Caps",
+		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
 	};
 
-	const title = activeSpace
-		? activeSpace.name
-		: pathname.includes("/dashboard/folder")
-			? "Caps"
-			: titles[pathname] || "";
+	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
 
 	const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
 		(e) => {

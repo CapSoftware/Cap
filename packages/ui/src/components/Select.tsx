@@ -11,7 +11,7 @@ const SelectVariantContext = React.createContext<SelectVariant>("default");
 
 const selectTriggerVariants = cva(
 	cx(
-		"font-medium flex px-4 py-2 transition-all duration-200 text-[13px] outline-0",
+		"font-medium flex px-4 py-2 transition-all duration-200 text-sm outline-0",
 		"rounded-xl border-[1px] items-center justify-between gap-2 whitespace-nowrap",
 		"disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-gray-3 disabled:text-gray-9",
 		"ring-0 ring-gray-12 ring-offset-0 data-[state=open]:ring-offset-2 ring-offset-gray-1 data-[state=open]:ring-1",
@@ -122,7 +122,7 @@ function Select({
 			{...props}
 		>
 			<SelectTrigger variant={variant} size={size} className={className}>
-				<SelectValue placeholder={placeholder} />
+				<SelectValue className="text-sm" placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent className="mt-2" variant={variant}>
 				{options.map((option) => (
@@ -223,7 +223,7 @@ function SelectLabel({
 	return (
 		<SelectPrimitive.Label
 			data-slot="select-label"
-			className={cx("text-gray-10 px-3 py-1.5 text-xs", className)}
+			className={cx("text-gray-10 px-3 py-1.5 text-sm", className)}
 			{...props}
 		/>
 	);

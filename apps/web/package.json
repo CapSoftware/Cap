@@ -26,6 +26,8 @@
 		"@cap/web-backend": "workspace:*",
 		"@cap/web-domain": "workspace:*",
 		"@deepgram/sdk": "^3.3.4",
+		"@dnd-kit/core": "^6.3.1",
+		"@dnd-kit/utilities": "^3.2.2",
 		"@dub/analytics": "^0.0.27",
 		"@effect/cluster": "^0.50.4",
 		"@effect/experimental": "^0.56.0",

@@ -23,7 +23,7 @@ export interface OtherStatsData {
 	browsers: BrowserRowData[];
 	operatingSystems: OSRowData[];
 	deviceTypes: DeviceRowData[];
-	topCaps: CapRowData[];
+	topCaps?: CapRowData[] | null;
 }
 
 interface OtherStatsProps {
@@ -97,20 +97,22 @@ export default function OtherStats({ data }: OtherStatsProps) {
 					/>
 				</div>
 			</OtherStatBox>
-			<OtherStatBox
-				className="col-span-2"
-				title="Top Caps"
-				icon={faRecordVinyl}
-			>
-				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
-					<TableCard
-						title="Caps"
-						columns={["Cap", "Views", "Comments", "Reactions", "Percentage"]}
-						rows={data.topCaps}
-						type="cap"
-					/>
-				</div>
-			</OtherStatBox>
+			{data.topCaps && (
+				<OtherStatBox
+					className="col-span-2"
+					title="Top Caps"
+					icon={faRecordVinyl}
+				>
+					<div className="flex flex-col flex-1 gap-5 justify-center w-full">
+						<TableCard
+							title="Caps"
+							columns={["Cap", "Views", "Comments", "Reactions", "Percentage"]}
+							rows={data.topCaps}
+							type="cap"
+						/>
+					</div>
+				</OtherStatBox>
+			)}
 		</div>
 	);
 }
