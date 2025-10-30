@@ -227,8 +227,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         Ok(OutputPipeline {
             path,
             first_timestamp_rx: first_rx,
-            stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             video_info: Some(video_info),
+            stop_token: Some(build_ctx.stop_token.clone().drop_guard()),
             done_fut: build_ctx.done_rx,
             pause_flag: build_ctx.pause_flag,
             cancel_token: build_ctx.stop_token,
@@ -596,8 +596,8 @@ pub type DoneFut = Shared<BoxFuture<'static, Result<(), PipelineDoneError>>>;
 pub struct OutputPipeline {
     path: PathBuf,
     pub first_timestamp_rx: oneshot::Receiver<Timestamp>,
-    stop_token: Option<DropGuard>,
     video_info: Option<VideoInfo>,
+    stop_token: Option<DropGuard>,
     done_fut: DoneFut,
     pause_flag: Arc<AtomicBool>,
     cancel_token: CancellationToken,
