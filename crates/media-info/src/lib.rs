@@ -24,7 +24,7 @@ pub enum AudioInfoError {
 }
 
 impl AudioInfo {
-    pub const MAX_AUDIO_CHANNELS: u16 = 8;
+    pub const MAX_AUDIO_CHANNELS: u16 = 16;
 
     pub const fn new(
         sample_format: Sample,
@@ -133,18 +133,26 @@ impl AudioInfo {
         frame
     }
 
-    pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
+    pub fn wrap_frame_with_max_channels(&self, data: &[u8], max_channels: usize) -> frame::Audio {
+        let out_channels = self.channels.min(max_channels);
+
         let sample_size = self.sample_size();
         let interleaved_chunk_size = sample_size * self.channels;
         let samples = data.len() / interleaved_chunk_size;
 
-        let mut frame = frame::Audio::new(self.sample_format, samples, self.channel_layout());
+        let mut frame = frame::Audio::new(
+            self.sample_format,
+            samples,
+            ChannelLayout::default(out_channels as i32),
+        );
         frame.set_rate(self.sample_rate);
 
         if self.channels == 0 {
             unreachable!()
-        } else if self.channels == 1 || frame.is_packed() {
+        } else if self.channels == 1 || (frame.is_packed() && self.channels <= max_channels) {
             frame.data_mut(0)[0..data.len()].copy_from_slice(data)
+        } else if frame.is_packed() && self.channels > max_channels {
+            todo!();
         } else {
             // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
             // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
@@ -155,7 +163,7 @@ impl AudioInfo {
                 let start = chunk_index * sample_size;
                 let end = start + sample_size;
 
-                for channel in 0..self.channels {
+                for channel in 0..self.channels.min(max_channels) {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
                     frame.data_mut(channel)[start..end]
@@ -165,6 +173,15 @@ impl AudioInfo {
         }
 
         frame
+    }
+
+    pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
+        self.wrap_frame_with_max_channels(data, self.channels)
+    }
+
+    pub fn with_max_channels(mut self, channels: u16) -> Self {
+        self.channels = self.channels.min(channels as usize);
+        self
     }
 }
 
