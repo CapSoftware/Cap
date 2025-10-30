@@ -1,4 +1,4 @@
-use cap_media::feeds::{AudioInputSamples, AudioInputSamplesReceiver};
+use cap_recording::feeds::microphone::MicrophoneSamples;
 use cpal::{SampleFormat, StreamInstant};
 use keyed_priority_queue::KeyedPriorityQueue;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,10 @@ const MIN_DB: f64 = -96.0;
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct AudioInputLevelChange(f64);
 
-pub fn spawn_event_emitter(app_handle: AppHandle, audio_input_rx: AudioInputSamplesReceiver) {
+pub fn spawn_event_emitter(
+    app_handle: AppHandle,
+    audio_input_rx: flume::Receiver<MicrophoneSamples>,
+) {
     let mut time_window = VolumeMeter::new(0.2);
     tokio::spawn(async move {
         while let Ok(samples) = audio_input_rx.recv_async().await {
@@ -53,19 +56,15 @@ impl VolumeMeter {
         self.maxes.push(time, value);
         self.times.push_back(time);
 
-        loop {
-            if let Some(time) = self
-                .times
-                .back()
-                .unwrap()
-                .duration_since(self.times.front().unwrap())
-            {
-                if time > self.keep_duration {
-                    self.maxes.remove(self.times.front().unwrap());
-                    self.times.pop_front();
-                } else {
-                    break;
-                }
+        while let Some(time) = self
+            .times
+            .back()
+            .unwrap()
+            .duration_since(self.times.front().unwrap())
+        {
+            if time > self.keep_duration {
+                self.maxes.remove(self.times.front().unwrap());
+                self.times.pop_front();
             } else {
                 break;
             }
@@ -86,6 +85,7 @@ struct MinNonNan(f64);
 
 impl Eq for MinNonNan {}
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for MinNonNan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         other.0.partial_cmp(&self.0)
@@ -109,7 +109,7 @@ fn db_fs(data: impl Iterator<Item = f64>) -> f64 {
     (20.0 * (max as f64 / MAX_AMPLITUDE_F32).log10()).clamp(MIN_DB, 0.0)
 }
 
-fn samples_to_f64(samples: &AudioInputSamples) -> impl Iterator<Item = f64> + use<'_> {
+fn samples_to_f64(samples: &MicrophoneSamples) -> impl Iterator<Item = f64> + use<'_> {
     samples
         .data
         .chunks(samples.format.sample_size())

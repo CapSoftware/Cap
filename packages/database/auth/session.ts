@@ -1,28 +1,30 @@
-import { getServerSession, Session } from "next-auth";
-import { eq, InferSelectModel } from "drizzle-orm";
-import { authOptions } from "./auth-options";
+import { User } from "@cap/web-domain";
+import { eq, type InferSelectModel } from "drizzle-orm";
+import { getServerSession } from "next-auth";
+import { cache } from "react";
 import { db } from "../";
 import { users } from "../schema";
+import { authOptions } from "./auth-options";
 
 export const getSession = async () => {
-  const session = await getServerSession(authOptions());
+	const session = await getServerSession(authOptions());
 
-  return session;
+	return session;
 };
 
-export const getCurrentUser = async (
-  session?: Session
-): Promise<InferSelectModel<typeof users> | null> => {
-  const _session = session ?? (await getServerSession(authOptions()));
+export const getCurrentUser = cache(
+	async (): Promise<InferSelectModel<typeof users> | null> => {
+		const session = await getServerSession(authOptions());
 
-  if (!_session) return null;
+		if (!session) return null;
 
-  const [currentUser] = await db()
-    .select()
-    .from(users)
-    .where(eq(users.id, _session?.user.id));
+		const [currentUser] = await db()
+			.select()
+			.from(users)
+			.where(eq(users.id, User.UserId.make(session.user.id)));
 
-  return currentUser ?? null;
-};
+		return currentUser ?? null;
+	},
+);
 
 export const userSelectProps = users.$inferSelect;

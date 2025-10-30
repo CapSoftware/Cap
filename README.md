@@ -22,15 +22,20 @@ Cap is the open source alternative to Loom. It's a video messaging tool that all
 
 <img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png"/>
 
-# Cap Self Hosting *(Updated May 2025)*
+# Self Hosting
 
-Self-hosting deployment options for Cap are currently being worked on. This includes a [Dockerfile](https://github.com/CapSoftware/Cap/blob/main/Dockerfile) and also [one-click deployment via Railway](https://railway.com/template/PwpGcf). Documentation on how to deploy will be released as soon as we make the Dockerfile and Railway deployment template stable. You will be able to take your self hosted URL and paste directly into the desktop app for direct, instant use.
+Cap Web is available to self-host using Docker or Railway, see our [self-hosting docs](https://cap.so/docs/self-hosting) to learn more.
+You can also use the button below to deploy Cap Web to Railway:
 
-Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
+
+Cap Desktop can connect to your self-hosted Cap Web instance regardless of if you build it yourself or [download from our website](https://cap.so/download).
 
 # Monorepo App Architecture
 
 We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS throughout this Turborepo powered monorepo.
+
+> A note about database: The codebase is currently designed to work with MySQL only. MariaDB or other compatible databases might partially work but are not officially supported.
 
 ### Apps:
 
@@ -45,6 +50,13 @@ We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM),
 - `database`: A [React](https://reactjs.org) and [Drizzle ORM](https://orm.drizzle.team/) Shared database library.
 - `config`: `eslint` configurations (includes `eslint-config-next`, `eslint-config-prettier` other configs used throughout the monorepo).
 
+### License:
+Portions of this software are licensed as follows:
+
+- All code residing in the `cap-camera*` and `scap-*` families of crates is licensed under the MIT License (see [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT)).
+- All third party components are licensed under the original license provided by the owner of the applicable component
+- All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE)
+  
 # Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This guide is a work in progress, and is updated regularly as the app matures.

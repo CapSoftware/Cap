@@ -1,12 +1,13 @@
 use ffmpeg::{
     codec as avcodec,
     format::{self as avformat, context::input::PacketIter},
-    frame as avframe, util as avutil,
+    frame as avframe,
+    sys::{AVHWDeviceType, EAGAIN},
+    util as avutil,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{AVHWDeviceType, EAGAIN};
 use std::path::PathBuf;
-use tracing::debug;
+use tracing::*;
 
 pub struct FFmpegDecoder {
     input: avformat::context::Input,
@@ -49,16 +50,25 @@ impl FFmpegDecoder {
 
             let exceeds_common_hw_limits = width > 4096 || height > 4096;
 
-            let hw_device = hw_device_type
-                .and_then(|_| {
-		                if exceeds_common_hw_limits{
-				                debug!("Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration");
-				                None
-		                } else {
-			               		None
-		                }
-                })
-                .and_then(|hw_device_type| decoder.try_use_hw_device(hw_device_type).ok());
+            let hw_device = hw_device_type.and_then(|hw_device_type| {
+                if exceeds_common_hw_limits {
+                    warn!(
+                        "Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration"
+                    );
+                    None
+                } else {
+                    match decoder.try_use_hw_device(hw_device_type) {
+                        Ok(device) => {
+                            debug!("Using hardware device");
+                            Some(device)
+                        },
+                        Err(error) => {
+                            error!("Failed to enable hardware decoder: {error:?}");
+                            None
+                        }
+                    }
+                }
+            });
 
             Ok(FFmpegDecoder {
                 input,
@@ -81,7 +91,7 @@ impl FFmpegDecoder {
         self.input.seek(position, ..position)
     }
 
-    pub fn frames(&mut self) -> FramesIter {
+    pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
             packets: self.input.packets(),
             decoder: &mut self.decoder,
@@ -126,16 +136,14 @@ impl<'a> Iterator for FramesIter<'a> {
                     return match &self.hw_device {
                         Some(hw_device) => Some(Ok(hw_device.get_hwframe(&frame).unwrap_or(frame))),
                         None => Some(Ok(frame)),
-                    }
+                    };
                 }
                 Err(ffmpeg::Error::Eof) => return None,
                 Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {}
                 Err(e) => return Some(Err(e)),
             }
 
-            let Some((stream, packet)) = self.packets.next() else {
-                return None;
-            };
+            let (stream, packet) = self.packets.next()?;
 
             if stream.index() != self.stream_index {
                 continue;

@@ -6,16 +6,8 @@
 
 use std::borrow::Cow;
 
-use data::AudioInfoError;
+use cap_media_info::AudioInfoError;
 use thiserror::Error;
-
-pub mod data;
-pub mod encoders;
-pub mod feeds;
-pub mod frame_ws;
-pub mod pipeline;
-pub mod platform;
-pub mod sources;
 
 pub fn init() -> Result<(), MediaError> {
     ffmpeg::init()?;
@@ -39,9 +31,6 @@ pub enum MediaError {
 
     #[error("FFmpeg error: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
-
-    #[error("Camera error: {0}")]
-    Nokhwa(#[from] nokhwa::NokhwaError),
 
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),

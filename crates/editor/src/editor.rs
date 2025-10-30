@@ -1,16 +1,16 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
+use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
-    RenderVideoConstants, RendererLayers,
+    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
@@ -25,8 +25,9 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: flume::Sender<WSFrame>,
+    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     render_constants: Arc<RenderVideoConstants>,
+    #[allow(unused)]
     total_frames: u32,
 }
 
@@ -37,20 +38,22 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: flume::Sender<WSFrame>,
+        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Result<RendererHandle, String> {
-        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
+        let recordings = Arc::new(ProjectRecordingsMeta::new(
+            &recording_meta.project_path,
+            meta,
+        )?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.camera_path() {
-            if let Ok(camera_duration) =
+        if let Some(camera_path) = meta.camera_path()
+            && let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
-            {
-                max_duration = max_duration.max(camera_duration);
-            }
+        {
+            max_duration = max_duration.max(camera_duration);
         }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
@@ -59,7 +62,7 @@ impl Renderer {
 
         let this = Self {
             rx,
-            frame_tx,
+            frame_cb,
             render_constants,
             total_frames,
         };
@@ -94,24 +97,14 @@ impl Renderer {
                             }
                         }
 
-                        let frame_tx = self.frame_tx.clone();
-
-                        let output_size = uniforms.output_size;
-
                         let frame = frame_renderer
                             .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 
-                        frame_tx
-                            .try_send(WSFrame {
-                                data: frame.data,
-                                width: output_size.0,
-                                height: output_size.1,
-                                stride: frame.padded_bytes_per_row,
-                            })
-                            .ok();
-                        finished.send(()).ok();
+                        (self.frame_cb)(frame);
+
+                        let _ = finished.send(());
                     }
                     RendererMessage::Stop { finished } => {
                         if let Some(task) = frame_task.take() {
@@ -128,7 +121,7 @@ impl Renderer {
 
 impl RendererHandle {
     async fn send(&self, msg: RendererMessage) {
-        self.tx.send(msg).await.unwrap();
+        let _ = self.tx.send(msg).await;
     }
 
     pub async fn render_frame(
@@ -153,7 +146,12 @@ impl RendererHandle {
     pub async fn stop(&self) {
         // Send a stop message to the renderer
         let (tx, rx) = oneshot::channel();
-        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+        if self
+            .tx
+            .send(RendererMessage::Stop { finished: tx })
+            .await
+            .is_err()
+        {
             println!("Failed to send stop message to renderer");
         }
         // Wait for the renderer to acknowledge the stop

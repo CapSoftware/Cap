@@ -12,7 +12,7 @@ pub struct NV12ToRGBA {
 impl NV12ToRGBA {
     pub async fn new() -> Self {
         println!("NV12ToRGBA");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         // Get adapter for GPU
         let adapter = instance
@@ -26,7 +26,7 @@ impl NV12ToRGBA {
 
         // Create device and queue
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .unwrap();
 
@@ -85,7 +85,7 @@ impl NV12ToRGBA {
             label: Some("NV12 Converter Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -98,7 +98,12 @@ impl NV12ToRGBA {
         }
     }
 
-    pub fn convert(&self, input: NV12Input, width: u32, height: u32) -> Vec<u8> {
+    pub fn convert(
+        &self,
+        input: NV12Input,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, wgpu::PollError> {
         // Create textures for Y and UV planes
         let y_texture = self.device.create_texture_with_data(
             &self.queue,
@@ -196,7 +201,7 @@ impl NV12ToRGBA {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         // Create buffer for reading back the results
@@ -209,15 +214,15 @@ impl NV12ToRGBA {
 
         // Copy texture to buffer
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &output_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
                     rows_per_image: Some(height),
@@ -239,10 +244,10 @@ impl NV12ToRGBA {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait)?;
         rx.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
-        data.to_vec()
+        Ok(data.to_vec())
     }
 }

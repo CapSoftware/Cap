@@ -1,27 +1,43 @@
-use std::ops::{Add, Deref, Mul, Sub};
+use std::ops::{Add, Deref, Mul, Sub, SubAssign};
 
 use cap_project::{ProjectConfiguration, XY};
 
-use crate::{zoom::InterpolatedZoom, ProjectUniforms, RenderOptions};
+use crate::{ProjectUniforms, RenderOptions, zoom::InterpolatedZoom};
 
+/// Coordinate system for display frames
+/// `(0, 0)` is the top left of the frame,
+/// not the top left of the display
 #[derive(Default, Clone, Copy, Debug)]
 pub struct RawDisplaySpace;
 
-// raw cursor data
+/// Same as `RawDisplaySpace` except UV (0<->1)
+/// Cursor positions are stored as this
 #[derive(Default, Clone, Copy, Debug)]
 pub struct RawDisplayUVSpace;
 
+/// Coordinate system for display frames after they've been croppped.
+/// `(0, 0)` is the top left of the crop.
+/// The top left of the raw display would be negative
 #[derive(Default, Clone, Copy, Debug)]
 pub struct CroppedDisplaySpace;
 
+/// Coordinate system for rendered frames.
+/// `(0, 0)` is the top left of the final frame.
+/// Going from CroppedDisplaySpace to FrameSpace will account for padding.
+/// Cursor positions are defined in this coordinate space.
+///
+/// Rendered frame size is calculated before inner layouts,
+/// so this can be used during layout calculations.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct FrameSpace;
 
+/// Coordinate system for FrameSpace coordinates after zoom has been interpolated and applied.
+/// (0, 0) is the top left of the frame itself,
+/// so after a zoom is applied the original top left will likely be negative.
+///
+/// Used to account for zoom in calculating cursor positions.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct ZoomedFrameSpace;
-
-#[derive(Default, Clone, Copy, Debug)]
-pub struct TransformedDisplaySpace;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Coord<TSpace> {
@@ -83,8 +99,6 @@ impl Coord<RawDisplaySpace> {
         Coord::new(self.coord - crop.position.map(|v| v as f64))
     }
 }
-
-fn frame_size() {}
 
 impl Coord<CroppedDisplaySpace> {
     pub fn to_frame_space(
@@ -160,5 +174,11 @@ impl<T> Mul<f64> for Coord<T> {
             coord: self.coord * rhs,
             space: self.space,
         }
+    }
+}
+
+impl<T> SubAssign for Coord<T> {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.coord -= rhs.coord;
     }
 }

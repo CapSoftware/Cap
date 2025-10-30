@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
 use cap_project::BackgroundSource;
 use image::GenericImageView;
@@ -8,19 +6,19 @@ use specta::Type;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
-    create_shader_render_pipeline, srgb_to_linear, ProjectUniforms, RenderVideoConstants,
-    RenderingError,
+    ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline,
+    srgb_to_linear,
 };
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
-struct Gradient {
+pub struct Gradient {
     start: [f32; 4],
     end: [f32; 4],
     angle: f32,
 }
 
 #[derive(PartialEq)]
-enum ColorOrGradient {
+pub enum ColorOrGradient {
     Color([f32; 4]),
     Gradient(Gradient),
 }
@@ -35,11 +33,11 @@ pub enum Background {
 impl From<BackgroundSource> for Background {
     fn from(value: BackgroundSource) -> Self {
         match value {
-            BackgroundSource::Color { value } => Background::Color([
+            BackgroundSource::Color { value, alpha } => Background::Color([
                 srgb_to_linear(value[0]),
                 srgb_to_linear(value[1]),
                 srgb_to_linear(value[2]),
-                1.0,
+                alpha as f32 / 255.0,
             ]),
             BackgroundSource::Gradient { from, to, angle } => Background::Gradient(Gradient {
                 start: [
@@ -57,16 +55,16 @@ impl From<BackgroundSource> for Background {
                 angle: angle as f32,
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path {
-                    if !path.is_empty() {
-                        let clean_path = path
-                            .replace("asset://localhost/", "/")
-                            .replace("asset://", "")
-                            .replace("localhost//", "/");
+                if let Some(path) = path
+                    && !path.is_empty()
+                {
+                    let clean_path = path
+                        .replace("asset://localhost/", "/")
+                        .replace("asset://", "")
+                        .replace("localhost//", "/");
 
-                        if std::path::Path::new(&clean_path).exists() {
-                            return Background::Image { path: clean_path };
-                        }
+                    if std::path::Path::new(&clean_path).exists() {
+                        return Background::Image { path: clean_path };
                     }
                 }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
@@ -82,6 +80,7 @@ pub enum Inner {
     },
     ColorOrGradient {
         value: ColorOrGradient,
+        #[allow(unused)]
         buffer: wgpu::Buffer,
         bind_group: wgpu::BindGroup,
     },
@@ -144,14 +143,14 @@ impl BackgroundLayer {
                                 });
 
                                 queue.write_texture(
-                                    wgpu::ImageCopyTexture {
+                                    wgpu::TexelCopyTextureInfo {
                                         texture: &texture,
                                         mip_level: 0,
                                         origin: wgpu::Origin3d::ZERO,
                                         aspect: wgpu::TextureAspect::All,
                                     },
                                     &rgba,
-                                    wgpu::ImageDataLayout {
+                                    wgpu::TexelCopyBufferLayout {
                                         offset: 0,
                                         bytes_per_row: Some(4 * dimensions.0),
                                         rows_per_image: Some(dimensions.1),
@@ -210,7 +209,7 @@ impl BackgroundLayer {
                         self.inner = Some(Inner::Image {
                             path,
                             bind_group: self.image_pipeline.bind_group(
-                                &device,
+                                device,
                                 &uniform_buffer,
                                 &texture_view,
                             ),
@@ -316,8 +315,6 @@ impl ImageBackgroundPipeline {
         });
         let shader = device.create_shader_module(include_wgsl!("../shaders/image-background.wgsl"));
 
-        let empty_constants: HashMap<String, f64> = HashMap::new();
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ImageBackgroundPipeline"),
             layout: Some(
@@ -329,26 +326,24 @@ impl ImageBackgroundPipeline {
             ),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             }),
             primitive: wgpu::PrimitiveState {
@@ -439,14 +434,29 @@ impl From<Background> for GradientOrColorUniforms {
     fn from(value: Background) -> Self {
         match value {
             Background::Color(color) => Self {
-                start: color,
-                end: color,
+                start: [
+                    color[0] * color[3],
+                    color[1] * color[3],
+                    color[2] * color[3],
+                    color[3],
+                ],
+                end: [
+                    color[0] * color[3],
+                    color[1] * color[3],
+                    color[2] * color[3],
+                    color[3],
+                ],
                 angle: 0.0,
                 _padding: [0.0; 3],
             },
             Background::Gradient(Gradient { start, end, angle }) => Self {
-                start,
-                end,
+                start: [
+                    start[0] * start[3],
+                    start[1] * start[3],
+                    start[2] * start[3],
+                    start[3],
+                ],
+                end: [end[0] * end[3], end[1] * end[3], end[2] * end[3], end[3]],
                 angle,
                 _padding: [0.0; 3],
             },
@@ -489,15 +499,61 @@ impl GradientOrColorPipeline {
     }
 
     pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniforms.as_entire_binding(),
             }],
             label: Some("bind_group"),
-        });
+        })
+    }
+}
 
-        bind_group
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::BackgroundSource;
+
+    #[test]
+    fn test_transparent_color_conversion() {
+        let source = BackgroundSource::Color {
+            value: [255, 0, 0], // Red
+            alpha: 128,         // 50% opacity
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Color(color) => {
+                assert!((color[0] - 1.0).abs() < 1e-6); // Red in linear
+                assert_eq!(color[1], 0.0);
+                assert_eq!(color[2], 0.0);
+                assert!((color[3] - 0.5).abs() < 0.01); // Alpha 128/255 ≈ 0.5
+            }
+            _ => panic!("Expected Color variant"),
+        }
+    }
+
+    #[test]
+    fn test_transparent_gradient_conversion() {
+        let source = BackgroundSource::Gradient {
+            from: [0, 255, 0], // Green
+            to: [0, 0, 255],   // Blue
+            angle: 90,
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Gradient(gradient) => {
+                assert_eq!(gradient.start[0], 0.0);
+                assert_eq!(gradient.start[1], 1.0); // Green in linear
+                assert_eq!(gradient.start[2], 0.0);
+                assert_eq!(gradient.start[3], 1.0); // Alpha 255/255 = 1.0
+                assert_eq!(gradient.end[0], 0.0);
+                assert_eq!(gradient.end[1], 0.0);
+                assert_eq!(gradient.end[2], 1.0); // Blue in linear
+                assert_eq!(gradient.end[3], 0.0); // Alpha 0/255 = 0.0
+                assert_eq!(gradient.angle, 90.0);
+            }
+            _ => panic!("Expected Gradient variant"),
+        }
     }
 }

@@ -3,7 +3,7 @@
 	"private": true,
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
+		"bot-dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",
 		"cf-typegen": "wrangler types"
@@ -22,6 +22,7 @@
 		"jose": "^5.10.0",
 		"octokit": "^4.1.2",
 		"tweetnacl": "^1.0.3",
-		"valibot": "1.0.0-rc.1"
+		"valibot": "1.0.0-rc.1",
+		"zod": "^3"
 	}
 }

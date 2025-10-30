@@ -1,0 +1,26 @@
+[package]
+name = "cap-camera-mediafoundation"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+tracing.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+windows-core = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_DirectShow",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_Performance",
+] }
+
+[dev-dependencies]
+inquire = "0.7.5"
+
+[lints]
+workspace = true

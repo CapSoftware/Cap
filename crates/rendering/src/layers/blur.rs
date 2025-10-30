@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
@@ -10,6 +8,7 @@ pub struct BlurLayer {
     sampler: wgpu::Sampler,
     uniforms_buffer: wgpu::Buffer,
     pipeline: BlurPipeline,
+    cached_uniforms: Option<BlurUniforms>,
 }
 
 impl BlurLayer {
@@ -31,6 +30,7 @@ impl BlurLayer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
             pipeline: BlurPipeline::new(device),
+            cached_uniforms: None,
         }
     }
 
@@ -47,11 +47,14 @@ impl BlurLayer {
             _padding: 0.0,
         };
 
-        queue.write_buffer(
-            &self.uniforms_buffer,
-            0,
-            bytemuck::cast_slice(&[blur_uniform]),
-        );
+        if self.cached_uniforms.as_ref() != Some(&blur_uniform) {
+            queue.write_buffer(
+                &self.uniforms_buffer,
+                0,
+                bytemuck::cast_slice(&[blur_uniform]),
+            );
+            self.cached_uniforms = Some(blur_uniform);
+        }
     }
 
     pub fn render(
@@ -63,12 +66,9 @@ impl BlurLayer {
         pass.set_pipeline(&self.pipeline.render_pipeline);
         pass.set_bind_group(
             0,
-            &self.pipeline.bind_group(
-                &device,
-                &self.uniforms_buffer,
-                &source_texture,
-                &self.sampler,
-            ),
+            &self
+                .pipeline
+                .bind_group(device, &self.uniforms_buffer, source_texture, &self.sampler),
             &[],
         );
         pass.draw(0..4, 0..1);
@@ -76,7 +76,7 @@ impl BlurLayer {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default, PartialEq)]
 pub struct BlurUniforms {
     output_size: [f32; 2],
     blur_strength: f32,
@@ -127,7 +127,6 @@ impl BlurPipeline {
                 include_str!("../shaders/background-blur.wgsl").into(),
             ),
         });
-        let empty_constants: HashMap<String, f64> = HashMap::new();
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Background Blur Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
@@ -138,26 +137,24 @@ impl BlurPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             }),
             primitive: wgpu::PrimitiveState {

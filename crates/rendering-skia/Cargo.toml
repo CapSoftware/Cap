@@ -1,0 +1,33 @@
+[package]
+name = "cap-rendering-skia"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+futures = { workspace = true }
+
+# Skia dependencies
+skia-safe = "0.86.1"
+tracing-subscriber = "0.3"
+
+# Project dependencies
+cap-project = { path = "../project" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { version = "0.86.1", features = ["metal"] }
+metal = "0.27"
+foreign-types-shared = "0.3"
+
+[[bin]]
+name = "test-skia"
+path = "src/bin/test_skia.rs"
+
+[[bin]]
+name = "test-background"
+path = "src/bin/test_background.rs"

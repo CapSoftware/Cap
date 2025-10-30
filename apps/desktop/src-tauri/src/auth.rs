@@ -57,10 +57,10 @@ impl AuthStore {
             return Err("User not authenticated".to_string());
         };
 
-        if let Some(plan) = &auth.plan {
-            if plan.manual {
-                return Ok(());
-            }
+        if let Some(plan) = &auth.plan
+            && plan.manual
+        {
+            return Ok(());
         }
 
         let mut auth = auth;
@@ -72,7 +72,7 @@ impl AuthStore {
             .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
             .await
             .map_err(|e| {
-                println!("Failed to fetch plan: {}", e);
+                println!("Failed to fetch plan: {e}");
                 e.to_string()
             })?;
         println!("Plan fetch response status: {}", response.status());
@@ -93,7 +93,7 @@ impl AuthStore {
         auth.plan = Some(Plan {
             upgraded: plan_response.upgraded,
             last_checked: chrono::Utc::now().timestamp() as i32,
-            manual: auth.plan.as_ref().map_or(false, |p| p.manual),
+            manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
         auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
 
@@ -118,6 +118,3 @@ impl AuthStore {
         store.save().map_err(|e| e.to_string())
     }
 }
-
-#[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone, serde::Deserialize)]
-pub struct AuthenticationInvalid;

@@ -1,197 +1,201 @@
-import { createS3Client, getS3Bucket } from "@/utils/s3";
 import {
-  createPresignedPost,
-  type PresignedPost,
-} from "@aws-sdk/s3-presigned-post";
-import {
-  CloudFrontClient,
-  CreateInvalidationCommand,
+	CloudFrontClient,
+	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { db } from "@cap/database";
-import { s3Buckets } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
+import { db, updateIfDefined } from "@cap/database";
+import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { Hono } from "hono";
+import { AwsCredentials, S3Buckets } from "@cap/web-backend";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
+import { and, eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
+import { Hono } from "hono";
 import { z } from "zod";
 
+import { runPromise } from "@/lib/server";
+import {
+	isAtLeastSemver,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
+import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
 
 app.post(
-  "/",
-  zValidator(
-    "json",
-    z.object({
-      fileKey: z.string(),
-      duration: z.string().optional(),
-      bandwidth: z.string().optional(),
-      resolution: z.string().optional(),
-      videoCodec: z.string().optional(),
-      audioCodec: z.string().optional(),
-      method: z.union([z.literal("post"), z.literal("put")]).default("post"),
-    })
-  ),
-  async (c) => {
-    const user = c.get("user");
-    const {
-      fileKey,
-      duration,
-      bandwidth,
-      resolution,
-      videoCodec,
-      audioCodec,
-      method,
-    } = c.req.valid("json");
+	"/",
+	zValidator(
+		"json",
+		z
+			.object({
+				method: z.union([z.literal("post"), z.literal("put")]).default("post"),
+				durationInSecs: stringOrNumberOptional,
+				width: stringOrNumberOptional,
+				height: stringOrNumberOptional,
+				fps: stringOrNumberOptional,
+			})
+			.and(
+				z.union([
+					// DEPRECATED
+					z.object({ fileKey: z.string() }),
+					z.object({ videoId: z.string(), subpath: z.string() }),
+				]),
+			),
+	),
+	async (c) => {
+		const user = c.get("user");
+		const { durationInSecs, width, height, fps, method, ...body } =
+			c.req.valid("json");
 
-    try {
-      const [bucket] = await db()
-        .select()
-        .from(s3Buckets)
-        .where(eq(s3Buckets.ownerId, user.id));
+		const fileKey = parseVideoIdOrFileKey(user.id, body);
 
-      const s3Config = bucket
-        ? {
-            endpoint: bucket.endpoint || undefined,
-            region: bucket.region,
-            accessKeyId: bucket.accessKeyId,
-            secretAccessKey: bucket.secretAccessKey,
-          }
-        : null;
+		try {
+			const [customBucket] = await db()
+				.select()
+				.from(Db.s3Buckets)
+				.where(eq(Db.s3Buckets.ownerId, user.id));
 
-      if (
-        !bucket ||
-        !s3Config ||
-        bucket.bucketName !== serverEnv().CAP_AWS_BUCKET
-      ) {
-        const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
-        if (distributionId) {
-          console.log("Creating CloudFront invalidation for", fileKey);
+			const s3Config = customBucket
+				? {
+						endpoint: customBucket.endpoint || undefined,
+						region: customBucket.region,
+						accessKeyId: customBucket.accessKeyId,
+						secretAccessKey: customBucket.secretAccessKey,
+					}
+				: null;
 
-          const cloudfront = new CloudFrontClient({
-            region: serverEnv().CAP_AWS_REGION || "us-east-1",
-            credentials: {
-              accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
-              secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
-            },
-          });
+			if (
+				!customBucket ||
+				!s3Config ||
+				customBucket.bucketName !== serverEnv().CAP_AWS_BUCKET
+			) {
+				const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
+				if (distributionId) {
+					console.log("Creating CloudFront invalidation for", fileKey);
 
-          const pathToInvalidate = "/" + fileKey;
+					const cloudfront = new CloudFrontClient({
+						region: serverEnv().CAP_AWS_REGION || "us-east-1",
+						credentials: await runPromise(
+							Effect.map(AwsCredentials, (c) => c.credentials),
+						),
+					});
 
-          try {
-            const invalidation = await cloudfront.send(
-              new CreateInvalidationCommand({
-                DistributionId: distributionId,
-                InvalidationBatch: {
-                  CallerReference: `${Date.now()}`,
-                  Paths: {
-                    Quantity: 1,
-                    Items: [pathToInvalidate],
-                  },
-                },
-              })
-            );
-            console.log("CloudFront invalidation created:", invalidation);
-          } catch (error) {
-            console.error("Failed to create CloudFront invalidation:", error);
-          }
-        }
-      }
+					const pathToInvalidate = "/" + fileKey;
 
-      console.log("Creating S3 client with config:", {
-        hasEndpoint: !!s3Config?.endpoint,
-        hasRegion: !!s3Config?.region,
-        hasAccessKey: !!s3Config?.accessKeyId,
-        hasSecretKey: !!s3Config?.secretAccessKey,
-      });
+					try {
+						const invalidation = await cloudfront.send(
+							new CreateInvalidationCommand({
+								DistributionId: distributionId,
+								InvalidationBatch: {
+									CallerReference: `${Date.now()}`,
+									Paths: {
+										Quantity: 1,
+										Items: [pathToInvalidate],
+									},
+								},
+							}),
+						);
+						console.log("CloudFront invalidation created:", invalidation);
+					} catch (error) {
+						console.error("Failed to create CloudFront invalidation:", error);
+					}
+				}
+			}
 
-      const [s3Client] = await createS3Client(s3Config);
+			const contentType = fileKey.endsWith(".aac")
+				? "audio/aac"
+				: fileKey.endsWith(".webm")
+					? "audio/webm"
+					: fileKey.endsWith(".mp4")
+						? "video/mp4"
+						: fileKey.endsWith(".mp3")
+							? "audio/mpeg"
+							: fileKey.endsWith(".m3u8")
+								? "application/x-mpegURL"
+								: "video/mp2t";
 
-      const contentType = fileKey.endsWith(".aac")
-        ? "audio/aac"
-        : fileKey.endsWith(".webm")
-        ? "audio/webm"
-        : fileKey.endsWith(".mp4")
-        ? "video/mp4"
-        : fileKey.endsWith(".mp3")
-        ? "audio/mpeg"
-        : fileKey.endsWith(".m3u8")
-        ? "application/x-mpegURL"
-        : "video/mp2t";
+			let data: PresignedPost;
 
-      const bucketName = await getS3Bucket(bucket);
+			await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(
+					Option.fromNullable(customBucket?.id),
+				);
 
-      let data;
-      if (method === "post") {
-        const Fields = {
-          "Content-Type": contentType,
-          "x-amz-meta-userid": user.id,
-          "x-amz-meta-duration": duration ?? "",
-          "x-amz-meta-bandwidth": bandwidth ?? "",
-          "x-amz-meta-resolution": resolution ?? "",
-          "x-amz-meta-videocodec": videoCodec ?? "",
-          "x-amz-meta-audiocodec": audioCodec ?? "",
-        };
+				if (method === "post") {
+					const Fields = {
+						"Content-Type": contentType,
+						"x-amz-meta-userid": user.id,
+						"x-amz-meta-duration": durationInSecs
+							? durationInSecs.toString()
+							: "",
+					};
 
-        data = await createPresignedPost(s3Client, {
-          Bucket: bucketName,
-          Key: fileKey,
-          Fields,
-          Expires: 1800,
-        });
-      } else if (method === "put") {
-        const presignedUrl = await getSignedUrl(
-          s3Client,
-          new PutObjectCommand({
-            Bucket: bucketName,
-            Key: fileKey,
-            ContentType: contentType,
-            Metadata: {
-              userid: user.id,
-              duration: duration ?? "",
-              bandwidth: bandwidth ?? "",
-              resolution: resolution ?? "",
-              videocodec: videoCodec ?? "",
-              audiocodec: audioCodec ?? "",
-            },
-          }),
-          { expiresIn: 1800 }
-        );
+					data = yield* bucket.getPresignedPostUrl(fileKey, {
+						Fields,
+						Expires: 1800,
+					});
+				} else if (method === "put") {
+					const presignedUrl = yield* bucket.getPresignedPutUrl(
+						fileKey,
+						{
+							ContentType: contentType,
+							Metadata: {
+								userid: user.id,
+								duration: durationInSecs ? durationInSecs.toString() : "",
+							},
+						},
+						{ expiresIn: 1800 },
+					);
 
-        data = { url: presignedUrl, fields: {} };
-      }
-      console.log({ data });
+					data = { url: presignedUrl, fields: {} };
+				}
+			}).pipe(runPromise);
 
-      console.log("Presigned URL created successfully");
+			console.log("Presigned URL created successfully");
 
-      // After successful presigned URL creation, trigger revalidation
-      const videoId = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
-      if (videoId) {
-        try {
-          await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ videoId }),
-          });
-        } catch (revalidateError) {
-          console.error("Failed to revalidate page:", revalidateError);
-        }
-      }
+			// After successful presigned URL creation, trigger revalidation
+			const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
 
-      if (method === "post") return c.json({ presignedPostData: data });
-      else return c.json({ presignedPutData: data });
-    } catch (s3Error) {
-      console.error("S3 operation failed:", s3Error);
-      throw new Error(
-        `S3 operation failed: ${
-          s3Error instanceof Error ? s3Error.message : "Unknown error"
-        }`
-      );
-    }
-  }
+			const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
+			if (videoIdToUse) {
+				const videoId = Video.VideoId.make(videoIdToUse);
+				await db()
+					.update(Db.videos)
+					.set({
+						duration: updateIfDefined(durationInSecs, Db.videos.duration),
+						width: updateIfDefined(width, Db.videos.width),
+						height: updateIfDefined(height, Db.videos.height),
+						fps: updateIfDefined(fps, Db.videos.fps),
+					})
+					.where(
+						and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
+					);
+
+				// i hate this but it'll have to do
+				const clientSupportsUploadProgress = isFromDesktopSemver(
+					c.req,
+					UPLOAD_PROGRESS_VERSION,
+				);
+				if (fileKey.endsWith("result.mp4") && clientSupportsUploadProgress)
+					await db()
+						.update(Db.videoUploads)
+						.set({ mode: "singlepart" })
+						.where(eq(Db.videoUploads.videoId, videoId));
+			}
+
+			if (method === "post") return c.json({ presignedPostData: data! });
+			else return c.json({ presignedPutData: data! });
+		} catch (s3Error) {
+			console.error("S3 operation failed:", s3Error);
+			throw new Error(
+				`S3 operation failed: ${
+					s3Error instanceof Error ? s3Error.message : "Unknown error"
+				}`,
+			);
+		}
+	},
 );

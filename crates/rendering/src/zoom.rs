@@ -1,10 +1,8 @@
-use cap_project::{cursor::CursorEvents, ZoomSegment, XY};
+use cap_project::{XY, ZoomSegment};
 
 use crate::{Coord, RawDisplayUVSpace};
 
 pub const ZOOM_DURATION: f64 = 1.0;
-// Added constant for cursor smoothing
-pub const CURSOR_SMOOTHING_WINDOW: f64 = 0.15; // 150ms window for smoothing
 
 #[derive(Debug, Clone, Copy)]
 pub struct SegmentsCursor<'a> {
@@ -242,7 +240,7 @@ mod test {
         };
     }
 
-    fn c(time: f64, segments: &[ZoomSegment]) -> SegmentsCursor {
+    fn c<'a>(time: f64, segments: &'a [ZoomSegment]) -> SegmentsCursor<'a> {
         SegmentsCursor::new(time, segments)
     }
 

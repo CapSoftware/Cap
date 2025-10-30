@@ -1,14 +1,13 @@
 import { Channel } from "@tauri-apps/api/core";
-import { commands, ExportSettings, FramesRendered } from "./tauri";
+import { commands, type ExportSettings, type FramesRendered } from "./tauri";
 
 export async function exportVideo(
-  projectPath: string,
-  settings: ExportSettings,
-  onProgress: (progress: FramesRendered) => void
+	projectPath: string,
+	settings: ExportSettings,
+	onProgress: (progress: FramesRendered) => void,
 ) {
-  const progress = new Channel<FramesRendered>((e) => {
-    console.log({ e });
-    onProgress(e);
-  });
-  return await commands.exportVideo(projectPath, progress, settings);
+	const progress = new Channel<FramesRendered>((e) => {
+		onProgress(e);
+	});
+	return await commands.exportVideo(projectPath, progress, settings);
 }

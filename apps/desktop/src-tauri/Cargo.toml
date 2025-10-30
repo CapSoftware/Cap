@@ -1,17 +1,15 @@
 [package]
 name = "cap-desktop"
-version = "0.3.50"
+version = "0.3.79"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-name = "cap_desktop"
+name = "cap_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
@@ -39,7 +37,7 @@ tauri-plugin-process = "2.2.0"
 tauri-plugin-shell = "2.2.0"
 tauri-plugin-single-instance = { version = "2.2.0", features = ["deep-link"] }
 tauri-plugin-store = "2.2.0"
-tauri-plugin-updater = "2.3.1"
+tauri-plugin-updater = "2.9.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
@@ -47,30 +45,29 @@ tauri-plugin-deep-link = "2.2.0"
 tauri-plugin-clipboard-manager = "2.2.1"
 tauri-plugin-opener = "2.2.6"
 
-serde = { version = "1", features = ["derive"] }
+scap = { workspace = true }
+serde = { workspace = true }
 serde_json = "1.0.111"
 specta.workspace = true
 specta-typescript = "0.0.7"
 tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
-scap.workspace = true
 image = "0.25.2"
-mp4 = "0.14.0"
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
-futures = "0.3"
-axum = { version = "0.7.5", features = ["ws"] }
+futures = { workspace = true }
+axum = { version = "0.7.5", features = ["ws", "macros"] }
 tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
 rodio = "0.19.0"
 png = "0.17.13"
-device_query = "2.1.0"
+device_query = "4.0.1"
 base64 = "0.22.1"
-reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
-global-hotkey = "0.6.3"
+global-hotkey = "0.7.0"
 rand = "0.8.5"
 cpal.workspace = true
 keyed_priority_queue = "0.4.2"
@@ -80,6 +77,8 @@ whisper-rs = "0.11.0"
 lazy_static = "1.4.0"
 log = "0.4.20"
 
+cap-audio = { path = "../../../crates/audio" }
+cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
@@ -88,7 +87,10 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
-cap-audio = { path = "../../../crates/audio" }
+scap-targets = { path = "../../../crates/scap-targets" }
+scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
+scap-direct3d = { path = "../../../crates/scap-direct3d" }
+
 flume.workspace = true
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
@@ -98,6 +100,20 @@ cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
 tokio-util = "0.7.15"
+wgpu.workspace = true
+bytemuck = "1.23.1"
+kameo = "0.17.2"
+tauri-plugin-sentry = "0.5.0"
+thiserror.workspace = true
+bytes = "1.10.1"
+async-stream = "0.3.6"
+tracing-futures = { version = "0.2.5", features = ["futures-03"] }
+tracing-opentelemetry = "0.32.0"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
+posthog-rs = "0.3.7"
+
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
@@ -111,6 +127,7 @@ cocoa = "0.26.0"
 objc = "0.2.7"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+cidre = { workspace = true }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -123,11 +140,3 @@ windows-sys = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
-
-# Optimize for smaller binary size
-[profile.release]
-panic = "abort"   # Strip expensive panic clean-up logic
-codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
-opt-level = "s"   # Optimize for binary size
-debug = true

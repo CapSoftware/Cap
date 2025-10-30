@@ -8,7 +8,7 @@ pub struct CompositeVideoFramePipeline {
     pub render_pipeline: wgpu::RenderPipeline,
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct CompositeVideoFrameUniforms {
     pub crop_bounds: [f32; 4],
@@ -25,7 +25,43 @@ pub struct CompositeVideoFrameUniforms {
     pub shadow_size: f32,
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
-    pub _padding: [f32; 3],
+    pub opacity: f32,
+    pub border_enabled: f32,
+    pub border_width: f32,
+    pub _padding0: f32,
+    pub _padding1: [f32; 2],
+    pub _padding1b: [f32; 2],
+    pub border_color: [f32; 4],
+    pub _padding2: [f32; 4],
+}
+
+impl Default for CompositeVideoFrameUniforms {
+    fn default() -> Self {
+        Self {
+            crop_bounds: Default::default(),
+            target_bounds: Default::default(),
+            output_size: Default::default(),
+            frame_size: Default::default(),
+            velocity_uv: Default::default(),
+            target_size: Default::default(),
+            rounding_px: Default::default(),
+            mirror_x: Default::default(),
+            motion_blur_amount: Default::default(),
+            camera_motion_blur_amount: Default::default(),
+            shadow: Default::default(),
+            shadow_size: Default::default(),
+            shadow_opacity: Default::default(),
+            shadow_blur: Default::default(),
+            opacity: 1.0,
+            border_enabled: 0.0,
+            border_width: 5.0,
+            _padding0: 0.0,
+            _padding1: [0.0; 2],
+            _padding1b: [0.0; 2],
+            border_color: [1.0, 1.0, 1.0, 0.8],
+            _padding2: [0.0; 4],
+        }
+    }
 }
 
 impl CompositeVideoFrameUniforms {
@@ -38,14 +74,18 @@ impl CompositeVideoFrameUniforms {
             }),
         )
     }
+
+    pub fn write_to_buffer(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer) {
+        queue.write_buffer(buffer, 0, bytemuck::bytes_of(self));
+    }
 }
 
-pub struct CompositeFrameResources {
-    pub bind_group: wgpu::BindGroup,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniforms_buffer: wgpu::Buffer,
-    pub sampler: wgpu::Sampler,
-}
+// pub struct CompositeFrameResources {
+//     pub bind_group: wgpu::BindGroup,
+//     pub bind_group_layout: wgpu::BindGroupLayout,
+//     pub uniforms_buffer: wgpu::Buffer,
+//     pub sampler: wgpu::Sampler,
+// }
 
 impl CompositeVideoFramePipeline {
     pub fn new(device: &wgpu::Device) -> Self {
@@ -61,60 +101,6 @@ impl CompositeVideoFramePipeline {
             render_pipeline,
         }
     }
-
-    // fn resources(
-    //     device: &wgpu::Device,
-    //     source_frame: &wgpu::TextureView,
-    //     target_frame: &wgpu::TextureView,
-    // ) -> CompositeFrameResources {
-    //     let sampler = device.create_sampler(
-    //         &(wgpu::SamplerDescriptor {
-    //             address_mode_u: wgpu::AddressMode::ClampToEdge,
-    //             address_mode_v: wgpu::AddressMode::ClampToEdge,
-    //             address_mode_w: wgpu::AddressMode::ClampToEdge,
-    //             mag_filter: wgpu::FilterMode::Linear,
-    //             min_filter: wgpu::FilterMode::Linear,
-    //             mipmap_filter: wgpu::FilterMode::Nearest,
-    //             ..Default::default()
-    //         }),
-    //     );
-
-    //     let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
-
-    //     let bind_group_layout = Self::bind_group_layout(device);
-
-    //     let bind_group = device.create_bind_group(
-    //         &(wgpu::BindGroupDescriptor {
-    //             layout: &bind_group_layout,
-    //             entries: &[
-    //                 wgpu::BindGroupEntry {
-    //                     binding: 0,
-    //                     resource: uniforms_buffer.as_entire_binding(),
-    //                 },
-    //                 wgpu::BindGroupEntry {
-    //                     binding: 1,
-    //                     resource: wgpu::BindingResource::TextureView(source_frame),
-    //                 },
-    //                 wgpu::BindGroupEntry {
-    //                     binding: 2,
-    //                     resource: wgpu::BindingResource::TextureView(target_frame),
-    //                 },
-    //                 wgpu::BindGroupEntry {
-    //                     binding: 3,
-    //                     resource: wgpu::BindingResource::Sampler(&sampler),
-    //                 },
-    //             ],
-    //             label: Some("bind_group"),
-    //         }),
-    //     );
-
-    //     CompositeFrameResources {
-    //         bind_group,
-    //         bind_group_layout,
-    //         uniforms_buffer,
-    //         sampler,
-    //     }
-    // }
 
     fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -163,12 +149,12 @@ impl CompositeVideoFramePipeline {
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
         );
 
-        let bind_group = device.create_bind_group(
+        device.create_bind_group(
             &(wgpu::BindGroupDescriptor {
                 layout: &self.bind_group_layout,
                 entries: &[
@@ -187,8 +173,27 @@ impl CompositeVideoFramePipeline {
                 ],
                 label: Some("bind_group"),
             }),
-        );
+        )
+    }
 
-        bind_group
+    pub fn create_frame_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+        device.create_texture(
+            &(wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                label: Some("Frame Composite texture"),
+                view_formats: &[],
+            }),
+        )
     }
 }

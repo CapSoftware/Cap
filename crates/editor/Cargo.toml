@@ -1,7 +1,7 @@
 [package]
 name = "cap-editor"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -11,14 +11,17 @@ cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 cap-audio = { path = "../audio" }
+cap-media-info = { path = "../media-info" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true
 axum = { version = "0.7.5", features = ["ws"] }
 ffmpeg.workspace = true
 specta.workspace = true
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 sentry.workspace = true
-futures = "0.3.31"
+futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
+tokio-util = "0.7.15"
+ringbuf = "0.4.8"

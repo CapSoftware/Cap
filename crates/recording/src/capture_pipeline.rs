@@ -1,356 +1,318 @@
-use std::{
-    future::Future,
-    path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
-    time::SystemTime,
+use crate::{
+    feeds::microphone::MicrophoneFeedLock,
+    output_pipeline::*,
+    sources,
+    sources::screen_capture::{self, CropBounds, ScreenCaptureFormat, ScreenCaptureTarget},
 };
+use anyhow::anyhow;
+use cap_timestamp::Timestamps;
+use std::{path::PathBuf, sync::Arc};
 
-use cap_media::{
-    data::AudioInfo,
-    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, OpusEncoder},
-    feeds::AudioInputFeed,
-    pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
-    sources::{
-        AVFrameCapture, AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
-        ScreenCaptureSource, ScreenCaptureTarget,
-    },
-    MediaError,
-};
-use ffmpeg::ffi::AV_TIME_BASE_Q;
-use flume::{Receiver, Sender};
-use tokio::sync::oneshot;
-use tracing::error;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::RecordingError;
+#[cfg(windows)]
+#[derive(Clone, Debug)]
+pub struct EncoderPreferences {
+    force_software: Arc<AtomicBool>,
+}
 
-pub type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
+#[cfg(windows)]
+impl EncoderPreferences {
+    pub fn new() -> Self {
+        Self {
+            force_software: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn should_force_software(&self) -> bool {
+        self.force_software.load(Ordering::Relaxed)
+    }
+
+    pub fn force_software_only(&self) {
+        self.force_software.store(true, Ordering::Relaxed);
+    }
+}
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
-    fn make_studio_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
+        start_time: Timestamps,
+        #[cfg(windows)] encoder_preferences: EncoderPreferences,
+    ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
 
-    fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
-        audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
+    async fn make_instant_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
-        pause_flag: Arc<AtomicBool>,
-    ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
+        output_resolution: (u32, u32),
+        #[cfg(windows)] encoder_preferences: EncoderPreferences,
+    ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
 }
 
+pub struct Stop;
+
 #[cfg(target_os = "macos")]
-impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
-    fn make_studio_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
+impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError> {
-        let screen_config = source.0.info();
-        let mut screen_encoder = cap_media::encoders::MP4AVAssetWriterEncoder::init(
-            "screen",
-            screen_config,
-            None,
-            output_path.into(),
-            None,
-        )?;
-
-        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
-
-        builder.spawn_task("screen_capture_encoder", move |ready| {
-            let mut timestamp_tx = Some(timestamp_tx);
-            let _ = ready.send(Ok(()));
-
-            while let Ok(frame) = source.1.recv() {
-                if let Some(timestamp_tx) = timestamp_tx.take() {
-                    let _ = timestamp_tx.send(frame.1);
-                }
-
-                screen_encoder.queue_video_frame(frame.0.as_ref());
-            }
-            screen_encoder.finish();
-        });
-
-        builder.spawn_source("screen_capture", source.0);
-
-        Ok((builder, timestamp_rx))
+        start_time: Timestamps,
+    ) -> anyhow::Result<OutputPipeline> {
+        OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<AVFoundationMp4Muxer>(Default::default())
+            .await
     }
 
     async fn make_instant_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
-        audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
-        pause_flag: Arc<AtomicBool>,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
-        let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = AudioMixer::new(audio_tx);
+        output_resolution: (u32, u32),
+    ) -> anyhow::Result<OutputPipeline> {
+        let mut output = OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture);
 
         if let Some(system_audio) = system_audio {
-            audio_mixer.add_source(system_audio.1, system_audio.0);
+            output = output.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
         }
 
-        if let Some(audio) = audio {
-            let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
-
-            builder.spawn_source("microphone_capture", source);
+        if let Some(mic_feed) = mic_feed {
+            output = output.with_audio_source::<sources::Microphone>(mic_feed);
         }
 
-        let has_audio_sources = audio_mixer.has_sources();
-
-        let mp4 = Arc::new(std::sync::Mutex::new(
-            cap_media::encoders::MP4AVAssetWriterEncoder::init(
-                "mp4",
-                source.0.info(),
-                has_audio_sources.then_some(AudioMixer::info()),
-                output_path.into(),
-                Some(1080),
-            )?,
-        ));
-
-        use cidre::cm;
-
-        let (first_frame_tx, mut first_frame_rx) = oneshot::channel::<(cm::Time, f64)>();
-
-        if has_audio_sources {
-            builder.spawn_source("audio_mixer", audio_mixer);
-
-            let mp4 = mp4.clone();
-            builder.spawn_task("audio_encoding", move |ready| {
-                let _ = ready.send(Ok(()));
-                let mut time = None;
-
-                while let Ok(mut frame) = audio_rx.recv() {
-                    let pts = frame.pts().unwrap();
-
-                    if let Ok(first_time) = first_frame_rx.try_recv() {
-                        time = Some(first_time);
-                    };
-
-                    let Some(time) = time else {
-                        continue;
-                    };
-
-                    let elapsed = (pts as f64 / AV_TIME_BASE_Q.den as f64) - time.1;
-
-                    let time = time.0.add(cm::Time::new(
-                        (elapsed * time.0.scale as f64 + time.1 * time.0.scale as f64) as i64,
-                        time.0.scale,
-                    ));
-
-                    frame.set_pts(Some(time.value / (time.scale / AV_TIME_BASE_Q.den) as i64));
-
-                    if let Ok(mut mp4) = mp4.lock() {
-                        if let Err(e) = mp4.queue_audio_frame(frame) {
-                            error!("{e}");
-                            return;
-                        }
-                    }
-                }
-            });
-        }
-
-        let mut first_frame_tx = Some(first_frame_tx);
-        builder.spawn_task("screen_capture_encoder", move |ready| {
-            let _ = ready.send(Ok(()));
-            while let Ok((frame, unix_time)) = source.1.recv() {
-                if let Ok(mut mp4) = mp4.lock() {
-                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        mp4.pause();
-                    } else {
-                        mp4.resume();
-                    }
-
-                    if let Some(first_frame_tx) = first_frame_tx.take() {
-                        let _ = first_frame_tx.send((frame.pts(), unix_time));
-                    }
-
-                    mp4.queue_video_frame(frame.as_ref());
-                }
-            }
-            if let Ok(mut mp4) = mp4.lock() {
-                mp4.finish();
-            }
-        });
-
-        builder.spawn_source("screen_capture", source.0);
-
-        Ok(builder)
+        output
+            .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
+                output_height: Some(output_resolution.1),
+            })
+            .await
     }
 }
 
-impl MakeCapturePipeline for AVFrameCapture {
-    fn make_studio_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
+#[cfg(windows)]
+impl MakeCapturePipeline for screen_capture::Direct3DCapture {
+    async fn make_studio_mode_pipeline(
+        screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
-    where
-        Self: Sized,
-    {
-        let screen_config = source.0.info();
-        let mut screen_encoder = MP4File::init(
-            "screen",
-            output_path.into(),
-            |o| H264Encoder::builder("screen", screen_config).build(o),
-            |_| None,
-        )?;
+        start_time: Timestamps,
+        encoder_preferences: EncoderPreferences,
+    ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
 
-        builder.spawn_source("screen_capture", source.0);
-
-        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
-
-        builder.spawn_task("screen_capture_encoder", move |ready| {
-            let mut timestamp_tx = Some(timestamp_tx);
-            let _ = ready.send(Ok(()));
-
-            while let Ok(frame) = source.1.recv() {
-                if let Some(timestamp_tx) = timestamp_tx.take() {
-                    timestamp_tx.send(frame.1).unwrap();
-                }
-                screen_encoder.queue_video_frame(frame.0);
-            }
-            screen_encoder.finish();
-        });
-
-        Ok((builder, timestamp_rx))
+        OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<WindowsMuxer>(WindowsMuxerConfig {
+                pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
+                d3d_device,
+                bitrate_multiplier: 0.15f32,
+                frame_rate: 30u32,
+                output_size: None,
+                encoder_preferences,
+            })
+            .await
     }
 
     async fn make_instant_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
-        ),
-        audio: Option<&AudioInputFeed>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
-        _pause_flag: Arc<AtomicBool>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
-    where
-        Self: Sized,
-    {
-        let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = AudioMixer::new(audio_tx);
+        output_resolution: (u32, u32),
+        encoder_preferences: EncoderPreferences,
+    ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
+        let mut output_builder = OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture);
+
+        if let Some(mic_feed) = mic_feed {
+            output_builder = output_builder.with_audio_source::<sources::Microphone>(mic_feed);
+        }
 
         if let Some(system_audio) = system_audio {
-            audio_mixer.add_source(system_audio.1, system_audio.0);
+            output_builder =
+                output_builder.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
         }
 
-        if let Some(audio) = audio {
-            let sink = audio_mixer.sink(audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
-
-            builder.spawn_source("microphone_capture", source);
-        }
-
-        let has_audio_sources = audio_mixer.has_sources();
-
-        let screen_config = source.0.info();
-        let mp4 = Arc::new(std::sync::Mutex::new(MP4File::init(
-            "screen",
-            output_path.into(),
-            |o| H264Encoder::builder("screen", screen_config).build(o),
-            |o| {
-                has_audio_sources.then(|| {
-                    AACEncoder::init("mic_audio", AudioMixer::info(), o).map(|v| v.boxed())
-                })
-            },
-        )?));
-
-        if has_audio_sources {
-            builder.spawn_source("audio_mixer", audio_mixer);
-
-            let mp4 = mp4.clone();
-            builder.spawn_task("audio_encoding", move |ready| {
-                let _ = ready.send(Ok(()));
-                while let Ok(frame) = audio_rx.recv() {
-                    if let Ok(mut mp4) = mp4.lock() {
-                        mp4.queue_audio_frame(frame);
-                    }
-                }
-            });
-        }
-
-        builder.spawn_source("screen_capture", source.0);
-
-        builder.spawn_task("screen_encoder", move |ready| {
-            let _ = ready.send(Ok(()));
-            while let Ok((frame, unix_time)) = source.1.recv() {
-                if let Ok(mut mp4) = mp4.lock() {
-                    // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    //     mp4.pause();
-                    // } else {
-                    //     mp4.resume();
-                    // }
-
-                    mp4.queue_video_frame(frame);
-                }
-            }
-            if let Ok(mut mp4) = mp4.lock() {
-                mp4.finish();
-            }
-        });
-
-        Ok(builder)
+        output_builder
+            .build::<WindowsMuxer>(WindowsMuxerConfig {
+                pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
+                bitrate_multiplier: 0.15f32,
+                frame_rate: 30u32,
+                d3d_device,
+                output_size: Some(windows::Graphics::SizeInt32 {
+                    Width: output_resolution.0 as i32,
+                    Height: output_resolution.1 as i32,
+                }),
+                encoder_preferences,
+            })
+            .await
     }
 }
 
-type ScreenCaptureReturn<T> = (
-    ScreenCaptureSource<T>,
-    Receiver<(<T as ScreenCaptureFormat>::VideoFormat, f64)>,
-);
-
 #[cfg(target_os = "macos")]
-pub type ScreenCaptureMethod = CMSampleBufferCapture;
+pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
-#[cfg(not(target_os = "macos"))]
-pub type ScreenCaptureMethod = AVFrameCapture;
+#[cfg(windows)]
+pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
 
-pub fn create_screen_capture(
-    capture_target: &ScreenCaptureTarget,
-    show_camera: bool,
-    force_show_cursor: bool,
-    max_fps: u32,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
-    start_time: SystemTime,
-) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
-    let (video_tx, video_rx) = flume::bounded(16);
+pub fn target_to_display_and_crop(
+    target: &ScreenCaptureTarget,
+) -> anyhow::Result<(scap_targets::Display, Option<CropBounds>)> {
+    use scap_targets::{bounds::*, *};
 
-    ScreenCaptureSource::<ScreenCaptureMethod>::init(
-        capture_target,
-        None,
-        show_camera,
-        force_show_cursor,
-        max_fps,
-        video_tx,
-        audio_tx,
-        start_time,
-    )
-    .map(|v| (v, video_rx))
-    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
+    let display = target
+        .display()
+        .ok_or_else(|| anyhow!("Display not found"))?;
+
+    let crop_bounds = match target {
+        ScreenCaptureTarget::Display { .. } => None,
+        ScreenCaptureTarget::Window { id } => {
+            let window = Window::from_id(id).ok_or_else(|| anyhow!("Window not found"))?;
+
+            #[cfg(target_os = "macos")]
+            {
+                let raw_display_bounds = display
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .logical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(LogicalBounds::new(
+                    LogicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                        raw_window_bounds.position().y() - raw_display_bounds.position().y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+
+            #[cfg(windows)]
+            {
+                let raw_display_position = display
+                    .raw_handle()
+                    .physical_position()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let raw_window_bounds = window
+                    .raw_handle()
+                    .physical_bounds()
+                    .ok_or_else(|| anyhow!("No window bounds"))?;
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_position.x(),
+                        raw_window_bounds.position().y() - raw_display_position.y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+        }
+        ScreenCaptureTarget::Area {
+            bounds: relative_bounds,
+            ..
+        } => {
+            #[cfg(target_os = "macos")]
+            {
+                Some(*relative_bounds)
+            }
+
+            #[cfg(windows)]
+            {
+                let raw_display_size = display
+                    .physical_size()
+                    .ok_or_else(|| anyhow!("No display bounds"))?;
+                let logical_display_size = display
+                    .logical_size()
+                    .ok_or_else(|| anyhow!("No display logical size"))?;
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        (relative_bounds.position().x() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.position().y() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                    PhysicalSize::new(
+                        (relative_bounds.size().width() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.size().height() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                ))
+            }
+        }
+    };
+
+    Ok((display, crop_bounds))
+}
+
+#[cfg(windows)]
+pub fn create_d3d_device()
+-> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
+    use windows::Win32::Graphics::{
+        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE},
+        Direct3D11::{D3D11_CREATE_DEVICE_FLAG, ID3D11Device},
+    };
+
+    let mut device = None;
+    let flags = {
+        use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+
+        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        if cfg!(feature = "d3ddebug") {
+            use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_DEBUG;
+
+            flags |= D3D11_CREATE_DEVICE_DEBUG;
+        }
+        flags
+    };
+    let mut result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+    if let Err(error) = &result {
+        use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
+
+        if error.code() == DXGI_ERROR_UNSUPPORTED {
+            use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+
+            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device);
+        }
+    }
+    result?;
+
+    fn create_d3d_device_with_type(
+        driver_type: D3D_DRIVER_TYPE,
+        flags: D3D11_CREATE_DEVICE_FLAG,
+        device: *mut Option<ID3D11Device>,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            use windows::Win32::{
+                Foundation::HMODULE,
+                Graphics::Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
+            };
+
+            D3D11CreateDevice(
+                None,
+                driver_type,
+                HMODULE(std::ptr::null_mut()),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(device),
+                None,
+                None,
+            )
+        }
+    }
+
+    Ok(device.unwrap())
 }

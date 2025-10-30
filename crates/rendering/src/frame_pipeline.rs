@@ -1,36 +1,34 @@
-use cap_project::XY;
-use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-use crate::{ProjectUniforms, RenderSession, RenderVideoConstants, RenderingError};
+use crate::{ProjectUniforms, RenderSession, RenderingError};
 
-pub struct FramePipelineState<'a> {
-    pub constants: &'a RenderVideoConstants,
-    pub uniforms: &'a ProjectUniforms,
-    pub texture: &'a wgpu::Texture,
-    pub texture_view: wgpu::TextureView,
-}
+// pub struct FramePipelineState<'a> {
+//     pub constants: &'a RenderVideoConstants,
+//     pub uniforms: &'a ProjectUniforms,
+//     pub texture: &'a wgpu::Texture,
+//     pub texture_view: wgpu::TextureView,
+// }
 
-impl<'a> FramePipelineState<'a> {
-    pub fn new(
-        constants: &'a RenderVideoConstants,
-        uniforms: &'a ProjectUniforms,
-        texture: &'a wgpu::Texture,
-    ) -> Self {
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+// impl<'a> FramePipelineState<'a> {
+//     pub fn new(
+//         constants: &'a RenderVideoConstants,
+//         uniforms: &'a ProjectUniforms,
+//         texture: &'a wgpu::Texture,
+//     ) -> Self {
+//         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        Self {
-            constants,
-            uniforms,
-            texture,
-            texture_view,
-        }
-    }
-}
+//         Self {
+//             constants,
+//             uniforms,
+//             texture,
+//             texture_view,
+//         }
+//     }
+// }
 
-pub struct FramePipelineEncoder {
-    pub encoder: wgpu::CommandEncoder,
-}
+// pub struct FramePipelineEncoder {
+//     pub encoder: wgpu::CommandEncoder,
+// }
 
 #[derive(Clone)]
 pub struct RenderedFrame {
@@ -40,17 +38,17 @@ pub struct RenderedFrame {
     pub padded_bytes_per_row: u32,
 }
 
-impl FramePipelineEncoder {
-    pub fn new(state: &FramePipelineState) -> Self {
-        Self {
-            encoder: state.constants.device.create_command_encoder(
-                &(wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                }),
-            ),
-        }
-    }
-}
+// impl FramePipelineEncoder {
+//     pub fn new(state: &FramePipelineState) -> Self {
+//         Self {
+//             encoder: state.constants.device.create_command_encoder(
+//                 &(wgpu::CommandEncoderDescriptor {
+//                     label: Some("Render Encoder"),
+//                 }),
+//             ),
+//         }
+//     }
+// }
 
 pub fn padded_bytes_per_row(output_size: (u32, u32)) -> u32 {
     // Calculate the aligned bytes per row
@@ -81,13 +79,8 @@ pub async fn finish_encoder(
     };
 
     let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
-
-    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        size: output_buffer_size,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        label: Some("Output Buffer"),
-        mapped_at_creation: false,
-    });
+    session.ensure_readback_buffers(device, output_buffer_size);
+    let output_buffer = session.current_readback_buffer();
 
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -96,15 +89,15 @@ pub async fn finish_encoder(
     );
 
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: session.current_texture(),
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
-            buffer: &output_buffer,
-            layout: wgpu::ImageDataLayout {
+        wgpu::TexelCopyBufferInfo {
+            buffer: output_buffer,
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_bytes_per_row),
                 rows_per_image: Some(uniforms.output_size.1),
@@ -116,21 +109,23 @@ pub async fn finish_encoder(
     queue.submit(std::iter::once(encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
-    let (tx, rx) = oneshot_channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        tx.send(result).ok();
+        let _ = tx.send(result);
     });
-    device.poll(wgpu::Maintain::Wait);
 
-    rx.receive()
-        .await
-        .ok_or(RenderingError::BufferMapWaitingFailed)??;
+    device.poll(wgpu::PollType::Wait)?;
+
+    rx.await
+        .map_err(|_| RenderingError::BufferMapWaitingFailed)??;
 
     let data = buffer_slice.get_mapped_range();
     let data_vec = data.to_vec();
 
     drop(data);
     output_buffer.unmap();
+
+    session.swap_readback_buffers();
 
     Ok(RenderedFrame {
         data: data_vec,

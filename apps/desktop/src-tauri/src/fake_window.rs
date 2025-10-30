@@ -1,16 +1,18 @@
-use cap_media::platform::Bounds;
+use scap_targets::bounds::LogicalBounds;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::{sync::RwLock, time::sleep};
+use tracing::instrument;
 
-pub struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, Bounds>>>>);
+pub struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, LogicalBounds>>>>);
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn set_fake_window_bounds(
     window: tauri::Window,
     name: String,
-    bounds: Bounds,
+    bounds: LogicalBounds,
     state: tauri::State<'_, FakeWindowBounds>,
 ) -> Result<(), String> {
     let mut state = state.0.write().await;
@@ -23,6 +25,7 @@ pub async fn set_fake_window_bounds(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state, window))]
 pub async fn remove_fake_window(
     window: tauri::Window,
     name: String,
@@ -70,10 +73,12 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             let mut ignore = true;
 
             for bounds in windows.values() {
-                let x_min = (window_position.x as f64) + bounds.x * scale_factor;
-                let x_max = (window_position.x as f64) + (bounds.x + bounds.width) * scale_factor;
-                let y_min = (window_position.y as f64) + bounds.y * scale_factor;
-                let y_max = (window_position.y as f64) + (bounds.y + bounds.height) * scale_factor;
+                let x_min = (window_position.x as f64) + bounds.position().x() * scale_factor;
+                let x_max = (window_position.x as f64)
+                    + (bounds.position().x() + bounds.size().width()) * scale_factor;
+                let y_min = (window_position.y as f64) + bounds.position().y() * scale_factor;
+                let y_max = (window_position.y as f64)
+                    + (bounds.position().y() + bounds.size().height()) * scale_factor;
 
                 if mouse_position.x >= x_min
                     && mouse_position.x <= x_max

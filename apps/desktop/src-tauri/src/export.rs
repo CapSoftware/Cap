@@ -1,89 +1,82 @@
-use crate::{create_editor_instance_impl, get_video_metadata, FramesRendered};
-use cap_export::ExportSettings;
+use crate::{FramesRendered, get_video_metadata};
+use cap_export::ExporterBase;
 use cap_project::{RecordingMeta, XY};
+use serde::Deserialize;
+use specta::Type;
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tracing::{info, instrument};
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
+#[serde(tag = "format")]
+pub enum ExportSettings {
+    Mp4(cap_export::mp4::Mp4ExportSettings),
+    Gif(cap_export::gif::GifExportSettings),
+}
+
+impl ExportSettings {
+    fn fps(&self) -> u32 {
+        match self {
+            ExportSettings::Mp4(settings) => settings.fps,
+            ExportSettings::Gif(settings) => settings.fps,
+        }
+    }
+}
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(progress))]
 pub async fn export_video(
-    app: AppHandle,
     project_path: PathBuf,
     progress: tauri::ipc::Channel<FramesRendered>,
     settings: ExportSettings,
 ) -> Result<PathBuf, String> {
-    let editor_instance = create_editor_instance_impl(&app, project_path.clone()).await?;
-
-    let screen_metadata = get_video_metadata(project_path.clone())
+    let exporter_base = ExporterBase::builder(project_path)
+        .build()
         .await
         .map_err(|e| {
-            sentry::capture_message(
-                &format!("Failed to get video metadata: {}", e),
-                sentry::Level::Error,
-            );
-            "Failed to read video metadata. The recording may be from an incompatible version."
-                .to_string()
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            e.to_string()
         })?;
 
-    // Get camera metadata if it exists
-    let camera_metadata = get_video_metadata(project_path.clone()).await.ok();
-
-    // Use the longer duration between screen and camera
-    let duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    let total_frames = editor_instance.get_total_frames(settings.fps);
-
-    let output_path = editor_instance.meta().output_path();
+    let total_frames = exporter_base.total_frames(settings.fps());
 
     let _ = progress.send(FramesRendered {
         rendered_count: 0,
         total_frames,
     });
 
-    // Create a modified project configuration that accounts for different video lengths
-    let mut modified_project = editor_instance.project_config.1.borrow().clone();
-    if let Some(timeline) = &mut modified_project.timeline {
-        // Ensure timeline duration matches the longest video
-        for segment in timeline.segments.iter_mut() {
-            if segment.end > duration {
-                segment.end = duration;
-            }
+    let output_path = match settings {
+        ExportSettings::Mp4(settings) => {
+            settings
+                .export(exporter_base, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
+        }
+        ExportSettings::Gif(settings) => {
+            settings
+                .export(exporter_base, move |frame_index| {
+                    // Ensure progress never exceeds total frames
+                    let _ = progress.send(FramesRendered {
+                        rendered_count: (frame_index + 1).min(total_frames),
+                        total_frames,
+                    });
+                })
+                .await
         }
     }
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })?;
 
-    cap_export::Exporter::new(
-        modified_project,
-        output_path.clone(),
-        move |frame_index| {
-            // Ensure progress never exceeds total frames
-            let current_frame = (frame_index + 1).min(total_frames);
-            let _ = progress.send(FramesRendered {
-                rendered_count: current_frame,
-                total_frames,
-            });
-        },
-        editor_instance.project_path.clone(),
-        editor_instance.meta().clone(),
-        editor_instance.render_constants.clone(),
-        &editor_instance.segments,
-        editor_instance.recordings.clone(),
-        settings,
-    )
-    .await
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?
-    .export_with_custom_muxer()
-    .await
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })
+    info!("Exported to {} completed", output_path.display());
+
+    Ok(output_path)
 }
 
 #[derive(Debug, serde::Serialize, specta::Type)]
@@ -96,30 +89,20 @@ pub struct ExportEstimates {
 // This will need to be refactored at some point to be more accurate.
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn get_export_estimates(
     path: PathBuf,
     resolution: XY<u32>,
     fps: u32,
 ) -> Result<ExportEstimates, String> {
-    let screen_metadata = get_video_metadata(path.clone()).await?;
-    let camera_metadata = get_video_metadata(path.clone()).await.ok();
+    let metadata = get_video_metadata(path.clone()).await?;
 
-    let raw_duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    let meta = RecordingMeta::load_for_project(&path).unwrap();
+    let meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
     let project_config = meta.project_config();
     let duration_seconds = if let Some(timeline) = &project_config.timeline {
-        timeline
-            .segments
-            .iter()
-            .map(|s| (s.end - s.start) / s.timescale)
-            .sum()
+        timeline.segments.iter().map(|s| s.duration()).sum()
     } else {
-        raw_duration
+        metadata.duration
     };
 
     let (width, height) = (resolution.x, resolution.y);

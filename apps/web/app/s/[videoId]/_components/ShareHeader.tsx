@@ -1,240 +1,323 @@
 "use client";
 
-import { Button } from "@cap/ui";
-import { videos } from "@cap/database/schema";
-import moment from "moment";
-import { userSelectProps } from "@cap/database/auth/session";
-import {
-  faChevronDown,
-  faLock,
-  faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
-import { toast } from "sonner";
-import { Copy, Globe2 } from "lucide-react";
+import type { userSelectProps } from "@cap/database/auth/session";
+import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
+import { Button } from "@cap/ui";
+import { userIsPro } from "@cap/utils";
+import type { ImageUpload } from "@cap/web-domain";
+import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Check, Copy, Globe2 } from "lucide-react";
+import moment from "moment";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { editTitle } from "@/actions/videos/edit-title";
-import { usePublicEnv } from "@/utils/public-env";
-import { isUserOnProPlan } from "@cap/utils";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
-import clsx from "clsx";
+import { usePublicEnv } from "@/utils/public-env";
 
 export const ShareHeader = ({
-  data,
-  user,
-  customDomain,
-  domainVerified,
-  sharedOrganizations = [],
-  userOrganizations = [],
+	data,
+	customDomain,
+	domainVerified,
+	sharedOrganizations = [],
+	sharedSpaces = [],
+	spacesData = null,
 }: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-  customDomain?: string | null;
-  domainVerified?: boolean;
-  sharedOrganizations?: { id: string; name: string }[];
-  userOrganizations?: { id: string; name: string }[];
+	data: typeof videos.$inferSelect & {
+		ownerName?: string | null;
+		ownerImage?: ImageUpload.ImageUrl | null;
+		ownerIsPro?: boolean;
+	};
+	customDomain?: string | null;
+	domainVerified?: boolean;
+	sharedOrganizations?: { id: string; name: string }[];
+	userOrganizations?: { id: string; name: string }[];
+	sharedSpaces?: {
+		id: string;
+		name: string;
+		iconUrl?: string;
+		organizationId: string;
+	}[];
+	userSpaces?: {
+		id: string;
+		name: string;
+		iconUrl?: string;
+		organizationId: string;
+	}[];
+	spacesData?: Spaces[] | null;
 }) => {
-  const { push, refresh } = useRouter();
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(data.name);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-  const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
-    useState(sharedOrganizations);
+	const user = useCurrentUser();
+	const { push, refresh } = useRouter();
+	const [isEditing, setIsEditing] = useState(false);
+	const [title, setTitle] = useState(data.name);
+	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [linkCopied, setLinkCopied] = useState(false);
 
-  const isOwner = user && user.id.toString() === data.ownerId;
+	const contextData = useDashboardContext();
+	const contextSharedSpaces = contextData?.sharedSpaces || null;
+	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-  const { webUrl } = usePublicEnv();
+	const isOwner = user && user.id === data.ownerId;
 
-  useEffect(() => {
-    setTitle(data.name);
-  }, [data.name]);
+	const { webUrl } = usePublicEnv();
 
-  const handleBlur = async () => {
-    setIsEditing(false);
+	useEffect(() => {
+		setTitle(data.name);
+	}, [data.name]);
 
-    try {
-      await editTitle(data.id, title);
-      toast.success("Video title updated");
-      refresh();
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to update title - please try again.");
-      }
-    }
-  };
+	const handleBlur = async () => {
+		setIsEditing(false);
+		const next = title.trim();
+		if (next === "" || next === data.name) return;
+		try {
+			await editTitle(data.id, title);
+			toast.success("Video title updated");
+			refresh();
+		} catch (error) {
+			if (error instanceof Error) {
+				toast.error(error.message);
+			} else {
+				toast.error("Failed to update title - please try again.");
+			}
+		}
+	};
 
-  const handleKeyDown = async (event: { key: string }) => {
-    if (event.key === "Enter") {
-      handleBlur();
-    }
-  };
+	const handleKeyDown = async (event: { key: string }) => {
+		if (event.key === "Enter") {
+			handleBlur();
+		}
+	};
 
-  const getVideoLink = () => {
-    return customDomain && domainVerified
-      ? `https://${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
-  };
+	const getVideoLink = () => {
+		if (NODE_ENV === "development" && customDomain && domainVerified) {
+			return `https://${customDomain}/s/${data.id}`;
+		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+			return `${webUrl}/s/${data.id}`;
+		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+			return `https://${customDomain}/s/${data.id}`;
+		} else if (
+			buildEnv.NEXT_PUBLIC_IS_CAP &&
+			!customDomain &&
+			!domainVerified
+		) {
+			return `https://cap.link/${data.id}`;
+		} else {
+			return `${webUrl}/s/${data.id}`;
+		}
+	};
 
-  const getDisplayLink = () => {
-    return customDomain && domainVerified
-      ? `${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
-  };
+	const getDisplayLink = () => {
+		if (NODE_ENV === "development" && customDomain && domainVerified) {
+			return `${customDomain}/s/${data.id}`;
+		} else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+			return `${webUrl}/s/${data.id}`;
+		} else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+			return `${customDomain}/s/${data.id}`;
+		} else if (
+			buildEnv.NEXT_PUBLIC_IS_CAP &&
+			!customDomain &&
+			!domainVerified
+		) {
+			return `cap.link/${data.id}`;
+		} else {
+			return `${webUrl}/s/${data.id}`;
+		}
+	};
 
-  const isUserPro = user
-    ? isUserOnProPlan({
-        subscriptionStatus: user.stripeSubscriptionStatus,
-      })
-    : false;
+	const isVideoOwnerPro: boolean = data.ownerIsPro ?? false;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setCurrentSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
-    );
-    refresh();
-  };
+	const handleSharingUpdated = () => {
+		refresh();
+	};
 
-  const renderSharedStatus = () => {
-    const baseClassName =
-      "text-sm text-gray-10 transition-colors duration-200 flex items-center";
+	const renderSharedStatus = () => {
+		if (isOwner) {
+			const hasSpaceSharing =
+				sharedOrganizations?.length > 0 || effectiveSharedSpaces?.length > 0;
+			const isPublic = data.public;
 
-    if (isOwner) {
-      if (currentSharedOrganizations?.length === 0) {
-        return (
-          <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Not shared{" "}
-            <FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
-          </p>
-        );
-      } else {
-        return (
-          <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
-            onClick={() => setIsSharingDialogOpen(true)}
-          >
-            Shared{" "}
-            <FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
-          </p>
-        );
-      }
-    } else {
-      return <p className={baseClassName}>Shared with you</p>;
-    }
-  };
+			if (!hasSpaceSharing && !isPublic) {
+				return (
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
+						onClick={() => setIsSharingDialogOpen(true)}
+					>
+						Not shared{" "}
+						<FontAwesomeIcon className="ml-2 size-2.5" icon={faChevronDown} />
+					</Button>
+				);
+			} else {
+				return (
+					<Button
+						className="px-3 w-fit"
+						size="xs"
+						variant="outline"
+						onClick={() => setIsSharingDialogOpen(true)}
+					>
+						Shared{" "}
+						<FontAwesomeIcon className="ml-1 size-2.5" icon={faChevronDown} />
+					</Button>
+				);
+			}
+		} else {
+			return (
+				<Button
+					className="px-3 pointer-events-none w-fit"
+					size="xs"
+					variant="outline"
+				>
+					Shared with you
+				</Button>
+			);
+		}
+	};
 
-  return (
-    <>
-      <SharingDialog
-        isOpen={isSharingDialogOpen}
-        onClose={() => setIsSharingDialogOpen(false)}
-        capId={data.id}
-        capName={data.name}
-        sharedOrganizations={currentSharedOrganizations || []}
-        userOrganizations={userOrganizations}
-        onSharingUpdated={handleSharingUpdated}
-      />
-      <div>
-        <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
-          <div className="items-center md:flex md:justify-between md:space-x-6">
-            <div className="mb-3 md:mb-0">
-              <div className="flex items-center space-x-3  lg:min-w-[400px]">
-                {isEditing ? (
-                  <input
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onBlur={handleBlur}
-                    onKeyDown={handleKeyDown}
-                    autoFocus
-                    className="w-full text-xl font-semibold sm:text-2xl"
-                  />
-                ) : (
-                  <h1
-                    className="text-xl sm:text-2xl"
-                    onClick={() => {
-                      if (user && user.id.toString() === data.ownerId) {
-                        setIsEditing(true);
-                      }
-                    }}
-                  >
-                    {title}
-                  </h1>
-                )}
-              </div>
-              {user && renderSharedStatus()}
-              <p className="text-sm text-gray-10 mt-1">
-                {moment(data.createdAt).fromNow()}
-              </p>
-            </div>
-          </div>
-          {user !== null && (
-            <div className="flex space-x-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  {data.password && (
-                    <FontAwesomeIcon
-                      className="size-4 text-amber-600"
-                      icon={faLock}
-                    />
-                  )}
-                  <Button
-                    variant="white"
-                    onClick={() => {
-                      navigator.clipboard.writeText(getVideoLink());
-                      toast.success("Link copied to clipboard!");
-                    }}
-                  >
-                    {getDisplayLink()}
-                    <Copy className="ml-2 w-4 h-4" />
-                  </Button>
-                </div>
-                {user !== null && !isUserPro && (
-                  <button
-                    className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
-                    onClick={() => setUpgradeModalOpen(true)}
-                  >
-                    <Globe2 className="mr-1 w-4 h-4" />
-                    Connect a custom domain
-                  </button>
-                )}
-              </div>
-              {user !== null && (
-                <div className="hidden md:flex">
-                  <Button
-                    onClick={() => {
-                      push("/dashboard");
-                    }}
-                  >
-                    <span className="hidden text-sm text-white lg:block">
-                      Go to
-                    </span>{" "}
-                    Dashboard
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-      <UpgradeModal
-        open={upgradeModalOpen}
-        onOpenChange={setUpgradeModalOpen}
-      />
-    </>
-  );
+	return (
+		<>
+			{isOwner && !isVideoOwnerPro && (
+				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
+					<p className="text-center text-gray-12">
+						Shareable links are limited to 5 mins on the free plan.
+					</p>
+					<Button
+						type="button"
+						onClick={() => setUpgradeModalOpen(true)}
+						size="sm"
+						variant="blue"
+					>
+						Upgrade To Cap Pro
+					</Button>
+				</div>
+			)}
+			<SharingDialog
+				isOpen={isSharingDialogOpen}
+				onClose={() => setIsSharingDialogOpen(false)}
+				capId={data.id}
+				capName={data.name}
+				sharedSpaces={effectiveSharedSpaces || []}
+				onSharingUpdated={handleSharingUpdated}
+				isPublic={data.public}
+				spacesData={spacesData}
+			/>
+			<div className="mt-8">
+				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
+					<div className="items-center md:flex md:justify-between md:space-x-6">
+						<div className="space-y-3">
+							<div className="flex flex-col lg:min-w-[400px]">
+								{isEditing ? (
+									<input
+										value={title}
+										onChange={(e) => setTitle(e.target.value)}
+										onBlur={handleBlur}
+										onKeyDown={handleKeyDown}
+										autoFocus
+										className="w-full text-xl sm:text-2xl"
+									/>
+								) : (
+									<h1
+										className="text-xl sm:text-2xl"
+										onClick={() => {
+											if (isOwner) {
+												setIsEditing(true);
+											}
+										}}
+									>
+										{title}
+									</h1>
+								)}
+							</div>
+							<div className="flex gap-7 items-center">
+								<div className="flex gap-2 items-center">
+									{data.ownerName && (
+										<SignedImageUrl
+											name={data.ownerName}
+											image={data.ownerImage}
+											className="size-8"
+											letterClass="text-base"
+										/>
+									)}
+									<div className="flex flex-col text-left">
+										<p className="text-sm text-gray-12">{data.ownerName}</p>
+										<p className="text-xs text-gray-10">
+											{moment(data.createdAt).fromNow()}
+										</p>
+									</div>
+								</div>
+								{user && renderSharedStatus()}
+							</div>
+						</div>
+					</div>
+					{user !== null && (
+						<div className="flex space-x-2">
+							<div>
+								<div className="flex gap-2 items-center">
+									{data.password && (
+										<FontAwesomeIcon
+											className="text-amber-600 size-4"
+											icon={faLock}
+										/>
+									)}
+									<Button
+										variant="white"
+										onClick={() => {
+											navigator.clipboard.writeText(getVideoLink());
+											setLinkCopied(true);
+											setTimeout(() => {
+												setLinkCopied(false);
+											}, 2000);
+										}}
+									>
+										{getDisplayLink()}
+										{linkCopied ? (
+											<Check className="ml-2 w-4 h-4 svgpathanimation" />
+										) : (
+											<Copy className="ml-2 w-4 h-4" />
+										)}
+									</Button>
+								</div>
+								{!isVideoOwnerPro && (
+									<button
+										type="button"
+										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
+										onClick={() => setUpgradeModalOpen(true)}
+									>
+										<Globe2 className="mr-1 w-4 h-4" />
+										Connect a custom domain
+									</button>
+								)}
+							</div>
+							{user !== null && (
+								<div className="hidden md:flex">
+									<Button
+										onClick={() => {
+											push("/dashboard/caps?page=1");
+										}}
+									>
+										<span className="hidden text-sm text-white lg:block">
+											Go to
+										</span>{" "}
+										Dashboard
+									</Button>
+								</div>
+							)}
+						</div>
+					)}
+				</div>
+			</div>
+			<UpgradeModal
+				open={upgradeModalOpen}
+				onOpenChange={setUpgradeModalOpen}
+			/>
+		</>
+	);
 };

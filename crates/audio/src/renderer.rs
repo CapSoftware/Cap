@@ -6,27 +6,27 @@ pub enum StereoMode {
     MonoR,
 }
 
+pub struct AudioRendererTrack<'a> {
+    pub data: &'a AudioData,
+    pub gain: f32,
+    pub stereo_mode: StereoMode,
+    pub offset: isize,
+}
+
 // Renders a combination of audio tracks into a single stereo buffer
 pub fn render_audio(
-    tracks: &[(&AudioData, f32, StereoMode)],
+    tracks: &[AudioRendererTrack],
     offset: usize,
     samples: usize,
     out_offset: usize,
     out: &mut [f32],
 ) -> usize {
-    if tracks
-        .iter()
-        .any(|t| (t.0.samples().len() / t.0.channels() as usize) < offset)
-    {
-        return 0;
-    }
-
     let samples = samples.min(
         tracks
             .iter()
-            .map(|t| (t.0.samples().len() / t.0.channels() as usize) - offset)
-            .min()
-            .unwrap_or(usize::MAX),
+            .flat_map(|t| (t.data.samples().len() / t.data.channels() as usize).checked_sub(offset))
+            .max()
+            .unwrap_or(0),
     );
 
     for i in 0..samples {
@@ -34,21 +34,30 @@ pub fn render_audio(
         let mut right = 0.0;
 
         for track in tracks {
-            let gain = gain_for_db(track.1);
+            let i = i.wrapping_add_signed(track.offset);
+
+            let data = track.data;
+            let gain = gain_for_db(track.gain);
 
             if gain == f32::NEG_INFINITY {
                 continue;
             }
 
-            if track.0.channels() == 1 {
-                left += track.0.samples()[offset + i] * 0.707 * gain;
-                right += track.0.samples()[offset + i] * 0.707 * gain;
-            } else if track.0.channels() == 2 {
+            if data.channels() == 1 {
+                if let Some(sample) = data.samples().get(offset + i) {
+                    left += sample * 0.707 * gain;
+                    right += sample * 0.707 * gain;
+                }
+            } else if data.channels() == 2 {
                 let base_idx = offset * 2 + i * 2;
-                let l_sample = track.0.samples()[base_idx];
-                let r_sample = track.0.samples()[base_idx + 1];
+                let Some(l_sample) = data.samples().get(base_idx) else {
+                    continue;
+                };
+                let Some(r_sample) = data.samples().get(base_idx + 1) else {
+                    continue;
+                };
 
-                match track.2 {
+                match track.stereo_mode {
                     StereoMode::Stereo => {
                         left += l_sample * gain;
                         right += r_sample * gain;

@@ -1,28 +1,24 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraXPosition, CameraYPosition, Crop, CursorEvents, ProjectConfiguration,
-    RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, Crop, CursorEvents,
+    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
-use composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms};
+use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
-use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
-use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
+use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
+use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
-use futures::future::OptionFuture;
 use futures::FutureExt;
+use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    GradientOrColorPipeline, ImageBackgroundPipeline,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc;
-use tracing::subscriber::DefaultGuard;
-
-use image::GenericImageView;
-use log::{debug, info, warn};
 use std::{path::PathBuf, time::Instant};
+use tokio::sync::mpsc;
+use tracing::error;
 
 mod composite_frame;
 mod coord;
@@ -31,14 +27,16 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
+mod scene;
 mod spring_mass_damper;
 mod zoom;
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
-pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
+pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
+use scene::*;
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
@@ -138,12 +136,16 @@ impl RecordingSegmentDecoders {
         &self,
         segment_time: f32,
         needs_camera: bool,
+        offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let (screen, camera) = tokio::join!(
             self.screen.get_frame(segment_time),
             OptionFuture::from(
                 needs_camera
-                    .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
+                    .then(|| self
+                        .camera
+                        .as_ref()
+                        .map(|d| d.get_frame(segment_time + offsets.camera)))
                     .flatten()
             )
         );
@@ -171,6 +173,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Error polling wgpu: {0}")]
+    PollError(#[from] wgpu::PollError),
 }
 
 pub struct RenderSegment {
@@ -178,36 +182,29 @@ pub struct RenderSegment {
     pub decoders: RecordingSegmentDecoders,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
-    options: RenderOptions,
-    project: ProjectConfiguration,
+    constants: &RenderVideoConstants,
+    project: &ProjectConfiguration,
     sender: mpsc::Sender<(RenderedFrame, u32)>,
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
 ) -> Result<(), RenderingError> {
-    let constants = RenderVideoConstants::new(options, recording_meta, meta).await?;
-    // let recordings = ProjectRecordings::new(&recording_meta.project_path, meta);
-
     ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
 
-    // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(recordings, recording_meta, meta, &project);
+    let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
-    println!(
-        "Final export duration: {} seconds ({} frames at {}fps)",
-        duration, total_frames, fps
-    );
 
     let mut frame_number = 0;
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(constants);
 
     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
@@ -223,8 +220,8 @@ pub async fn render_video_to_channel(
         };
 
         let segment = &segments[segment_i as usize];
+        let clip_config = project.clips.iter().find(|v| v.index == segment_i);
 
-        // do this after all usages but before any 'continue' to handle frame skip
         let frame_number = {
             let prev = frame_number;
             std::mem::replace(&mut frame_number, prev + 1)
@@ -232,12 +229,16 @@ pub async fn render_video_to_channel(
 
         if let Some(segment_frames) = segment
             .decoders
-            .get_frames(segment_time as f32, !project.camera.hide)
+            .get_frames(
+                segment_time as f32,
+                !project.camera.hide,
+                clip_config.map(|v| v.offsets).unwrap_or_default(),
+            )
             .await
         {
             let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
+                constants,
+                project,
                 frame_number,
                 fps,
                 resolution_base,
@@ -267,53 +268,28 @@ pub async fn render_video_to_channel(
 }
 
 pub fn get_duration(
-    recordings: &ProjectRecordings,
+    recordings: &ProjectRecordingsMeta,
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
     project: &ProjectConfiguration,
 ) -> f64 {
     let mut max_duration = recordings.duration();
-    println!("Initial screen recording duration: {}", max_duration);
 
-    // Check camera duration if it exists
-    if let Some(camera_path) = meta.camera_path() {
-        if let Ok(camera_duration) =
+    if let Some(camera_path) = meta.camera_path()
+        && let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
-            println!("Camera recording duration: {}", camera_duration);
-            max_duration = max_duration.max(camera_duration);
-            println!("New max duration after camera check: {}", max_duration);
-        }
+    {
+        println!("Camera recording duration: {camera_duration}");
+        max_duration = max_duration.max(camera_duration);
+        println!("New max duration after camera check: {max_duration}");
     }
 
-    // If there's a timeline, ensure all segments extend to the max duration
     if let Some(timeline) = &project.timeline {
-        println!("Found timeline with {} segments", timeline.segments.len());
-        // for (i, segment) in timeline.segments.iter().enumerate() {
-        //     println!(
-        //         "Segment {} - current end: {}, max_duration: {}",
-        //         i, segment.end, max_duration
-        //     );
-        //     if segment.end < max_duration {
-        //         segment.end = max_duration;
-        //         println!("Extended segment {} to new end: {}", i, segment.end);
-        //     }
-        // }
-        let final_duration = timeline.duration();
-        println!(
-            "Final timeline duration after adjustments: {}",
-            final_duration
-        );
-        final_duration
+        timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {}", max_duration);
+        println!("No timeline found, using max_duration: {max_duration}");
         max_duration
     }
-}
-
-pub struct CursorTexture {
-    inner: wgpu::Texture,
-    hotspot: XY<f32>,
 }
 
 pub struct RenderVideoConstants {
@@ -322,89 +298,44 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub cursor_textures: HashMap<String, CursorTexture>,
-    background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
-    camera_frame: Option<(wgpu::Texture, wgpu::TextureView)>,
+    pub meta: StudioRecordingMeta,
+    pub recording_meta: RecordingMeta,
+    pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
 impl RenderVideoConstants {
     pub async fn new(
-        options: RenderOptions,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
+        segments: &[SegmentRecordings],
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
-        println!("Initializing wgpu...");
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .ok_or(RenderingError::NoAdapter)?;
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await?;
-
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, recording_meta, meta);
-        let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
-        let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
-
-        let image_background_pipeline = ImageBackgroundPipeline::new(&device);
-        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-
-        let screen_frame = {
-            let texture = device.create_texture(
-                &(wgpu::TextureDescriptor {
-                    size: wgpu::Extent3d {
-                        width: options.screen_size.x,
-                        height: options.screen_size.y,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_DST,
-                    label: Some("Screen Frame texture"),
-                    view_formats: &[],
-                }),
-            );
-
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            (texture, texture_view)
+        let options = RenderOptions {
+            screen_size: XY::new(segments[0].display.width, segments[0].display.height),
+            camera_size: segments[0]
+                .camera
+                .as_ref()
+                .map(|c| XY::new(c.width, c.height)),
         };
 
-        let camera_frame = options.camera_size.map(|s| {
-            let texture = device.create_texture(
-                &(wgpu::TextureDescriptor {
-                    size: wgpu::Extent3d {
-                        width: s.x,
-                        height: s.y,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_DST,
-                    label: Some("Camera texture"),
-                    view_formats: &[],
-                }),
-            );
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|_| RenderingError::NoAdapter)?;
 
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let device_descriptor = wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features: wgpu::Features::empty(),
+            ..Default::default()
+        };
 
-            (texture, texture_view)
-        });
+        let (device, queue) = adapter.request_device(&device_descriptor).await?;
+
+        let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
             _instance: instance,
@@ -412,100 +343,10 @@ impl RenderVideoConstants {
             device,
             queue,
             options,
-            cursor_textures,
             background_textures,
-            camera_frame,
+            meta,
+            recording_meta,
         })
-    }
-
-    fn load_cursor_textures(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
-    ) -> HashMap<String, CursorTexture> {
-        let mut textures = HashMap::new();
-
-        let cursor_images = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.cursor_images(recording_meta).unwrap_or_default()
-            }
-        };
-
-        for (cursor_id, cursor) in &cursor_images.0 {
-            if !cursor.path.exists() {
-                continue;
-            }
-
-            match image::open(&cursor.path) {
-                Ok(img) => {
-                    let dimensions = img.dimensions();
-
-                    let rgba = img.into_rgba8();
-
-                    // Create the texture
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&format!("Cursor Texture {}", cursor_id)),
-                        size: wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue.write_texture(
-                        wgpu::ImageCopyTexture {
-                            texture: &texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &rgba,
-                        wgpu::ImageDataLayout {
-                            offset: 0,
-                            bytes_per_row: Some(4 * dimensions.0),
-                            rows_per_image: None,
-                        },
-                        wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    textures.insert(
-                        cursor_id.clone(),
-                        CursorTexture {
-                            inner: texture,
-                            hotspot: cursor.hotspot.map(|v| v as f32),
-                        },
-                    );
-                    println!("Successfully loaded cursor texture: {}", cursor_id);
-                }
-                Err(e) => {
-                    println!(
-                        "Failed to load cursor image {}: {}",
-                        cursor.path.display(),
-                        e
-                    );
-                    // Don't return error, just skip this cursor image
-                    continue;
-                }
-            }
-        }
-
-        println!(
-            "Completed loading cursor textures. Total loaded: {}",
-            textures.len()
-        );
-        textures
     }
 }
 
@@ -515,9 +356,11 @@ pub struct ProjectUniforms {
     pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
+    camera_only: Option<CompositeVideoFrameUniforms>,
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
+    pub scene: InterpolatedScene,
     pub resolution_base: XY<u32>,
 }
 
@@ -548,6 +391,7 @@ impl ProjectUniforms {
         })
     }
 
+    #[allow(unused)]
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);
 
@@ -564,10 +408,12 @@ impl ProjectUniforms {
     ) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
         let crop_aspect = crop.aspect_ratio();
-        let padding = Self::get_padding(options, project) * 2.0;
 
         let (base_width, base_height) = match &project.aspect_ratio {
             None => {
+                let padding_basis = u32::max(crop.size.x, crop.size.y) as f64;
+                let padding =
+                    padding_basis * project.background.padding / 100.0 * SCREEN_MAX_PADDING * 2.0;
                 let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
                 let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
                 (width, height)
@@ -616,9 +462,7 @@ impl ProjectUniforms {
 
         let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        return (scaled_width, scaled_height);
-
-        // ((base_width + 1) & !1, (base_height + 1) & !1)
+        (scaled_width, scaled_height)
     }
 
     pub fn display_offset(
@@ -644,7 +488,12 @@ impl ProjectUniforms {
 
         let cropped_aspect = cropped_size.x / cropped_size.y;
 
-        let padding = Self::get_padding(options, project);
+        let padding = {
+            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+
+            f64::max(output_size.x, output_size.y) * padding_factor
+        };
+
         let is_height_constrained = cropped_aspect <= output_aspect;
 
         let available_size = output_size - 2.0 * padding;
@@ -679,6 +528,104 @@ impl ProjectUniforms {
         end - display_offset
     }
 
+    fn auto_zoom_focus(
+        cursor_events: &CursorEvents,
+        time_secs: f32,
+        smoothing: Option<SpringMassDamperSimulationConfig>,
+        current_cursor: Option<InterpolatedCursorPosition>,
+    ) -> Coord<RawDisplayUVSpace> {
+        const PREVIOUS_SAMPLE_DELTA: f32 = 0.1;
+        const MIN_LOOKAHEAD: f64 = 0.05;
+        const MAX_LOOKAHEAD: f64 = 0.18;
+        const MIN_FOLLOW_FACTOR: f64 = 0.2;
+        const MAX_FOLLOW_FACTOR: f64 = 0.65;
+        const SPEED_RESPONSE: f64 = 12.0;
+        const VELOCITY_BLEND: f64 = 0.25;
+        const MAX_SHIFT: f64 = 0.25;
+        const MIN_SPEED: f64 = 0.002;
+
+        let fallback = Coord::<RawDisplayUVSpace>::new(XY::new(0.5, 0.5));
+
+        let current_cursor = match current_cursor
+            .or_else(|| interpolate_cursor(cursor_events, time_secs, smoothing))
+        {
+            Some(cursor) => cursor,
+            None => return fallback,
+        };
+
+        let previous_time = (time_secs - PREVIOUS_SAMPLE_DELTA).max(0.0);
+        let previous_cursor = if previous_time < time_secs {
+            interpolate_cursor(cursor_events, previous_time, smoothing)
+        } else {
+            None
+        };
+
+        let current_position = current_cursor.position.coord;
+        let previous_position = previous_cursor
+            .as_ref()
+            .map(|c| c.position.coord)
+            .unwrap_or(current_position);
+
+        let delta_time = (time_secs - previous_time).max(f32::EPSILON) as f64;
+
+        let simulation_velocity = XY::new(
+            current_cursor.velocity.x as f64,
+            current_cursor.velocity.y as f64,
+        );
+
+        let finite_velocity = if previous_cursor.is_some() {
+            (current_position - previous_position) / delta_time
+        } else {
+            XY::new(0.0, 0.0)
+        };
+
+        let mut velocity = if smoothing.is_some() {
+            simulation_velocity * (1.0 - VELOCITY_BLEND) + finite_velocity * VELOCITY_BLEND
+        } else {
+            finite_velocity
+        };
+
+        if velocity.x.is_nan() || velocity.y.is_nan() {
+            velocity = XY::new(0.0, 0.0);
+        }
+
+        let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+
+        if speed < MIN_SPEED {
+            return Coord::new(XY::new(
+                current_position.x.clamp(0.0, 1.0),
+                current_position.y.clamp(0.0, 1.0),
+            ));
+        }
+
+        let speed_factor = (1.0 - (-speed / SPEED_RESPONSE).exp()).clamp(0.0, 1.0);
+
+        let lookahead = MIN_LOOKAHEAD + (MAX_LOOKAHEAD - MIN_LOOKAHEAD) * speed_factor;
+        let follow_strength =
+            MIN_FOLLOW_FACTOR + (MAX_FOLLOW_FACTOR - MIN_FOLLOW_FACTOR) * speed_factor;
+
+        let predicted_shift = XY::new(
+            (velocity.x * lookahead).clamp(-MAX_SHIFT, MAX_SHIFT),
+            (velocity.y * lookahead).clamp(-MAX_SHIFT, MAX_SHIFT),
+        );
+
+        let predicted_center = current_position + predicted_shift;
+        let base_center = previous_cursor
+            .map(|prev| {
+                let retention = 0.45 + 0.25 * speed_factor;
+                prev.position.coord * retention + current_position * (1.0 - retention)
+            })
+            .unwrap_or(current_position);
+
+        let final_center =
+            base_center * (1.0 - follow_strength) + predicted_center * follow_strength;
+
+        Coord::new(XY::new(
+            final_center.x.clamp(0.0, 1.0),
+            final_center.y.clamp(0.0, 1.0),
+        ))
+    }
+
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
@@ -698,14 +645,23 @@ impl ProjectUniforms {
 
         let crop = Self::get_crop(options, project);
 
+        let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        });
+
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
             segment_frames.recording_time,
-            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
-                tension: project.cursor.tension,
-                mass: project.cursor.mass,
-                friction: project.cursor.friction,
-            }),
+            cursor_smoothing,
+        );
+
+        let zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            segment_frames.recording_time,
+            cursor_smoothing,
+            interpolated_cursor.clone(),
         );
 
         let zoom = InterpolatedZoom::new(
@@ -717,19 +673,17 @@ impl ProjectUniforms {
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
             ),
-            interpolate_cursor(
-                cursor_events,
-                (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
-                    tension: project.cursor.tension,
-                    mass: project.cursor.mass,
-                    friction: project.cursor.friction,
-                }),
-            )
-            .as_ref()
-            .map(|i| i.position)
-            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+            zoom_focus,
         );
+
+        let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+            frame_time as f64,
+            project
+                .timeline
+                .as_ref()
+                .map(|t| t.scene_segments.as_slice())
+                .unwrap_or(&[]),
+        ));
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -774,7 +728,7 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount,
+                motion_blur_amount: (motion_blur_amount + scene.screen_blur as f32 * 0.8).min(1.0),
                 camera_motion_blur_amount: 0.0,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -792,19 +746,43 @@ impl ProjectUniforms {
                     .advanced_shadow
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
-                _padding: [0.0; 3],
+                opacity: scene.screen_opacity as f32,
+                border_enabled: if project
+                    .background
+                    .border
+                    .as_ref()
+                    .is_some_and(|b| b.enabled)
+                {
+                    1.0
+                } else {
+                    0.0
+                },
+                border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                _padding0: 0.0,
+                _padding1: [0.0; 2],
+                _padding1b: [0.0; 2],
+                border_color: if let Some(b) = project.background.border.as_ref() {
+                    [
+                        b.color[0] as f32 / 255.0,
+                        b.color[1] as f32 / 255.0,
+                        b.color[2] as f32 / 255.0,
+                        (b.opacity / 100.0).clamp(0.0, 1.0),
+                    ]
+                } else {
+                    [1.0, 1.0, 1.0, 0.8]
+                },
+                _padding2: [0.0; 4],
             }
         };
 
         let camera = options
             .camera_size
-            .filter(|_| !project.camera.hide)
+            .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
-                // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
                 let zoom_size = project
                     .camera
@@ -815,10 +793,28 @@ impl ProjectUniforms {
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
 
-                let size = [
-                    min_axis * zoomed_size + CAMERA_PADDING,
-                    min_axis * zoomed_size + CAMERA_PADDING,
-                ];
+                let zoomed_size = zoomed_size * scene.camera_scale as f32;
+
+                let aspect = frame_size[0] / frame_size[1];
+                let size = match project.camera.shape {
+                    CameraShape::Source => {
+                        if aspect >= 1.0 {
+                            [
+                                (min_axis * zoomed_size + CAMERA_PADDING) * aspect,
+                                min_axis * zoomed_size + CAMERA_PADDING,
+                            ]
+                        } else {
+                            [
+                                min_axis * zoomed_size + CAMERA_PADDING,
+                                (min_axis * zoomed_size + CAMERA_PADDING) / aspect,
+                            ]
+                        }
+                    }
+                    CameraShape::Square => [
+                        min_axis * zoomed_size + CAMERA_PADDING,
+                        min_axis * zoomed_size + CAMERA_PADDING,
+                    ],
+                };
 
                 let position = {
                     let x = match &project.camera.position.x {
@@ -841,24 +837,28 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = 0.0;
 
-                CompositeVideoFrameUniforms {
-                    output_size,
-                    frame_size,
-                    crop_bounds: [
+                let crop_bounds = match project.camera.shape {
+                    CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
+                    CameraShape::Square => [
                         (frame_size[0] - frame_size[1]) / 2.0,
                         0.0,
                         frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
                         frame_size[1],
                     ],
+                };
+
+                CompositeVideoFrameUniforms {
+                    output_size,
+                    frame_size,
+                    crop_bounds,
                     target_bounds,
                     target_size: [
                         target_bounds[2] - target_bounds[0],
                         target_bounds[3] - target_bounds[1],
                     ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
+                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount,
@@ -879,7 +879,83 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    _padding: [0.0; 3],
+                    opacity: scene.regular_camera_transition_opacity() as f32,
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
+                }
+            });
+
+        let camera_only = options
+            .camera_size
+            .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
+            .map(|camera_size| {
+                let output_size = [output_size.0 as f32, output_size.1 as f32];
+                let frame_size = [camera_size.x as f32, camera_size.y as f32];
+
+                let aspect = frame_size[0] / frame_size[1];
+                let output_aspect = output_size[0] / output_size[1];
+
+                let zoom_factor = scene.camera_only_zoom as f32;
+                let size = [output_size[0] * zoom_factor, output_size[1] * zoom_factor];
+
+                let position = [
+                    (output_size[0] - size[0]) / 2.0,
+                    (output_size[1] - size[1]) / 2.0,
+                ];
+
+                let target_bounds = [
+                    position[0],
+                    position[1],
+                    position[0] + size[0],
+                    position[1] + size[1],
+                ];
+
+                // In camera-only mode, we ignore the camera shape setting (Square/Source)
+                // and just apply the minimum crop needed to fill the output aspect ratio.
+                // This prevents excessive zooming when shape is set to Square.
+                let crop_bounds = if aspect > output_aspect {
+                    // Camera is wider than output - crop left and right
+                    let visible_width = frame_size[1] * output_aspect;
+                    let crop_x = (frame_size[0] - visible_width) / 2.0;
+                    [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
+                } else {
+                    // Camera is taller than output - crop top and bottom
+                    let visible_height = frame_size[0] / output_aspect;
+                    let crop_y = (frame_size[1] - visible_height) / 2.0;
+                    [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
+                };
+
+                CompositeVideoFrameUniforms {
+                    output_size,
+                    frame_size,
+                    crop_bounds,
+                    target_bounds,
+                    target_size: [
+                        target_bounds[2] - target_bounds[0],
+                        target_bounds[3] - target_bounds[1],
+                    ],
+                    rounding_px: 0.0,
+                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+                    velocity_uv: [0.0, 0.0],
+                    motion_blur_amount: 0.0,
+                    camera_motion_blur_amount: scene.camera_only_blur as f32 * 0.5,
+                    shadow: 0.0,
+                    shadow_size: 0.0,
+                    shadow_opacity: 0.0,
+                    shadow_blur: 0.0,
+                    opacity: scene.camera_only_transition_opacity() as f32,
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
                 }
             });
 
@@ -889,8 +965,10 @@ impl ProjectUniforms {
             resolution_base,
             display,
             camera,
+            camera_only,
             project: project.clone(),
             zoom,
+            scene,
             interpolated_cursor,
         }
     }
@@ -955,6 +1033,8 @@ pub struct RendererLayers {
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
+    camera_only: CameraLayer,
+    #[allow(unused)]
     captions: CaptionsLayer,
 }
 
@@ -966,6 +1046,7 @@ impl RendererLayers {
             display: DisplayLayer::new(device),
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
+            camera_only: CameraLayer::new(device),
             captions: CaptionsLayer::new(device, queue),
         }
     }
@@ -979,7 +1060,7 @@ impl RendererLayers {
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
-                &constants,
+                constants,
                 uniforms,
                 Background::from(uniforms.project.background.source.clone()),
             )
@@ -994,7 +1075,7 @@ impl RendererLayers {
             &constants.queue,
             segment_frames,
             constants.options.screen_size,
-            &uniforms,
+            uniforms.display,
         );
 
         self.cursor.prepare(
@@ -1006,35 +1087,29 @@ impl RendererLayers {
             constants,
         );
 
-        if let (
-            Some(camera_size),
-            Some(camera_frame),
-            Some(uniforms),
-            Some((texture, texture_view)),
-        ) = (
-            constants.options.camera_size,
-            &segment_frames.camera_frame,
-            &uniforms.camera,
-            &constants.camera_frame,
-        ) {
-            self.camera.prepare(
-                &constants.device,
-                &constants.queue,
-                *uniforms,
-                camera_size,
-                camera_frame,
-                (texture, texture_view),
-            );
-        }
+        self.camera.prepare(
+            &constants.device,
+            &constants.queue,
+            (|| {
+                Some((
+                    uniforms.camera?,
+                    constants.options.camera_size?,
+                    segment_frames.camera_frame.as_ref()?,
+                ))
+            })(),
+        );
 
-        // if let Some(captions) = &uniforms.project.captions {
-        //     self.captions.prepare(
-        //         uniforms,
-        //         segment_frames,
-        //         uniforms.resolution_base,
-        //         constants,
-        //     );
-        // }
+        self.camera_only.prepare(
+            &constants.device,
+            &constants.queue,
+            (|| {
+                Some((
+                    uniforms.camera_only?,
+                    constants.options.camera_size?,
+                    segment_frames.camera_frame.as_ref()?,
+                ))
+            })(),
+        );
 
         Ok(())
     }
@@ -1044,6 +1119,7 @@ impl RendererLayers {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
     ) {
         macro_rules! render_pass {
             ($view:expr, $load:expr) => {
@@ -1067,7 +1143,7 @@ impl RendererLayers {
         {
             let mut pass = render_pass!(
                 session.current_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             );
             self.background.render(&mut pass);
         }
@@ -1080,25 +1156,29 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
 
+        // Render camera-only layer when transitioning with CameraOnly mode
+        if uniforms.scene.is_transitioning_camera_only() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.camera_only.render(&mut pass);
+        }
+
+        // Also render regular camera overlay during transitions when its opacity > 0
+        if uniforms.scene.should_render_camera()
+            && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
         }
-
-        // {
-        //     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-        //     self.captions.render(&mut pass);
-        // }
     }
 }
 
@@ -1106,6 +1186,9 @@ pub struct RenderSession {
     textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     current_is_left: bool,
+    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
+    readback_buffer_size: u64,
+    current_readback_is_left: bool,
 }
 
 impl RenderSession {
@@ -1138,6 +1221,9 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
+            readback_buffers: (None, None),
+            readback_buffer_size: 0,
+            current_readback_is_left: true,
         }
     }
 
@@ -1195,10 +1281,48 @@ impl RenderSession {
     pub fn swap_textures(&mut self) {
         self.current_is_left = !self.current_is_left;
     }
+
+    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
+        let needs_new = self
+            .readback_buffers
+            .0
+            .as_ref()
+            .is_none_or(|_| self.readback_buffer_size < size);
+
+        if needs_new {
+            let make_buffer = || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("RenderSession Readback Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            };
+
+            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
+            self.readback_buffer_size = size;
+        }
+    }
+
+    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
+        if self.current_readback_is_left {
+            self.readback_buffers
+                .0
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        } else {
+            self.readback_buffers
+                .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        }
+    }
+
+    pub(crate) fn swap_readback_buffers(&mut self) {
+        self.current_readback_is_left = !self.current_readback_is_left;
+    }
 }
 
-// TODO: reuse as many resources as possible
-// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
@@ -1217,38 +1341,33 @@ async fn produce_frame(
         }),
     );
 
-    layers.render(&constants.device, &mut encoder, session);
+    layers.render(&constants.device, &mut encoder, session, &uniforms);
 
-    Ok(finish_encoder(
+    finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await?)
+    .await
 }
 
-// Helper function to parse color components from hex strings
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
-    // Remove # prefix if present
     let color = hex_color.trim_start_matches('#');
 
-    // Parse the color component
     if color.len() == 6 {
-        // Standard hex color #RRGGBB
         let start = index * 2;
         if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
             return value as f32 / 255.0;
         }
     }
 
-    // Default fallback values
     match index {
-        0 => 1.0, // Red default
-        1 => 1.0, // Green default
-        2 => 1.0, // Blue default
-        _ => 1.0, // Alpha default
+        0 => 1.0,
+        1 => 1.0,
+        2 => 1.0,
+        _ => 1.0,
     }
 }
 
@@ -1265,33 +1384,29 @@ pub fn create_shader_render_pipeline(
         push_constant_ranges: &[],
     });
 
-    let empty_constants: HashMap<String, f64> = HashMap::new();
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &empty_constants,
+                constants: &[],
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &empty_constants,
+                constants: &[],
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         }),
         primitive: wgpu::PrimitiveState {
@@ -1323,10 +1438,81 @@ fn srgb_to_linear(c: u16) -> f32 {
     }
 }
 
-fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left {
-        a
-    } else {
-        b
+#[cfg(test)]
+mod project_uniforms_tests {
+    use super::*;
+    use cap_project::CursorMoveEvent;
+
+    fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "primary".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn default_smoothing() -> SpringMassDamperSimulationConfig {
+        SpringMassDamperSimulationConfig {
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+        }
+    }
+
+    #[test]
+    fn auto_zoom_focus_defaults_without_cursor_data() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![],
+        };
+
+        let focus = ProjectUniforms::auto_zoom_focus(&events, 0.3, None, None);
+
+        assert_eq!(focus.coord.x, 0.5);
+        assert_eq!(focus.coord.y, 0.5);
+    }
+
+    #[test]
+    fn auto_zoom_focus_is_stable_for_slow_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![
+                cursor_move(0.0, 0.5, 0.5),
+                cursor_move(200.0, 0.55, 0.5),
+                cursor_move(400.0, 0.6, 0.5),
+            ],
+        };
+
+        let smoothing = Some(default_smoothing());
+
+        let current = interpolate_cursor(&events, 0.4, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, 0.4, smoothing, Some(current.clone()));
+
+        let dx = (focus.coord.x - current.position.coord.x).abs();
+        let dy = (focus.coord.y - current.position.coord.y).abs();
+
+        assert!(dx < 0.05, "expected minimal horizontal drift, got {dx}");
+        assert!(dy < 0.05, "expected minimal vertical drift, got {dy}");
+    }
+
+    #[test]
+    fn auto_zoom_focus_leans_into_velocity_for_fast_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![cursor_move(0.0, 0.1, 0.5), cursor_move(40.0, 0.9, 0.5)],
+        };
+
+        let smoothing = Some(default_smoothing());
+        let query_time = 0.045; // slightly after the fast movement
+
+        let current = interpolate_cursor(&events, query_time, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, query_time, smoothing, Some(current.clone()));
+        let delta = focus.coord.x - current.position.coord.x;
+        assert!(delta < 0.2, "focus moved too far ahead: {delta}");
+        assert!(delta > -0.25, "focus lagged too far behind: {delta}");
     }
 }

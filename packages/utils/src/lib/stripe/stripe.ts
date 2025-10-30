@@ -1,16 +1,13 @@
 import { serverEnv } from "@cap/env";
 import Stripe from "stripe";
 
-const key = () =>
-  serverEnv().STRIPE_SECRET_KEY_TEST ??
-  serverEnv().STRIPE_SECRET_KEY_LIVE ??
-  "";
+const key = () => serverEnv().STRIPE_SECRET_KEY ?? "";
 export const STRIPE_AVAILABLE = () => key() !== "";
 export const stripe = () =>
-  new Stripe(key(), {
-    apiVersion: "2023-10-16",
-    appInfo: {
-      name: "Cap",
-      version: "0.1.0",
-    },
-  });
+	new Stripe(key(), {
+		apiVersion: "2023-10-16",
+		appInfo: {
+			name: "Cap",
+			version: "0.1.0",
+		},
+	});

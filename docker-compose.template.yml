@@ -21,7 +21,8 @@ services:
       CAP_AWS_SECRET_KEY: capS3root
       CAP_AWS_BUCKET: capso
       CAP_AWS_REGION: us-east-1
-      CAP_AWS_ENDPOINT: http://minio:3902
+      S3_PUBLIC_ENDPOINT: http://localhost:3902
+      S3_INTERNAL_ENDPOINT: http://minio:3902
     ports:
       - 3000:3000
 

@@ -1,0 +1,23 @@
+[package]
+name = "cap-camera-windows"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+thiserror.workspace = true
+inquire = "0.7.5"
+
+[target.'cfg(windows)'.dependencies]
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
+cap-camera-directshow = { path = "../camera-directshow" }
+
+windows = { workspace = true }
+windows-core = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+inquire = "0.7.5"

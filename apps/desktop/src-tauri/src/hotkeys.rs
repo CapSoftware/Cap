@@ -1,5 +1,6 @@
 use crate::{
-    RequestNewScreenshot, RequestRestartRecording, RequestStartRecording, RequestStopRecording,
+    RequestOpenRecordingPicker, RequestStartRecording, recording,
+    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
 };
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
@@ -10,8 +11,9 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
+use tracing::instrument;
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy, Debug)]
 pub struct Hotkey {
     #[specta(type = String)]
     code: Code,
@@ -21,34 +23,43 @@ pub struct Hotkey {
     shift: bool,
 }
 
-impl Hotkey {
-    fn to_shortcut(&self) -> Shortcut {
+impl From<Hotkey> for Shortcut {
+    fn from(hotkey: Hotkey) -> Self {
         let mut modifiers = Modifiers::empty();
 
-        if self.meta {
+        if hotkey.meta {
             modifiers |= Modifiers::META;
         }
-        if self.ctrl {
+        if hotkey.ctrl {
             modifiers |= Modifiers::CONTROL;
         }
-        if self.alt {
+        if hotkey.alt {
             modifiers |= Modifiers::ALT;
         }
-        if self.shift {
+        if hotkey.shift {
             modifiers |= Modifiers::SHIFT;
         }
 
-        Shortcut::new(Some(modifiers), self.code)
+        Shortcut::new(Some(modifiers), hotkey.code)
     }
 }
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::enum_variant_names)]
 pub enum HotkeyAction {
-    StartRecording,
+    StartStudioRecording,
+    StartInstantRecording,
     StopRecording,
     RestartRecording,
     // TakeScreenshot,
+    OpenRecordingPicker,
+    OpenRecordingPickerDisplay,
+    OpenRecordingPickerWindow,
+    OpenRecordingPickerArea,
+    // Needed for deserialization of deprecated actions
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -66,6 +77,9 @@ impl HotkeysStore {
     }
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct OnEscapePress;
+
 pub type HotkeysState = Mutex<HotkeysStore>;
 pub fn init(app: &AppHandle) {
     app.plugin(
@@ -75,24 +89,23 @@ pub fn init(app: &AppHandle) {
                     return;
                 }
 
+                if shortcut.key == Code::Escape {
+                    OnEscapePress.emit(app).ok();
+                }
+
+                if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
+                    });
+                }
+
                 let state = app.state::<HotkeysState>();
                 let store = state.lock().unwrap();
 
                 for (action, hotkey) in &store.hotkeys {
-                    if &hotkey.to_shortcut() == shortcut {
-                        match action {
-                            HotkeyAction::StartRecording => {
-                                let _ = RequestStartRecording.emit(app);
-                            }
-                            HotkeyAction::StopRecording => {
-                                let _ = RequestStopRecording.emit(app);
-                            }
-                            HotkeyAction::RestartRecording => {
-                                let _ = RequestRestartRecording.emit(app);
-                            } // HotkeyAction::TakeScreenshot => {
-                              //     let _ = RequestNewScreenshot.emit(app);
-                              // }
-                        }
+                    if &Shortcut::from(*hotkey) == shortcut {
+                        tokio::spawn(handle_hotkey(app.clone(), *action));
                     }
                 }
             })
@@ -100,19 +113,75 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
+    let store = match HotkeysStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => HotkeysStore::default(),
+        Err(e) => {
+            eprintln!("Failed to load hotkeys store: {e}");
+            HotkeysStore::default()
+        }
+    };
 
     let global_shortcut = app.global_shortcut();
-
     for hotkey in store.hotkeys.values() {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(Shortcut::from(*hotkey)).ok();
     }
 
     app.manage(Mutex::new(store));
 }
 
+async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
+    match action {
+        HotkeyAction::StartStudioRecording => {
+            let _ = RequestStartRecording {
+                mode: cap_recording::RecordingMode::Studio,
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::StartInstantRecording => {
+            let _ = RequestStartRecording {
+                mode: cap_recording::RecordingMode::Instant,
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
+        HotkeyAction::RestartRecording => recording::restart_recording(app.clone(), app.state())
+            .await
+            .map(|_| ()),
+        HotkeyAction::OpenRecordingPicker => {
+            let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerDisplay => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Display),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerWindow => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Window),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerArea => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Area),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::Other => Ok(()),
+    }
+}
+
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument(skip(app))]
 pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) -> Result<(), ()> {
     let global_shortcut = app.global_shortcut();
     let state = app.state::<HotkeysState>();
@@ -126,14 +195,14 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
         store.hotkeys.remove(&action);
     }
 
-    if let Some(prev) = prev {
-        if !store.hotkeys.values().any(|h| h == &prev) {
-            global_shortcut.unregister(prev.to_shortcut()).ok();
-        }
+    if let Some(prev) = prev
+        && !store.hotkeys.values().any(|h| h == &prev)
+    {
+        global_shortcut.unregister(Shortcut::from(prev)).ok();
     }
 
     if let Some(hotkey) = hotkey {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(Shortcut::from(hotkey)).ok();
     }
 
     Ok(())
