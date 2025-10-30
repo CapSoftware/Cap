@@ -3,11 +3,13 @@ import { dub } from "@cap/utils";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
+import { serverEnv } from "@cap/env";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import { VideosRepo } from "./VideosRepo.ts";
+import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
@@ -15,6 +17,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
+		const client = yield* HttpClient.HttpClient;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
 			repo
@@ -207,6 +210,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					),
 				);
 
+				console.log("HERE GET");
+				const token = serverEnv().TINYBIRD_TOKEN;
+				const host = serverEnv().TINYBIRD_HOST;
+				if (token && host) {
+					const response2 = yield* client.get(
+						`${host}/v0/pipes/video_views.json?token=${token}&video_id=${video.id}`,
+					);
+					if (response2.status !== 200) {
+						// TODO
+					}
+					console.log("ANALYTICS", response2.status, yield* response2.text);
+
+					// TODO: Effect schema
+					const result = JSON.parse(yield* response2.text);
+					return { count: result.data[0].count };
+				}
+
 				const response = yield* Effect.tryPromise(() =>
 					dub().analytics.retrieve({
 						domain: "cap.link",
@@ -219,6 +239,39 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				return { count: clicks };
 			}),
+
+			captureAnalytics: Effect.fn("Videos.captureAnalytics")(function* (
+				videoId: Video.VideoId,
+			) {
+				const token = serverEnv().TINYBIRD_TOKEN;
+				const host = serverEnv().TINYBIRD_HOST;
+				if (!token || !host) return;
+
+				console.log("TINYBIRD EVENT"); // TODO
+				const response = yield* client.post(
+					`${host}/v0/events?name=analytics_views`,
+					{
+						body: HttpBody.unsafeJson({
+							timestamp: new Date().toISOString(),
+							version: "1",
+							session_id: "todo", // TODO
+							video_id: videoId,
+							payload: JSON.stringify({
+								hello: "world", // TODO
+							}),
+						}),
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
+					},
+				);
+				// const response = yield* HttpClientResponse.filterStatusOk(response);
+				if (response.status !== 200) {
+					// TODO
+				}
+
+				console.log(response.status, yield* response.text);
+			}),
 		};
 	}),
 	dependencies: [
@@ -226,5 +279,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		VideosRepo.Default,
 		Database.Default,
 		S3Buckets.Default,
+		FetchHttpClient.layer,
 	],
 }) {}

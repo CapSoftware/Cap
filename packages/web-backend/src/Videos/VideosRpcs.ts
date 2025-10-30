@@ -77,6 +77,9 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						videos.getAnalytics(id).pipe(
 							Effect.catchTags({
 								DatabaseError: () => new InternalError({ type: "database" }),
+								RequestError: () => new InternalError({ type: "httpRequest" }),
+								ResponseError: () =>
+									new InternalError({ type: "httpResponse" }),
 								UnknownException: () => new InternalError({ type: "unknown" }),
 							}),
 							Effect.matchEffect({
@@ -94,6 +97,17 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					provideOptionalAuth,
 					Effect.catchTags({
 						DatabaseError: () => new InternalError({ type: "database" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
+					}),
+				),
+
+			VideoCaptureAnalytics: (videoId) =>
+				videos.captureAnalytics(videoId).pipe(
+					provideOptionalAuth,
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+						RequestError: () => new InternalError({ type: "httpRequest" }),
+						ResponseError: () => new InternalError({ type: "httpResponse" }),
 						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),

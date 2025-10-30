@@ -1,0 +1,18 @@
+DESCRIPTION >
+    Sessions
+
+SCHEMA >
+    `date` Date,
+    `session_id` String,
+    `tenant_id` String,
+    `domain` String,
+    `device` SimpleAggregateFunction(any, String),
+    `browser` SimpleAggregateFunction(any, String),
+    `location` SimpleAggregateFunction(any, String),
+    `first_hit` SimpleAggregateFunction(min, DateTime),
+    `latest_hit` SimpleAggregateFunction(max, DateTime),
+    `hits` AggregateFunction(count)
+
+ENGINE AggregatingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY tenant_id, domain, date, session_id

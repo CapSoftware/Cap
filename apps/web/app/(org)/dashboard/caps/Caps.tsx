@@ -24,6 +24,7 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
+import { usePublicEnv } from "@/utils/public-env";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -54,18 +55,17 @@ export type VideoData = {
 export const Caps = ({
 	data,
 	count,
-	dubApiKeyEnabled,
 	folders,
 }: {
 	data: VideoData;
 	count: number;
 	folders: FolderDataType[];
-	dubApiKeyEnabled: boolean;
 }) => {
 	const router = useRouter();
 	const params = useSearchParams();
 	const page = Number(params.get("page")) || 1;
 	const { user } = useDashboardContext();
+	const publicEnv = usePublicEnv();
 	const limit = 15;
 	const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
 	const totalPages = Math.ceil(count / limit);
@@ -77,7 +77,7 @@ export const Caps = ({
 
 	const analyticsQuery = useVideosAnalyticsQuery(
 		data.map((video) => video.id),
-		dubApiKeyEnabled,
+		publicEnv.analyticsAvailable,
 	);
 	const analytics = analyticsQuery.data || {};
 

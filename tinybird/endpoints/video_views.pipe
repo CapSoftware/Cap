@@ -1,0 +1,9 @@
+TOKEN dashboard READ
+DESCRIPTION endpoint to get views for video
+
+NODE result
+SQL >
+    %
+    SELECT count(*) as count FROM analytics_views
+    WHERE video_id = {{String(video_id)}}
+TYPE ENDPOINT

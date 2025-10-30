@@ -131,6 +131,10 @@ export default ({ children }: PropsWithChildren) =>
 												webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 												workosAuthAvailable: !!serverEnv().WORKOS_CLIENT_ID,
 												googleAuthAvailable: !!serverEnv().GOOGLE_CLIENT_ID,
+												analyticsAvailable:
+													!!serverEnv().DUB_API_KEY ||
+													(!!serverEnv().TINYBIRD_HOST &&
+														!!serverEnv().TINYBIRD_TOKEN),
 											}}
 										>
 											<ReactQueryProvider>

@@ -1,5 +1,4 @@
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -11,7 +10,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -22,6 +20,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "./utils/transcript-utils";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 declare global {
 	interface Window {
@@ -74,6 +73,16 @@ export const ShareVideo = forwardRef<
 			data.id,
 			data.transcriptionStatus,
 		);
+
+		const rpc = useRpcClient();
+		const mutation = useEffectMutation({
+			mutationFn: () => rpc.VideoCaptureAnalytics(data.id),
+		});
+
+		// biome-ignore lint/correctness/useExhaustiveDependencies: just cause
+		useEffect(() => {
+			if (mutation.isIdle) mutation.mutate();
+		}, []);
 
 		// Handle comments data
 		useEffect(() => {

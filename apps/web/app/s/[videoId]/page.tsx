@@ -11,7 +11,6 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
@@ -22,13 +21,7 @@ import {
 	Videos,
 } from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import {
-	Comment,
-	type ImageUpload,
-	type Organisation,
-	Policy,
-	type Video,
-} from "@cap/web-domain";
+import { Comment, type Organisation, Policy, Video } from "@cap/web-domain";
 import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -36,7 +29,6 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
 	type OrganizationSettings,
@@ -254,7 +246,7 @@ export async function generateMetadata(
 export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
-	const videoId = params.videoId as Video.VideoId;
+	const videoId = Video.VideoId.make(params.videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -492,7 +484,7 @@ async function AuthorizedContent({
 		}
 	}
 
-	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const currentMetadata = video.metadata || {};
 	const metadata = currentMetadata;
 	let initialAiData = null;
 
@@ -679,7 +671,12 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = Effect.flatMap(Videos, (videos) =>
+		videos.getAnalytics(videoId),
+	).pipe(
+		Effect.map((v) => v.count),
+		EffectRuntime.runPromise,
+	);
 
 	const [
 		membersList,
