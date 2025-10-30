@@ -158,8 +158,7 @@ impl Message<Pause> for Actor {
                 let (cursors, next_cursor_id) = self
                     .stop_pipeline(pipeline, segment_start_time)
                     .await
-                    // .context("stop_pipeline")
-                ?;
+                    .context("stop_pipeline")?;
 
                 Some(ActorState::Paused {
                     next_index: index + 1,
