@@ -199,13 +199,13 @@ export function Timeline() {
 						});
 					});
 				}}
-			onMouseMove={(e) => {
-				const { left } = timelineBounds;
-				if (editorState.playing || left == null) return;
-				setPreviewTimeThrottled(
-					transform().position + secsPerPixel() * (e.clientX - left),
-				);
-			}}
+				onMouseMove={(e) => {
+					const { left } = timelineBounds;
+					if (editorState.playing || left == null) return;
+					setPreviewTimeThrottled(
+						transform().position + secsPerPixel() * (e.clientX - left),
+					);
+				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
 				onMouseLeave={() => {
 					setEditorState("previewTime", null);

@@ -71,13 +71,13 @@ function WaveformCanvas(props: {
 
 		const step = 0.05 / secsPerPixel();
 		const samplesPerSecond = 10;
-		
+
 		const startTime = props.segment.start;
 		const endTime = props.segment.end;
-		
+
 		const pixelsPerSecond = 1 / secsPerPixel();
 		const samplesPerPixel = samplesPerSecond / pixelsPerSecond;
-		
+
 		let sampleStep = 0.1;
 		if (samplesPerPixel < 0.5) {
 			sampleStep = Math.max(0.1, Math.ceil(1 / samplesPerPixel) * 0.1);
@@ -100,7 +100,7 @@ function WaveformCanvas(props: {
 		) {
 			const index = Math.floor(segmentTime * samplesPerSecond);
 			if (index < 0 || index >= waveform.length) continue;
-			
+
 			const xTime = index / samplesPerSecond;
 
 			const currentDb =
@@ -115,16 +115,13 @@ function WaveformCanvas(props: {
 				const cpX2 = x - step / 2;
 
 				ctx.bezierCurveTo(cpX1, prevY, cpX2, y, x, y);
-				
+
 				prevX = x;
 				prevY = y;
 			}
 		}
 
-		ctx.lineTo(
-			(endTime + 0.3 - startTime) / secsPerPixel(),
-			h,
-		);
+		ctx.lineTo((endTime + 0.3 - startTime) / secsPerPixel(), h);
 
 		ctx.closePath();
 		ctx.fill();
