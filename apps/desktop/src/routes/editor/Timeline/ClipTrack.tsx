@@ -53,6 +53,7 @@ function WaveformCanvas(props: {
 	const { project } = useEditorContext();
 
 	let canvas: HTMLCanvasElement | undefined;
+	let rafId: number | null = null;
 	const { width } = useSegmentContext();
 	const { secsPerPixel } = useTimelineContext();
 
@@ -65,11 +66,22 @@ function WaveformCanvas(props: {
 	) => {
 		const maxAmplitude = h;
 
-		// yellow please
 		ctx.fillStyle = color;
 		ctx.beginPath();
 
 		const step = 0.05 / secsPerPixel();
+		const samplesPerSecond = 10;
+		
+		const startTime = props.segment.start;
+		const endTime = props.segment.end;
+		
+		const pixelsPerSecond = 1 / secsPerPixel();
+		const samplesPerPixel = samplesPerSecond / pixelsPerSecond;
+		
+		let sampleStep = 0.1;
+		if (samplesPerPixel < 0.5) {
+			sampleStep = Math.max(0.1, Math.ceil(1 / samplesPerPixel) * 0.1);
+		}
 
 		ctx.moveTo(0, h);
 
@@ -78,35 +90,39 @@ function WaveformCanvas(props: {
 			return 1.0 - Math.max(ww + gain, -60) / -60;
 		};
 
+		let prevX = 0;
+		let prevY = h;
+
 		for (
-			let segmentTime = props.segment.start;
-			segmentTime <= props.segment.end + 0.1;
-			segmentTime += 0.1
+			let segmentTime = startTime;
+			segmentTime <= endTime + 0.1;
+			segmentTime += sampleStep
 		) {
-			const index = Math.floor(segmentTime * 10);
-			const xTime = index / 10;
+			const index = Math.floor(segmentTime * samplesPerSecond);
+			if (index < 0 || index >= waveform.length) continue;
+			
+			const xTime = index / samplesPerSecond;
 
 			const currentDb =
 				typeof waveform[index] === "number" ? waveform[index] : -60;
 			const amplitude = norm(currentDb) * maxAmplitude;
 
-			const x = (xTime - props.segment.start) / secsPerPixel();
+			const x = (xTime - startTime) / secsPerPixel();
 			const y = h - amplitude;
 
-			const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
-			const prevDb =
-				typeof waveform[index - 1] === "number" ? waveform[index - 1] : -60;
-			const prevAmplitude = norm(prevDb) * maxAmplitude;
-			const prevY = h - prevAmplitude;
+			if (prevX !== x) {
+				const cpX1 = prevX + step / 2;
+				const cpX2 = x - step / 2;
 
-			const cpX1 = prevX + step / 2;
-			const cpX2 = x - step / 2;
-
-			ctx.bezierCurveTo(cpX1, prevY, cpX2, y, x, y);
+				ctx.bezierCurveTo(cpX1, prevY, cpX2, y, x, y);
+				
+				prevX = x;
+				prevY = y;
+			}
 		}
 
 		ctx.lineTo(
-			(props.segment.end + 0.3 - props.segment.start) / secsPerPixel(),
+			(endTime + 0.3 - startTime) / secsPerPixel(),
 			h,
 		);
 
@@ -146,14 +162,25 @@ function WaveformCanvas(props: {
 	}
 
 	createEffect(() => {
-		renderWaveforms();
+		// track reactive deps
+		void width();
+		void secsPerPixel();
+		void project.audio.micVolumeDb;
+		void project.audio.systemVolumeDb;
+		if (rafId !== null) cancelAnimationFrame(rafId);
+		rafId = requestAnimationFrame(renderWaveforms);
+	});
+
+	onCleanup(() => {
+		if (rafId !== null) cancelAnimationFrame(rafId);
 	});
 
 	return (
 		<canvas
 			ref={(el) => {
 				canvas = el;
-				renderWaveforms();
+				if (rafId !== null) cancelAnimationFrame(rafId);
+				rafId = requestAnimationFrame(renderWaveforms);
 			}}
 			class="absolute inset-0 w-full h-full pointer-events-none"
 			height={52}
