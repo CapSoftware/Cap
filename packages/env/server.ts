@@ -67,7 +67,7 @@ function createServerEnv() {
 			S3_INTERNAL_ENDPOINT: z.string().optional(),
 			VERCEL_AWS_ROLE_ARN: z.string().optional(),
 			WORKFLOWS_RPC_URL: z.string().optional(),
-			WORKFLOWS_RPC_SECRET: z.string(),
+			WORKFLOWS_RPC_SECRET: z.string().optional(),
 		},
 		experimental__runtimeEnv: {
 			...process.env,

@@ -36,7 +36,7 @@ impl AudioEncoderBase {
         Ok(())
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
         while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
             self.inner.send_frame(&frame, output, &mut self.encoder)?;
         }

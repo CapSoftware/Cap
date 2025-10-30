@@ -1,4 +1,5 @@
 use std::{
+    env::temp_dir,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
@@ -30,6 +31,8 @@ pub enum BackgroundSource {
     },
     Color {
         value: Color,
+        #[serde(default = "default_alpha")]
+        alpha: u8,
     },
     Gradient {
         from: Color,
@@ -41,6 +44,10 @@ pub enum BackgroundSource {
 
 fn default_gradient_angle() -> u16 {
     90
+}
+
+fn default_alpha() -> u8 {
+    u8::MAX
 }
 
 impl Default for BackgroundSource {
@@ -639,10 +646,17 @@ impl ProjectConfiguration {
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
-        std::fs::write(
+        let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
+
+        // Write to temporary file first to ensure readers don't see partial files
+        std::fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
+
+        std::fs::rename(
+            &temp_path,
             project_path.as_ref().join("project-config.json"),
-            serde_json::to_string_pretty(self)?,
-        )
+        )?;
+
+        Ok(())
     }
 
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {

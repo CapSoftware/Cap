@@ -135,6 +135,8 @@ export default $config({
 			};
 		})();
 
+		const oidcSub = (environment: "production" | "preview" | "staging") =>
+			`owner:${VERCEL_TEAM_SLUG}:project:${VERCEL_PROJECT_NAME}:environment:${environment}`;
 		const vercelAwsAccessRole = new aws.iam.Role("VercelAWSAccessRole", {
 			assumeRolePolicy: {
 				Version: "2012-10-17",
@@ -150,9 +152,10 @@ export default $config({
 								[`${oidc.url}:aud`]: oidc.aud,
 							},
 							StringLike: {
-								[`${oidc.url}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:${stage.variant === "git-branch" ? "preview" : stage.variant}`,
-								],
+								[`${oidc.url}:sub`]:
+									stage.variant === "production"
+										? [oidcSub("production")]
+										: [oidcSub("preview"), oidcSub("staging")],
 							},
 						},
 					},

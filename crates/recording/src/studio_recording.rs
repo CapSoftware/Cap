@@ -1,10 +1,13 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
+    },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
+    screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
@@ -14,7 +17,6 @@ use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
-use scap_targets::WindowId;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -50,10 +52,7 @@ pub struct ActorHandle {
 #[derive(kameo::Actor)]
 pub struct Actor {
     recording_dir: PathBuf,
-    capture_target: screen_capture::ScreenCaptureTarget,
-    video_info: VideoInfo,
     state: Option<ActorState>,
-    fps: u32,
     segment_factory: SegmentPipelineFactory,
     segments: Vec<RecordingSegment>,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -290,12 +289,34 @@ impl Pipeline {
             futures.push(system_audio.done_fut());
         }
 
+        // Ensure non-video pipelines stop promptly when the video pipeline completes
+        {
+            let mic_cancel = self.microphone.as_ref().map(|p| p.cancel_token());
+            let cam_cancel = self.camera.as_ref().map(|p| p.cancel_token());
+            let sys_cancel = self.system_audio.as_ref().map(|p| p.cancel_token());
+
+            let screen_done = self.screen.done_fut();
+            tokio::spawn(async move {
+                // When screen (video) finishes, cancel the other pipelines
+                let _ = screen_done.await;
+                if let Some(token) = mic_cancel.as_ref() {
+                    token.cancel();
+                }
+                if let Some(token) = cam_cancel.as_ref() {
+                    token.cancel();
+                }
+                if let Some(token) = sys_cancel.as_ref() {
+                    token.cancel();
+                }
+            });
+        }
+
         tokio::spawn(async move {
             while let Some(res) = futures.next().await {
-                if let Err(err) = res {
-                    if completion_tx.borrow().is_none() {
-                        let _ = completion_tx.send(Some(Err(err)));
-                    }
+                if let Err(err) = res
+                    && completion_tx.borrow().is_none()
+                {
+                    let _ = completion_tx.send(Some(Err(err)));
                 }
             }
         });
@@ -346,7 +367,7 @@ pub struct ActorBuilder {
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
     #[cfg(target_os = "macos")]
-    excluded_windows: Vec<WindowId>,
+    excluded_windows: Vec<scap_targets::WindowId>,
 }
 
 impl ActorBuilder {
@@ -384,7 +405,7 @@ impl ActorBuilder {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }
@@ -461,13 +482,9 @@ async fn spawn_studio_recording_actor(
     trace!("spawning recording actor");
 
     let base_inputs = base_inputs.clone();
-    let fps = pipeline.screen.video_info().unwrap().fps();
 
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
-        fps,
-        capture_target: base_inputs.capture_target.clone(),
-        video_info: pipeline.screen.video_info().unwrap(),
         state: Some(ActorState::Recording {
             pipeline,
             /*pipeline_done_rx,*/
@@ -584,6 +601,8 @@ struct SegmentPipelineFactory {
     start_time: Timestamps,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
+    #[cfg(windows)]
+    encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 }
 
 impl SegmentPipelineFactory {
@@ -604,6 +623,8 @@ impl SegmentPipelineFactory {
             start_time,
             index: 0,
             completion_tx,
+            #[cfg(windows)]
+            encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
         }
     }
 
@@ -621,6 +642,8 @@ impl SegmentPipelineFactory {
             next_cursors_id,
             self.custom_cursor_capture,
             self.start_time,
+            #[cfg(windows)]
+            self.encoder_preferences.clone(),
         )
         .await?;
 
@@ -671,7 +694,7 @@ pub enum CreateSegmentPipelineError {
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
 #[allow(clippy::too_many_arguments)]
 async fn create_segment_pipeline(
-    segments_dir: &PathBuf,
+    segments_dir: &Path,
     cursors_dir: &Path,
     index: u32,
     base_inputs: RecordingBaseInputs,
@@ -679,21 +702,17 @@ async fn create_segment_pipeline(
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     start_time: Timestamps,
+    #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
-    let display = base_inputs
-        .capture_target
-        .display()
-        .ok_or(CreateSegmentPipelineError::NoDisplay)?;
-    let crop_bounds = base_inputs
-        .capture_target
-        .cursor_crop()
-        .ok_or(CreateSegmentPipelineError::NoBounds)?;
-
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
-    let screen_config = create_screen_capture(
-        &base_inputs.capture_target,
+    let (display, crop) =
+        target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
+
+    let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+        display,
+        crop,
         !custom_cursor_capture,
         120,
         start_time.system_time(),
@@ -706,7 +725,7 @@ async fn create_segment_pipeline(
         base_inputs.excluded_windows,
     )
     .await
-    .unwrap();
+    .context("screen capture init")?;
 
     let (capture_source, system_audio) = screen_config.to_sources().await?;
 
@@ -720,6 +739,8 @@ async fn create_segment_pipeline(
         capture_source,
         screen_output_path.clone(),
         start_time,
+        #[cfg(windows)]
+        encoder_preferences,
     )
     .instrument(error_span!("screen-out"))
     .await
@@ -758,21 +779,28 @@ async fn create_segment_pipeline(
     .transpose()
     .context("microphone pipeline setup")?;
 
-    let cursor = custom_cursor_capture.then(move || {
-        let cursor = spawn_cursor_recorder(
-            crop_bounds,
-            display,
-            cursors_dir.to_path_buf(),
-            prev_cursors,
-            next_cursors_id,
-            start_time,
-        );
+    let cursor = custom_cursor_capture
+        .then(move || {
+            let cursor_crop_bounds = base_inputs
+                .capture_target
+                .cursor_crop()
+                .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
-        CursorPipeline {
-            output_path: dir.join("cursor.json"),
-            actor: cursor,
-        }
-    });
+            let cursor = spawn_cursor_recorder(
+                cursor_crop_bounds,
+                display,
+                cursors_dir.to_path_buf(),
+                prev_cursors,
+                next_cursors_id,
+                start_time,
+            );
+
+            Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
+                output_path: dir.join("cursor.json"),
+                actor: cursor,
+            })
+        })
+        .transpose()?;
 
     info!("pipeline playing");
 
@@ -784,11 +812,6 @@ async fn create_segment_pipeline(
         cursor,
         system_audio,
     })
-}
-
-struct CameraPipelineInfo {
-    inner: OutputPipeline,
-    fps: u32,
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {

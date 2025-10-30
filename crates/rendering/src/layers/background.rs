@@ -33,11 +33,11 @@ pub enum Background {
 impl From<BackgroundSource> for Background {
     fn from(value: BackgroundSource) -> Self {
         match value {
-            BackgroundSource::Color { value } => Background::Color([
+            BackgroundSource::Color { value, alpha } => Background::Color([
                 srgb_to_linear(value[0]),
                 srgb_to_linear(value[1]),
                 srgb_to_linear(value[2]),
-                1.0,
+                alpha as f32 / 255.0,
             ]),
             BackgroundSource::Gradient { from, to, angle } => Background::Gradient(Gradient {
                 start: [
@@ -434,14 +434,29 @@ impl From<Background> for GradientOrColorUniforms {
     fn from(value: Background) -> Self {
         match value {
             Background::Color(color) => Self {
-                start: color,
-                end: color,
+                start: [
+                    color[0] * color[3],
+                    color[1] * color[3],
+                    color[2] * color[3],
+                    color[3],
+                ],
+                end: [
+                    color[0] * color[3],
+                    color[1] * color[3],
+                    color[2] * color[3],
+                    color[3],
+                ],
                 angle: 0.0,
                 _padding: [0.0; 3],
             },
             Background::Gradient(Gradient { start, end, angle }) => Self {
-                start,
-                end,
+                start: [
+                    start[0] * start[3],
+                    start[1] * start[3],
+                    start[2] * start[3],
+                    start[3],
+                ],
+                end: [end[0] * end[3], end[1] * end[3], end[2] * end[3], end[3]],
                 angle,
                 _padding: [0.0; 3],
             },
@@ -492,5 +507,53 @@ impl GradientOrColorPipeline {
             }],
             label: Some("bind_group"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cap_project::BackgroundSource;
+
+    #[test]
+    fn test_transparent_color_conversion() {
+        let source = BackgroundSource::Color {
+            value: [255, 0, 0], // Red
+            alpha: 128,         // 50% opacity
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Color(color) => {
+                assert!((color[0] - 1.0).abs() < 1e-6); // Red in linear
+                assert_eq!(color[1], 0.0);
+                assert_eq!(color[2], 0.0);
+                assert!((color[3] - 0.5).abs() < 0.01); // Alpha 128/255 ≈ 0.5
+            }
+            _ => panic!("Expected Color variant"),
+        }
+    }
+
+    #[test]
+    fn test_transparent_gradient_conversion() {
+        let source = BackgroundSource::Gradient {
+            from: [0, 255, 0], // Green
+            to: [0, 0, 255],   // Blue
+            angle: 90,
+        };
+        let background = Background::from(source);
+        match background {
+            Background::Gradient(gradient) => {
+                assert_eq!(gradient.start[0], 0.0);
+                assert_eq!(gradient.start[1], 1.0); // Green in linear
+                assert_eq!(gradient.start[2], 0.0);
+                assert_eq!(gradient.start[3], 1.0); // Alpha 255/255 = 1.0
+                assert_eq!(gradient.end[0], 0.0);
+                assert_eq!(gradient.end[1], 0.0);
+                assert_eq!(gradient.end[2], 1.0); // Blue in linear
+                assert_eq!(gradient.end[3], 0.0); // Alpha 0/255 = 0.0
+                assert_eq!(gradient.angle, 90.0);
+            }
+            _ => panic!("Expected Gradient variant"),
+        }
     }
 }

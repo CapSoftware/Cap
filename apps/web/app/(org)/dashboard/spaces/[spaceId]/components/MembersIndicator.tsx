@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Avatar,
 	Button,
 	Dialog,
 	DialogContent,
@@ -17,10 +16,12 @@ import { type Space, User } from "@cap/web-domain";
 import { faPlus, faUserGroup } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 import { setSpaceMembers } from "../actions";
 import type { SpaceMemberData } from "../page";
@@ -44,6 +45,7 @@ export const MembersIndicator = ({
 	onAddVideos,
 }: MembersIndicatorProps) => {
 	const { user } = useDashboardContext();
+	const router = useRouter();
 	const [open, setOpen] = useState(false);
 	const [isLoading, setIsLoading] = useState(false);
 
@@ -81,6 +83,7 @@ export const MembersIndicator = ({
 				role: "member",
 			});
 			toast.success("Members updated!");
+			router.refresh();
 		} catch (error) {
 			console.error("Failed to update members:", error);
 			toast.error("Failed to update members");
@@ -165,9 +168,9 @@ export const MembersIndicator = ({
 											key={member.userId}
 											className="flex gap-2 items-center p-3 rounded-lg border bg-gray-3 border-gray-4"
 										>
-											<Avatar
+											<SignedImageUrl
 												name={member.name || member.email}
-												imageUrl={member.image || undefined}
+												image={member.image || undefined}
 												className="size-8"
 												letterClass="text-sm"
 											/>

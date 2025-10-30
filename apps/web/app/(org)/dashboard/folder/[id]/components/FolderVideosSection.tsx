@@ -6,10 +6,8 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { useEffectMutation } from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
-import { AnalyticsRequest } from "@/lib/Requests/AnalyticsRequest";
-import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
@@ -31,11 +29,11 @@ export default function FolderVideosSection({
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
 
+	const rpc = useRpcClient();
+
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
-
-			const rpc = yield* Rpc;
 
 			const fiber = yield* Effect.gen(function* () {
 				const results = yield* Effect.all(
@@ -87,7 +85,7 @@ export default function FolderVideosSection({
 	});
 
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();

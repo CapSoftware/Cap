@@ -104,8 +104,8 @@ impl AACEncoder {
         self.base.send_frame(frame, timestamp, output)
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
-        self.base.finish(output)
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.flush(output)
     }
 }
 
@@ -114,7 +114,7 @@ impl AudioEncoder for AACEncoder {
         let _ = self.send_frame(frame, Duration::MAX, output);
     }
 
-    fn finish(&mut self, output: &mut format::context::Output) {
-        let _ = self.finish(output);
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.flush(output)
     }
 }

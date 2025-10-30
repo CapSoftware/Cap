@@ -3,10 +3,18 @@ import { Schema } from "effect";
 
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
+import { ImageUpdatePayload } from "./ImageUpload.ts";
 import { OrganisationId } from "./Organisation.ts";
+import { PolicyDeniedError } from "./Policy.ts";
 
 export const UserId = Schema.String.pipe(Schema.brand("UserId"));
 export type UserId = typeof UserId.Type;
+
+export const UserUpdate = Schema.Struct({
+	id: UserId,
+	image: Schema.optional(ImageUpdatePayload),
+});
+export type UserUpdate = Schema.Schema.Type<typeof UserUpdate>;
 
 export const OnboardingStepPayload = Schema.Union(
 	Schema.Struct({
@@ -73,5 +81,9 @@ export class UserRpcs extends RpcGroup.make(
 		payload: OnboardingStepPayload,
 		success: OnboardingStepResult,
 		error: InternalError,
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("UserUpdate", {
+		payload: UserUpdate,
+		error: Schema.Union(InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
 ) {}

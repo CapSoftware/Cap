@@ -2,14 +2,18 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoIdLength } from "@cap/database/helpers";
+import { nanoId } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
-import { Space, type User } from "@cap/web-domain";
+import {
+	Space,
+	SpaceMemberId,
+	type SpaceMemberRole,
+	type User,
+} from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
-import { v4 as uuidv4 } from "uuid";
 import { runPromise } from "@/lib/server";
 import { uploadSpaceIcon } from "./upload-space-icon";
 
@@ -22,37 +26,64 @@ export async function updateSpace(formData: FormData) {
 	const members = formData.getAll("members[]") as User.UserId[];
 	const iconFile = formData.get("icon") as File | null;
 
+	// Get the space to check authorization
+	const [space] = await db()
+		.select({
+			createdById: spaces.createdById,
+			organizationId: spaces.organizationId,
+		})
+		.from(spaces)
+		.where(eq(spaces.id, id))
+		.limit(1);
+
+	if (!space) {
+		return { success: false, error: "Space not found" };
+	}
+
+	// Check if user is the creator or a member of the space
+	const isCreator = space.createdById === user.id;
 	const [membership] = await db()
 		.select()
 		.from(spaceMembers)
-		.where(and(eq(spaceMembers.spaceId, id), eq(spaceMembers.userId, user.id)));
+		.where(and(eq(spaceMembers.spaceId, id), eq(spaceMembers.userId, user.id)))
+		.limit(1);
 
-	if (!membership) return { success: false, error: "Unauthorized" };
+	if (!isCreator && !membership) {
+		return { success: false, error: "Unauthorized" };
+	}
 
 	// Update space name
 	await db().update(spaces).set({ name }).where(eq(spaces.id, id));
 
-	// Update members (simple replace for now)
+	// Update members - ensure creator is always included
+	const memberIds = Array.from(new Set([...members, space.createdById]));
+
 	await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, id));
-	if (members.length > 0) {
-		await db()
-			.insert(spaceMembers)
-			.values(
-				members.map((userId) => ({
-					id: uuidv4().substring(0, nanoIdLength),
+	await db()
+		.insert(spaceMembers)
+		.values(
+			memberIds.map((userId) => {
+				const role: SpaceMemberRole =
+					userId === space.createdById ? "Admin" : "member";
+				return {
+					id: SpaceMemberId.make(nanoId()),
 					spaceId: id,
 					userId,
-				})),
-			);
-	}
+					role,
+				};
+			}),
+		);
 
 	// Handle icon removal if requested
 	if (formData.get("removeIcon") === "true") {
 		// Remove icon from S3 and set iconUrl to null
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
-		const space = spaceArr[0];
-		if (space?.iconUrl) {
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+		const spaceData = spaceArr[0];
+		if (spaceData?.iconUrl) {
+			// Extract the S3 key (it might already be a key or could be a legacy URL)
+			const key = spaceData.iconUrl.startsWith("organizations/")
+				? spaceData.iconUrl
+				: spaceData.iconUrl.match(/organizations\/.+/)?.[0];
 
 			if (key) {
 				try {
@@ -71,5 +102,6 @@ export async function updateSpace(formData: FormData) {
 	}
 
 	revalidatePath("/dashboard");
+	revalidatePath(`/dashboard/spaces/${id}`);
 	return { success: true };
 }

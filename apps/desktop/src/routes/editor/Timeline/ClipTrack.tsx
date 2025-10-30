@@ -8,9 +8,10 @@ import {
 	createEffect,
 	createMemo,
 	createRoot,
+	createSignal,
 	For,
 	Match,
-	mergeProps,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -204,18 +205,40 @@ export function ClipTrack(
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-					const prevDuration = () =>
-						segments()
-							.slice(0, i())
-							.reduce((t, s) => t + (s.end - s.start) / s.timescale, 0);
+					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
+						offset: number;
+						initialStart: number;
+					}>(null);
 
-					const relativeSegment = mergeProps(segment, () => ({
-						start: prevDuration(),
-						end: segment.end - segment.start + prevDuration(),
-					}));
+					const prefixOffsets = createMemo(() => {
+						const segs = segments();
+						const out: number[] = new Array(segs.length);
+						let sum = 0;
+						for (let k = 0; k < segs.length; k++) {
+							out[k] = sum;
+							sum += (segs[k].end - segs[k].start) / segs[k].timescale;
+						}
+						return out;
+					});
+					const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
-					const segmentX = useSegmentTranslateX(() => relativeSegment);
-					const segmentWidth = useSegmentWidth(() => relativeSegment);
+					const relativeSegment = createMemo(() => {
+						const ds = startHandleDrag();
+						const offset = ds ? ds.offset / segment.timescale : 0;
+
+						return {
+							start: Math.max(prevDuration() + offset, 0),
+							end:
+								prevDuration() +
+								offset +
+								(segment.end - segment.start) / segment.timescale,
+							timescale: segment.timescale,
+							recordingSegment: segment.recordingSegment,
+						};
+					});
+
+					const segmentX = useSegmentTranslateX(relativeSegment);
+					const segmentWidth = useSegmentWidth(relativeSegment);
 
 					const segmentRecording = (s = i()) =>
 						editorInstance.recordings.segments[
@@ -242,7 +265,9 @@ export function ClipTrack(
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
-						return segmentIndex === selection.index;
+						if (segmentIndex === undefined || segmentIndex === -1) return false;
+
+						return selection.indices.includes(segmentIndex);
 					});
 
 					const micWaveform = () => {
@@ -358,7 +383,7 @@ export function ClipTrack(
 										: "border-transparent",
 								)}
 								innerClass="ring-blue-9"
-								segment={relativeSegment}
+								segment={relativeSegment()}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 
@@ -371,16 +396,81 @@ export function ClipTrack(
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {
 										createRoot((dispose) => {
-											createEventListener(e.currentTarget, "mouseup", (e) => {
-												dispose();
+											createEventListener(
+												e.currentTarget,
+												"mouseup",
+												(upEvent) => {
+													dispose();
 
-												setEditorState("timeline", "selection", {
-													type: "clip",
-													index: i(),
-												});
+													const currentIndex = i();
+													const selection = editorState.timeline.selection;
+													const isMac =
+														navigator.platform.toUpperCase().indexOf("MAC") >=
+														0;
+													const isMultiSelect = isMac
+														? upEvent.metaKey
+														: upEvent.ctrlKey;
+													const isRangeSelect = upEvent.shiftKey;
 
-												props.handleUpdatePlayhead(e);
-											});
+													if (
+														isRangeSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Range selection: select from last selected to current
+														const existingIndices = selection.indices;
+														const lastIndex =
+															existingIndices[existingIndices.length - 1];
+														const start = Math.min(lastIndex, currentIndex);
+														const end = Math.max(lastIndex, currentIndex);
+														const rangeIndices = Array.from(
+															{ length: end - start + 1 },
+															(_, idx) => start + idx,
+														);
+
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: rangeIndices,
+														});
+													} else if (
+														isMultiSelect &&
+														selection &&
+														selection.type === "clip"
+													) {
+														// Multi-select: toggle current index
+														const existingIndices = selection.indices;
+
+														if (existingIndices.includes(currentIndex)) {
+															// Remove from selection
+															const newIndices = existingIndices.filter(
+																(idx) => idx !== currentIndex,
+															);
+															if (newIndices.length > 0) {
+																setEditorState("timeline", "selection", {
+																	type: "clip" as const,
+																	indices: newIndices,
+																});
+															} else {
+																setEditorState("timeline", "selection", null);
+															}
+														} else {
+															// Add to selection
+															setEditorState("timeline", "selection", {
+																type: "clip" as const,
+																indices: [...existingIndices, currentIndex],
+															});
+														}
+													} else {
+														// Normal single selection
+														setEditorState("timeline", "selection", {
+															type: "clip" as const,
+															indices: [currentIndex],
+														});
+													}
+
+													props.handleUpdatePlayhead(upEvent);
+												},
+											);
 										});
 									}
 								}}
@@ -398,9 +488,14 @@ export function ClipTrack(
 									position="start"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
-										const start = segment.start;
-
 										if (split()) return;
+
+										const initialStart = segment.start;
+										setStartHandleDrag({
+											offset: 0,
+											initialStart,
+										});
+
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
 												segment.recordingSegment ?? 0
@@ -431,35 +526,51 @@ export function ClipTrack(
 
 										function update(event: MouseEvent) {
 											const newStart =
-												start +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+												initialStart +
+												(event.clientX - downEvent.clientX) *
+													secsPerPixel() *
+													segment.timescale;
+
+											const clampedStart = Math.min(
+												Math.max(
+													newStart,
+													prevSegmentIsSameClip ? prevSegment.end : 0,
+													segment.end - maxDuration,
+												),
+												segment.end - 1,
+											);
+
+											setStartHandleDrag({
+												offset: clampedStart - initialStart,
+												initialStart,
+											});
 
 											setProject(
 												"timeline",
 												"segments",
 												i(),
 												"start",
-												Math.min(
-													Math.max(
-														newStart,
-														prevSegmentIsSameClip ? prevSegment.end : 0,
-														segment.end - maxDuration,
-													),
-													segment.end - 1,
-												),
+												clampedStart,
 											);
 										}
 
 										const resumeHistory = projectHistory.pause();
 										createRoot((dispose) => {
+											onCleanup(() => {
+												resumeHistory();
+												console.log("NUL");
+												setStartHandleDrag(null);
+												onHandleReleased();
+											});
+
 											createEventListenerMap(window, {
 												mousemove: update,
 												mouseup: (e) => {
-													dispose();
-													resumeHistory();
 													update(e);
-													onHandleReleased();
+													dispose();
 												},
+												blur: () => dispose(),
+												mouseleave: () => dispose(),
 											});
 										});
 									}}
@@ -516,9 +627,11 @@ export function ClipTrack(
 												: false;
 
 										function update(event: MouseEvent) {
-											const newEnd =
-												end +
-												(event.clientX - downEvent.clientX) * secsPerPixel();
+											const deltaRecorded =
+												(event.clientX - downEvent.clientX) *
+												secsPerPixel() *
+												segment.timescale;
+											const newEnd = end + deltaRecorded;
 
 											setProject(
 												"timeline",
@@ -528,7 +641,8 @@ export function ClipTrack(
 												Math.max(
 													Math.min(
 														newEnd,
-														segment.end + availableTimelineDuration,
+														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
+														end + availableTimelineDuration * segment.timescale,
 														nextSegmentIsSameClip
 															? nextSegment.start
 															: maxSegmentDuration,
@@ -546,6 +660,16 @@ export function ClipTrack(
 													dispose();
 													resumeHistory();
 													update(e);
+													onHandleReleased();
+												},
+												blur: () => {
+													dispose();
+													resumeHistory();
+													onHandleReleased();
+												},
+												mouseleave: () => {
+													dispose();
+													resumeHistory();
 													onHandleReleased();
 												},
 											});
@@ -649,7 +773,7 @@ function CutOffsetButton(props: {
 			{props.value === 0 ? (
 				<IconCapScissors class="size-3.5" />
 			) : (
-				<>{formatTime(props.value)}</>
+				formatTime(props.value)
 			)}
 		</button>
 	);

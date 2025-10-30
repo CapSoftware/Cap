@@ -11,6 +11,7 @@ import { useId, useState } from "react";
 import { toast } from "sonner";
 import { trackEvent } from "@/app/utils/analytics";
 import OtpForm from "./OtpForm";
+import { usePublicEnv } from "@/utils/public-env";
 
 interface AuthOverlayProps {
 	isOpen: boolean;
@@ -64,7 +65,6 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 					</div>
 
 					<div className="flex flex-col">
-						<AnimatePresence> </AnimatePresence>
 						{step === 1 ? (
 							<StepOne
 								email={email}
@@ -145,6 +145,8 @@ const StepOne = ({
 			callbackUrl: `${window.location.origin}/s/${videoId}`,
 		});
 	};
+	const publicEnv = usePublicEnv();
+
 	return (
 		<form
 			onSubmit={async (e) => {
@@ -204,21 +206,25 @@ const StepOne = ({
 						: "Email sent to your inbox"
 					: "Continue with Email"}
 			</Button>
-			<div className="flex gap-4 items-center">
-				<span className="flex-1 h-px bg-gray-5" />
-				<p className="text-sm text-center text-gray-10">OR</p>
-				<span className="flex-1 h-px bg-gray-5" />
-			</div>
-			<Button
-				variant="gray"
-				type="button"
-				className="flex gap-2 justify-center items-center my-1 w-full text-sm"
-				onClick={handleGoogleSignIn}
-				disabled={loading}
-			>
-				<Image src="/google.svg" alt="Google" width={16} height={16} />
-				Login with Google
-			</Button>
+			{publicEnv.googleAuthAvailable && (
+				<>
+					<div className="flex gap-4 items-center">
+						<span className="flex-1 h-px bg-gray-5" />
+						<p className="text-sm text-center text-gray-10">OR</p>
+						<span className="flex-1 h-px bg-gray-5" />
+					</div>
+					<Button
+						variant="gray"
+						type="button"
+						className="flex gap-2 justify-center items-center my-1 w-full text-sm"
+						onClick={handleGoogleSignIn}
+						disabled={loading}
+					>
+						<Image src="/google.svg" alt="Google" width={16} height={16} />
+						Login with Google
+					</Button>
+				</>
+			)}
 		</form>
 	);
 };

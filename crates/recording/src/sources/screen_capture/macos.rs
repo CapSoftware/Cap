@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use anyhow::{Context, anyhow};
+use cap_timestamp::Timestamp;
 use cidre::*;
 use futures::{FutureExt as _, channel::mpsc, future::BoxFuture};
 use std::{
@@ -49,10 +50,6 @@ enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]
     AsContentFilter,
-    #[error("CreateActor: {0}")]
-    CreateActor(arc::R<ns::Error>),
-    #[error("DidStopWithError: {0}")]
-    DidStopWithError(arc::R<ns::Error>),
 }
 
 pub struct VideoFrame {
@@ -111,7 +108,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 excluded_sc_windows,
             )
             .await
-            .ok_or_else(|| SourceError::AsContentFilter)?;
+            .ok_or(SourceError::AsContentFilter)?;
 
         debug!("SCK content filter: {:?}", content_filter);
 

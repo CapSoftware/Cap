@@ -13,7 +13,8 @@ use std::{
     any::Any,
     future,
     marker::PhantomData,
-    path::PathBuf,
+    ops::Deref,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{self, AtomicBool},
@@ -138,19 +139,26 @@ impl TaskPool {
         ));
     }
 
-    pub fn spawn_thread(&mut self, name: &'static str, cb: impl FnOnce() + Send + 'static) {
+    pub fn spawn_thread(
+        &mut self,
+        name: &'static str,
+        cb: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+    ) {
         let span = error_span!("", task = name);
         let (done_tx, done_rx) = oneshot::channel();
         std::thread::spawn(move || {
             let _guard = span.enter();
             trace!("Task started");
-            cb();
-            let _ = done_tx.send(());
+            let _ = done_tx.send(cb());
             info!("Task finished");
         });
         self.0.push((
             name,
-            tokio::spawn(done_rx.map_err(|_| anyhow!("Cancelled"))),
+            tokio::spawn(
+                done_rx
+                    .map_err(|_| anyhow!("Cancelled"))
+                    .map(|v| v.and_then(|v| v)),
+            ),
         ));
     }
 }
@@ -211,10 +219,11 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         Ok(OutputPipeline {
             path,
             first_timestamp_rx: first_rx,
-            stop_token: Some(stop_token.drop_guard()),
+            stop_token: Some(stop_token.clone().drop_guard()),
             video_info: Some(video_info),
             done_fut: done_rx,
             pause_flag,
+            cancel_token: stop_token,
         })
     }
 }
@@ -264,10 +273,11 @@ impl OutputPipelineBuilder<NoVideo> {
         Ok(OutputPipeline {
             path,
             first_timestamp_rx: first_rx,
-            stop_token: Some(stop_token.drop_guard()),
+            stop_token: Some(stop_token.clone().drop_guard()),
             video_info: None,
             done_fut: done_rx,
             pause_flag,
+            cancel_token: stop_token,
         })
     }
 }
@@ -291,7 +301,7 @@ fn setup_build() -> (
         done_tx,
         done_rx
             .map(|v| {
-                v.map_err(|s| anyhow::Error::from(s))
+                v.map_err(anyhow::Error::from)
                     .and_then(|v| v)
                     .map_err(|e| PipelineDoneError(Arc::new(e)))
             })
@@ -301,15 +311,16 @@ fn setup_build() -> (
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_build(
     mut setup_ctx: SetupCtx,
     audio_sources: Vec<AudioSourceSetupFn>,
     stop_token: CancellationToken,
-    muxer: Arc<Mutex<impl Muxer + AudioMuxer>>,
+    muxer: Arc<Mutex<impl AudioMuxer>>,
     timestamps: Timestamps,
     done_tx: oneshot::Sender<anyhow::Result<()>>,
     first_tx: Option<oneshot::Sender<Timestamp>>,
-    path: &PathBuf,
+    path: &Path,
 ) -> anyhow::Result<()> {
     configure_audio(
         &mut setup_ctx,
@@ -353,7 +364,13 @@ async fn finish_build(
 
             let _ = done_tx.send(match (res, muxer_res) {
                 (Err(e), _) | (_, Err(e)) => Err(e),
-                _ => Ok(()),
+                (_, Ok(muxer_streams_res)) => {
+                    if let Err(e) = muxer_streams_res {
+                        warn!("Muxer streams had failure: {e:#}");
+                    }
+
+                    Ok(())
+                }
             });
         }),
     );
@@ -375,7 +392,7 @@ async fn setup_video_source<TVideo: VideoSource>(
 
 async fn setup_muxer<TMuxer: Muxer>(
     muxer_config: TMuxer::Config,
-    path: &PathBuf,
+    path: &Path,
     video_info: Option<VideoInfo>,
     audio_info: Option<AudioInfo>,
     pause_flag: &Arc<AtomicBool>,
@@ -384,7 +401,7 @@ async fn setup_muxer<TMuxer: Muxer>(
     let muxer = Arc::new(Mutex::new(
         TMuxer::setup(
             muxer_config,
-            path.clone(),
+            path.to_path_buf(),
             video_info,
             audio_info,
             pause_flag.clone(),
@@ -459,7 +476,7 @@ async fn configure_audio<TMutex: AudioMuxer>(
     timestamps: Timestamps,
     mut first_tx: Option<oneshot::Sender<Timestamp>>,
 ) -> anyhow::Result<()> {
-    if audio_sources.len() < 1 {
+    if audio_sources.is_empty() {
         return Ok(());
     }
 
@@ -481,9 +498,13 @@ async fn configure_audio<TMutex: AudioMuxer>(
 
     setup_ctx.tasks().spawn_thread("audio-mixer", {
         let stop_flag = stop_flag.clone();
-        move || audio_mixer.run(audio_tx, ready_tx, stop_flag)
+        move || {
+            audio_mixer.run(audio_tx, ready_tx, stop_flag);
+            Ok(())
+        }
     });
-    let _ = ready_rx
+
+    ready_rx
         .await
         .map_err(|_| anyhow::format_err!("Audio mixer crashed"))??;
 
@@ -540,6 +561,7 @@ pub struct OutputPipeline {
     video_info: Option<VideoInfo>,
     done_fut: DoneFut,
     pause_flag: Arc<AtomicBool>,
+    cancel_token: CancellationToken,
 }
 
 pub struct FinishedOutputPipeline {
@@ -594,6 +616,14 @@ impl OutputPipeline {
 
     pub fn done_fut(&self) -> DoneFut {
         self.done_fut.clone()
+    }
+
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
     }
 }
 
@@ -684,6 +714,14 @@ impl AudioFrame {
     }
 }
 
+impl Deref for AudioFrame {
+    type Target = ffmpeg::frame::Audio;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 pub trait VideoSource: Send + 'static {
     type Config;
     type Frame: VideoFrame;
@@ -764,20 +802,20 @@ pub trait VideoFrame: Send + 'static {
 pub trait Muxer: Send + 'static {
     type Config;
 
-    async fn setup(
+    fn setup(
         config: Self::Config,
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
         pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
-    ) -> anyhow::Result<Self>
+    ) -> impl Future<Output = anyhow::Result<Self>> + Send
     where
         Self: Sized;
 
     fn stop(&mut self) {}
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<()>;
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>>;
 }
 
 pub trait AudioMuxer: Muxer {

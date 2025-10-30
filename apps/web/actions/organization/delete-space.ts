@@ -77,7 +77,7 @@ export async function deleteSpace(
 					prefix: `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`,
 				});
 
-				if (listedObjects.Contents?.length) {
+				if (listedObjects.Contents) {
 					yield* bucket.deleteObjects(
 						listedObjects.Contents.map((content) => ({
 							Key: content.Key,

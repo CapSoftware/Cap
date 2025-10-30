@@ -20,6 +20,11 @@ use crate::{
     segments::get_audio_segments,
 };
 
+#[derive(Debug)]
+pub enum PlaybackStartError {
+    InvalidFps,
+}
+
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -42,7 +47,18 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
+    pub async fn start(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+    ) -> Result<PlaybackHandle, PlaybackStartError> {
+        let fps_f64 = fps as f64;
+
+        if !(fps_f64.is_finite() && fps_f64 > 0.0) {
+            warn!(fps, "Invalid FPS provided for playback start");
+            return Err(PlaybackStartError::InvalidFps);
+        }
+
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -72,52 +88,75 @@ impl Playback {
             }
             .spawn();
 
-            loop {
-                let time =
-                    (self.start_frame_number as f64 / fps as f64) + start.elapsed().as_secs_f64();
-                let frame_number = (time * fps as f64).floor() as u32;
+            let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
+            let mut frame_number = self.start_frame_number;
 
-                if frame_number as f64 >= fps as f64 * duration {
+            'playback: loop {
+                let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
+                let next_deadline = start + frame_duration.mul_f64(frame_offset);
+
+                tokio::select! {
+                    _ = stop_rx.changed() => break 'playback,
+                    _ = tokio::time::sleep_until(next_deadline) => {}
+                }
+
+                if *stop_rx.borrow() {
                     break;
-                };
+                }
+
+                let playback_time = frame_number as f64 / fps_f64;
+                if playback_time >= duration {
+                    break;
+                }
 
                 let project = self.project.borrow().clone();
 
-                if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
-                    let segment = &self.segments[segment_i as usize];
-                    let clip_config = project.clips.iter().find(|v| v.index == segment_i);
-                    let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
+                let Some((segment_time, segment_i)) = project.get_segment_time(playback_time)
+                else {
+                    break;
+                };
 
-                    let data = tokio::select! {
-                        _ = stop_rx.changed() => { break; },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => { data }
-                    };
+                let segment = &self.segments[segment_i as usize];
+                let clip_offsets = project
+                    .clips
+                    .iter()
+                    .find(|v| v.index == segment_i)
+                    .map(|v| v.offsets)
+                    .unwrap_or_default();
 
-                    if let Some(segment_frames) = data {
-                        let uniforms = ProjectUniforms::new(
-                            &self.render_constants,
-                            &project,
-                            frame_number,
-                            fps,
-                            resolution_base,
-                            &segment.cursor,
-                            &segment_frames,
-                        );
+                let data = tokio::select! {
+                    _ = stop_rx.changed() => break 'playback,
+                    data = segment
+                        .decoders
+                        .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => data,
+                };
 
-                        self.renderer
-                            .render_frame(segment_frames, uniforms, segment.cursor.clone())
-                            .await;
-                    }
+                if let Some(segment_frames) = data {
+                    let uniforms = ProjectUniforms::new(
+                        &self.render_constants,
+                        &project,
+                        frame_number,
+                        fps,
+                        resolution_base,
+                        &segment.cursor,
+                        &segment_frames,
+                    );
+
+                    self.renderer
+                        .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                        .await;
                 }
 
-                tokio::time::sleep_until(
-                    start
-                        + (frame_number - self.start_frame_number)
-                            * Duration::from_secs_f32(1.0 / fps as f32),
-                )
-                .await;
-
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+
+                frame_number = frame_number.saturating_add(1);
+
+                let expected_frame = self.start_frame_number
+                    + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
+
+                if frame_number < expected_frame {
+                    frame_number = expected_frame;
+                }
             }
 
             stop_tx.send(true).ok();
@@ -125,7 +164,7 @@ impl Playback {
             event_tx.send(PlaybackEvent::Stop).ok();
         });
 
-        handle
+        Ok(handle)
     }
 }
 
@@ -287,16 +326,15 @@ impl AudioPlayback {
                     };
 
                     if let SupportedBufferSize::Range { min, max } = supported_config.buffer_size()
+                        && clamped != desired
                     {
-                        if clamped != desired {
-                            info!(
-                                requested_frames = desired,
-                                clamped_frames = clamped,
-                                range_min = *min,
-                                range_max = *max,
-                                "Adjusted requested audio buffer to fit device capabilities",
-                            );
-                        }
+                        info!(
+                            requested_frames = desired,
+                            clamped_frames = clamped,
+                            range_min = *min,
+                            range_max = *max,
+                            "Adjusted requested audio buffer to fit device capabilities",
+                        );
                     }
 
                     config.buffer_size = BufferSize::Fixed(clamped);
@@ -365,22 +403,22 @@ impl AudioPlayback {
                 audio_renderer.prefill(&project_snapshot, headroom_samples);
             }
 
-            if let Some(hint) = static_latency_hint {
-                if hint.latency_secs > 0.0 {
-                    match hint.transport {
-                        cap_audio::OutputTransportKind::Airplay => info!(
-                            "Applying AirPlay output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                        transport if transport.is_wireless() => info!(
-                            "Applying wireless output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                        _ => info!(
-                            "Applying output latency hint: {:.1} ms",
-                            hint.latency_secs * 1_000.0
-                        ),
-                    }
+            if let Some(hint) = static_latency_hint
+                && hint.latency_secs > 0.0
+            {
+                match hint.transport {
+                    cap_audio::OutputTransportKind::Airplay => info!(
+                        "Applying AirPlay output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    transport if transport.is_wireless() => info!(
+                        "Applying wireless output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
+                    _ => info!(
+                        "Applying output latency hint: {:.1} ms",
+                        hint.latency_secs * 1_000.0
+                    ),
                 }
             }
 

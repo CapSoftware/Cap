@@ -1,14 +1,12 @@
 use reqwest::StatusCode;
-use serde::Serialize;
-use specta::Type;
 use tauri::{Emitter, Manager, Runtime};
-use tauri_specta::Event;
 use thiserror::Error;
 use tracing::{error, warn};
 
 use crate::{
     ArcLock,
     auth::{AuthSecret, AuthStore},
+    http_client,
 };
 
 #[derive(Error, Debug)]
@@ -20,11 +18,22 @@ pub enum AuthedApiError {
     #[error("AuthedApiError/AuthStore: {0}")]
     AuthStore(String),
     #[error("AuthedApiError/Request: {0}")]
-    Request(#[from] reqwest::Error),
+    Request(reqwest::Error),
     #[error("AuthedApiError/Deserialization: {0}")]
     Deserialization(#[from] serde_json::Error),
+    #[error("The request has timed out")]
+    Timeout,
     #[error("AuthedApiError/Other: {0}")]
     Other(String),
+}
+
+impl From<reqwest::Error> for AuthedApiError {
+    fn from(err: reqwest::Error) -> Self {
+        match err {
+            err if err.is_timeout() => AuthedApiError::Timeout,
+            err => AuthedApiError::Request(err),
+        }
+    }
 }
 
 impl From<&'static str> for AuthedApiError {
@@ -50,12 +59,11 @@ fn apply_env_headers(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 }
 
 async fn do_authed_request(
+    client: &reqwest::Client,
     auth: &AuthStore,
-    build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+    build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     url: String,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
-
     let req = build(client, url).header(
         "Authorization",
         format!(
@@ -74,23 +82,25 @@ pub trait ManagerExt<R: Runtime>: Manager<R> {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError>;
 
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error>;
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String;
+
+    async fn is_server_url_custom(&self) -> bool;
 }
 
 impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn authed_api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, AuthedApiError> {
         let Some(auth) = AuthStore::get(self.app_handle()).map_err(AuthedApiError::AuthStore)?
         else {
@@ -99,7 +109,8 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         };
 
         let url = self.make_app_url(path.into()).await;
-        let response = do_authed_request(&auth, build, url).await?;
+        let response =
+            do_authed_request(&self.state::<http_client::HttpClient>(), &auth, build, url).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
             error!("Authentication expired. Please log in again.");
@@ -112,17 +123,29 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
     async fn api_request(
         &self,
         path: impl Into<String>,
-        build: impl FnOnce(reqwest::Client, String) -> reqwest::RequestBuilder,
+        build: impl FnOnce(&reqwest::Client, String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let url = self.make_app_url(path.into()).await;
-        let client = reqwest::Client::new();
 
-        apply_env_headers(build(client, url)).send().await
+        apply_env_headers(build(&self.state::<http_client::HttpClient>(), url))
+            .send()
+            .await
     }
 
     async fn make_app_url(&self, pathname: impl AsRef<str>) -> String {
         let app_state = self.state::<ArcLock<crate::App>>();
         let server_url = &app_state.read().await.server_url;
         format!("{}{}", server_url, pathname.as_ref())
+    }
+
+    async fn is_server_url_custom(&self) -> bool {
+        let state = self.state::<ArcLock<crate::App>>();
+        let app_state = state.read().await;
+
+        if let Some(env_url) = std::option_env!("VITE_SERVER_URL") {
+            return app_state.server_url != env_url;
+        }
+
+        false
     }
 }

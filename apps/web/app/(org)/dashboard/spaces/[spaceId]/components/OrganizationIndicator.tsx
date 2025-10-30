@@ -1,7 +1,6 @@
 "use client";
 
 import {
-	Avatar,
 	Button,
 	Dialog,
 	DialogContent,
@@ -10,18 +9,19 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
 import { faBuilding, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import Image from "next/image";
 import { useState } from "react";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useDashboardContext } from "../../../Contexts";
 
 export type OrganizationMemberData = {
 	id: string;
 	userId: string;
 	role: string;
-	image?: string | null;
+	image?: ImageUpload.ImageUrl | null;
 	name: string | null;
 	email: string;
 };
@@ -73,21 +73,12 @@ export const OrganizationIndicator = ({
 											key={member.id}
 											className="flex gap-3 items-center px-3 py-2 rounded-lg border transition-colors bg-gray-3 border-gray-4"
 										>
-											{member.image ? (
-												<Image
-													src={member.image}
-													alt={member.name || member.email}
-													width={36}
-													height={36}
-													className="rounded-full"
-												/>
-											) : (
-												<Avatar
-													letterClass="text-md"
-													name={member.name || member.email}
-													className="size-9 text-gray-12"
-												/>
-											)}
+											<SignedImageUrl
+												image={member.image}
+												name={member.name || member.email}
+												className="size-8"
+												letterClass="text-sm"
+											/>
 											<div className="flex-1 min-w-0">
 												<p className="text-sm font-medium truncate text-gray-12">
 													{member.name || member.email}
@@ -101,7 +92,9 @@ export const OrganizationIndicator = ({
 											<p
 												className={clsx(
 													"px-2.5 py-1.5 text-xs font-medium capitalize text-white rounded-full",
-													member.role == "owner" ? "bg-blue-500" : "bg-gray-10",
+													member.role === "owner"
+														? "bg-blue-500"
+														: "bg-gray-10",
 												)}
 											>
 												{member.role}

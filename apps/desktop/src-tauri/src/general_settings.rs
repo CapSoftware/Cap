@@ -118,6 +118,8 @@ pub struct GeneralSettingsStore {
     pub excluded_windows: Vec<WindowExclusion>,
     #[serde(default)]
     pub delete_instant_recordings_after_upload: bool,
+    #[serde(default = "default_instant_mode_max_resolution")]
+    pub instant_mode_max_resolution: u32,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -135,6 +137,10 @@ fn no(_: &bool) -> bool {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_instant_mode_max_resolution() -> u32 {
+    1920
 }
 
 fn default_server_url() -> String {
@@ -177,6 +183,7 @@ impl Default for GeneralSettingsStore {
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
+            instant_mode_max_resolution: 1920,
         }
     }
 }

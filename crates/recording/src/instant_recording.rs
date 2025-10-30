@@ -1,15 +1,17 @@
 use crate::{
     RecordingBaseInputs,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
+    },
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
     sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
+use anyhow::Context as _;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
-use scap_targets::WindowId;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -19,6 +21,7 @@ use tracing::*;
 
 struct Pipeline {
     output: OutputPipeline,
+    video_info: VideoInfo,
 }
 
 enum ActorState {
@@ -189,6 +192,7 @@ async fn create_pipeline(
     output_path: PathBuf,
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    max_output_size: Option<u32>,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
@@ -197,6 +201,20 @@ async fn create_pipeline(
         );
     };
 
+    let screen_info = screen_source.info();
+
+    let output_resolution = max_output_size
+        .map(|max_output_size| {
+            clamp_size(
+                (screen_info.width, screen_info.height),
+                (
+                    max_output_size,
+                    (max_output_size as f64 / 16.0 * 9.0) as u32,
+                ),
+            )
+        })
+        .unwrap_or((screen_info.width, screen_info.height));
+
     let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
     let output = ScreenCaptureMethod::make_instant_mode_pipeline(
@@ -204,10 +222,21 @@ async fn create_pipeline(
         system_audio,
         mic_feed,
         output_path.clone(),
+        output_resolution,
+        #[cfg(windows)]
+        crate::capture_pipeline::EncoderPreferences::new(),
     )
     .await?;
 
-    Ok(Pipeline { output })
+    Ok(Pipeline {
+        output,
+        video_info: VideoInfo::from_raw_ffmpeg(
+            screen_info.pixel_format,
+            output_resolution.0,
+            output_resolution.1,
+            screen_info.fps(),
+        ),
+    })
 }
 
 impl Actor {
@@ -221,8 +250,9 @@ pub struct ActorBuilder {
     capture_target: ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    max_output_size: Option<u32>,
     #[cfg(target_os = "macos")]
-    excluded_windows: Vec<WindowId>,
+    excluded_windows: Vec<scap_targets::WindowId>,
 }
 
 impl ActorBuilder {
@@ -232,6 +262,7 @@ impl ActorBuilder {
             capture_target,
             system_audio: false,
             mic_feed: None,
+            max_output_size: None,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -247,8 +278,13 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_max_output_size(mut self, max_output_size: u32) -> Self {
+        self.max_output_size = Some(max_output_size);
+        self
+    }
+
     #[cfg(target_os = "macos")]
-    pub fn with_excluded_windows(mut self, excluded_windows: Vec<WindowId>) -> Self {
+    pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
         self
     }
@@ -269,6 +305,7 @@ impl ActorBuilder {
                 #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
+            self.max_output_size,
         )
         .await
     }
@@ -278,6 +315,7 @@ impl ActorBuilder {
 pub async fn spawn_instant_recording_actor(
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,
+    max_output_size: Option<u32>,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -293,8 +331,12 @@ pub async fn spawn_instant_recording_actor(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 
-    let screen_source = create_screen_capture(
-        &inputs.capture_target,
+    let (display, crop_bounds) =
+        target_to_display_and_crop(&inputs.capture_target).context("target_display_crop")?;
+
+    let screen_source = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+        display,
+        crop_bounds,
         true,
         30,
         start_time,
@@ -306,7 +348,8 @@ pub async fn spawn_instant_recording_actor(
         #[cfg(target_os = "macos")]
         inputs.excluded_windows,
     )
-    .await?;
+    .await
+    .context("screen capture init")?;
 
     debug!("screen capture: {screen_source:#?}");
 
@@ -314,9 +357,11 @@ pub async fn spawn_instant_recording_actor(
         content_dir.join("output.mp4"),
         screen_source.clone(),
         inputs.mic_feed.clone(),
+        max_output_size,
     )
     .await?;
 
+    let video_info = pipeline.video_info;
     let segment_start_time = current_time_f64();
 
     trace!("spawning recording actor");
@@ -325,7 +370,7 @@ pub async fn spawn_instant_recording_actor(
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         capture_target: inputs.capture_target.clone(),
-        video_info: screen_source.info(),
+        video_info,
         state: ActorState::Recording {
             pipeline,
             // pipeline_done_rx,
@@ -352,4 +397,157 @@ fn current_time_f64() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
+}
+
+fn ensure_even(value: u32) -> u32 {
+    let adjusted = value - (value % 2);
+    if adjusted == 0 { 2 } else { adjusted }
+}
+
+fn clamp_size(input: (u32, u32), max: (u32, u32)) -> (u32, u32) {
+    // 16/9-ish
+    if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) <= 16.0 / 9.0 {
+        let width = ensure_even(max.0.min(input.0));
+
+        let height_ratio = input.1 as f64 / input.0 as f64;
+        let height = ensure_even((height_ratio * width as f64).round() as u32);
+
+        (width, height)
+    }
+    // 9/16-ish
+    else if input.0 <= input.1 && (input.0 as f64 / input.1 as f64) >= 9.0 / 16.0 {
+        let height = ensure_even(max.0.min(input.1));
+
+        let width_ratio = input.0 as f64 / input.1 as f64;
+        let width = ensure_even((width_ratio * height as f64).round() as u32);
+
+        (width, height)
+    }
+    // ultrawide
+    else if input.0 >= input.1 && (input.0 as f64 / input.1 as f64) > 16.0 / 9.0 {
+        let height = ensure_even(max.1.min(input.1));
+
+        let width_ratio = input.0 as f64 / input.1 as f64;
+        let width = ensure_even((width_ratio * height as f64).round() as u32);
+
+        (width, height)
+    }
+    // ultratall
+    else if input.0 < input.1 && (input.0 as f64 / input.1 as f64) <= 9.0 / 16.0 {
+        // swapped since max_width/height assume horizontal
+        let width = ensure_even(max.1.min(input.0));
+
+        let height_ratio = input.1 as f64 / input.0 as f64;
+        let height = ensure_even((height_ratio * width as f64).round() as u32);
+
+        (width, height)
+    } else {
+        unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clamp_size_16_9_ish_landscape() {
+        // Test 16:9 aspect ratio (boundary case)
+        let result = clamp_size((1920, 1080), (1920, 1080));
+        assert_eq!(result, (1920, 1080));
+
+        // Test aspect ratio less than 16:9 (wider than tall, but not ultrawide)
+        let result = clamp_size((1600, 1200), (1920, 1080)); // 4:3 ratio
+        assert_eq!(result, (1600, 1200));
+
+        // Test scaling down when input exceeds max width
+        let result = clamp_size((2560, 1440), (1920, 1080)); // 16:9 ratio, needs scaling
+        assert_eq!(result, (1920, 1080));
+    }
+
+    #[test]
+    fn test_clamp_size_9_16_ish_portrait() {
+        // Test 9:16 aspect ratio (boundary case)
+        let result = clamp_size((1080, 1920), (1920, 1080));
+        assert_eq!(result, (1080, 1920));
+
+        // Test aspect ratio greater than 9:16 but still portrait
+        let result = clamp_size((1200, 1600), (1920, 1080)); // 3:4 ratio
+        assert_eq!(result, (1200, 1600));
+
+        // Test square format (1:1 ratio) - should use portrait path when width <= height
+        let result = clamp_size((1080, 1080), (1920, 1080));
+        assert_eq!(result, (1080, 1080));
+    }
+
+    #[test]
+    fn test_clamp_size_ultrawide() {
+        // Test ultrawide aspect ratio (> 16:9)
+        let result = clamp_size((2560, 1080), (1920, 1080)); // ~2.37:1 ratio
+        assert_eq!(result, (2560, 1080));
+
+        // Test very ultrawide
+        let result = clamp_size((3440, 1440), (1920, 1080)); // ~2.39:1 ratio
+        assert_eq!(result, (2580, 1080));
+
+        // Test when height constraint is the limiting factor
+        let result = clamp_size((3840, 1600), (1920, 1080)); // 2.4:1 ratio
+        assert_eq!(result, (2592, 1080));
+
+        // Test even number enforcement for height
+        let result = clamp_size((2561, 1080), (1920, 1081)); // Odd max height
+        assert_eq!(result, (2560, 1080)); // Height should be made even
+
+        // Test even number enforcement for calculated width
+        let result = clamp_size((2561, 1080), (1920, 1080)); // Results in odd width calculation
+        assert_eq!(result, (2560, 1080)); // Width should be made even
+    }
+
+    #[test]
+    fn test_clamp_size_ultratall() {
+        // Test ultratall aspect ratio (< 9:16)
+        let result = clamp_size((1080, 2560), (1920, 1920)); // ~9:21.3 ratio
+        assert_eq!(result, (1080, 2560));
+
+        // Test very ultratall that needs scaling
+        let result = clamp_size((800, 3200), (1920, 2000)); // 1:4 ratio
+        assert_eq!(result, (800, 3200));
+
+        // Test when width constraint is the limiting factor (using max.1 as width limit)
+        let result = clamp_size((500, 3000), (1920, 1000)); // Very tall, width limited by max.1
+        assert_eq!(result, (500, 3000));
+
+        // Test even number enforcement for width (using max.1)
+        let result = clamp_size((500, 3000), (1920, 1001)); // Odd max.1 used as width
+        assert_eq!(result, (500, 3000)); // Width should be made even
+
+        // Test even number enforcement for calculated height
+        let result = clamp_size((500, 3000), (1920, 1000)); // Results in odd height calculation
+        assert_eq!(result, (500, 3000)); // Height should be made even
+    }
+
+    #[test]
+    fn test_clamp_size_edge_cases() {
+        // Test minimum sizes
+        let result = clamp_size((2, 2), (1920, 1080));
+        assert_eq!(result, (2, 2));
+
+        // Test when input is smaller than max in all dimensions
+        let result = clamp_size((800, 600), (1920, 1080));
+        assert_eq!(result, (800, 600));
+
+        // Test exact 16:9 boundary
+        let sixteen_nine = 16.0 / 9.0;
+        let width = 1920;
+        let height = (width as f64 / sixteen_nine) as u32; // Should be exactly 1080
+        let result = clamp_size((width, height), (1920, 1080));
+        assert_eq!(result, (1920, 1080));
+
+        // Test exact 9:16 boundary
+        let nine_sixteen = 9.0 / 16.0;
+        let height = 1920;
+        let width = (height as f64 * nine_sixteen) as u32; // Should be exactly 1080
+        let result = clamp_size((width, height), (1920, 1080));
+        assert_eq!(result, (1080, 1920));
+    }
 }

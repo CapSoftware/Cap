@@ -1,11 +1,9 @@
 mod audio_data;
 mod latency;
-mod playback;
 mod renderer;
 
 pub use audio_data::*;
 pub use latency::*;
-// playback module now only re-exports from latency module
 pub use renderer::*;
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {

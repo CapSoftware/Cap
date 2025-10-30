@@ -96,7 +96,7 @@ impl MicrophoneFeed {
         }
     }
 
-    pub fn default() -> Option<(String, Device, SupportedStreamConfig)> {
+    pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
         host.default_input_device().and_then(get_usable_device)
     }
@@ -129,6 +129,8 @@ impl MicrophoneFeed {
 fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
     let device_name_for_logging = device.name().ok();
 
+    let preferred_rate = cpal::SampleRate(48_000);
+
     let result = device
         .supported_input_configs()
         .map_err(|error| {
@@ -148,6 +150,16 @@ fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamC
                     .cmp(&a.sample_format().sample_size())
                     .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
             });
+
+            // First try to find a config that natively supports 48 kHz so we
+            // don't have to rely on resampling later.
+            if let Some(config) = configs.iter().find(|config| {
+                ffmpeg_sample_format_for(config.sample_format()).is_some()
+                    && config.min_sample_rate().0 <= preferred_rate.0
+                    && config.max_sample_rate().0 >= preferred_rate.0
+            }) {
+                return Some(config.with_sample_rate(preferred_rate));
+            }
 
             configs.into_iter().find_map(|config| {
                 ffmpeg_sample_format_for(config.sample_format())

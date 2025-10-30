@@ -15,7 +15,7 @@ import { useDashboardContext, useTheme } from "../../Contexts";
 
 const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 	const { theme } = useTheme();
-	const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
+	const { user, setUpgradeModalOpen } = useDashboardContext();
 
 	const { RiveComponent: CapAIArt } = useRive({
 		src: "/rive/bento.riv",
@@ -72,7 +72,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 				</div>
 			</div>
 			<DialogFooter>
-				{!isSubscribed ? (
+				{!user.isPro ? (
 					<div className="flex gap-2 ml-auto">
 						<Button
 							autoFocus={false}

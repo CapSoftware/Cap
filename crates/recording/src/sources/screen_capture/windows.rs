@@ -1,38 +1,30 @@
 use crate::{
-    AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig, SetupCtx,
-    output_pipeline,
+    AudioFrame, SetupCtx, output_pipeline,
     screen_capture::{ScreenCaptureConfig, ScreenCaptureFormat},
 };
 use ::windows::Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device};
 use anyhow::anyhow;
-use cap_fail::fail_err;
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_timestamp::{PerformanceCounterTimestamp, Timestamp, Timestamps};
+use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
     FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
 };
-use kameo::prelude::*;
-use scap_direct3d::StopCapturerError;
 use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{
-    collections::VecDeque,
     sync::{
         Arc,
         atomic::{self, AtomicU32},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tokio_util::{
-    future::FutureExt as _,
-    sync::{CancellationToken, DropGuard},
-};
+use tokio_util::{future::FutureExt as _, sync::CancellationToken};
 use tracing::*;
 
-const WINDOW_DURATION: Duration = Duration::from_secs(3);
-const LOG_INTERVAL: Duration = Duration::from_secs(5);
+// const WINDOW_DURATION: Duration = Duration::from_secs(3);
+// const LOG_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
 
 #[derive(Debug)]
@@ -61,24 +53,6 @@ impl ScreenCaptureFormat for Direct3DCapture {
         info
     }
 }
-
-#[derive(Clone, Debug, thiserror::Error)]
-enum SourceError {
-    #[error("NoDisplay: Id '{0}'")]
-    NoDisplay(DisplayId),
-    #[error("AsCaptureItem: {0}")]
-    AsCaptureItem(::windows::core::Error),
-    #[error("CreateAudioCapture/{0}")]
-    CreateAudioCapture(scap_cpal::CapturerError),
-    #[error("StartCapturingAudio/{0}")]
-    StartCapturingAudio(
-        String, /* SendError<audio::StartCapturing, cpal::PlayStreamError> */
-    ),
-    #[error("Closed")]
-    Closed,
-}
-
-struct CapturerHandle {}
 
 pub struct VideoFrame {
     pub frame: scap_direct3d::Frame,
@@ -179,7 +153,7 @@ impl output_pipeline::VideoSource for VideoSource {
     where
         Self: Sized,
     {
-        let (mut error_tx, mut error_rx) = mpsc::channel(1);
+        let (error_tx, mut error_rx) = mpsc::channel(1);
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
 
         let tokio_rt = tokio::runtime::Handle::current();
@@ -197,15 +171,13 @@ impl output_pipeline::VideoSource for VideoSource {
                         }
                         Err(e) => {
                             error!("Failed to create GraphicsCaptureItem on capture thread: {}", e);
-                            let _ = error_tx.send(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
-                            return;
+                            return Err(anyhow!("Failed to create GraphicsCaptureItem: {}", e));
                         }
                     }
                 }
                 None => {
                     error!("Display not found for ID: {:?}", display_id);
-                    let _ = error_tx.send(anyhow!("Display not found for ID: {:?}", display_id));
-                    return;
+                    return Err(anyhow!("Display not found for ID: {:?}", display_id));
                 }
             };
 
@@ -246,15 +218,13 @@ impl output_pipeline::VideoSource for VideoSource {
                 }
                 Err(e) => {
                     error!("Failed to create D3D capturer: {}", e);
-                    let _ = error_tx.send(e.into());
-                    return;
+                    return Err(e.into());
                 }
             };
 
             let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
                 error!("Failed to receive Start control message - channel disconnected");
-                let _ = error_tx.send(anyhow!("Control channel disconnected before Start"));
-                return;
+                return Err(anyhow!("Control channel disconnected before Start"));
             };
 
             tokio_rt.spawn(
@@ -279,19 +249,21 @@ impl output_pipeline::VideoSource for VideoSource {
             }
             if reply.send(start_result).is_err() {
                 error!("Failed to send start result - receiver dropped");
-                return;
+                return Ok(());
             }
 
             let Ok(VideoControl::Stop(reply)) = ctrl_rx.recv() else {
                 trace!("Failed to receive Stop control message - channel disconnected (expected during shutdown)");
-                return;
+                return Ok(());
             };
 
             if reply.send(capturer.stop().map_err(Into::into)).is_err() {
-                return;
+            	return Ok(());
             }
 
-            drop(drop_guard)
+            drop(drop_guard);
+
+            Ok(())
         });
 
         ctx.tasks().spawn("d3d-capture", async move {

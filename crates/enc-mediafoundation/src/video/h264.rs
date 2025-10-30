@@ -35,6 +35,8 @@ use windows::{
     core::{Error, Interface},
 };
 
+const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
+
 pub struct VideoEncoderOutputSample {
     sample: IMFSample,
 }
@@ -58,8 +60,6 @@ pub struct H264Encoder {
     output_stream_id: u32,
     output_type: IMFMediaType,
     bitrate: u32,
-
-    first_time: Option<TimeSpan>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -296,7 +296,6 @@ impl H264Encoder {
             bitrate,
 
             output_type,
-            first_time: None,
         })
     }
 
@@ -396,6 +395,7 @@ impl H264Encoder {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
+            let mut consecutive_empty_samples = 0;
             let mut should_exit = false;
             while !should_exit {
                 let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
@@ -431,14 +431,29 @@ impl H264Encoder {
                             ..Default::default()
                         };
 
+                        // ProcessOutput may succeed but not populate pSample in some edge cases
+                        // (e.g., hardware encoder transient failures, specific MFT implementations).
+                        // This is a known contract violation by certain Media Foundation Transforms.
+                        // We handle this gracefully by skipping the frame instead of panicking.
                         let sample = {
                             let mut output_buffers = [output_buffer];
                             self.transform
                                 .ProcessOutput(0, &mut output_buffers, &mut status)?;
-                            output_buffers[0].pSample.as_ref().unwrap().clone()
+                            output_buffers[0].pSample.as_ref().cloned()
                         };
 
-                        on_sample(sample)?;
+                        if let Some(sample) = sample {
+                            consecutive_empty_samples = 0;
+                            on_sample(sample)?;
+                        } else {
+                            consecutive_empty_samples += 1;
+                            if consecutive_empty_samples > MAX_CONSECUTIVE_EMPTY_SAMPLES {
+                                return Err(windows::core::Error::new(
+                                    windows::core::HRESULT(0),
+                                    "Too many consecutive empty samples",
+                                ));
+                            }
+                        }
                     }
                     _ => {
                         panic!("Unknown media event type: {}", event_type.0);

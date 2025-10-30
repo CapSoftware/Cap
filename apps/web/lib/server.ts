@@ -7,12 +7,16 @@ import {
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
+	ImageUploads,
+	Organisations,
 	OrganisationsPolicy,
 	S3Buckets,
 	Spaces,
 	SpacesPolicy,
+	Users,
 	Videos,
 	VideosPolicy,
+	VideosRepo,
 	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
@@ -21,11 +25,10 @@ import {
 	Headers,
 	type HttpApi,
 	HttpApiBuilder,
-	HttpApiClient,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { RpcClient, RpcMessage, RpcMiddleware } from "@effect/rpc";
+import { RpcClient, RpcMiddleware } from "@effect/rpc";
 import {
 	Cause,
 	Config,
@@ -57,54 +60,67 @@ class WorkflowRpcSecret extends Effect.Service<WorkflowRpcSecret>()(
 	"WorkflowRpcSecret",
 	{
 		sync: () => ({
-			authSecret: Redacted.make(serverEnv().WORKFLOWS_RPC_SECRET),
+			authSecret: Option.fromNullable(serverEnv().WORKFLOWS_RPC_SECRET).pipe(
+				Option.map(Redacted.make),
+			),
 		}),
 	},
 ) {}
 
-const WorkflowRpcLive = Layer.scoped(
-	Workflows.RpcClient,
+const WorkflowRpcLive = Layer.unwrapScoped(
 	Effect.gen(function* () {
 		const url = Option.getOrElse(
 			yield* Config.option(Config.string("WORKFLOWS_RPC_URL")),
 			() => "http://127.0.0.1:42169",
 		);
 
-		return yield* RpcClient.make(Workflows.RpcGroup).pipe(
+		const { authSecret } = yield* WorkflowRpcSecret;
+
+		if (Option.isNone(authSecret)) return Layer.empty;
+
+		const authMiddleware = RpcMiddleware.layerClient(
+			Workflows.SecretAuthMiddleware,
+			({ request }) =>
+				Effect.gen(function* () {
+					return {
+						...request,
+						headers: Headers.set(
+							request.headers,
+							"authorization",
+							Redacted.value(authSecret.value),
+						),
+					};
+				}),
+		);
+
+		const client = yield* RpcClient.make(Workflows.RpcGroup).pipe(
 			Effect.provide(
-				RpcClient.layerProtocolHttp({ url }).pipe(
-					Layer.provide(Workflows.RpcSerialization),
+				Layer.mergeAll(
+					RpcClient.layerProtocolHttp({ url }).pipe(
+						Layer.provide(Workflows.RpcSerialization),
+					),
+					authMiddleware,
 				),
 			),
 		);
+
+		return Layer.succeed(Workflows.RpcClient, client);
 	}),
-).pipe(
-	Layer.provide(
-		RpcMiddleware.layerClient(Workflows.SecretAuthMiddleware, ({ request }) =>
-			Effect.gen(function* () {
-				const { authSecret } = yield* WorkflowRpcSecret;
-				return {
-					...request,
-					headers: Headers.set(
-						request.headers,
-						"authorization",
-						Redacted.value(authSecret),
-					),
-				};
-			}),
-		),
-	),
 );
 
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
 	VideosPolicy.Default,
+	VideosRepo.Default,
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,
 	Spaces.Default,
+	Users.Default,
+	Organisations.Default,
 	AwsCredentials.Default,
+	ImageUploads.Default,
 	WorkflowRpcLive,
 	layerTracer,
 ).pipe(

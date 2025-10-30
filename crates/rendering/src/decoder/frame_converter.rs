@@ -24,7 +24,7 @@ impl FrameConverter {
         if frame.format() == format::Pixel::RGBA {
             let width = frame.width() as usize;
             let height = frame.height() as usize;
-            let stride = frame.stride(0) as usize;
+            let stride = frame.stride(0);
 
             return copy_rgba_plane(frame.data(0), stride, width, height);
         }
@@ -48,14 +48,14 @@ impl FrameConverter {
         let rgba_frame = &self.rgba_frame;
         copy_rgba_plane(
             rgba_frame.data(0),
-            rgba_frame.stride(0) as usize,
+            rgba_frame.stride(0),
             rgba_frame.width() as usize,
             rgba_frame.height() as usize,
         )
     }
 
     fn ensure_scaler(&mut self, input_format: format::Pixel, width: u32, height: u32) {
-        let needs_new = self.scaler.as_ref().map_or(true, |state| {
+        let needs_new = self.scaler.as_ref().is_none_or(|state| {
             state.input_format != input_format || state.width != width || state.height != height
         });
 

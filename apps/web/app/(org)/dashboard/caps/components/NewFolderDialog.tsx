@@ -18,8 +18,7 @@ import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import {
 	BlueFolder,
 	type FolderHandle,
@@ -101,16 +100,16 @@ export const NewFolderDialog: React.FC<Props> = ({
 		),
 	);
 
+	const rpc = useRpcClient();
+
 	const createFolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
-			withRpc((r) =>
-				r.FolderCreate({
-					name: data.name,
-					color: data.color,
-					spaceId: Option.fromNullable(spaceId),
-					parentId: Option.none(),
-				}),
-			),
+			rpc.FolderCreate({
+				name: data.name,
+				color: data.color,
+				spaceId: Option.fromNullable(spaceId),
+				parentId: Option.none(),
+			}),
 		onSuccess: () => {
 			setFolderName("");
 			setSelectedColor(null);

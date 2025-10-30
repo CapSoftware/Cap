@@ -10,7 +10,7 @@ use std::{
     ptr::{self, null, null_mut},
     time::{Duration, Instant},
 };
-use tracing::{trace, warn};
+use tracing::*;
 use windows::{
     Win32::{
         Foundation::*,
@@ -325,10 +325,6 @@ impl VideoInputDeviceIterator {
                 &mut enum_moniker,
                 0,
             )?;
-
-            if enum_moniker.is_none() {
-                warn!("VideoInputDeviceIterator::new produced no enum moniker");
-            }
 
             // CreateClassEnumerator can return S_FALSE which is treated as success,
             // so we can't assume this exists

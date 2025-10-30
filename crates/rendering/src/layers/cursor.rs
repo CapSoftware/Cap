@@ -472,73 +472,6 @@ fn compute_cursor_fade_in(cursor: &CursorEvents, current_time_ms: f64, hide_dela
     smoothstep64(0.0, CURSOR_IDLE_FADE_OUT_MS, time_since_resume) as f32
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
-        CursorMoveEvent {
-            active_modifiers: vec![],
-            cursor_id: "pointer".into(),
-            time_ms,
-            x,
-            y,
-        }
-    }
-
-    fn cursor_events(times: &[(f64, f64, f64)]) -> CursorEvents {
-        CursorEvents {
-            moves: times
-                .iter()
-                .map(|(time, x, y)| move_event(*time, *x, *y))
-                .collect(),
-            clicks: vec![],
-        }
-    }
-
-    #[test]
-    fn opacity_stays_visible_with_recent_move() {
-        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (1500.0, 0.1, 0.1)]);
-
-        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0);
-
-        assert_eq!(opacity, 1.0);
-    }
-
-    #[test]
-    fn opacity_fades_once_past_delay() {
-        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
-
-        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0);
-
-        assert_eq!(opacity, 0.0);
-    }
-
-    #[test]
-    fn opacity_fades_in_after_long_inactivity() {
-        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
-
-        let hide_delay_ms = 2000.0;
-
-        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms);
-        assert_eq!(at_resume, 0.0);
-
-        let halfway = compute_cursor_idle_opacity(
-            &cursor,
-            5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
-            hide_delay_ms,
-        );
-        assert!((halfway - 0.5).abs() < 0.05);
-
-        let after_fade = compute_cursor_idle_opacity(
-            &cursor,
-            5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
-            hide_delay_ms,
-        );
-        assert_eq!(after_fade, 1.0);
-    }
-}
-
 fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
     fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
         let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
@@ -681,5 +614,72 @@ impl CursorTexture {
             (pixmap.width(), pixmap.height()),
             hotspot,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "pointer".into(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn cursor_events(times: &[(f64, f64, f64)]) -> CursorEvents {
+        CursorEvents {
+            moves: times
+                .iter()
+                .map(|(time, x, y)| move_event(*time, *x, *y))
+                .collect(),
+            clicks: vec![],
+        }
+    }
+
+    #[test]
+    fn opacity_stays_visible_with_recent_move() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (1500.0, 0.1, 0.1)]);
+
+        let opacity = compute_cursor_idle_opacity(&cursor, 2000.0, 2000.0);
+
+        assert_eq!(opacity, 1.0);
+    }
+
+    #[test]
+    fn opacity_fades_once_past_delay() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0)]);
+
+        let opacity = compute_cursor_idle_opacity(&cursor, 3000.0, 1000.0);
+
+        assert_eq!(opacity, 0.0);
+    }
+
+    #[test]
+    fn opacity_fades_in_after_long_inactivity() {
+        let cursor = cursor_events(&[(0.0, 0.0, 0.0), (5000.0, 0.5, 0.5)]);
+
+        let hide_delay_ms = 2000.0;
+
+        let at_resume = compute_cursor_idle_opacity(&cursor, 5000.0, hide_delay_ms);
+        assert_eq!(at_resume, 0.0);
+
+        let halfway = compute_cursor_idle_opacity(
+            &cursor,
+            5000.0 + CURSOR_IDLE_FADE_OUT_MS / 2.0,
+            hide_delay_ms,
+        );
+        assert!((halfway - 0.5).abs() < 0.05);
+
+        let after_fade = compute_cursor_idle_opacity(
+            &cursor,
+            5000.0 + CURSOR_IDLE_FADE_OUT_MS * 2.0,
+            hide_delay_ms,
+        );
+        assert_eq!(after_fade, 1.0);
     }
 }

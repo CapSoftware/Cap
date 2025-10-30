@@ -33,18 +33,17 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
     let log_file = get_latest_log_file(app).await.ok_or("No log file found")?;
 
     let metadata =
-        fs::metadata(&log_file).map_err(|e| format!("Failed to read log file metadata: {}", e))?;
+        fs::metadata(&log_file).map_err(|e| format!("Failed to read log file metadata: {e}"))?;
     let file_size = metadata.len();
 
-    const MAX_SIZE: u64 = 1 * 1024 * 1024;
+    const MAX_SIZE: u64 = 1024 * 1024;
 
     let log_content = if file_size > MAX_SIZE {
         let content =
-            fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {}", e))?;
+            fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {e}"))?;
 
         let header = format!(
-            "⚠️ Log file truncated (original size: {} bytes, showing last ~1MB)\n\n",
-            file_size
+            "⚠️ Log file truncated (original size: {file_size} bytes, showing last ~1MB)\n\n"
         );
         let max_content_size = (MAX_SIZE as usize) - header.len();
 
@@ -54,13 +53,13 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
             if let Some(newline_pos) = truncated.find('\n') {
                 format!("{}{}", header, &truncated[newline_pos + 1..])
             } else {
-                format!("{}{}", header, truncated)
+                format!("{header}{truncated}")
             }
         } else {
             content
         }
     } else {
-        fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {}", e))?
+        fs::read_to_string(&log_file).map_err(|e| format!("Failed to read log file: {e}"))?
     };
 
     let form = reqwest::multipart::Form::new()
@@ -73,7 +72,7 @@ pub async fn upload_log_file(app: &AppHandle) -> Result<(), String> {
             client.post(url).multipart(form)
         })
         .await
-        .map_err(|e| format!("Failed to upload logs: {}", e))?;
+        .map_err(|e| format!("Failed to upload logs: {e}"))?;
 
     if !response.status().is_success() {
         return Err(format!("Upload failed with status: {}", response.status()));

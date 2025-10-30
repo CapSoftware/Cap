@@ -4,7 +4,7 @@ import { cx } from "cva";
 import type { ComponentProps, JSX } from "solid-js";
 
 interface Props extends ComponentProps<typeof KTooltip.Root> {
-	content: JSX.Element;
+	content?: JSX.Element;
 	childClass?: string;
 	kbd?: string[];
 }

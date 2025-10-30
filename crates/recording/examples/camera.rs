@@ -1,27 +1,35 @@
-use std::fmt::Display;
-
-use cap_recording::feeds::{CameraFeed, DeviceOrModelID};
+use cap_recording::{
+    CameraFeed,
+    feeds::camera::{self, DeviceOrModelID},
+};
 use ffmpeg::format::Pixel;
 use image::{ColorType, codecs::jpeg};
+use kameo::Actor;
+use std::fmt::Display;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let cameras = CameraFeed::list_cameras()
-        .into_iter()
-        .map(CameraSelection)
-        .collect();
+    let cameras = cap_camera::list_cameras().map(CameraSelection).collect();
     let device = inquire::Select::new("Select a device", cameras)
         .prompt()
         .unwrap();
 
-    let feed = CameraFeed::init(DeviceOrModelID::from_info(&device.0))
-        .await
-        .unwrap();
+    let feed = CameraFeed::spawn(CameraFeed::default());
+    feed.ask(camera::SetInput {
+        id: DeviceOrModelID::from_info(&device.0),
+    })
+    .await
+    .unwrap()
+    .await
+    .unwrap();
+
     let (tx, rx) = flume::bounded(1);
-    feed.attach(tx);
-    let frame = rx.recv_async().await.unwrap().frame;
+
+    feed.ask(camera::AddSender(tx)).await.unwrap();
+
+    let frame = rx.recv_async().await.unwrap().inner;
     frame.format();
     frame.width();
     frame.height();
