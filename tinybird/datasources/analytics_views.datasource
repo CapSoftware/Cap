@@ -1,0 +1,17 @@
+DESCRIPTION >
+    Analytics events for when the share page is opened.
+
+TOKEN "tracker" APPEND
+
+SCHEMA >
+    `timestamp` DateTime `json:$.timestamp`,
+    `version` LowCardinality(String) `json:$.version`,
+
+    `session_id` Nullable(String) `json:$.session_id`,
+    `video_id` String `json:$.video_id`,
+
+    `payload` String `json:$.payload`
+
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(timestamp)
+ENGINE_SORTING_KEY video_id, timestamp
