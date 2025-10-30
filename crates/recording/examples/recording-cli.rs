@@ -1,6 +1,7 @@
-use cap_recording::{screen_capture::ScreenCaptureTarget, *};
+use cap_recording::{feeds::*, screen_capture::ScreenCaptureTarget, *};
+use kameo::Actor as _;
 use scap_targets::Display;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tracing::*;
 
 #[tokio::main]
@@ -42,20 +43,14 @@ pub async fn main() {
 
     // mic_feed
     //     .ask(microphone::SetInput {
-    //         label:
-    //         // MicrophoneFeed::list()
-    //         //     .into_iter()
-    //         //     .find(|(k, _)| k.contains("Focusrite"))
-    //         MicrophoneFeed::default()
-    //             .map(|v| v.0)
-    //             .unwrap(),
+    //         label: MicrophoneFeed::default_device().map(|v| v.0).unwrap(),
     //     })
     //     .await
     //     .unwrap()
     //     .await
     //     .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // tokio::time::sleep(Duration::from_millis(10)).await;
 
     let handle = instant_recording::Actor::builder(
         dir.path().into(),
@@ -63,10 +58,11 @@ pub async fn main() {
             id: Display::primary().id(),
         },
     )
-    // .with_system_audio(true)
+    .with_system_audio(true)
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
+    // .with_mic_feed(Arc::new(mic_feed.ask(microphone::Lock).await.unwrap()))
     .build(
         #[cfg(target_os = "macos")]
         cidre::sc::ShareableContent::current().await.unwrap(),
