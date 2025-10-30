@@ -1,0 +1,79 @@
+# docker-compose.yml
+# Vollständiger Stack für Cap Web, Datenbank und S3-kompatiblen Speicher
+
+version: '3.8'
+
+services:
+  # Der Hauptdienst: Die Cap Web-Anwendung
+  cap-web:
+    # Baut das Image direkt aus dem Quellcode in diesem Repository.
+    # Dies ist entscheidend für ARM64-Architekturen wie Raspberry Pi oder Apple Silicon.
+    build: .
+    restart: always
+    ports:
+      # Mappt den internen Port 3000 auf den externen Port 3000 des Servers.
+      # Ändern Sie "3000:3000", falls der Port 3000 auf Ihrem Host bereits belegt ist.
+      - "3000:3000"
+    environment:
+      # Verweist auf die .env-Datei für die Konfiguration.
+      # Alternativ können diese Variablen direkt in Ihrer Deployment-Plattform gesetzt werden.
+      - DATABASE_URL=${DATABASE_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_REGION=${S3_REGION}
+      - S3_BUCKET=${S3_BUCKET}
+      # Optional für E-Mail-Login-Links (siehe Doku)
+      # - RESEND_API_KEY=${RESEND_API_KEY}
+      # - RESEND_FROM_DOMAIN=${RESEND_FROM_DOMAIN}
+    depends_on:
+      - db
+      - minio
+    networks:
+      - cap-network
+
+  # Die MySQL-Datenbank zur Speicherung von Metadaten
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    volumes:
+      # Speichert die Datenbankdaten persistent auf dem Host-System
+      - db-data:/var/lib/mysql
+    networks:
+      - cap-network
+
+  # MinIO als S3-kompatibler Speicher für die Videoaufnahmen
+  minio:
+    image: minio/minio:latest
+    restart: always
+    ports:
+      # Port für die S3-API
+      - "9000:9000"
+      # Port für die MinIO Web-UI
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      # Speichert die hochgeladenen Aufnahmen persistent auf dem Host-System
+      - minio-data:/data
+    networks:
+      - cap-network
+
+# Definition der Volumes für persistente Datenspeicherung
+volumes:
+  db-data:
+  minio-data:
+
+# Definition des internen Netzwerks für die Kommunikation der Container
+networks:
+  cap-network:
+
