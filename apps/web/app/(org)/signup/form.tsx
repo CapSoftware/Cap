@@ -19,6 +19,7 @@ import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
+import { usePublicEnv } from "@/utils/public-env";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
@@ -418,6 +419,8 @@ const NormalSignup = ({
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
 }) => {
+	const publicEnv = usePublicEnv();
+
 	return (
 		<motion.div>
 			<motion.div layout className="flex flex-col space-y-3">
@@ -444,54 +447,64 @@ const NormalSignup = ({
 					Sign up with email
 				</MotionButton>
 			</motion.div>
-			<div className="flex gap-4 items-center my-4">
-				<span className="flex-1 h-px bg-gray-5" />
-				<p className="text-sm text-center text-gray-10">OR</p>
-				<span className="flex-1 h-px bg-gray-5" />
-			</div>
-			<motion.div
-				layout
-				className="flex flex-col gap-3 justify-center items-center"
-			>
-				{!oauthError && (
-					<>
+			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
+				<>
+					<div className="flex gap-4 items-center my-4">
+						<span className="flex-1 h-px bg-gray-5" />
+						<p className="text-sm text-center text-gray-10">OR</p>
+						<span className="flex-1 h-px bg-gray-5" />
+					</div>
+					<motion.div
+						layout
+						className="flex flex-col gap-3 justify-center items-center"
+					>
+						{!oauthError && (
+							<>
+								<MotionButton
+									variant="gray"
+									type="button"
+									className="flex gap-2 justify-center items-center w-full text-sm"
+									onClick={handleGoogleSignIn}
+									disabled={loading}
+								>
+									<Image
+										src="/google.svg"
+										alt="Google"
+										width={16}
+										height={16}
+									/>
+									Sign up with Google
+								</MotionButton>
+							</>
+						)}
+
+						{oauthError && (
+							<div className="flex gap-3 items-center p-3 bg-red-400 rounded-xl border border-red-600">
+								<FontAwesomeIcon
+									className="text-gray-50 size-8"
+									icon={faExclamationCircle}
+								/>
+								<p className="text-xs leading-5 text-gray-50">
+									It looks like you've previously used this email to sign up via
+									email. Please enter your email below to receive a sign up
+									link.
+								</p>
+							</div>
+						)}
 						<MotionButton
 							variant="gray"
 							type="button"
-							className="flex gap-2 justify-center items-center w-full text-sm"
-							onClick={handleGoogleSignIn}
+							className="w-full"
+							layout
+							onClick={() => setShowOrgInput(true)}
 							disabled={loading}
 						>
-							<Image src="/google.svg" alt="Google" width={16} height={16} />
-							Sign up with Google
+							<LucideArrowUpRight size={20} />
+							Sign up with SAML SSO
 						</MotionButton>
-					</>
-				)}
-
-				{oauthError && (
-					<div className="flex gap-3 items-center p-3 bg-red-400 rounded-xl border border-red-600">
-						<FontAwesomeIcon
-							className="text-gray-50 size-8"
-							icon={faExclamationCircle}
-						/>
-						<p className="text-xs leading-5 text-gray-50">
-							It looks like you've previously used this email to sign up via
-							email. Please enter your email below to receive a sign up link.
-						</p>
-					</div>
-				)}
-				<MotionButton
-					variant="gray"
-					type="button"
-					className="w-full"
-					layout
-					onClick={() => setShowOrgInput(true)}
-					disabled={loading}
-				>
-					<LucideArrowUpRight size={20} />
-					Sign up with SAML SSO
-				</MotionButton>
-			</motion.div>
+					</motion.div>
+				</>
+			)}
 		</motion.div>
 	);
 };
