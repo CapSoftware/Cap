@@ -270,11 +270,6 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 	).pipe(runPromise);
 
 	return (
-		<Caps
-			data={processedVideoData}
-			folders={foldersData}
-			count={totalCount}
-			dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
-		/>
+		<Caps data={processedVideoData} folders={foldersData} count={totalCount} />
 	);
 }

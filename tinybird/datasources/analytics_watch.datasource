@@ -1,7 +1,7 @@
 DESCRIPTION >
     Analytics events for when a view is being viewed in the player.
 
-TOKEN "tracker" APPEND
+TOKEN "dashboard" APPEND
 
 SCHEMA >
     `timestamp` DateTime `json:$.timestamp`,

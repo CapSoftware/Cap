@@ -210,6 +210,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					),
 				);
 
+				console.log("HERE GET");
+				const token = serverEnv().TINYBIRD_TOKEN;
+				const host = serverEnv().TINYBIRD_HOST;
+				if (token && host) {
+					const response2 = yield* client.get(
+						`${host}/v0/pipes/video_views.json?token=${token}&video_id=${video.id}`,
+					);
+					if (response2.status !== 200) {
+						// TODO
+					}
+					console.log("ANALYTICS", response2.status, yield* response2.text);
+
+					// TODO: Effect schema
+					const result = JSON.parse(yield* response2.text);
+					return { count: result.data[0].count };
+				}
+
 				const response = yield* Effect.tryPromise(() =>
 					dub().analytics.retrieve({
 						domain: "cap.link",
@@ -226,20 +243,34 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			captureAnalytics: Effect.fn("Videos.captureAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
-				console.log("TODO");
-				const dsn = serverEnv().TINYBIRD_DATA_SOURCE_NAME;
-				if (!dsn) return;
+				const token = serverEnv().TINYBIRD_TOKEN;
+				const host = serverEnv().TINYBIRD_HOST;
+				if (!token || !host) return;
 
+				console.log("TINYBIRD EVENT"); // TODO
 				const response = yield* client.post(
-					`https://api.tinybird.co/v0/events?name=${encodeURIComponent(dsn)}`,
+					`${host}/v0/events?name=analytics_views`,
 					{
 						body: HttpBody.unsafeJson({
-							title: "foo",
-							body: "bar",
-							userId: 1,
+							timestamp: new Date().toISOString(),
+							version: "1",
+							session_id: "todo", // TODO
+							video_id: videoId,
+							payload: JSON.stringify({
+								hello: "world", // TODO
+							}),
 						}),
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
 					},
 				);
+				// const response = yield* HttpClientResponse.filterStatusOk(response);
+				if (response.status !== 200) {
+					// TODO
+				}
+
+				console.log(response.status, yield* response.text);
 			}),
 		};
 	}),

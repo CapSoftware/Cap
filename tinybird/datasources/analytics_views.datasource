@@ -1,7 +1,7 @@
 DESCRIPTION >
     Analytics events for when the share page is opened.
 
-TOKEN "tracker" APPEND
+TOKEN "dashboard" APPEND
 
 SCHEMA >
     `timestamp` DateTime `json:$.timestamp`,

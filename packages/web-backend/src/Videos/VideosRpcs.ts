@@ -77,6 +77,9 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						videos.getAnalytics(id).pipe(
 							Effect.catchTags({
 								DatabaseError: () => new InternalError({ type: "database" }),
+								RequestError: () => new InternalError({ type: "httpRequest" }),
+								ResponseError: () =>
+									new InternalError({ type: "httpResponse" }),
 								UnknownException: () => new InternalError({ type: "unknown" }),
 							}),
 							Effect.matchEffect({

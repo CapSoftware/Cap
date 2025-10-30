@@ -68,7 +68,8 @@ function createServerEnv() {
 			VERCEL_AWS_ROLE_ARN: z.string().optional(),
 			WORKFLOWS_RPC_URL: z.string().optional(),
 			WORKFLOWS_RPC_SECRET: z.string().optional(),
-			TINYBIRD_DATA_SOURCE_NAME: z.string().optional(),
+			TINYBIRD_HOST: z.string().optional(),
+			TINYBIRD_TOKEN: z.string().optional(),
 		},
 		experimental__runtimeEnv: {
 			...process.env,
