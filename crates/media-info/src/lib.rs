@@ -191,9 +191,10 @@ impl AudioInfo {
         self.wrap_frame_with_max_channels(data, self.channels)
     }
 
-    pub fn with_max_channels(mut self, channels: u16) -> Self {
-        self.channels = self.channels.min(channels as usize);
-        self
+    pub fn with_max_channels(&self, channels: u16) -> Self {
+        let mut this = *self;
+        this.channels = this.channels.min(channels as usize);
+        this
     }
 }
 
