@@ -108,19 +108,6 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	return sharedSpaces;
 }
 
-type VideoWithOrganization = typeof videos.$inferSelect & {
-	sharedOrganization?: {
-		organizationId: string;
-	} | null;
-	organizationMembers?: string[];
-	organizationId?: string;
-	sharedOrganizations?: { id: string; name: string }[];
-	password?: string | null;
-	hasPassword?: boolean;
-	ownerIsPro?: boolean;
-	orgSettings?: OrganizationSettings | null;
-};
-
 const ALLOWED_REFERRERS = [
 	"x.com",
 	"twitter.com",
@@ -277,8 +264,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.select({
 					id: videos.id,
 					name: videos.name,
-					ownerName: users.name,
-					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -369,9 +354,6 @@ async function AuthorizedContent({
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
-		ownerIsPro?: boolean;
-		ownerName?: string | null;
-		ownerImageUrlOrKey?: ImageUpload.ImageUrlOrKey | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -474,13 +456,6 @@ async function AuthorizedContent({
 			.select({
 				id: videos.id,
 				name: videos.name,
-				ownerId: videos.ownerId,
-				ownerName: users.name,
-				ownerImageUrlOrKey: users.image,
-				ownerIsPro:
-					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
-						Boolean,
-					),
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				bucket: videos.bucket,
@@ -503,7 +478,7 @@ async function AuthorizedContent({
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-			.leftJoin(users, eq(videos.ownerId, users.id))
+			.innerJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(organizations, eq(videos.orgId, organizations.id))
 			.where(eq(videos.id, videoId))
 			.execute();
@@ -720,19 +695,17 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo = await Effect.gen(function* () {
 		const imageUploads = yield* ImageUploads;
-		const ownerIsPro = userIsPro(video.owner);
 
 		return {
 			...video,
 			owner: {
 				id: video.owner.id,
 				name: video.owner.name,
-				isPro: ownerIsPro,
-				image: video.ownerImageUrlOrKey
-					? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
+				isPro: userIsPro(video.owner),
+				image: video.owner.image
+					? yield* imageUploads.resolveImageUrl(video.owner.image)
 					: null,
 			},
-			ownerIsPro,
 			organization: {
 				organizationMembers: membersList.map((member) => member.userId),
 				organizationId: video.sharedOrganization?.organizationId ?? undefined,
@@ -768,7 +741,6 @@ async function AuthorizedContent({
 				<Share
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
-					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}
