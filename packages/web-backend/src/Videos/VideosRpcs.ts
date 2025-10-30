@@ -97,6 +97,17 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
+
+			VideoCaptureAnalytics: (videoId) =>
+				videos.captureAnalytics(videoId).pipe(
+					provideOptionalAuth,
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+						RequestError: () => new InternalError({ type: "httpRequest" }),
+						ResponseError: () => new InternalError({ type: "httpResponse" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
+					}),
+				),
 		};
 	}),
 );

@@ -16,6 +16,7 @@ env:
 
 jobs:
   ci:
+    name: Deploy
     runs-on: ubuntu-latest
     defaults:
       run:

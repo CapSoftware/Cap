@@ -3,11 +3,13 @@ import { dub } from "@cap/utils";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
+import { serverEnv } from "@cap/env";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import { VideosRepo } from "./VideosRepo.ts";
+import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
@@ -15,6 +17,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
+		const client = yield* HttpClient.HttpClient;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
 			repo
@@ -219,6 +222,25 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				return { count: clicks };
 			}),
+
+			captureAnalytics: Effect.fn("Videos.captureAnalytics")(function* (
+				videoId: Video.VideoId,
+			) {
+				console.log("TODO");
+				const dsn = serverEnv().TINYBIRD_DATA_SOURCE_NAME;
+				if (!dsn) return;
+
+				const response = yield* client.post(
+					`https://api.tinybird.co/v0/events?name=${encodeURIComponent(dsn)}`,
+					{
+						body: HttpBody.unsafeJson({
+							title: "foo",
+							body: "bar",
+							userId: 1,
+						}),
+					},
+				);
+			}),
 		};
 	}),
 	dependencies: [
@@ -226,5 +248,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		VideosRepo.Default,
 		Database.Default,
 		S3Buckets.Default,
+		FetchHttpClient.layer,
 	],
 }) {}

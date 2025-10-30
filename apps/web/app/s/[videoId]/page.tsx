@@ -27,7 +27,7 @@ import {
 	type ImageUpload,
 	type Organisation,
 	Policy,
-	type Video,
+	Video,
 } from "@cap/web-domain";
 import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -254,7 +254,7 @@ export async function generateMetadata(
 export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
-	const videoId = params.videoId as Video.VideoId;
+	const videoId = Video.VideoId.make(params.videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -492,7 +492,7 @@ async function AuthorizedContent({
 		}
 	}
 
-	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const currentMetadata = video.metadata || {};
 	const metadata = currentMetadata;
 	let initialAiData = null;
 

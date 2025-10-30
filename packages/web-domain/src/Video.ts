@@ -203,4 +203,8 @@ export class VideoRpcs extends RpcGroup.make(
 		),
 		error: InternalError,
 	}),
+	Rpc.make("VideoCaptureAnalytics", {
+		payload: VideoId,
+		error: InternalError,
+	}),
 ) {}

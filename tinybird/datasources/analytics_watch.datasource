@@ -1,0 +1,19 @@
+DESCRIPTION >
+    Analytics events for when a view is being viewed in the player.
+
+TOKEN "tracker" APPEND
+
+SCHEMA >
+    `timestamp` DateTime `json:$.timestamp`,
+    `version` LowCardinality(String) `json:$.version`,
+
+    `session_id` Nullable(String) `json:$.session_id`,
+    `video_id` String `json:$.video_id`,
+
+    `action` LowCardinality(String) `json:$.action`,
+
+    `ts` DateTime64(3) `json:$.ts`,
+
+ENGINE MergeTree
+ENGINE_PARTITION_KEY toYYYYMM(timestamp)
+ENGINE_SORTING_KEY video_id, action, timestamp
