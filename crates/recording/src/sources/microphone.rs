@@ -7,11 +7,15 @@ use cap_media_info::AudioInfo;
 use futures::{SinkExt, channel::mpsc};
 use std::sync::Arc;
 
-pub struct Microphone(AudioInfo, Arc<MicrophoneFeedLock>);
+pub struct Microphone {
+    info: AudioInfo,
+    _lock: Arc<MicrophoneFeedLock>,
+}
 
 impl AudioSource for Microphone {
     type Config = Arc<MicrophoneFeedLock>;
 
+    #[allow(clippy::manual_async_fn)]
     fn setup(
         feed_lock: Self::Config,
         mut audio_tx: mpsc::Sender<AudioFrame>,
@@ -33,18 +37,21 @@ impl AudioSource for Microphone {
                 while let Ok(frame) = rx.recv_async().await {
                     let _ = audio_tx
                         .send(AudioFrame::new(
-                            audio_info.wrap_frame(&frame.data),
+                            audio_info.wrap_frame_with_max_channels(&frame.data, 2),
                             frame.timestamp,
                         ))
                         .await;
                 }
             });
 
-            Ok(Self(audio_info, feed_lock))
+            Ok(Self {
+                info: audio_info.with_max_channels(2),
+                _lock: feed_lock,
+            })
         }
     }
 
     fn audio_info(&self) -> AudioInfo {
-        self.0
+        self.info
     }
 }

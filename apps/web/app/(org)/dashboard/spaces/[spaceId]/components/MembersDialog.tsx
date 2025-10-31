@@ -1,10 +1,6 @@
-import {
-	Avatar,
-	Dialog,
-	DialogContent,
-	DialogHeader,
-	DialogTitle,
-} from "@cap/ui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@cap/ui";
+import type { ImageUpload } from "@cap/web-domain";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 
 interface OrganizationMember {
 	id: string;
@@ -19,6 +15,7 @@ interface OrganizationMember {
 		email: string;
 		firstName?: string | null;
 		lastName?: string | null;
+		memberImage?: ImageUpload.ImageUrl | null;
 	};
 }
 
@@ -46,10 +43,11 @@ export const MembersDialog = ({
 								key={member.userId}
 								className="flex items-center p-2 rounded-lg hover:bg-gray-3"
 							>
-								<Avatar
-									letterClass="text-md"
+								<SignedImageUrl
+									image={member.user?.memberImage}
 									name={member.user?.name || "User"}
-									className="mr-3 size-8 text-gray-12"
+									className="mr-3 size-8"
+									letterClass="text-md"
 								/>
 								<div className="flex flex-col">
 									<span className="text-sm font-medium text-gray-12">

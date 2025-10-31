@@ -1,8 +1,7 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import type { comments as commentsSchema } from "@cap/database/schema";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
 	startTransition,
@@ -22,28 +21,21 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
+import type { VideoData } from "./types";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
+	authorImage: ImageUpload.ImageUrl | null;
 };
 
 export type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
+	authorImage?: ImageUpload.ImageUrl | null;
 	sending?: boolean;
 };
 
-type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
-	organizationMembers?: string[];
-	organizationId?: string;
-	sharedOrganizations?: { id: string; name: string }[];
-	hasPassword?: boolean;
-	ownerIsPro?: boolean;
-	orgSettings?: OrganizationSettings | null;
-};
-
 interface ShareProps {
-	data: VideoWithOrganizationInfo;
-	user: typeof userSelectProps | null;
+	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	customDomain: string | null;
@@ -137,7 +129,6 @@ const useVideoStatus = (
 
 export const Share = ({
 	data,
-	user,
 	comments,
 	views,
 	initialAiData,
@@ -285,11 +276,10 @@ export const Share = ({
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
 				<div className="flex-1">
-					<div className="overflow-hidden relative bg-white rounded-2xl border aspect-video border-gray-5">
-						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-hidden rounded-xl">
+					<div className="overflow-visible relative bg-white rounded-2xl border aspect-video border-gray-5">
+						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-visible rounded-xl">
 							<ShareVideo
 								data={{ ...data, transcriptionStatus }}
-								user={user}
 								comments={comments}
 								areChaptersDisabled={areChaptersDisabled}
 								areCaptionsDisabled={areCaptionsDisabled}
@@ -306,7 +296,6 @@ export const Share = ({
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
 							data={data}
-							user={user}
 						/>
 					</div>
 				</div>
@@ -320,7 +309,6 @@ export const Share = ({
 								transcriptionStatus,
 							}}
 							videoSettings={videoSettings}
-							user={user}
 							commentsData={commentsData}
 							setCommentsData={setCommentsData}
 							optimisticComments={optimisticComments}
@@ -347,7 +335,6 @@ export const Share = ({
 							data.orgSettings?.disableReactions
 						}
 						data={data}
-						user={user}
 					/>
 				</div>
 			</div>

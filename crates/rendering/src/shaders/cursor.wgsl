@@ -4,12 +4,10 @@ struct VertexOutput {
 };
 
 struct Uniforms {
-    position: vec2<f32>,
-    size: vec2<f32>,
+    position_size: vec4<f32>,
     output_size: vec4<f32>,
     screen_bounds: vec4<f32>,
-    velocity: vec2<f32>,
-    motion_blur_amount: f32,
+    velocity_blur_opacity: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -38,14 +36,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     );
 
     let pos = positions[vertex_index];
-    let screen_pos = uniforms.position.xy;
+    let screen_pos = uniforms.position_size.xy;
+    let cursor_size = uniforms.position_size.zw;
 
     // Calculate final position - centered around cursor position
     // Flip the Y coordinate by subtracting from output height
     var adjusted_pos = screen_pos;
     adjusted_pos.y = uniforms.output_size.y - adjusted_pos.y;  // Flip Y coordinate
 
-    let final_pos = ((pos * uniforms.size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
+    let final_pos = ((pos * cursor_size) + adjusted_pos) / uniforms.output_size.xy * 2.0 - 1.0;
 
     var output: VertexOutput;
     output.position = vec4<f32>(final_pos, 0.0, 1.0);
@@ -61,11 +60,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var weight_sum = 0.0;
 
     // Calculate velocity magnitude for adaptive blur strength
-    let velocity_mag = length(uniforms.velocity);
-    let adaptive_blur = uniforms.motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
+    let velocity = uniforms.velocity_blur_opacity.xy;
+    let motion_blur_amount = uniforms.velocity_blur_opacity.z;
+    let opacity = uniforms.velocity_blur_opacity.w;
+
+    let velocity_mag = length(velocity);
+    let adaptive_blur = motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
 
     // Calculate blur direction from velocity
-    var blur_dir = uniforms.velocity;
+    var blur_dir = velocity;
 
     // Enhanced blur trail
     let max_blur_offset = 3.0 * adaptive_blur;
@@ -99,5 +102,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    return final_color * vec4<f32>(1.0, 1.0, 1.0, 1.0 - uniforms.motion_blur_amount * 0.2);
+    final_color *= vec4<f32>(1.0, 1.0, 1.0, 1.0 - motion_blur_amount * 0.2);
+    final_color *= opacity;
+
+    return final_color;
 }

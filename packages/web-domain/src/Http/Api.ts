@@ -1,8 +1,8 @@
-import { HttpApi, OpenApi } from "@effect/platform";
+import { HttpApi, HttpApiError, OpenApi } from "@effect/platform";
 import { LoomHttpApi } from "../Loom.ts";
 
 export class ApiContract extends HttpApi.make("cap-web-api")
-	.add(LoomHttpApi.prefix("/loom"))
+	.add(LoomHttpApi.prefix("/loom").addError(HttpApiError.ServiceUnavailable))
 	.annotateContext(
 		OpenApi.annotations({
 			title: "Cap HTTP API",

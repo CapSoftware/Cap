@@ -53,6 +53,7 @@ import {
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
+import IconLucideTimer from "~icons/lucide/timer";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
 import {
@@ -112,6 +113,7 @@ const BACKGROUND_COLORS = [
 	"#A9A9A9", // Dark Gray
 	"#FFFFFF", // White
 	"#000000", // Black
+	"#00000000", // Transparent
 ];
 
 const BACKGROUND_GRADIENTS = [
@@ -137,6 +139,12 @@ const BACKGROUND_GRADIENTS = [
 
 const WALLPAPER_NAMES = [
 	// macOS wallpapers
+	"macOS/tahoe-dusk-min",
+	"macOS/tahoe-dawn-min",
+	"macOS/tahoe-day-min",
+	"macOS/tahoe-night-min",
+	"macOS/tahoe-dark",
+	"macOS/tahoe-light",
 	"macOS/sequoia-dark",
 	"macOS/sequoia-light",
 	"macOS/sonoma-clouds",
@@ -226,6 +234,13 @@ export function ConfigSidebar() {
 		editorState,
 		meta,
 	} = useEditorContext();
+
+	const cursorIdleDelay = () =>
+		((project.cursor as { hideWhenIdleDelay?: number }).hideWhenIdleDelay ??
+			2) as number;
+
+	const clampIdleDelay = (value: number) =>
+		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -460,6 +475,39 @@ export function ConfigSidebar() {
 								step={1}
 							/>
 						</Field>
+						<Field
+							name="Hide When Idle"
+							icon={<IconLucideTimer class="size-4" />}
+							value={
+								<Toggle
+									checked={project.cursor.hideWhenIdle}
+									onChange={(value) =>
+										setProject("cursor", "hideWhenIdle", value)
+									}
+								/>
+							}
+						/>
+						<Show when={project.cursor.hideWhenIdle}>
+							<Subfield name="Inactivity Delay" class="gap-4 items-center">
+								<div class="flex flex-1 gap-3 items-center">
+									<Slider
+										class="flex-1"
+										value={[cursorIdleDelay()]}
+										onChange={(v) => {
+											const rounded = clampIdleDelay(v[0]);
+											setProject("cursor", "hideWhenIdleDelay" as any, rounded);
+										}}
+										minValue={0.5}
+										maxValue={5}
+										step={0.1}
+										formatTooltip={(value) => `${value.toFixed(1)}s`}
+									/>
+									<span class="w-12 text-xs text-right text-gray-11">
+										{cursorIdleDelay().toFixed(1)}s
+									</span>
+								</div>
+							</Subfield>
+						</Show>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
@@ -687,37 +735,131 @@ export function ConfigSidebar() {
 									const sceneSelection = selection();
 									if (sceneSelection.type !== "scene") return;
 
-									const segment =
-										project.timeline?.sceneSegments?.[sceneSelection.index];
-									if (!segment) return;
+									const segments = sceneSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.sceneSegments?.[idx],
+											index: idx,
+										}))
+										.filter((s) => s.segment !== undefined);
 
-									return { selection: sceneSelection, segment };
+									if (segments.length === 0) return;
+									return { selection: sceneSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<SceneSegmentConfig
-										segment={value().segment}
-										segmentIndex={value().selection.index}
-									/>
+									<Show
+										when={value().segments.length > 1}
+										fallback={
+											<SceneSegmentConfig
+												segment={value().segments[0].segment!}
+												segmentIndex={value().segments[0].index}
+											/>
+										}
+									>
+										<div class="space-y-4">
+											<div class="flex flex-row justify-between items-center">
+												<div class="flex gap-2 items-center">
+													<EditorButton
+														onClick={() =>
+															setEditorState("timeline", "selection", null)
+														}
+														leftIcon={<IconLucideCheck />}
+													>
+														Done
+													</EditorButton>
+													<span class="text-sm text-gray-10">
+														{value().segments.length} scene{" "}
+														{value().segments.length === 1
+															? "segment"
+															: "segments"}{" "}
+														selected
+													</span>
+												</div>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														const indices = value().selection.indices;
+
+														// Delete segments in reverse order to maintain indices
+														[...indices]
+															.sort((a, b) => b - a)
+															.forEach((idx) => {
+																projectActions.deleteSceneSegment(idx);
+															});
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
+											</div>
+										</div>
+									</Show>
 								)}
 							</Show>
 							<Show
 								when={(() => {
-									const clipSegment = selection();
-									if (clipSegment.type !== "clip") return;
+									const clipSelection = selection();
+									if (clipSelection.type !== "clip") return;
 
-									const segment =
-										project.timeline?.segments?.[clipSegment.index];
-									if (!segment) return;
+									const segments = clipSelection.indices
+										.map((idx) => ({
+											segment: project.timeline?.segments?.[idx],
+											index: idx,
+										}))
+										.filter((s) => s.segment !== undefined);
 
-									return { selection: clipSegment, segment };
+									if (segments.length === 0) return;
+									return { selection: clipSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<ClipSegmentConfig
-										segment={value().segment}
-										segmentIndex={value().selection.index}
-									/>
+									<Show
+										when={value().segments.length > 1}
+										fallback={
+											<ClipSegmentConfig
+												segment={value().segments[0].segment!}
+												segmentIndex={value().segments[0].index}
+											/>
+										}
+									>
+										<div class="space-y-4">
+											<div class="flex flex-row justify-between items-center">
+												<div class="flex gap-2 items-center">
+													<EditorButton
+														onClick={() =>
+															setEditorState("timeline", "selection", null)
+														}
+														leftIcon={<IconLucideCheck />}
+													>
+														Done
+													</EditorButton>
+													<span class="text-sm text-gray-10">
+														{value().segments.length} clip{" "}
+														{value().segments.length === 1
+															? "segment"
+															: "segments"}{" "}
+														selected
+													</span>
+												</div>
+												<EditorButton
+													variant="danger"
+													onClick={() => {
+														const indices = value().selection.indices;
+
+														// Delete segments in reverse order to maintain indices
+														[...indices]
+															.sort((a, b) => b - a)
+															.forEach((idx) => {
+																projectActions.deleteClipSegment(idx);
+															});
+													}}
+													leftIcon={<IconCapTrash />}
+												>
+													Delete
+												</EditorButton>
+											</div>
+										</div>
+									</Show>
 								)}
 							</Show>
 						</Suspense>
@@ -1326,22 +1468,33 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													class="sr-only peer"
 													name="colorPicker"
 													onChange={(e) => {
-														if (e.target.checked) {
-															backgrounds.color = {
-																type: "color",
-																value: hexToRgb(color) ?? [0, 0, 0],
-															};
-															setProject(
-																"background",
-																"source",
-																backgrounds.color,
-															);
-														}
+														if (!e.target.checked) return;
+
+														const rgbValue = hexToRgb(color);
+														if (!rgbValue) return;
+
+														const [r, g, b, a] = rgbValue;
+														backgrounds.color = {
+															type: "color",
+															value: [r, g, b],
+															alpha: a,
+														};
+
+														setProject(
+															"background",
+															"source",
+															backgrounds.color,
+														);
 													}}
 												/>
 												<div
 													class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-													style={{ "background-color": color }}
+													style={{
+														background:
+															color === "#00000000"
+																? CHECKERED_BUTTON_BACKGROUND
+																: color,
+													}}
 												/>
 											</label>
 										)}
@@ -1913,26 +2066,25 @@ function ZoomSegmentPreview(props: {
 
 	const start = createMemo(() => props.segment.start);
 
-	const segmentIndex = createMemo(() => {
+	const clipSegment = createMemo(() => {
 		const st = start();
-		const i = project.timeline?.segments.findIndex(
-			(s) => s.start <= st && s.end > st,
-		);
-		if (i === undefined || i === -1) return 0;
-		return i;
+		return project.timeline?.segments.find((s) => s.start <= st && s.end > st);
 	});
 
 	const relativeTime = createMemo(() => {
 		const st = start();
-		const segment = project.timeline?.segments[segmentIndex()];
+		const segment = clipSegment();
 		if (!segment) return 0;
 		return Math.max(0, st - segment.start);
 	});
 
 	const video = document.createElement("video");
 	createEffect(() => {
+		// TODO: make this not hardcoded
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${editorInstance.path}/content/segments/segment-${
+				clipSegment()?.recordingSegment ?? 0
+			}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2447,8 +2599,8 @@ function SourceOffsetField(props: {
 
 	return (
 		<Field name={props.name}>
-			<div class="flex flex-row items-center justify-between w-full -mt-2">
-				<div class="flex flex-row space-x-1 items-end">
+			<div class="flex flex-row justify-between items-center -mt-2 w-full">
+				<div class="flex flex-row items-end space-x-1">
 					<NumberField.Root
 						value={value()}
 						onChange={setValue}
@@ -2469,7 +2621,7 @@ function SourceOffsetField(props: {
 					</NumberField.Root>
 					<span class="text-gray-11">ms</span>
 				</div>
-				<div class="text-gray-11 flex flex-row space-x-1">
+				<div class="flex flex-row space-x-1 text-gray-11">
 					{[-100, -10, 10, 100].map((v) => (
 						<button
 							type="button"
@@ -2622,7 +2774,11 @@ function RgbInput(props: {
 				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
+					if (!value) return;
+
+					// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+					const [r, g, b] = value;
+					props.onChange([r, g, b]);
 				}}
 			/>
 			<TextInput
@@ -2635,14 +2791,24 @@ function RgbInput(props: {
 					setText(e.currentTarget.value);
 
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
+					if (!value) return;
+
+					const [r, g, b] = value;
+					props.onChange([r, g, b]);
 				}}
 				onBlur={(e) => {
 					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
-					else {
+					if (value) {
+						const [r, g, b] = value;
+						// RgbInput only handles RGB values, so extract RGB part if RGBA is returned
+						props.onChange([r, g, b]);
+					} else {
 						setText(prevHex);
-						props.onChange(hexToRgb(text())!);
+						const fallbackValue = hexToRgb(text());
+						if (!fallbackValue) return;
+
+						const [r, g, b] = fallbackValue;
+						props.onChange([r, g, b]);
 					}
 				}}
 			/>
@@ -2657,8 +2823,26 @@ function rgbToHex(rgb: [number, number, number]) {
 		.toUpperCase()}`;
 }
 
-function hexToRgb(hex: string): [number, number, number] | null {
-	const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+function hexToRgb(hex: string): [number, number, number, number] | null {
+	// Support both 6-digit (RGB) and 8-digit (RGBA) hex colors
+	const match = hex.match(
+		/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})?$/i,
+	);
 	if (!match) return null;
-	return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
+
+	const [, r, g, b, a] = match;
+	const rgb = [
+		Number.parseInt(r, 16),
+		Number.parseInt(g, 16),
+		Number.parseInt(b, 16),
+	] as const;
+
+	// If alpha is provided, return RGBA tuple
+	if (a) {
+		return [...rgb, Number.parseInt(a, 16)];
+	}
+
+	return [...rgb, 255];
 }
+
+const CHECKERED_BUTTON_BACKGROUND = `url("data:image/svg+xml,%3Csvg width='16' height='16' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='8' height='8' fill='%23a0a0a0'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%23a0a0a0'/%3E%3C/svg%3E")`;

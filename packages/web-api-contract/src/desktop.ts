@@ -140,19 +140,6 @@ const protectedContract = c.router(
 			query: z.object({ videoId: z.string() }),
 			responses: { 200: z.unknown() },
 		},
-		getOrganizations: {
-			method: "GET",
-			path: "/desktop/organizations",
-			responses: {
-				200: z.array(
-					z.object({
-						id: z.string(),
-						name: z.string(),
-						ownerId: z.string(),
-					}),
-				),
-			},
-		},
 	},
 	{
 		baseHeaders: z.object({ authorization: z.string() }),

@@ -88,7 +88,7 @@ impl ExporterBuilder {
                 studio_meta.clone(),
             )
             .await
-            .unwrap(),
+            .map_err(Error::RendererSetup)?,
         );
 
         let segments = cap_editor::create_segments(&recording_meta, studio_meta)

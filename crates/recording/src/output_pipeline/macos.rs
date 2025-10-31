@@ -3,7 +3,9 @@ use crate::{
     sources::screen_capture,
 };
 use anyhow::anyhow;
+use cap_enc_avfoundation::QueueFrameError;
 use cap_media_info::{AudioInfo, VideoInfo};
+use retry::{OperationResult, delay::Fixed};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
@@ -49,9 +51,13 @@ impl Muxer for AVFoundationMp4Muxer {
         ))
     }
 
-    fn finish(&mut self) -> anyhow::Result<()> {
-        self.0.lock().map_err(|e| anyhow!("{e}"))?.finish();
-        Ok(())
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|e| anyhow!("{e}"))?
+            .finish(Some(timestamp))
+            .map(Ok)?)
     }
 }
 
@@ -71,17 +77,32 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             mp4.resume();
         }
 
-        mp4.queue_video_frame(&frame.sample_buf, timestamp)
-            .map_err(|e| anyhow!("QueueVideoFrame/{e}"))
+        retry::retry(Fixed::from_millis(3).take(3), || {
+            match mp4.queue_video_frame(frame.sample_buf.clone(), timestamp) {
+                Ok(v) => OperationResult::Ok(v),
+                Err(QueueFrameError::NotReadyForMore) => {
+                    OperationResult::Retry(QueueFrameError::NotReadyForMore)
+                }
+                Err(e) => OperationResult::Err(e),
+            }
+        })
+        .map_err(|e| anyhow!("send_video_frame/{e}"))
     }
 }
 
 impl AudioMuxer for AVFoundationMp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        self.0
-            .lock()
-            .map_err(|e| anyhow!("{e}"))?
-            .queue_audio_frame(frame.inner, timestamp)
-            .map_err(|e| anyhow!("{e}"))
+        let mut mp4 = self.0.lock().map_err(|e| anyhow!("{e}"))?;
+
+        retry::retry(Fixed::from_millis(3).take(3), || {
+            match mp4.queue_audio_frame(&frame.inner, timestamp) {
+                Ok(v) => OperationResult::Ok(v),
+                Err(QueueFrameError::NotReadyForMore) => {
+                    OperationResult::Retry(QueueFrameError::NotReadyForMore)
+                }
+                Err(e) => OperationResult::Err(e),
+            }
+        })
+        .map_err(|e| anyhow!("send_audio_frame/{e}"))
     }
 }

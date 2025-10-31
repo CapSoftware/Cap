@@ -38,6 +38,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 	const provider = yield* S3BucketClientProvider;
 	return {
 		bucketName: provider.bucket,
+		isPathStyle: provider.isPathStyle,
 		getSignedObjectUrl: (key: string) =>
 			wrapS3Promise(
 				provider.getPublic.pipe(
@@ -181,7 +182,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						),
 					),
 				),
-			),
+			).pipe(Effect.when(() => objects.length > 0)),
 		getPresignedPutUrl: (
 			key: string,
 			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
@@ -256,6 +257,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 									UploadId: uploadId,
 									PartNumber: partNumber,
 								}),
+								{ expiresIn: 3600 },
 							),
 						),
 					),

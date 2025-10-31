@@ -329,6 +329,18 @@ export function Player() {
 	);
 }
 
+// CSS for checkerboard grid (adaptive to light/dark mode)
+const gridStyle = {
+	"background-image":
+		"linear-gradient(45deg, rgba(128,128,128,0.12) 25%, transparent 25%), " +
+		"linear-gradient(-45deg, rgba(128,128,128,0.12) 25%, transparent 25%), " +
+		"linear-gradient(45deg, transparent 75%, rgba(128,128,128,0.12) 75%), " +
+		"linear-gradient(-45deg, transparent 75%, rgba(128,128,128,0.12) 75%)",
+	"background-size": "40px 40px",
+	"background-position": "0 0, 0 20px, 20px -20px, -20px 0px",
+	"background-color": "rgba(200,200,200,0.08)",
+};
+
 function PreviewCanvas() {
 	const { latestFrame } = useEditorContext();
 
@@ -393,8 +405,9 @@ function PreviewCanvas() {
 								style={{
 									width: `${size().width - padding * 2}px`,
 									height: `${size().height}px`,
+									...gridStyle,
 								}}
-								class="bg-blue-50 rounded"
+								class="rounded"
 								ref={canvasRef}
 								id="canvas"
 								width={currentFrame().width}

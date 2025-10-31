@@ -101,7 +101,7 @@ impl AuthStore {
             manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
         auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
-        auth.organizations = api::fetch_organizations(&app)
+        auth.organizations = api::fetch_organizations(app)
             .await
             .map_err(|e| e.to_string())?;
 

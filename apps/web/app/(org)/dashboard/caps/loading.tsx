@@ -27,7 +27,7 @@ export default function Loading() {
 								.fill(0)
 								.map((_, index) => (
 									<Skeleton
-										key={index}
+										key={index.toString()}
 										baseColor="var(--gray-4)"
 										highlightColor="var(--gray-5)"
 										className="!h-[72px] w-full !rounded-xl"
@@ -40,7 +40,7 @@ export default function Loading() {
 									.fill(0)
 									.map((_, index) => (
 										<div
-											key={index}
+											key={index.toString()}
 											className="flex relative flex-col gap-4 w-full h-full bg-gray-3 rounded-2xl border-gray-4 border-[1px]"
 										>
 											{/* Thumbnail */}

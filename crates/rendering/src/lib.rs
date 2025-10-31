@@ -319,15 +319,21 @@ impl RenderVideoConstants {
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
             .await
             .map_err(|_| RenderingError::NoAdapter)?;
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-                ..Default::default()
-            })
-            .await?;
+
+        let device_descriptor = wgpu::DeviceDescriptor {
+            label: Some("cap-rendering-device"),
+            required_features: wgpu::Features::empty(),
+            ..Default::default()
+        };
+
+        let (device, queue) = adapter.request_device(&device_descriptor).await?;
 
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
@@ -1137,7 +1143,7 @@ impl RendererLayers {
         {
             let mut pass = render_pass!(
                 session.current_texture_view(),
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             );
             self.background.render(&mut pass);
         }
@@ -1176,89 +1182,13 @@ impl RendererLayers {
     }
 }
 
-#[cfg(test)]
-mod project_uniforms_tests {
-    use super::*;
-    use cap_project::CursorMoveEvent;
-
-    fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
-        CursorMoveEvent {
-            active_modifiers: vec![],
-            cursor_id: "primary".to_string(),
-            time_ms,
-            x,
-            y,
-        }
-    }
-
-    fn default_smoothing() -> SpringMassDamperSimulationConfig {
-        SpringMassDamperSimulationConfig {
-            tension: 100.0,
-            mass: 1.0,
-            friction: 20.0,
-        }
-    }
-
-    #[test]
-    fn auto_zoom_focus_defaults_without_cursor_data() {
-        let events = CursorEvents {
-            clicks: vec![],
-            moves: vec![],
-        };
-
-        let focus = ProjectUniforms::auto_zoom_focus(&events, 0.3, None, None);
-
-        assert_eq!(focus.coord.x, 0.5);
-        assert_eq!(focus.coord.y, 0.5);
-    }
-
-    #[test]
-    fn auto_zoom_focus_is_stable_for_slow_motion() {
-        let events = CursorEvents {
-            clicks: vec![],
-            moves: vec![
-                cursor_move(0.0, 0.5, 0.5),
-                cursor_move(200.0, 0.55, 0.5),
-                cursor_move(400.0, 0.6, 0.5),
-            ],
-        };
-
-        let smoothing = Some(default_smoothing());
-
-        let current = interpolate_cursor(&events, 0.4, smoothing).expect("cursor position");
-        let focus =
-            ProjectUniforms::auto_zoom_focus(&events, 0.4, smoothing, Some(current.clone()));
-
-        let dx = (focus.coord.x - current.position.coord.x).abs();
-        let dy = (focus.coord.y - current.position.coord.y).abs();
-
-        assert!(dx < 0.05, "expected minimal horizontal drift, got {dx}");
-        assert!(dy < 0.05, "expected minimal vertical drift, got {dy}");
-    }
-
-    #[test]
-    fn auto_zoom_focus_leans_into_velocity_for_fast_motion() {
-        let events = CursorEvents {
-            clicks: vec![],
-            moves: vec![cursor_move(0.0, 0.1, 0.5), cursor_move(40.0, 0.9, 0.5)],
-        };
-
-        let smoothing = Some(default_smoothing());
-        let query_time = 0.045; // slightly after the fast movement
-
-        let current = interpolate_cursor(&events, query_time, smoothing).expect("cursor position");
-        let focus =
-            ProjectUniforms::auto_zoom_focus(&events, query_time, smoothing, Some(current.clone()));
-        let delta = focus.coord.x - current.position.coord.x;
-        assert!(delta < 0.2, "focus moved too far ahead: {delta}");
-        assert!(delta > -0.25, "focus lagged too far behind: {delta}");
-    }
-}
-
 pub struct RenderSession {
     textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     current_is_left: bool,
+    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
+    readback_buffer_size: u64,
+    current_readback_is_left: bool,
 }
 
 impl RenderSession {
@@ -1291,6 +1221,9 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
+            readback_buffers: (None, None),
+            readback_buffer_size: 0,
+            current_readback_is_left: true,
         }
     }
 
@@ -1347,6 +1280,46 @@ impl RenderSession {
 
     pub fn swap_textures(&mut self) {
         self.current_is_left = !self.current_is_left;
+    }
+
+    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
+        let needs_new = self
+            .readback_buffers
+            .0
+            .as_ref()
+            .is_none_or(|_| self.readback_buffer_size < size);
+
+        if needs_new {
+            let make_buffer = || {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("RenderSession Readback Buffer"),
+                    size,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                })
+            };
+
+            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
+            self.readback_buffer_size = size;
+        }
+    }
+
+    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
+        if self.current_readback_is_left {
+            self.readback_buffers
+                .0
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        } else {
+            self.readback_buffers
+                .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        }
+    }
+
+    pub(crate) fn swap_readback_buffers(&mut self) {
+        self.current_readback_is_left = !self.current_readback_is_left;
     }
 }
 
@@ -1462,5 +1435,84 @@ fn srgb_to_linear(c: u16) -> f32 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(test)]
+mod project_uniforms_tests {
+    use super::*;
+    use cap_project::CursorMoveEvent;
+
+    fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "primary".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn default_smoothing() -> SpringMassDamperSimulationConfig {
+        SpringMassDamperSimulationConfig {
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+        }
+    }
+
+    #[test]
+    fn auto_zoom_focus_defaults_without_cursor_data() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![],
+        };
+
+        let focus = ProjectUniforms::auto_zoom_focus(&events, 0.3, None, None);
+
+        assert_eq!(focus.coord.x, 0.5);
+        assert_eq!(focus.coord.y, 0.5);
+    }
+
+    #[test]
+    fn auto_zoom_focus_is_stable_for_slow_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![
+                cursor_move(0.0, 0.5, 0.5),
+                cursor_move(200.0, 0.55, 0.5),
+                cursor_move(400.0, 0.6, 0.5),
+            ],
+        };
+
+        let smoothing = Some(default_smoothing());
+
+        let current = interpolate_cursor(&events, 0.4, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, 0.4, smoothing, Some(current.clone()));
+
+        let dx = (focus.coord.x - current.position.coord.x).abs();
+        let dy = (focus.coord.y - current.position.coord.y).abs();
+
+        assert!(dx < 0.05, "expected minimal horizontal drift, got {dx}");
+        assert!(dy < 0.05, "expected minimal vertical drift, got {dy}");
+    }
+
+    #[test]
+    fn auto_zoom_focus_leans_into_velocity_for_fast_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![cursor_move(0.0, 0.1, 0.5), cursor_move(40.0, 0.9, 0.5)],
+        };
+
+        let smoothing = Some(default_smoothing());
+        let query_time = 0.045; // slightly after the fast movement
+
+        let current = interpolate_cursor(&events, query_time, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, query_time, smoothing, Some(current.clone()));
+        let delta = focus.coord.x - current.position.coord.x;
+        assert!(delta < 0.2, "focus moved too far ahead: {delta}");
+        assert!(delta > -0.25, "focus lagged too far behind: {delta}");
     }
 }

@@ -2,12 +2,13 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, users } from "@cap/database/schema";
 import { Notification as APINotification } from "@cap/web-api-contract";
-import { and, ColumnBaseConfig, desc, eq, isNull, sql } from "drizzle-orm";
-import { MySqlColumn } from "drizzle-orm/mysql-core";
+import { ImageUploads } from "@cap/web-backend";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { Effect } from "effect";
 import { NextResponse } from "next/server";
-import { AvcProfileInfo } from "node_modules/@remotion/media-parser/dist/containers/avc/parse-avc";
 import { z } from "zod";
 import type { NotificationType } from "@/lib/Notification";
+import { runPromise } from "@/lib/server";
 import { jsonExtractString } from "@/utils/sql";
 
 const notificationDataSchema = z.object({
@@ -90,32 +91,46 @@ export async function GET() {
 			formattedCountResults[type] = Number(count);
 		});
 
-		const formattedNotifications = notificationsWithAuthors
-			.map(({ notification, author }) => {
-				try {
-					// all notifications currently require an author
-					if (!author) return;
+		const formattedNotifications = await Effect.gen(function* () {
+			const imageUploads = yield* ImageUploads;
 
-					return APINotification.parse({
-						id: notification.id,
-						type: notification.type,
-						readAt: notification.readAt,
-						videoId: notification.data.videoId,
-						createdAt: notification.createdAt,
-						data: notification.data,
-						comment: notification.data.comment,
-						author: {
-							id: author.id,
-							name: author.name ?? "Unknown",
-							avatar: author.avatar,
-						},
-					});
-				} catch (error) {
-					console.error("Invalid notification data:", error);
-					return null;
-				}
-			})
-			.filter(Boolean);
+			return yield* Effect.all(
+				notificationsWithAuthors.map(({ notification, author }) =>
+					Effect.gen(function* () {
+						// all notifications currently require an author
+						if (!author) return null;
+
+						const resolvedAvatar = author.avatar
+							? yield* imageUploads
+									.resolveImageUrl(author.avatar)
+									.pipe(Effect.catchAll(() => Effect.succeed(null)))
+							: null;
+
+						return APINotification.parse({
+							id: notification.id,
+							type: notification.type,
+							readAt: notification.readAt,
+							videoId: notification.data.videoId,
+							createdAt: notification.createdAt,
+							data: notification.data,
+							comment: notification.data.comment,
+							author: {
+								id: author.id,
+								name: author.name ?? "Unknown",
+								avatar: resolvedAvatar,
+							},
+						});
+					}).pipe(
+						Effect.catchAll((error) => {
+							console.error("Invalid notification data:", error);
+							return Effect.succeed(null);
+						}),
+					),
+				),
+			);
+		})
+			.pipe(runPromise)
+			.then((results) => results.filter(Boolean));
 
 		return NextResponse.json({
 			notifications: formattedNotifications,

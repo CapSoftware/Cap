@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
@@ -12,10 +12,18 @@ use tracing::{debug, error};
 
 use crate::base::EncoderBase;
 
+fn is_420(format: ffmpeg::format::Pixel) -> bool {
+    format
+        .descriptor()
+        .map(|desc| desc.log2_chroma_w() == 1 && desc.log2_chroma_h() == 1)
+        .unwrap_or(false)
+}
+
 pub struct H264EncoderBuilder {
     bpp: f32,
     input_config: VideoInfo,
     preset: H264Preset,
+    output_size: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -33,6 +41,8 @@ pub enum H264EncoderError {
     CodecNotFound,
     #[error("Pixel format {0:?} not supported")]
     PixFmtNotSupported(Pixel),
+    #[error("Invalid output dimensions {width}x{height}; expected non-zero even width and height")]
+    InvalidOutputDimensions { width: u32, height: u32 },
 }
 
 impl H264EncoderBuilder {
@@ -43,6 +53,7 @@ impl H264EncoderBuilder {
             input_config,
             bpp: Self::QUALITY_BPP,
             preset: H264Preset::Ultrafast,
+            output_size: None,
         }
     }
 
@@ -56,62 +67,124 @@ impl H264EncoderBuilder {
         self
     }
 
+    pub fn with_output_size(mut self, width: u32, height: u32) -> Result<Self, H264EncoderError> {
+        if width == 0 || height == 0 {
+            return Err(H264EncoderError::InvalidOutputDimensions { width, height });
+        }
+
+        self.output_size = Some((width, height));
+        Ok(self)
+    }
+
     pub fn build(
         self,
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
-        let input_config = &self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(input_config, self.preset)
+        let input_config = self.input_config;
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
             .ok_or(H264EncoderError::CodecNotFound)?;
 
-        let (format, converter) = if !codec
+        let (output_width, output_height) = self
+            .output_size
+            .unwrap_or((input_config.width, input_config.height));
+
+        if output_width == 0 || output_height == 0 {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
+
+        let encoder_supports_input_format = codec
             .video()
-            .unwrap()
-            .formats()
-            .unwrap()
-            .any(|f| f == input_config.pixel_format)
-        {
+            .ok()
+            .and_then(|codec_video| codec_video.formats())
+            .is_some_and(|mut formats| formats.any(|f| f == input_config.pixel_format));
+
+        let mut needs_pixel_conversion = false;
+
+        let output_format = if encoder_supports_input_format {
+            input_config.pixel_format
+        } else {
+            needs_pixel_conversion = true;
             let format = ffmpeg::format::Pixel::NV12;
             debug!(
                 "Converting from {:?} to {:?} for H264 encoding",
                 input_config.pixel_format, format
             );
-            (
-                format,
-                Some(
-                    ffmpeg::software::converter(
-                        (input_config.width, input_config.height),
-                        input_config.pixel_format,
-                        format,
-                    )
-                    .map_err(|e| {
+            format
+        };
+
+        if is_420(output_format) && (output_width % 2 != 0 || output_height % 2 != 0) {
+            return Err(H264EncoderError::InvalidOutputDimensions {
+                width: output_width,
+                height: output_height,
+            });
+        }
+
+        let needs_scaling =
+            output_width != input_config.width || output_height != input_config.height;
+
+        if needs_scaling {
+            debug!(
+                "Scaling video frames for H264 encoding from {}x{} to {}x{}",
+                input_config.width, input_config.height, output_width, output_height
+            );
+        }
+
+        let converter = if needs_pixel_conversion || needs_scaling {
+            let flags = if needs_scaling {
+                ffmpeg::software::scaling::flag::Flags::BICUBIC
+            } else {
+                ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR
+            };
+
+            match ffmpeg::software::scaling::Context::get(
+                input_config.pixel_format,
+                input_config.width,
+                input_config.height,
+                output_format,
+                output_width,
+                output_height,
+                flags,
+            ) {
+                Ok(context) => Some(context),
+                Err(e) => {
+                    if needs_pixel_conversion {
                         error!(
-                            "Failed to create converter from {:?} to NV12: {:?}",
-                            input_config.pixel_format, e
+                            "Failed to create converter from {:?} to {:?}: {:?}",
+                            input_config.pixel_format, output_format, e
                         );
-                        H264EncoderError::PixFmtNotSupported(input_config.pixel_format)
-                    })?,
-                ),
-            )
+                        return Err(H264EncoderError::PixFmtNotSupported(
+                            input_config.pixel_format,
+                        ));
+                    }
+
+                    return Err(H264EncoderError::FFmpeg(e));
+                }
+            }
         } else {
-            (input_config.pixel_format, None)
+            None
         };
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
 
-        encoder_ctx.set_threading(Config::count(4));
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().video()?;
 
-        encoder.set_width(input_config.width);
-        encoder.set_height(input_config.height);
-        encoder.set_format(format);
+        encoder.set_width(output_width);
+        encoder.set_height(output_height);
+        encoder.set_format(output_format);
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
         // let target_bitrate = compression.bitrate();
         let bitrate = get_bitrate(
-            input_config.width,
-            input_config.height,
+            output_width,
+            output_height,
             input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
             self.bpp,
         );
@@ -130,8 +203,10 @@ impl H264EncoderBuilder {
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
             encoder,
-            config: self.input_config,
             converter,
+            output_format,
+            output_width,
+            output_height,
         })
     }
 }
@@ -139,8 +214,10 @@ impl H264EncoderBuilder {
 pub struct H264Encoder {
     base: EncoderBase,
     encoder: encoder::Video,
-    config: VideoInfo,
     converter: Option<ffmpeg::software::scaling::Context>,
+    output_format: format::Pixel,
+    output_width: u32,
+    output_height: u32,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -167,16 +244,16 @@ impl H264Encoder {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
-        let frame = if let Some(converter) = &mut self.converter {
-            let mut new_frame = frame::Video::empty();
+        if let Some(converter) = &mut self.converter {
+            let pts = frame.pts();
+            let mut converted =
+                frame::Video::new(self.output_format, self.output_width, self.output_height);
             converter
-                .run(&frame, &mut new_frame)
+                .run(&frame, &mut converted)
                 .map_err(QueueFrameError::Converter)?;
-            new_frame.set_pts(frame.pts());
-            new_frame
-        } else {
-            frame
-        };
+            converted.set_pts(pts);
+            frame = converted;
+        }
 
         self.base
             .send_frame(&frame, output, &mut self.encoder)
@@ -185,11 +262,8 @@ impl H264Encoder {
         Ok(())
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) {
-        if let Err(e) = self.base.process_eof(output, &mut self.encoder) {
-            tracing::error!("Failed to send EOF to encoder: {:?}", e);
-            return;
-        }
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.process_eof(output, &mut self.encoder)
     }
 }
 
@@ -247,8 +321,9 @@ fn get_codec_and_options(
 
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
     // higher frame rates don't really need double the bitrate lets be real
-    let frame_rate_multiplier = (frame_rate - 30.0).max(0.0) * 0.6 + 30.0;
-    let pixels_per_second = (width * height) as f32 * frame_rate_multiplier;
+    let frame_rate_multiplier = ((frame_rate as f64 - 30.0).max(0.0) * 0.6) + 30.0;
+    let area = (width as f64) * (height as f64);
+    let pixels_per_second = area * frame_rate_multiplier;
 
-    (pixels_per_second * bpp) as usize
+    (pixels_per_second * bpp as f64) as usize
 }

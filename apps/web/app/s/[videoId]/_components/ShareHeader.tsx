@@ -1,15 +1,13 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
-import { Avatar, Button } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
+import { Button } from "@cap/ui";
+import { type ImageUpload, User } from "@cap/web-domain";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -17,23 +15,21 @@ import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
+import type { VideoData } from "../types";
 
 export const ShareHeader = ({
 	data,
-	user,
 	customDomain,
 	domainVerified,
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	spacesData = null,
 }: {
-	data: typeof videos.$inferSelect & {
-		ownerName?: string | null;
-		ownerImage?: string | null;
-	};
-	user: typeof userSelectProps | null;
+	data: VideoData;
 	customDomain?: string | null;
 	domainVerified?: boolean;
 	sharedOrganizations?: { id: string; name: string }[];
@@ -52,6 +48,7 @@ export const ShareHeader = ({
 	}[];
 	spacesData?: Spaces[] | null;
 }) => {
+	const user = useCurrentUser();
 	const { push, refresh } = useRouter();
 	const [isEditing, setIsEditing] = useState(false);
 	const [title, setTitle] = useState(data.name);
@@ -63,7 +60,7 @@ export const ShareHeader = ({
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
 	const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
-	const isOwner = user && user.id.toString() === data.ownerId;
+	const isOwner = user && user.id === data.owner.id;
 
 	const { webUrl } = usePublicEnv();
 
@@ -130,10 +127,6 @@ export const ShareHeader = ({
 		}
 	};
 
-	const isUserPro = userIsPro(user);
-	const showUpgradeBanner =
-		user && data.ownerId === user.id && !userIsPro(user);
-
 	const handleSharingUpdated = () => {
 		refresh();
 	};
@@ -182,9 +175,11 @@ export const ShareHeader = ({
 		}
 	};
 
+	const userIsOwnerAndNotPro = user?.id === data.owner.id && !data.owner.isPro;
+
 	return (
 		<>
-			{showUpgradeBanner && (
+			{userIsOwnerAndNotPro && (
 				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
 					<p className="text-center text-gray-12">
 						Shareable links are limited to 5 mins on the free plan.
@@ -227,7 +222,7 @@ export const ShareHeader = ({
 									<h1
 										className="text-xl sm:text-2xl"
 										onClick={() => {
-											if (user && user.id.toString() === data.ownerId) {
+											if (isOwner) {
 												setIsEditing(true);
 											}
 										}}
@@ -238,20 +233,16 @@ export const ShareHeader = ({
 							</div>
 							<div className="flex gap-7 items-center">
 								<div className="flex gap-2 items-center">
-									{data.ownerImage ? (
-										<Image
-											src={data.ownerImage}
-											alt={data.ownerName || ""}
-											width={32}
-											unoptimized
-											height={32}
-											className="rounded-full"
+									{data.name && (
+										<SignedImageUrl
+											name={data.name}
+											image={data.owner.image}
+											className="size-8"
+											letterClass="text-base"
 										/>
-									) : (
-										<Avatar name={data.ownerName} className="size-8" />
 									)}
 									<div className="flex flex-col text-left">
-										<p className="text-sm text-gray-12">{data.ownerName}</p>
+										<p className="text-sm text-gray-12">{data.owner.name}</p>
 										<p className="text-xs text-gray-10">
 											{moment(data.createdAt).fromNow()}
 										</p>
@@ -289,7 +280,7 @@ export const ShareHeader = ({
 										)}
 									</Button>
 								</div>
-								{user !== null && !isUserPro && (
+								{userIsOwnerAndNotPro && (
 									<button
 										type="button"
 										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"

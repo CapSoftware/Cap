@@ -1,6 +1,7 @@
 import type {
 	Comment,
 	Folder,
+	ImageUpload,
 	Organisation,
 	S3Bucket,
 	Space,
@@ -19,6 +20,7 @@ import {
 	primaryKey,
 	text,
 	timestamp,
+	unique,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
@@ -63,7 +65,7 @@ export const users = mysqlTable(
 		lastName: varchar("lastName", { length: 255 }),
 		email: varchar("email", { length: 255 }).unique().notNull(),
 		emailVerified: timestamp("emailVerified"),
-		image: varchar("image", { length: 255 }),
+		image: varchar("image", { length: 255 }).$type<ImageUpload.ImageUrlOrKey>(),
 		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
 		stripeSubscriptionId: varchar("stripeSubscriptionId", {
 			length: 255,
@@ -98,6 +100,13 @@ export const users = mysqlTable(
 		).$type<Organisation.OrganisationId>(),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+		onboardingSteps: json("onboardingSteps").$type<{
+			welcome?: boolean;
+			organizationSetup?: boolean;
+			customDomain?: boolean;
+			inviteTeam?: boolean;
+			download?: boolean;
+		}>(),
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
 		customBucket: nanoIdNullable("customBucket"),
 		inviteQuota: int("inviteQuota").notNull().default(1),
@@ -182,7 +191,9 @@ export const organizations = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 		}>(),
-		iconUrl: varchar("iconUrl", { length: 1024 }),
+		iconUrl: varchar("iconUrl", {
+			length: 1024,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
@@ -591,7 +602,9 @@ export const spaces = mysqlTable(
 			.notNull()
 			.$type<Organisation.OrganisationId>(),
 		createdById: nanoId("createdById").notNull().$type<User.UserId>(),
-		iconUrl: varchar("iconUrl", { length: 255 }),
+		iconUrl: varchar("iconUrl", {
+			length: 255,
+		}).$type<ImageUpload.ImageUrlOrKey>(),
 		description: varchar("description", { length: 1000 }),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -622,6 +635,10 @@ export const spaceMembers = mysqlTable(
 		spaceIdIndex: index("space_id_idx").on(table.spaceId),
 		userIdIndex: index("user_id_idx").on(table.userId),
 		spaceIdUserIdIndex: index("space_id_user_id_idx").on(
+			table.spaceId,
+			table.userId,
+		),
+		spaceIdUserIdUnique: unique("space_id_user_id_unique").on(
 			table.spaceId,
 			table.userId,
 		),
@@ -713,6 +730,7 @@ export const videoUploads = mysqlTable("video_uploads", {
 	total: int("total").notNull().default(0),
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
+	mode: varchar("mode", { length: 255, enum: ["singlepart", "multipart"] }),
 });
 
 export const importedVideos = mysqlTable(

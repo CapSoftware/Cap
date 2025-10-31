@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
+import type { ImageUpload } from "@cap/web-domain";
 import { Comment, type Video } from "@cap/web-domain";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
@@ -12,6 +13,7 @@ export async function newComment(data: {
 	content: string;
 	videoId: Video.VideoId;
 	type: "text" | "emoji";
+	authorImage: ImageUpload.ImageUrl | null;
 	parentCommentId: Comment.CommentId;
 	timestamp: number;
 }) {
@@ -67,6 +69,7 @@ export async function newComment(data: {
 	const commentWithAuthor = {
 		...newComment,
 		authorName: user.name,
+		authorImage: data.authorImage,
 		sending: false,
 	};
 

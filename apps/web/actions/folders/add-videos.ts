@@ -2,6 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { nanoId } from "@cap/database/helpers";
 import {
 	folders,
 	sharedVideos,
@@ -50,7 +51,39 @@ export async function addVideosToFolder(
 
 		const isAllSpacesEntry = spaceId === user.activeOrganizationId;
 
-		//if video already exists in the space, then move it
+		//if we're adding videos to a folder from Caps page, then insert the videos into the folder
+		if (isAllSpacesEntry && folder.spaceId) {
+			await db()
+				.insert(sharedVideos)
+				.values(
+					validVideoIds.map((videoId) => {
+						const id = nanoId();
+						return {
+							id,
+							videoId,
+							folderId,
+							organizationId: user.activeOrganizationId,
+							sharedByUserId: user.id,
+						};
+					}),
+				);
+		} else {
+			await db()
+				.insert(spaceVideos)
+				.values(
+					validVideoIds.map((videoId) => {
+						const id = nanoId();
+						return {
+							id,
+							videoId,
+							folderId,
+							spaceId,
+							addedById: user.id,
+						};
+					}),
+				);
+		}
+
 		if (isAllSpacesEntry) {
 			await db()
 				.update(sharedVideos)

@@ -1,29 +1,79 @@
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
-import { Organisation, User } from "@cap/web-domain";
+import { type ImageUpload, Organisation, User } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
-import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
+import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { Adapter } from "next-auth/adapters";
 import type Stripe from "stripe";
 import { nanoId } from "../helpers.ts";
-import { accounts, sessions, users, verificationTokens } from "../schema.ts";
+import {
+	accounts,
+	organizationInvites,
+	organizationMembers,
+	organizations,
+	sessions,
+	users,
+	verificationTokens,
+} from "../schema.ts";
 
-export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
+export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
 		async createUser(userData: any) {
-			await db.insert(users).values({
-				id: User.UserId.make(nanoId()),
-				email: userData.email,
-				emailVerified: userData.emailVerified,
-				name: userData.name,
-				image: userData.image,
-				activeOrganizationId: Organisation.OrganisationId.make(""),
+			const userId = User.UserId.make(nanoId());
+			await db.transaction(async (tx) => {
+				const [pendingInvite] = await tx
+					.select({ id: organizationInvites.id })
+					.from(organizationInvites)
+					.where(
+						and(
+							eq(organizationInvites.invitedEmail, userData.email),
+							eq(organizationInvites.status, "pending"),
+						),
+					)
+					.limit(1);
+
+				await tx.insert(users).values({
+					id: userId,
+					email: userData.email,
+					emailVerified: userData.emailVerified,
+					name: userData.name,
+					image: userData.image,
+					activeOrganizationId: Organisation.OrganisationId.make(""),
+				});
+
+				if (pendingInvite) {
+					return;
+				}
+
+				const organizationId = Organisation.OrganisationId.make(nanoId());
+
+				await tx.insert(organizations).values({
+					id: organizationId,
+					ownerId: userId,
+					name: "My Organization",
+				});
+
+				await tx.insert(organizationMembers).values({
+					id: nanoId(),
+					organizationId,
+					userId,
+					role: "owner",
+				});
+
+				await tx
+					.update(users)
+					.set({
+						activeOrganizationId: organizationId,
+						defaultOrgId: organizationId,
+					})
+					.where(eq(users.id, userId));
 			});
+
 			const rows = await db
 				.select()
 				.from(users)
-				.where(eq(users.email, userData.email))
+				.where(eq(users.id, userId))
 				.limit(1);
-			const row = rows[0];
+			let row = rows[0];
 			if (!row) throw new Error("User not found");
 
 			if (STRIPE_AVAILABLE()) {
@@ -80,6 +130,15 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 						}),
 					})
 					.where(eq(users.id, row.id));
+
+				const [updatedRow] = await db
+					.select()
+					.from(users)
+					.where(eq(users.id, row.id))
+					.limit(1);
+				if (updatedRow) {
+					row = updatedRow;
+				}
 			}
 
 			return row;
@@ -120,11 +179,14 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 			const row = rows[0];
 			return row?.users ?? null;
 		},
-		async updateUser({ id, ...userData }) {
+		async updateUser({ id, image, ...userData }) {
 			if (!id) throw new Error("User not found");
 			await db
 				.update(users)
-				.set(userData)
+				.set({
+					...userData,
+					image: image as ImageUpload.ImageUrlOrKey | null,
+				})
 				.where(eq(users.id, User.UserId.make(id)));
 			const rows = await db
 				.select()

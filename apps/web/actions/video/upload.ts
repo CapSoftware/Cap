@@ -10,7 +10,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
-import { S3Buckets } from "@cap/web-backend";
+import { AwsCredentials, S3Buckets } from "@cap/web-backend";
 import { type Folder, type Organisation, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -60,10 +60,9 @@ async function getVideoUploadPresignedUrl({
 			if (distributionId) {
 				const cloudfront = new CloudFrontClient({
 					region: serverEnv().CAP_AWS_REGION || "us-east-1",
-					credentials: {
-						accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
-						secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
-					},
+					credentials: await runPromise(
+						Effect.map(AwsCredentials, (c) => c.credentials),
+					),
 				});
 
 				const pathToInvalidate = "/" + fileKey;
@@ -113,21 +112,10 @@ async function getVideoUploadPresignedUrl({
 				Option.fromNullable(customBucket?.id),
 			);
 
-			const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
+			return yield* bucket.getPresignedPostUrl(fileKey, {
 				Fields,
 				Expires: 1800,
 			});
-
-			const customEndpoint = serverEnv().CAP_AWS_ENDPOINT;
-			if (customEndpoint && !customEndpoint.includes("amazonaws.com")) {
-				if (serverEnv().S3_PATH_STYLE) {
-					presignedPostData.url = `${customEndpoint}/${bucket.bucketName}`;
-				} else {
-					presignedPostData.url = customEndpoint;
-				}
-			}
-
-			return presignedPostData;
 		}).pipe(runPromise);
 
 		return { presignedPostData };

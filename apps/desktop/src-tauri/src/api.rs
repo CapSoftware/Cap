@@ -5,9 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use tauri::AppHandle;
+use tracing::{instrument, trace};
 
 use crate::web_api::{AuthedApiError, ManagerExt};
 
+#[instrument(skip(app))]
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
@@ -45,12 +47,13 @@ pub async fn upload_multipart_initiate(
         .map(|data| data.upload_id)
 }
 
+#[instrument(skip(app, upload_id))]
 pub async fn upload_multipart_presign_part(
     app: &AppHandle,
     video_id: &str,
     upload_id: &str,
     part_number: u32,
-    md5_sum: &str,
+    md5_sum: Option<&str>,
 ) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -58,16 +61,21 @@ pub async fn upload_multipart_presign_part(
         presigned_url: String,
     }
 
+    let mut body = serde_json::Map::from_iter([
+        ("videoId".to_string(), json!(video_id)),
+        ("uploadId".to_string(), json!(upload_id)),
+        ("partNumber".to_string(), json!(part_number)),
+    ]);
+
+    if let Some(md5_sum) = md5_sum {
+        body.insert("md5Sum".to_string(), json!(md5_sum));
+    }
+
     let resp = app
         .authed_api_request("/api/upload/multipart/presign-part", |c, url| {
             c.post(url)
                 .header("Content-Type", "application/json")
-                .json(&serde_json::json!({
-                    "videoId": video_id,
-                    "uploadId": upload_id,
-                    "partNumber": part_number,
-                    "md5Sum": md5_sum
-                }))
+                .json(&serde_json::json!(body))
         })
         .await
         .map_err(|err| format!("api/upload_multipart_presign_part/request: {err}"))?;
@@ -87,7 +95,7 @@ pub async fn upload_multipart_presign_part(
         .map(|data| data.presigned_url)
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UploadedPart {
     pub part_number: u32,
@@ -108,6 +116,7 @@ pub struct S3VideoMeta {
     pub fps: Option<f32>,
 }
 
+#[instrument(skip_all)]
 pub async fn upload_multipart_complete(
     app: &AppHandle,
     video_id: &str,
@@ -129,6 +138,8 @@ pub async fn upload_multipart_complete(
     pub struct Response {
         location: Option<String>,
     }
+
+    trace!("Completing multipart upload");
 
     let resp = app
         .authed_api_request("/api/upload/multipart/complete", |c, url| {
@@ -159,7 +170,7 @@ pub async fn upload_multipart_complete(
         .map(|data| data.location)
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresignedS3PutRequestMethod {
     #[allow(unused)]
@@ -167,7 +178,7 @@ pub enum PresignedS3PutRequestMethod {
     Put,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresignedS3PutRequest {
     pub video_id: String,
@@ -177,6 +188,7 @@ pub struct PresignedS3PutRequest {
     pub meta: Option<S3VideoMeta>,
 }
 
+#[instrument(skip(app))]
 pub async fn upload_signed(
     app: &AppHandle,
     body: PresignedS3PutRequest,
@@ -214,6 +226,7 @@ pub async fn upload_signed(
         .map(|data| data.presigned_put_data.url)
 }
 
+#[instrument(skip(app))]
 pub async fn desktop_video_progress(
     app: &AppHandle,
     video_id: &str,

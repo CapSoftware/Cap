@@ -52,6 +52,22 @@ export function Timeline() {
 			});
 			resume();
 		}
+
+		const checkBounds = () => {
+			if (timelineBounds.width && timelineBounds.width > 0) {
+				const minSegmentPixels = 80;
+				const secondsPerPixel = 1 / minSegmentPixels;
+				const desiredZoom = timelineBounds.width * secondsPerPixel;
+
+				if (transform().zoom > desiredZoom) {
+					transform().updateZoom(desiredZoom, 0);
+				}
+			} else {
+				setTimeout(checkBounds, 10);
+			}
+		};
+
+		checkBounds();
 	});
 
 	if (
@@ -125,9 +141,19 @@ export function Timeline() {
 			if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "clip") {
-				projectActions.deleteClipSegment(selection.index);
+				// Delete all selected clips in reverse order
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteClipSegment(idx);
+					});
 			} else if (selection.type === "scene") {
-				projectActions.deleteSceneSegment(selection.index);
+				// Delete all selected scenes in reverse order
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteSceneSegment(idx);
+					});
 			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			// Allow cutting while playing: use playbackTime when previewTime is null
@@ -176,6 +202,7 @@ export function Timeline() {
 						transform().position + secsPerPixel() * (e.clientX - left!),
 					);
 				}}
+				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
 				onMouseLeave={() => {
 					setEditorState("previewTime", null);
 				}}
@@ -227,7 +254,7 @@ export function Timeline() {
 							style={{
 								left: `${TIMELINE_PADDING}px`,
 								transform: `translateX(${
-									(time() - transform().position) / secsPerPixel()
+									(time() - transform().position) / secsPerPixel() - 0.5
 								}px)`,
 							}}
 						>

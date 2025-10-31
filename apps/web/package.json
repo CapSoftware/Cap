@@ -6,7 +6,7 @@
 		"dev": "dotenv -e ../../.env -- next dev",
 		"build": "next build --turbopack",
 		"build:web": "next build --turbopack",
-		"build:web:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
+		"build:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
 		"start": "next start",
 		"compress-images": "bash tools/compress-images.sh"
 	},

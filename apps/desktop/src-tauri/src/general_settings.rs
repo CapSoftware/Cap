@@ -4,7 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
-use tracing::error;
+use tracing::{error, instrument};
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -116,10 +116,12 @@ pub struct GeneralSettingsStore {
     pub enable_new_recording_flow: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
-    #[serde(default = "default_enable_new_uploader", skip_serializing_if = "no")]
-    pub enable_new_uploader: bool,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
+    #[serde(default)]
+    pub delete_instant_recordings_after_upload: bool,
+    #[serde(default = "default_instant_mode_max_resolution")]
+    pub instant_mode_max_resolution: u32,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -131,16 +133,16 @@ fn default_enable_new_recording_flow() -> bool {
     cfg!(debug_assertions)
 }
 
-fn default_enable_new_uploader() -> bool {
-    true
-}
-
 fn no(_: &bool) -> bool {
     false
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_instant_mode_max_resolution() -> u32 {
+    1920
 }
 
 fn default_server_url() -> String {
@@ -182,8 +184,9 @@ impl Default for GeneralSettingsStore {
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
-            enable_new_uploader: default_enable_new_uploader(),
             excluded_windows: default_excluded_windows(),
+            delete_instant_recordings_after_upload: false,
+            instant_mode_max_resolution: 1920,
         }
     }
 }
@@ -256,6 +259,7 @@ pub fn init(app: &AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub fn get_default_excluded_windows() -> Vec<WindowExclusion> {
     default_excluded_windows()
 }

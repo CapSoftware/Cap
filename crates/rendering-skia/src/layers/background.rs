@@ -26,7 +26,7 @@ pub enum Background {
 impl From<BackgroundSource> for Background {
     fn from(source: BackgroundSource) -> Self {
         match source {
-            BackgroundSource::Color { value } => Background::Color(value),
+            BackgroundSource::Color { value, .. } => Background::Color(value),
             BackgroundSource::Gradient { from, to, angle } => {
                 Background::Gradient { from, to, angle }
             }
@@ -359,6 +359,7 @@ mod tests {
             background: BackgroundSource::Color {
                 value: [65535, 0, 0],
             },
+            border: None,
         };
 
         // Should need update on first check
@@ -382,6 +383,7 @@ mod tests {
             background: BackgroundSource::Color {
                 value: [0, 65535, 0],
             },
+            border: None,
         };
         assert!(layer.needs_update(&new_uniforms));
     }

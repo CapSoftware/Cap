@@ -7,11 +7,9 @@ use cap_project::{
     TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
     cursor::CursorEvents,
 };
-use cap_recording::PipelineDoneError;
 use cap_recording::feeds::camera::CameraFeedLock;
-use cap_recording::feeds::microphone::MicrophoneFeedLock;
 use cap_recording::{
-    RecordingError, RecordingMode,
+    RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
     sources::{
@@ -213,6 +211,7 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
     tokio::task::spawn_blocking(|| {
         tauri::async_runtime::block_on(collect_displays_with_thumbnails())
@@ -223,6 +222,7 @@ pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThu
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
     tokio::task::spawn_blocking(
         || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
@@ -467,11 +467,12 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
+
                 #[cfg(target_os = "macos")]
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
                     .map_err(|e| format!("GetShareableContent: {e}"))?
-                    .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
+                    .ok_or_else(|| "GetShareableContent/NotAvailable".to_string())?;
 
                 let common = InProgressRecordingCommon {
                     target_name,
@@ -534,19 +535,17 @@ pub async fn start_recording(
                             return Err("Video upload info not found".to_string());
                         };
 
-                        let progressive_upload = InstantMultipartUpload::spawn(
-                            app_handle,
-                            recording_dir.join("content/output.mp4"),
-                            video_upload_info.clone(),
-                            Some(finish_upload_rx),
-                            recording_dir.clone(),
-                        );
-
                         let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )
-                        .with_system_audio(inputs.capture_system_audio);
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_max_output_size(
+                            general_settings
+                                .as_ref()
+                                .map(|settings| settings.instant_mode_max_resolution)
+                                .unwrap_or_else(|| 1920),
+                        );
 
                         #[cfg(target_os = "macos")]
                         {
@@ -568,6 +567,14 @@ pub async fn start_recording(
                                 e.to_string()
                             })?;
 
+                        let progressive_upload = InstantMultipartUpload::spawn(
+                            app_handle,
+                            recording_dir.join("content/output.mp4"),
+                            video_upload_info.clone(),
+                            recording_dir.clone(),
+                            Some(finish_upload_rx),
+                        );
+
                         InProgressRecording::Instant {
                             handle,
                             progressive_upload,
@@ -586,13 +593,13 @@ pub async fn start_recording(
             }
         })
         .await
-        .map_err(|e| format!("Failed to spawn recording actor: {e}"))?
+        .map_err(|e| format!("Failed to spawn recording actor: {e}"))
     }
     .await;
 
     let actor_done_fut = match spawn_actor_res {
-        Ok(rx) => rx,
-        Err(err) => {
+        Ok(Ok(rx)) => rx,
+        Ok(Err(err)) | Err(err) => {
             let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
 
             let mut dialog = MessageDialogBuilder::new(
@@ -666,6 +673,7 @@ pub async fn start_recording(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -678,6 +686,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -690,6 +699,7 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
@@ -706,6 +716,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn restart_recording(
     app: AppHandle,
     state: MutableState<'_, App>,
@@ -727,28 +738,36 @@ pub async fn restart_recording(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, state))]
 pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let recording_data = {
         let mut app_state = state.write().await;
-        if let Some(recording) = app_state.clear_current_recording() {
-            let recording_dir = recording.recording_dir().clone();
-            let video_id = match &recording {
-                InProgressRecording::Instant {
-                    video_upload_info, ..
-                } => Some(video_upload_info.id.clone()),
-                _ => None,
-            };
-            Some((recording, recording_dir, video_id))
-        } else {
-            None
-        }
+        app_state.clear_current_recording()
     };
 
-    if let Some((_, recording_dir, video_id)) = recording_data {
+    if let Some(recording) = recording_data {
+        let recording_dir = recording.recording_dir().clone();
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
-        // let _ = recording.cancel().await;
+        let video_id = match &recording {
+            InProgressRecording::Instant {
+                video_upload_info,
+                progressive_upload,
+                ..
+            } => {
+                debug!(
+                    "User deleted recording. Aborting multipart upload for {:?}",
+                    video_upload_info.id
+                );
+                progressive_upload.handle.abort();
+
+                Some(video_upload_info.id.clone())
+            }
+            _ => None,
+        };
+
+        let _ = recording.cancel().await;
 
         std::fs::remove_dir_all(&recording_dir).ok();
 
@@ -812,7 +831,7 @@ async fn handle_recording_end(
                         }
                     }
                     RecordingMetaInner::Instant(meta) => {
-                        *meta = InstantRecordingMeta::Failed { error: error };
+                        *meta = InstantRecordingMeta::Failed { error };
                     }
                 }
                 project_meta
@@ -945,7 +964,7 @@ async fn handle_recording_finish(
                             .map_err(|err|
                                 error!("Error compressing thumbnail for instant mode progressive upload: {err}")
                             ) {
-                                crate::upload::singlepart_uploader(
+                                let res = crate::upload::singlepart_uploader(
                                     app.clone(),
                                     crate::api::PresignedS3PutRequest {
                                         video_id: video_upload_info.id.clone(),
@@ -955,13 +974,17 @@ async fn handle_recording_finish(
                                     },
                                     bytes.len() as u64,
                                     stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-
                                 )
-                                .await
-                                .map_err(|err| {
-                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
-                                })
-                                .ok();
+                                .await;
+                                if let Err(err) = res {
+	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
+	                                return;
+                                }
+
+                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
+	                                	error!("Failed to remove recording files after upload: {err:?}");
+	                                }
+
                             }
                     } else if let Ok(meta) = build_video_meta(&output_path)
                         .map_err(|err| error!("Error getting video metadata: {}", err))

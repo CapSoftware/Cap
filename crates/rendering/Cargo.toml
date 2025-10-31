@@ -21,6 +21,7 @@ futures-intrusive = "0.5.0"
 image = "0.25.2"
 log = "0.4"
 serde = { workspace = true }
+serde_json = "1.0"
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
@@ -30,6 +31,8 @@ glyphon = "0.9.0"
 tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

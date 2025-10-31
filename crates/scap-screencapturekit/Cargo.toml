@@ -7,6 +7,7 @@ license = "MIT"
 [dependencies]
 futures = { workspace = true }
 tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
@@ -21,3 +22,4 @@ workspace = true
 clap = { version = "4.5.40", features = ["derive"] }
 inquire = "0.7.5"
 scap-targets = { path = "../scap-targets" }
+tokio.workspace = true

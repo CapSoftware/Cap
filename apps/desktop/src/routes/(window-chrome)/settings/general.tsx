@@ -13,8 +13,8 @@ import {
 	createEffect,
 	createMemo,
 	createResource,
-	createSignal,
 	For,
+	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -36,7 +36,7 @@ import {
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
-import { Setting, ToggleSetting } from "./Setting";
+import { SettingItem, ToggleSettingItem } from "./Setting";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -61,7 +61,9 @@ const getWindowOptionLabel = (window: CaptureWindow) => {
 	return parts.join(" • ");
 };
 
-const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
+type ExtendedGeneralSettingsStore = GeneralSettingsStore;
+
+const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	uploadIndividualFiles: false,
 	hideDockIcon: false,
 	autoCreateShareableLink: false,
@@ -70,13 +72,13 @@ const createDefaultGeneralSettings = (): GeneralSettingsStore => ({
 	enableNewRecordingFlow: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
-	enableNewUploader: false,
 	excludedWindows: [],
+	instantModeMaxResolution: 1920,
 });
 
 const deriveInitialSettings = (
 	store: GeneralSettingsStore | null,
-): GeneralSettingsStore => {
+): ExtendedGeneralSettingsStore => {
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
@@ -85,6 +87,16 @@ const deriveInitialSettings = (
 		...store,
 	};
 };
+
+const INSTANT_MODE_RESOLUTION_OPTIONS = [
+	{ value: 1280, label: "720p" },
+	{ value: 1920, label: "1080p" },
+	{ value: 2560, label: "1440p" },
+	{ value: 3840, label: "4K" },
+] satisfies {
+	value: number;
+	label: string;
+}[];
 
 export default function GeneralSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -168,7 +180,7 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
-	const [settings, setSettings] = createStore<GeneralSettingsStore>(
+	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
 		deriveInitialSettings(props.initialStore),
 	);
 
@@ -299,224 +311,32 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		await applyExcludedWindows(defaults);
 	};
 
-	type ToggleSettingItem = {
-		label: string;
-		type: "toggle";
-		description: string;
-		value: boolean;
-		onChange: (value: boolean) => void | Promise<void>;
-		os?: "macos" | "windows" | "linux";
-	};
-
-	type SelectSettingItem = {
-		label: string;
-		type: "select";
-		description: string;
-		value:
-			| MainWindowRecordingStartBehaviour
-			| PostStudioRecordingBehaviour
-			| PostDeletionBehaviour
-			| number;
-		onChange: (
-			value:
-				| MainWindowRecordingStartBehaviour
-				| PostStudioRecordingBehaviour
-				| PostDeletionBehaviour
-				| number,
-		) => void | Promise<void>;
-	};
-
-	type SettingItem = ToggleSettingItem | SelectSettingItem;
-
-	type SettingsGroup = {
-		title: string;
-		os?: "macos" | "windows" | "linux";
-		titleStyling?: string;
-		items: SettingItem[];
-	};
-
-	// Static settings groups structure to preserve component identity
-	const settingsGroups: SettingsGroup[] = [
-		{
-			title: "Cap Pro",
-			titleStyling:
-				"bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg",
-			items: [
-				{
-					label: "Disable automatic link opening",
-					type: "toggle",
-					description:
-						"When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
-					get value() {
-						return !!settings.disableAutoOpenLinks;
-					},
-					onChange: (value: boolean) =>
-						handleChange("disableAutoOpenLinks", value),
-				},
-			],
-		},
-		{
-			title: "App",
-			os: "macos",
-			items: [
-				{
-					label: "Hide dock icon",
-					type: "toggle",
-					os: "macos",
-					description:
-						"The dock icon will be hidden when there are no windows available to close.",
-					get value() {
-						return !!settings.hideDockIcon;
-					},
-					onChange: (value: boolean) => handleChange("hideDockIcon", value),
-				},
-				{
-					label: "Enable system notifications",
-					type: "toggle",
-					os: "macos",
-					description:
-						"Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
-					get value() {
-						return !!settings.enableNotifications;
-					},
-					onChange: async (value: boolean) => {
-						if (value) {
-							// Check current permission state
-							console.log("Checking notification permission status");
-							const permissionGranted = await isPermissionGranted();
-							console.log(`Current permission status: ${permissionGranted}`);
-
-							if (!permissionGranted) {
-								// Request permission if not granted
-								console.log("Permission not granted, requesting permission");
-								const permission = await requestPermission();
-								console.log(`Permission request result: ${permission}`);
-								if (permission !== "granted") {
-									// If permission denied, don't enable the setting
-									console.log("Permission denied, aborting setting change");
-									return;
-								}
-							}
-						}
-						handleChange("enableNotifications", value);
-					},
-				},
-				{
-					label: "Enable haptics",
-					type: "toggle",
-					os: "macos",
-					description: "Use haptics on Force Touch™ trackpads",
-					get value() {
-						return !!settings.hapticsEnabled;
-					},
-					onChange: (value: boolean) => handleChange("hapticsEnabled", value),
-				},
-			],
-		},
-		{
-			title: "Recording",
-			items: [
-				{
-					label: "Recording countdown",
-					description: "Countdown before recording starts",
-					type: "select",
-					get value() {
-						return settings.recordingCountdown ?? 0;
-					},
-					onChange: (
-						value:
-							| MainWindowRecordingStartBehaviour
-							| PostStudioRecordingBehaviour
-							| PostDeletionBehaviour
-							| number,
-					) => handleChange("recordingCountdown", value as number),
-				},
-				{
-					label: "Main window recording start behaviour",
-					description: "The main window recording start behaviour",
-					type: "select",
-					get value() {
-						return settings.mainWindowRecordingStartBehaviour ?? "close";
-					},
-					onChange: (
-						value:
-							| MainWindowRecordingStartBehaviour
-							| PostStudioRecordingBehaviour
-							| PostDeletionBehaviour
-							| number,
-					) =>
-						handleChange(
-							"mainWindowRecordingStartBehaviour",
-							value as MainWindowRecordingStartBehaviour,
-						),
-				},
-				{
-					label: "Studio recording finish behaviour",
-					description: "The studio recording finish behaviour",
-					type: "select",
-					get value() {
-						return settings.postStudioRecordingBehaviour ?? "openEditor";
-					},
-					onChange: (
-						value:
-							| MainWindowRecordingStartBehaviour
-							| PostStudioRecordingBehaviour
-							| PostDeletionBehaviour
-							| number,
-					) =>
-						handleChange(
-							"postStudioRecordingBehaviour",
-							value as PostStudioRecordingBehaviour,
-						),
-				},
-				{
-					label: "After deleting recording behaviour",
-					description:
-						"Should Cap reopen after deleting an in progress recording?",
-					type: "select",
-					get value() {
-						return settings.postDeletionBehaviour ?? "doNothing";
-					},
-					onChange: (
-						value:
-							| MainWindowRecordingStartBehaviour
-							| PostStudioRecordingBehaviour
-							| PostDeletionBehaviour
-							| number,
-					) =>
-						handleChange(
-							"postDeletionBehaviour",
-							value as PostDeletionBehaviour,
-						),
-				},
-			],
-		},
-	];
-
 	// Helper function to render select dropdown for recording behaviors
-	const renderRecordingSelect = (
-		label: string,
-		description: string,
-		getValue: () =>
+	const SelectSettingItem = <
+		T extends
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
 			| number,
-		onChange: (value: any) => void,
-		options: { text: string; value: any }[],
-	) => {
+	>(props: {
+		label: string;
+		description: string;
+		value: T;
+		onChange: (value: T) => void;
+		options: { text: string; value: any }[];
+	}) => {
 		return (
-			<Setting label={label} description={description}>
+			<SettingItem label={props.label} description={props.description}>
 				<button
 					type="button"
 					class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
 					onClick={async () => {
-						const currentValue = getValue();
-						const items = options.map((option) =>
+						const currentValue = props.value;
+						const items = props.options.map((option) =>
 							CheckMenuItem.new({
 								text: option.text,
 								checked: currentValue === option.value,
-								action: () => onChange(option.value),
+								action: () => props.onChange(option.value),
 							}),
 						);
 						const menu = await Menu.new({
@@ -527,13 +347,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					}}
 				>
 					{(() => {
-						const currentValue = getValue();
-						const option = options.find((opt) => opt.value === currentValue);
+						const currentValue = props.value;
+						const option = props.options.find(
+							(opt) => opt.value === currentValue,
+						);
 						return option ? option.text : currentValue;
 					})()}
 					<IconCapChevronDown class="size-4" />
 				</button>
-			</Setting>
+			</SettingItem>
 		);
 	};
 
@@ -548,109 +370,139 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					}}
 				/>
 
-				<For each={settingsGroups}>
-					{(group) => (
-						<Show when={group.os === ostype || !group.os}>
-							<div>
-								<h3
-									class={cx(
-										"mb-3 text-sm text-gray-12 w-fit",
-										group.titleStyling,
-									)}
-								>
-									{group.title}
-								</h3>
-								<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-									<For each={group.items}>
-										{(item) => {
-											// Check OS compatibility
-											if (
-												item.type === "toggle" &&
-												item.os &&
-												item.os !== ostype
-											) {
-												return null;
-											}
+				<SettingGroup
+					title="Cap Pro"
+					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
+				>
+					<ToggleSettingItem
+						label="Automatically open shareable links"
+						description="Whether Cap should automatically open instant recordings in your browser"
+						value={!settings.disableAutoOpenLinks}
+						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
+					/>
+				</SettingGroup>
 
-											if (item.type === "toggle") {
-												return (
-													<ToggleSetting
-														pro={group.title === "Cap Pro"}
-														label={item.label}
-														description={item.description}
-														value={item.value}
-														onChange={item.onChange}
-													/>
-												);
-											} else if (item.type === "select") {
-												if (
-													item.label === "Main window recording start behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Close", value: "close" },
-															{ text: "Minimise", value: "minimise" },
-														],
-													);
-												} else if (
-													item.label === "Studio recording finish behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Open editor", value: "openEditor" },
-															{
-																text: "Show in overlay",
-																value: "showOverlay",
-															},
-														],
-													);
-												} else if (item.label === "Recording countdown") {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Off", value: 0 },
-															{ text: "3 seconds", value: 3 },
-															{ text: "5 seconds", value: 5 },
-															{ text: "10 seconds", value: 10 },
-														],
-													);
-												} else if (
-													item.label === "After deleting recording behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Do Nothing", value: "doNothing" },
-															{
-																text: "Reopen Recording Window",
-																value: "reopenRecordingWindow",
-															},
-														],
-													);
-												}
-											}
-											return null;
-										}}
-									</For>
-								</div>
-							</div>
-						</Show>
-					)}
-				</For>
+				{ostype === "macos" && (
+					<SettingGroup title="App">
+						<ToggleSettingItem
+							label="Always show dock icon"
+							description="Show Cap in the dock even when there are no windows available to close."
+							value={!settings.hideDockIcon}
+							onChange={(v) => handleChange("hideDockIcon", !v)}
+						/>
+						<ToggleSettingItem
+							label="Enable system notifications"
+							description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."
+							value={!!settings.enableNotifications}
+							onChange={async (value) => {
+								if (value) {
+									// Check current permission state
+									console.log("Checking notification permission status");
+									const permissionGranted = await isPermissionGranted();
+									console.log(
+										`Current permission status: ${permissionGranted}`,
+									);
+
+									if (!permissionGranted) {
+										// Request permission if not granted
+										console.log(
+											"Permission not granted, requesting permission",
+										);
+										const permission = await requestPermission();
+										console.log(`Permission request result: ${permission}`);
+										if (permission !== "granted") {
+											// If permission denied, don't enable the setting
+											console.log("Permission denied, aborting setting change");
+											return;
+										}
+									}
+								}
+								handleChange("enableNotifications", value);
+							}}
+						/>
+						<ToggleSettingItem
+							label="Enable haptics"
+							description="Use haptics on Force Touch™ trackpads"
+							value={!!settings.hapticsEnabled}
+							onChange={(v) => handleChange("hapticsEnabled", v)}
+						/>
+					</SettingGroup>
+				)}
+
+				<SettingGroup title="Recording">
+					<SelectSettingItem
+						label="Instant mode max resolution"
+						description="Choose the maximum resolution for Instant Mode recordings."
+						value={settings.instantModeMaxResolution ?? 1920}
+						onChange={(value) =>
+							handleChange("instantModeMaxResolution", value)
+						}
+						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
+							text: option.label,
+							value: option.value,
+						}))}
+					/>
+					<SelectSettingItem
+						label="Recording countdown"
+						description="Countdown before recording starts"
+						value={settings.recordingCountdown ?? 0}
+						onChange={(value) => handleChange("recordingCountdown", value)}
+						options={[
+							{ text: "Off", value: 0 },
+							{ text: "3 seconds", value: 3 },
+							{ text: "5 seconds", value: 5 },
+							{ text: "10 seconds", value: 10 },
+						]}
+					/>
+					<SelectSettingItem
+						label="Main window recording start behaviour"
+						description="The main window recording start behaviour"
+						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
+						onChange={(value) =>
+							handleChange("mainWindowRecordingStartBehaviour", value)
+						}
+						options={[
+							{ text: "Close", value: "close" },
+							{ text: "Minimise", value: "minimise" },
+						]}
+					/>
+					<SelectSettingItem
+						label="Studio recording finish behaviour"
+						description="The studio recording finish behaviour"
+						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
+						onChange={(value) =>
+							handleChange("postStudioRecordingBehaviour", value)
+						}
+						options={[
+							{ text: "Open editor", value: "openEditor" },
+							{
+								text: "Show in overlay",
+								value: "showOverlay",
+							},
+						]}
+					/>
+					<SelectSettingItem
+						label="After deleting recording behaviour"
+						description="Should Cap reopen after deleting an in progress recording?"
+						value={settings.postDeletionBehaviour ?? "doNothing"}
+						onChange={(value) => handleChange("postDeletionBehaviour", value)}
+						options={[
+							{ text: "Do Nothing", value: "doNothing" },
+							{
+								text: "Reopen Recording Window",
+								value: "reopenRecordingWindow",
+							},
+						]}
+					/>
+					<ToggleSettingItem
+						label="Delete instant mode recordings after upload"
+						description="After finishing an instant recording, should Cap will delete it from your device?"
+						value={settings.deleteInstantRecordingsAfterUpload ?? false}
+						onChange={(v) =>
+							handleChange("deleteInstantRecordingsAfterUpload", v)
+						}
+					/>
+				</SettingGroup>
 
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
@@ -686,6 +538,21 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	);
 }
 
+function SettingGroup(
+	props: ParentProps<{ title: string; titleStyling?: string }>,
+) {
+	return (
+		<div>
+			<h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>
+				{props.title}
+			</h3>
+			<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+				{props.children}
+			</div>
+		</div>
+	);
+}
+
 function ServerURLSetting(props: {
 	value: string;
 	onChange: (v: string) => void;
@@ -696,7 +563,7 @@ function ServerURLSetting(props: {
 		<div class="flex flex-col gap-3">
 			<h3 class="text-sm text-gray-12 w-fit">Self host</h3>
 			<div class="flex flex-col gap-2 px-4 rounded-xl border border-gray-3 bg-gray-2">
-				<Setting
+				<SettingItem
 					label="Cap Server URL"
 					description="This setting should only be changed if you are self hosting your own instance of Cap Web."
 				>
@@ -716,7 +583,7 @@ function ServerURLSetting(props: {
 							Update
 						</Button>
 					</div>
-				</Setting>
+				</SettingItem>
 			</div>
 		</div>
 	);

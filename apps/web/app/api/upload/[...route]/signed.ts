@@ -4,16 +4,22 @@ import {
 } from "@aws-sdk/client-cloudfront";
 import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import * as Db from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
+import { AwsCredentials, S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+
 import { runPromise } from "@/lib/server";
+import {
+	isAtLeastSemver,
+	isFromDesktopSemver,
+	UPLOAD_PROGRESS_VERSION,
+} from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
@@ -50,8 +56,8 @@ app.post(
 		try {
 			const [customBucket] = await db()
 				.select()
-				.from(s3Buckets)
-				.where(eq(s3Buckets.ownerId, user.id));
+				.from(Db.s3Buckets)
+				.where(eq(Db.s3Buckets.ownerId, user.id));
 
 			const s3Config = customBucket
 				? {
@@ -73,10 +79,9 @@ app.post(
 
 					const cloudfront = new CloudFrontClient({
 						region: serverEnv().CAP_AWS_REGION || "us-east-1",
-						credentials: {
-							accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY || "",
-							secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY || "",
-						},
+						credentials: await runPromise(
+							Effect.map(AwsCredentials, (c) => c.credentials),
+						),
 					});
 
 					const pathToInvalidate = "/" + fileKey;
@@ -156,21 +161,31 @@ app.post(
 			const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
 
 			const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
-			if (videoIdToUse)
+			if (videoIdToUse) {
+				const videoId = Video.VideoId.make(videoIdToUse);
 				await db()
-					.update(videos)
+					.update(Db.videos)
 					.set({
-						duration: updateIfDefined(durationInSecs, videos.duration),
-						width: updateIfDefined(width, videos.width),
-						height: updateIfDefined(height, videos.height),
-						fps: updateIfDefined(fps, videos.fps),
+						duration: updateIfDefined(durationInSecs, Db.videos.duration),
+						width: updateIfDefined(width, Db.videos.width),
+						height: updateIfDefined(height, Db.videos.height),
+						fps: updateIfDefined(fps, Db.videos.fps),
 					})
 					.where(
-						and(
-							eq(videos.id, Video.VideoId.make(videoIdToUse)),
-							eq(videos.ownerId, user.id),
-						),
+						and(eq(Db.videos.id, videoId), eq(Db.videos.ownerId, user.id)),
 					);
+
+				// i hate this but it'll have to do
+				const clientSupportsUploadProgress = isFromDesktopSemver(
+					c.req,
+					UPLOAD_PROGRESS_VERSION,
+				);
+				if (fileKey.endsWith("result.mp4") && clientSupportsUploadProgress)
+					await db()
+						.update(Db.videoUploads)
+						.set({ mode: "singlepart" })
+						.where(eq(Db.videoUploads.videoId, videoId));
+			}
 
 			if (method === "post") return c.json({ presignedPostData: data! });
 			else return c.json({ presignedPutData: data! });

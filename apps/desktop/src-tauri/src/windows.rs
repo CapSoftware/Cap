@@ -18,7 +18,7 @@ use tauri::{
 };
 use tauri_specta::Event;
 use tokio::sync::RwLock;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 use crate::{
     App, ArcLock, RequestScreenCapturePrewarm, fake_window,
@@ -178,7 +178,7 @@ impl CapWindowId {
     }
 }
 
-#[derive(Clone, Type, Deserialize)]
+#[derive(Debug, Clone, Type, Deserialize)]
 pub enum ShowCapWindow {
     Setup,
     Main {
@@ -300,6 +300,9 @@ impl ShowCapWindow {
                 let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
+                let is_hovered_display = scap_targets::Display::get_containing_cursor()
+                    .map(|d| d.id())
+                    == Some(display.id());
 
                 let title = CapWindowId::TargetSelectOverlay {
                     display_id: display_id.clone(),
@@ -310,7 +313,7 @@ impl ShowCapWindow {
                 let mut window_builder = self
                     .window_builder(
                         app,
-                        format!("/target-select-overlay?displayId={display_id}"),
+                        format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}"),
                     )
                     .maximized(false)
                     .resizable(false)
@@ -816,6 +819,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(window))]
 pub fn set_theme(window: tauri::Window, theme: AppTheme) {
     let _ = window.set_theme(match theme {
         AppTheme::System => None,
@@ -832,6 +836,7 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(_window))]
 pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
     position_traffic_lights_impl(
@@ -881,6 +886,7 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
         if let Ok(id) = CapWindowId::from_str(&label) {
@@ -963,6 +969,7 @@ impl MonitorExt for Display {
 
 #[specta::specta]
 #[tauri::command(async)]
+#[instrument(skip(_window))]
 pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     #[cfg(target_os = "macos")]
     {

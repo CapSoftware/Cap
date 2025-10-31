@@ -1,6 +1,5 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_timestamp::Timestamp;
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -69,6 +68,13 @@ impl ScreenCaptureTarget {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
+        }
+    }
+
+    pub fn window(&self) -> Option<WindowId> {
+        match self {
+            Self::Window { id } => Some(id.clone()),
+            _ => None,
         }
     }
 
@@ -246,13 +252,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
 #[derive(Clone, Debug)]
 pub struct Config {
     display: DisplayId,
-    #[cfg(windows)]
-    crop_bounds: Option<PhysicalBounds>,
-    #[cfg(target_os = "macos")]
-    crop_bounds: Option<LogicalBounds>,
+    crop_bounds: Option<CropBounds>,
     fps: u32,
     show_cursor: bool,
 }
+
+#[cfg(target_os = "macos")]
+pub type CropBounds = LogicalBounds;
+
+#[cfg(windows)]
+pub type CropBounds = PhysicalBounds;
 
 impl Config {
     pub fn fps(&self) -> u32 {
@@ -273,7 +282,8 @@ pub enum ScreenCaptureInitError {
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
-        target: &ScreenCaptureTarget,
+        display: scap_targets::Display,
+        crop_bounds: Option<CropBounds>,
         show_cursor: bool,
         max_fps: u32,
         start_time: SystemTime,
@@ -284,90 +294,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let display = target.display().ok_or(ScreenCaptureInitError::NoDisplay)?;
-
-        let fps = max_fps.min(display.refresh_rate() as u32);
-
-        let crop_bounds = match target {
-            ScreenCaptureTarget::Display { .. } => None,
-            ScreenCaptureTarget::Window { id } => {
-                let window = Window::from_id(id).ok_or(ScreenCaptureInitError::NoWindow)?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    let raw_display_bounds = display
-                        .raw_handle()
-                        .logical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let raw_window_bounds = window
-                        .raw_handle()
-                        .logical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(LogicalBounds::new(
-                        LogicalPosition::new(
-                            raw_window_bounds.position().x() - raw_display_bounds.position().x(),
-                            raw_window_bounds.position().y() - raw_display_bounds.position().y(),
-                        ),
-                        raw_window_bounds.size(),
-                    ))
-                }
-
-                #[cfg(windows)]
-                {
-                    let raw_display_position = display
-                        .raw_handle()
-                        .physical_position()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let raw_window_bounds = window
-                        .raw_handle()
-                        .physical_bounds()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(PhysicalBounds::new(
-                        PhysicalPosition::new(
-                            raw_window_bounds.position().x() - raw_display_position.x(),
-                            raw_window_bounds.position().y() - raw_display_position.y(),
-                        ),
-                        raw_window_bounds.size(),
-                    ))
-                }
-            }
-            ScreenCaptureTarget::Area {
-                bounds: relative_bounds,
-                ..
-            } => {
-                #[cfg(target_os = "macos")]
-                {
-                    Some(*relative_bounds)
-                }
-
-                #[cfg(windows)]
-                {
-                    let raw_display_size = display
-                        .physical_size()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-                    let logical_display_size = display
-                        .logical_size()
-                        .ok_or(ScreenCaptureInitError::NoBounds)?;
-
-                    Some(PhysicalBounds::new(
-                        PhysicalPosition::new(
-                            (relative_bounds.position().x() / logical_display_size.width())
-                                * raw_display_size.width(),
-                            (relative_bounds.position().y() / logical_display_size.height())
-                                * raw_display_size.height(),
-                        ),
-                        PhysicalSize::new(
-                            (relative_bounds.size().width() / logical_display_size.width())
-                                * raw_display_size.width(),
-                            (relative_bounds.size().height() / logical_display_size.height())
-                                * raw_display_size.height(),
-                        ),
-                    ))
-                }
-            }
-        };
+        let target_refresh = validated_refresh_rate(display.refresh_rate());
+        let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
         let output_size = crop_bounds
             .and_then(|b| {
@@ -430,15 +358,43 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     }
 }
 
+fn validated_refresh_rate<T>(reported_refresh_rate: T) -> u32
+where
+    T: Into<f64>,
+{
+    let reported_refresh_rate = reported_refresh_rate.into();
+    let fallback_refresh = 60;
+    let rounded_refresh = reported_refresh_rate.round();
+    let is_invalid_refresh = !rounded_refresh.is_finite() || rounded_refresh <= 0.0;
+    let capped_refresh = if is_invalid_refresh {
+        fallback_refresh as f64
+    } else {
+        rounded_refresh.min(500.0)
+    };
+
+    if is_invalid_refresh {
+        warn!(
+            ?reported_refresh_rate,
+            fallback = fallback_refresh,
+            "Display reported invalid refresh rate; falling back to default"
+        );
+        fallback_refresh
+    } else {
+        capped_refresh as u32
+    }
+}
+
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
     scap_targets::Display::list()
         .into_iter()
         .filter_map(|display| {
+            let refresh_rate = validated_refresh_rate(display.raw_handle().refresh_rate());
+
             Some((
                 CaptureDisplay {
                     id: display.id(),
                     name: display.name()?,
-                    refresh_rate: display.raw_handle().refresh_rate() as u32,
+                    refresh_rate,
                 },
                 display,
             ))
@@ -480,13 +436,17 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
             #[cfg(not(target_os = "macos"))]
             let bundle_identifier = None;
 
+            let refresh_rate = v
+                .display()
+                .map(|display| validated_refresh_rate(display.raw_handle().refresh_rate()))?;
+
             Some((
                 CaptureWindow {
                     id: v.id(),
                     name,
                     owner_name,
                     bounds: v.display_relative_logical_bounds()?,
-                    refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
+                    refresh_rate,
                     bundle_identifier,
                 },
                 v,

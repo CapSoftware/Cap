@@ -28,9 +28,11 @@ tracing.workspace = true
 gifski = "1.32"
 imgref = "1.10"
 rgb = "0.8"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
+directories = "6.0.0"
 inquire = "0.7.5"
 tokio.workspace = true
 

@@ -48,7 +48,7 @@ impl BufferedResampler {
             pts += buffer.0.samples() as i64;
         }
 
-        return remaining_samples;
+        remaining_samples
     }
 
     pub fn output(&self) -> resampling::context::Definition {
@@ -56,10 +56,10 @@ impl BufferedResampler {
     }
 
     pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
-        if let Some(min_next_pts) = self.min_next_pts {
-            if let Some(pts) = frame.pts() {
-                frame.set_pts(Some(pts.max(min_next_pts)));
-            }
+        if let Some(min_next_pts) = self.min_next_pts
+            && let Some(pts) = frame.pts()
+        {
+            frame.set_pts(Some(pts.max(min_next_pts)));
         }
 
         let pts = frame.pts().unwrap();
@@ -75,7 +75,7 @@ impl BufferedResampler {
 
         self.buffer.push_back((resampled_frame, resampled_pts));
 
-        while let Some(_) = self.resampler.delay() {
+        while self.resampler.delay().is_some() {
             let mut resampled_frame = ffmpeg::frame::Audio::new(
                 self.resampler.output().format,
                 0,
@@ -89,7 +89,7 @@ impl BufferedResampler {
 
             self.buffer.push_back((resampled_frame, next_pts));
 
-            next_pts = next_pts + samples as i64;
+            next_pts += samples as i64;
         }
 
         self.min_next_pts = Some(pts + frame.samples() as i64);
@@ -279,21 +279,15 @@ mod test {
     const IN_RATE: u32 = 100;
 
     fn create_resampler(out_rate: u32) -> BufferedResampler {
-        let resampler = ffmpeg::software::resampler(
-            (
+        BufferedResampler::new(
+            AudioInfo::new_raw(format::Sample::U8(cap_media_info::Type::Packed), IN_RATE, 1),
+            AudioInfo::new_raw(
                 format::Sample::U8(cap_media_info::Type::Packed),
-                ChannelLayout::MONO,
-                IN_RATE,
-            ),
-            (
-                format::Sample::U8(cap_media_info::Type::Packed),
-                ChannelLayout::MONO,
                 out_rate,
+                1,
             ),
         )
-        .unwrap();
-
-        BufferedResampler::new(resampler)
+        .unwrap()
     }
 
     fn make_input_frame(samples: usize, pts: i64) -> ffmpeg::frame::Audio {

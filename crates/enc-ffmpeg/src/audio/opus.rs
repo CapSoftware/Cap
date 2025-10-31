@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
@@ -8,8 +8,9 @@ use ffmpeg::{
     threading::Config,
 };
 
-use super::AudioEncoder;
-use crate::audio::{base::AudioEncoderBase, buffered_resampler::BufferedResampler};
+use crate::audio::{
+    audio_encoder::AudioEncoder, base::AudioEncoderBase, buffered_resampler::BufferedResampler,
+};
 
 pub struct OpusEncoder {
     base: AudioEncoderBase,
@@ -43,7 +44,10 @@ impl OpusEncoder {
     ) -> Result<Self, OpusEncoderError> {
         let codec = encoder::find_by_name("libopus").ok_or(OpusEncoderError::CodecNotFound)?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
-        encoder_ctx.set_threading(Config::count(4));
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().audio()?;
 
         let rate = {
@@ -56,14 +60,8 @@ impl OpusEncoder {
                 .collect::<Vec<_>>();
             rates.sort();
 
-            let Some(&rate) = rates
-                .iter()
-                .find(|r| **r >= input_config.rate())
-                .or(rates.first())
-            else {
-                return Err(OpusEncoderError::RateNotSupported(input_config.rate()));
-            };
-            rate
+            select_output_rate(input_config.rate(), &rates)
+                .ok_or(OpusEncoderError::RateNotSupported(input_config.rate()))?
         };
 
         let mut output_config = input_config;
@@ -100,9 +98,17 @@ impl OpusEncoder {
         self.base.send_frame(frame, timestamp, output)
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
-        self.base.finish(output)
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.flush(output)
     }
+}
+
+fn select_output_rate(input_rate: i32, supported_rates: &[i32]) -> Option<i32> {
+    supported_rates
+        .iter()
+        .copied()
+        .find(|&rate| rate >= input_rate)
+        .or_else(|| supported_rates.iter().copied().max())
 }
 
 impl AudioEncoder for OpusEncoder {
@@ -110,7 +116,30 @@ impl AudioEncoder for OpusEncoder {
         let _ = self.queue_frame(frame, Duration::MAX, output);
     }
 
-    fn finish(&mut self, output: &mut format::context::Output) {
-        let _ = self.finish(output);
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.flush(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_output_rate;
+
+    #[test]
+    fn chooses_matching_rate_when_available() {
+        let supported = [8_000, 12_000, 16_000, 24_000, 48_000];
+        assert_eq!(select_output_rate(16_000, &supported), Some(16_000));
+    }
+
+    #[test]
+    fn clamps_to_highest_supported_rate_when_input_is_higher() {
+        let supported = [8_000, 12_000, 16_000, 24_000, 48_000];
+        assert_eq!(select_output_rate(96_000, &supported), Some(48_000));
+    }
+
+    #[test]
+    fn clamps_to_lowest_supported_rate_when_input_is_lower() {
+        let supported = [8_000, 12_000, 16_000, 24_000, 48_000];
+        assert_eq!(select_output_rate(4_000, &supported), Some(8_000));
     }
 }

@@ -8,12 +8,12 @@ import {
 	PutBucketPolicyCommand,
 	S3Client,
 } from "@aws-sdk/client-s3";
-import { db } from "@cap/database";
+import { migrateDb } from "@cap/database/migrate";
 import { buildEnv, serverEnv } from "@cap/env";
-import { migrate } from "drizzle-orm/mysql2/migrator";
-import path from "path";
 
 export async function register() {
+	if (process.env.NEXT_PUBLIC_IS_CAP) return;
+
 	console.log("Waiting 5 seconds to run migrations");
 	// Function to trigger migrations with retry logic
 	const triggerMigrations = async (retryCount = 0, maxRetries = 3) => {
@@ -90,9 +90,8 @@ async function runMigrations() {
 			console.log("🔍 DB migrations triggered");
 			console.log("💿 Running DB migrations...");
 
-			await migrate(db() as any, {
-				migrationsFolder: path.join(process.cwd(), "/migrations"),
-			});
+			await migrateDb();
+
 			console.log("💿 Migrations run successfully!");
 		} catch (error) {
 			console.error("🚨 MIGRATION_FAILED", { error });

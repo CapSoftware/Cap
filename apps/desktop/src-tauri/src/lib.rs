@@ -13,9 +13,12 @@ mod flags;
 mod frame_ws;
 mod general_settings;
 mod hotkeys;
+mod http_client;
+mod logging;
 mod notifications;
 mod permissions;
 mod platform;
+mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
@@ -23,7 +26,6 @@ mod target_select_overlay;
 mod thumbnails;
 mod tray;
 mod upload;
-mod upload_legacy;
 mod web_api;
 mod window_exclusion;
 mod windows;
@@ -83,10 +85,8 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-#[cfg(target_os = "macos")]
-use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
-use tracing::{error, info, trace, warn};
+use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
@@ -109,24 +109,17 @@ pub enum RecordingState {
     Active(InProgressRecording),
 }
 
-#[derive(specta::Type, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct App {
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_port: u16,
-    #[serde(skip)]
     camera_preview: CameraPreviewManager,
-    #[serde(skip)]
     handle: AppHandle,
-    #[serde(skip)]
     recording_state: RecordingState,
-    #[serde(skip)]
     recording_logging_handle: LoggingHandle,
-    #[serde(skip)]
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
-    #[serde(skip)]
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
+    logs_dir: PathBuf,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -220,6 +213,7 @@ impl App {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let mic_feed = state.read().await.mic_feed.clone();
 
@@ -245,6 +239,13 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
 #[tauri::command]
 #[specta::specta]
+async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
+    logging::upload_log_file(&app_handle).await
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(app_handle, state))]
 async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
@@ -388,6 +389,7 @@ struct CurrentRecording {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(state))]
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
@@ -575,6 +577,7 @@ async fn create_screenshot(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
     println!("Attempting to copy file from {src} to {dst}");
 
@@ -698,6 +701,7 @@ pub fn is_valid_video(path: &std::path::Path) -> bool {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(clipboard))]
 async fn copy_screenshot_to_clipboard(
     clipboard: MutableState<'_, ClipboardContext>,
     path: String,
@@ -716,6 +720,7 @@ async fn copy_screenshot_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(_app))]
 async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
 
@@ -774,6 +779,7 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn start_playback(
     editor_instance: WindowEditorInstance,
     fps: u32,
@@ -786,6 +792,7 @@ async fn start_playback(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), String> {
     let mut state = editor_instance.state.lock().await;
 
@@ -808,6 +815,7 @@ struct SerializedEditorInstance {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(window))]
 async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
     let CapWindowId::Editor { id } = CapWindowId::from_str(window.label()).unwrap() else {
         return Err("Invalid window".to_string());
@@ -843,12 +851,14 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor))]
 async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
 }
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor))]
 async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> Result<(), String> {
     let mut meta = editor.meta().clone();
     meta.pretty_name = pretty_name;
@@ -857,6 +867,7 @@ async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> R
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, clipboard))]
 async fn copy_video_to_clipboard(
     app: AppHandle,
     clipboard: MutableState<'_, ClipboardContext>,
@@ -874,6 +885,7 @@ async fn copy_video_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, String> {
     let recording_meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
@@ -884,8 +896,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         let raw_duration = input.duration();
         if raw_duration <= 0 {
             return Err(format!(
-                "Unknown or invalid duration for video file: {:?}",
-                path
+                "Unknown or invalid duration for video file: {path:?}"
             ));
         }
 
@@ -953,6 +964,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 fn close_recordings_overlay_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -972,6 +984,7 @@ fn close_recordings_overlay_window(app: AppHandle) {
 
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument(skip(_app))]
 fn focus_captures_panel(_app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -991,6 +1004,7 @@ pub struct FramesRendered {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn set_playhead_position(
     editor_instance: WindowEditorInstance,
     frame_number: u32,
@@ -1006,6 +1020,7 @@ async fn set_playhead_position(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn set_project_config(
     editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
@@ -1019,6 +1034,7 @@ async fn set_project_config(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn generate_zoom_segments_from_clicks(
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<ZoomSegment>, String> {
@@ -1032,6 +1048,7 @@ async fn generate_zoom_segments_from_clicks(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
     if !permissions::do_permissions_check(false)
         .microphone
@@ -1048,7 +1065,7 @@ pub struct UploadProgress {
     progress: f64,
 }
 
-#[derive(Deserialize, Type)]
+#[derive(Debug, Deserialize, Type)]
 pub enum UploadMode {
     Initial {
         pre_created_video: Option<VideoUploadInfo>,
@@ -1058,6 +1075,7 @@ pub enum UploadMode {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, channel))]
 async fn upload_exported_video(
     app: AppHandle,
     path: PathBuf,
@@ -1177,13 +1195,14 @@ async fn upload_exported_video(
                 .map_err(|e| error!("Failed to save recording meta: {e}"))
                 .ok();
 
-            Err(e.to_string().into())
+            Err(e.to_string())
         }
     }
 }
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, clipboard))]
 async fn upload_screenshot(
     app: AppHandle,
     clipboard: MutableState<'_, ClipboardContext>,
@@ -1233,6 +1252,7 @@ async fn upload_screenshot(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, _state))]
 async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
 
@@ -1361,6 +1381,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn save_file_dialog(
     app: AppHandle,
     file_name: String,
@@ -1480,6 +1501,7 @@ pub enum FileType {
 
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument]
 fn get_recording_meta(
     path: PathBuf,
     _file_type: FileType,
@@ -1491,6 +1513,7 @@ fn get_recording_meta(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
     let recordings_dir = recordings_path(&app);
 
@@ -1537,6 +1560,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMeta
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, String> {
     let screenshots_dir = screenshots_path(&app);
 
@@ -1580,6 +1604,7 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, Str
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     println!("Checking upgraded status and updating...");
 
@@ -1643,6 +1668,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app)
         && settings.disable_auto_open_links
@@ -1658,6 +1684,7 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(_app))]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -1680,6 +1707,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(_app))]
 async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     let bundle_id = "com.apple.Terminal";
@@ -1698,12 +1726,14 @@ async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn is_camera_window_open(app: AppHandle) -> bool {
     CapWindowId::Camera.get(&app).is_some()
 }
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Result<(), String> {
     editor_instance
         .modify_and_emit_state(|state| {
@@ -1716,6 +1746,7 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
@@ -1732,6 +1763,7 @@ async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn get_system_audio_waveforms(
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<Vec<f32>>, String> {
@@ -1750,6 +1782,7 @@ async fn get_system_audio_waveforms(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app, editor_instance, window))]
 async fn editor_delete_project(
     app: tauri::AppHandle,
     editor_instance: WindowEditorInstance,
@@ -1772,6 +1805,7 @@ async fn editor_delete_project(
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
     let _ = window.show(&app).await;
     Ok(())
@@ -1779,12 +1813,14 @@ async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String
 
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument]
 fn list_fails() -> Result<BTreeMap<String, bool>, ()> {
     Ok(cap_fail::get_state())
 }
 
 #[tauri::command(async)]
 #[specta::specta]
+#[instrument]
 fn set_fail(name: String, value: bool) {
     cap_fail::set_fail(&name, value)
 }
@@ -1849,13 +1885,18 @@ async fn check_notification_permissions(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Result<(), ()> {
-    app.write().await.server_url = server_url;
+    let mut app = app.write().await;
+    posthog::set_server_url(&server_url);
+    app.server_url = server_url;
+
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn set_camera_preview_state(
     app: MutableState<'_, App>,
     state: CameraPreviewState,
@@ -1871,6 +1912,7 @@ async fn set_camera_preview_state(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, String> {
     let app = app.read().await.camera_feed.clone();
 
@@ -1885,18 +1927,12 @@ async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, 
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
 
-#[tauri::command]
-#[specta::specta]
-async fn refresh_organizations(app: AppHandle) -> Result<(), String> {
-    info!("Manually refreshing organizations");
-    AuthStore::update_auth_plan(&app).await
-}
-
-pub type FilteredRegistry = tracing_subscriber::layer::Layered<
+type FilteredRegistry = tracing_subscriber::layer::Layered<
     tracing_subscriber::filter::FilterFn<fn(m: &tracing::Metadata) -> bool>,
     tracing_subscriber::Registry,
 >;
@@ -1905,12 +1941,14 @@ pub type DynLoggingLayer = Box<dyn tracing_subscriber::Layer<FilteredRegistry> +
 type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>, FilteredRegistry>;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub async fn run(recording_logging_handle: LoggingHandle) {
+pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     ffmpeg::init()
         .map_err(|e| {
             error!("Failed to initialize ffmpeg: {e}");
         })
         .ok();
+
+    posthog::init();
 
     let tauri_context = tauri::generate_context!();
 
@@ -1918,6 +1956,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            upload_logs,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,
@@ -1972,14 +2011,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             windows::position_traffic_lights,
             windows::set_theme,
             global_message_dialog,
-            log_message,
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
             list_fails,
             set_fail,
             update_auth_plan,
-            refresh_organizations,
             set_window_transparent,
             get_editor_meta,
             set_pretty_name,
@@ -2074,8 +2111,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+    let mut builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             trace!("Single instance invoked with args {args:?}");
 
             // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
@@ -2157,6 +2194,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             app.manage(EditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
+            app.manage(http_client::HttpClient::default());
+            app.manage(http_client::RetryableHttpClient::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2184,43 +2223,49 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         ..Default::default()
                     }));
                 });
-
-                // Fetch organizations if missing (for existing users)
-                if auth.organizations.is_empty() {
-                    info!("User is logged in but organizations not cached, fetching...");
-                    let app_clone = app.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = AuthStore::update_auth_plan(&app_clone).await {
-                            error!("Failed to fetch organizations on startup: {}", e);
-                        } else {
-                            info!("Organizations fetched successfully on startup");
-                        }
-                    });
-                }
             }
 
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
-                        .map_err(|err| {
-                            error!(
-                                "Error checking status of new uploader flow from settings: {err}"
-                            )
-                        })
-                        .ok()
-                        .and_then(|v| v.map(|v| v.enable_new_uploader))
-                        .unwrap_or(false);
-                    if is_new_uploader_enabled {
-                        resume_uploads(app)
-                            .await
-                            .map_err(|err| warn!("Error resuming uploads: {err}"))
-                            .ok();
-                    }
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
                 }
             });
 
             {
+                let (server_url, should_update) = if cfg!(debug_assertions)
+                    && let Ok(url) = std::env::var("VITE_SERVER_URL")
+                {
+                    (url, true)
+                } else if let Some(url) = GeneralSettingsStore::get(&app)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.server_url.clone())
+                {
+                    (url, false)
+                } else {
+                    (
+                        option_env!("VITE_SERVER_URL")
+                            .unwrap_or("https://cap.so")
+                            .to_string(),
+                        true,
+                    )
+                };
+
+                // This ensures settings reflects the correct value if it's set at startup
+                if should_update {
+                    GeneralSettingsStore::update(&app, |s| {
+                        s.server_url = server_url.clone();
+                    })
+                    .map_err(|err| warn!("Error updating server URL into settings store: {err}"))
+                    .ok();
+                }
+
+                posthog::set_server_url(&server_url);
+
                 app.manage(Arc::new(RwLock::new(App {
                     camera_ws_port,
                     handle: app.clone(),
@@ -2229,15 +2274,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     recording_logging_handle,
                     mic_feed,
                     camera_feed,
-                    server_url: std::option_env!("VITE_SERVER_URL")
-                        .map(|s| s.to_string())
-                        .or_else(|| {
-                            GeneralSettingsStore::get(&app)
-                                .ok()
-                                .flatten()
-                                .map(|v| v.server_url.clone())
-                        })
-                        .unwrap_or_else(|| "https://cap.so".to_string()),
+                    server_url,
+                    logs_dir: logs_dir.clone(),
                 })));
 
                 app.manage(Arc::new(RwLock::new(
@@ -2288,20 +2326,18 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 let _ = set_mic_input(app.state(), settings.mic_name).await;
                 let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
 
-                let _ = start_recording(
-                    app.clone(),
-                    app.state(),
+                let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
                         capture_target: settings.target.unwrap_or_else(|| {
                             ScreenCaptureTarget::Display {
                                 id: Display::primary().id(),
                             }
                         }),
-                        capture_system_audio: settings.system_audio,
                         mode: event.mode,
+                        capture_system_audio: settings.system_audio,
                         organization_id: settings.organization_id,
-                    },
-                )
+                    }
+                })
                 .await;
             });
 
@@ -2372,10 +2408,34 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
+
+                                #[cfg(target_os = "windows")]
+                                if CapWindowId::Settings.get(&app).is_none() {
+                                    reopen_main_window(&app);
+                                }
                             }
-                            CapWindowId::Settings
-                            | CapWindowId::Upgrade
-                            | CapWindowId::ModeSelect => {
+                            CapWindowId::Settings => {
+                                for (label, window) in app.webview_windows() {
+                                    if let Ok(id) = CapWindowId::from_str(&label)
+                                        && matches!(
+                                            id,
+                                            CapWindowId::TargetSelectOverlay { .. }
+                                                | CapWindowId::Main
+                                                | CapWindowId::Camera
+                                        )
+                                    {
+                                        let _ = window.show();
+                                    }
+                                }
+
+                                #[cfg(target_os = "windows")]
+                                if !has_open_editor_window(&app) {
+                                    reopen_main_window(&app);
+                                }
+
+                                return;
+                            }
+                            CapWindowId::Upgrade | CapWindowId::ModeSelect => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label)
                                         && matches!(
@@ -2494,6 +2554,30 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         });
 }
 
+#[cfg(target_os = "windows")]
+fn has_open_editor_window(app: &AppHandle) -> bool {
+    app.webview_windows()
+        .keys()
+        .any(|label| matches!(CapWindowId::from_str(label), Ok(CapWindowId::Editor { .. })))
+}
+
+#[cfg(target_os = "windows")]
+fn reopen_main_window(app: &AppHandle) {
+    if let Some(main) = CapWindowId::Main.get(app) {
+        let _ = main.show();
+        let _ = main.set_focus();
+    } else {
+        let handle = app.clone();
+        tokio::spawn(async move {
+            let _ = ShowCapWindow::Main {
+                init_target_mode: None,
+            }
+            .show(&handle)
+            .await;
+        });
+    }
+}
+
 async fn resume_uploads(app: AppHandle) -> Result<(), String> {
     let recordings_dir = recordings_path(&app);
     if !recordings_dir.exists() {
@@ -2501,7 +2585,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
     }
 
     let entries = std::fs::read_dir(&recordings_dir)
-        .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
+        .map_err(|e| format!("Failed to read recordings directory: {e}"))?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
@@ -2547,8 +2631,8 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                 app.clone(),
                                 file_path,
                                 pre_created_video,
-                                None,
                                 recording_dir,
+                                None,
                             );
                         }
                         UploadMeta::SinglePartUpload {
@@ -2673,23 +2757,14 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(app))]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
 }
 
 #[tauri::command]
 #[specta::specta]
-fn log_message(level: String, message: String) {
-    match level.as_str() {
-        "info" => info!("{}", message),
-        "warn" => warn!("{}", message),
-        "error" => error!("{}", message),
-        _ => trace!("{}", message),
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
+#[instrument(skip(clipboard))]
 async fn write_clipboard_string(
     clipboard: MutableState<'_, ClipboardContext>,
     text: String,

@@ -1,13 +1,13 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { getProPlanId, userIsPro } from "@cap/utils";
 import { faCheckCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { clsx } from "clsx";
-import { use, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useAuthContext } from "@/app/Layout/AuthContext";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import { useStripeContext } from "@/app/Layout/StripeContext";
 import {
 	CommercialArt,
 	type CommercialArtRef,
@@ -89,19 +89,20 @@ const PlanIcon = ({
 export const ComparePlans = () => {
 	const commercialArtRef = useRef<CommercialArtRef>(null);
 	const proArtRef = useRef<ProArtRef>(null);
-	const auth = use(useAuthContext().user);
+	const user = useCurrentUser();
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const [commercialLoading, setCommercialLoading] = useState(false);
+	const stripeCtx = useStripeContext();
 
 	// Check if user is already pro or any loading state is active
 	const isDisabled = useMemo(
 		() =>
-			(auth?.email && userIsPro(auth)) ||
+			(user?.email && user.isPro) ||
 			proLoading ||
 			guestLoading ||
 			commercialLoading,
-		[auth, proLoading, guestLoading, commercialLoading],
+		[user, proLoading, guestLoading, commercialLoading],
 	);
 
 	const plans: Plan[] = useMemo(
@@ -247,7 +248,7 @@ export const ComparePlans = () => {
 		);
 
 	const planCheckout = async (planId?: string) => {
-		const finalPlanId = planId || getProPlanId("yearly");
+		const finalPlanId = planId || stripeCtx.plans.yearly;
 		setProLoading(true);
 
 		try {

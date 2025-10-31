@@ -1,8 +1,8 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "fd21ec29-1327-4043-83d4-a594e87a437a",
-	"prevId": "49ce971d-dbc0-4954-80d1-15c0ede03235",
+	"id": "97ef7ec2-5d42-4374-8b79-fd79c9ebfe16",
+	"prevId": "1bbe69b5-ee2e-4a9e-acb4-6470e8fd36a0",
 	"tables": {
 		"accounts": {
 			"name": "accounts",
@@ -395,6 +395,155 @@
 			},
 			"checkConstraint": {}
 		},
+		"imported_videos": {
+			"name": "imported_videos",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"orgId": {
+					"name": "orgId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"source": {
+					"name": "source",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"source_id": {
+					"name": "source_id",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"imported_videos_orgId_source_source_id_pk": {
+					"name": "imported_videos_orgId_source_source_id_pk",
+					"columns": ["orgId", "source", "source_id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
+		"notifications": {
+			"name": "notifications",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"orgId": {
+					"name": "orgId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"recipientId": {
+					"name": "recipientId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"type": {
+					"name": "type",
+					"type": "varchar(10)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"data": {
+					"name": "data",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"readAt": {
+					"name": "readAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"recipient_id_idx": {
+					"name": "recipient_id_idx",
+					"columns": ["recipientId"],
+					"isUnique": false
+				},
+				"org_id_idx": {
+					"name": "org_id_idx",
+					"columns": ["orgId"],
+					"isUnique": false
+				},
+				"type_idx": {
+					"name": "type_idx",
+					"columns": ["type"],
+					"isUnique": false
+				},
+				"read_at_idx": {
+					"name": "read_at_idx",
+					"columns": ["readAt"],
+					"isUnique": false
+				},
+				"created_at_idx": {
+					"name": "created_at_idx",
+					"columns": ["createdAt"],
+					"isUnique": false
+				},
+				"recipient_read_idx": {
+					"name": "recipient_read_idx",
+					"columns": ["recipientId", "readAt"],
+					"isUnique": false
+				},
+				"recipient_created_idx": {
+					"name": "recipient_created_idx",
+					"columns": ["recipientId", "createdAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"notifications_id": {
+					"name": "notifications_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {
+				"notifications_id_unique": {
+					"name": "notifications_id_unique",
+					"columns": ["id"]
+				}
+			},
+			"checkConstraint": {}
+		},
 		"organization_invites": {
 			"name": "organization_invites",
 			"columns": {
@@ -632,6 +781,13 @@
 				"domainVerified": {
 					"name": "domainVerified",
 					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"settings": {
+					"name": "settings",
+					"type": "json",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
@@ -876,6 +1032,13 @@
 					"notNull": true,
 					"autoincrement": false
 				},
+				"folderId": {
+					"name": "folderId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"organizationId": {
 					"name": "organizationId",
 					"type": "varchar(15)",
@@ -905,6 +1068,11 @@
 					"columns": ["videoId"],
 					"isUnique": false
 				},
+				"folder_id_idx": {
+					"name": "folder_id_idx",
+					"columns": ["folderId"],
+					"isUnique": false
+				},
 				"organization_id_idx": {
 					"name": "organization_id_idx",
 					"columns": ["organizationId"],
@@ -918,6 +1086,11 @@
 				"video_id_organization_id_idx": {
 					"name": "video_id_organization_id_idx",
 					"columns": ["videoId", "organizationId"],
+					"isUnique": false
+				},
+				"video_id_folder_id_idx": {
+					"name": "video_id_folder_id_idx",
+					"columns": ["videoId", "folderId"],
 					"isUnique": false
 				}
 			},
@@ -1014,6 +1187,10 @@
 				"space_members_id_unique": {
 					"name": "space_members_id_unique",
 					"columns": ["id"]
+				},
+				"space_id_user_id_unique": {
+					"name": "space_id_user_id_unique",
+					"columns": ["spaceId", "userId"]
 				}
 			},
 			"checkConstraint": {}
@@ -1033,6 +1210,13 @@
 					"type": "varchar(15)",
 					"primaryKey": false,
 					"notNull": true,
+					"autoincrement": false
+				},
+				"folderId": {
+					"name": "folderId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": false,
 					"autoincrement": false
 				},
 				"videoId": {
@@ -1062,6 +1246,11 @@
 				"space_id_idx": {
 					"name": "space_id_idx",
 					"columns": ["spaceId"],
+					"isUnique": false
+				},
+				"folder_id_idx": {
+					"name": "folder_id_idx",
+					"columns": ["folderId"],
 					"isUnique": false
 				},
 				"video_id_idx": {
@@ -1281,6 +1470,14 @@
 					"notNull": false,
 					"autoincrement": false
 				},
+				"preferences": {
+					"name": "preferences",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false,
+					"default": "('null')"
+				},
 				"activeOrganizationId": {
 					"name": "activeOrganizationId",
 					"type": "varchar(15)",
@@ -1305,6 +1502,13 @@
 					"onUpdate": true,
 					"default": "(now())"
 				},
+				"onboardingSteps": {
+					"name": "onboardingSteps",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"onboarding_completed_at": {
 					"name": "onboarding_completed_at",
 					"type": "timestamp",
@@ -1326,6 +1530,13 @@
 					"notNull": true,
 					"autoincrement": false,
 					"default": 1
+				},
+				"defaultOrgId": {
+					"name": "defaultOrgId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
 				}
 			},
 			"indexes": {
@@ -1412,6 +1623,67 @@
 			},
 			"checkConstraint": {}
 		},
+		"video_uploads": {
+			"name": "video_uploads",
+			"columns": {
+				"video_id": {
+					"name": "video_id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"uploaded": {
+					"name": "uploaded",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"total": {
+					"name": "total",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"started_at": {
+					"name": "started_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				},
+				"updated_at": {
+					"name": "updated_at",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				},
+				"mode": {
+					"name": "mode",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"video_uploads_video_id": {
+					"name": "video_uploads_video_id",
+					"columns": ["video_id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
 		"videos": {
 			"name": "videos",
 			"columns": {
@@ -1429,6 +1701,13 @@
 					"notNull": true,
 					"autoincrement": false
 				},
+				"orgId": {
+					"name": "orgId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
 				"name": {
 					"name": "name",
 					"type": "varchar(255)",
@@ -1437,23 +1716,37 @@
 					"autoincrement": false,
 					"default": "'My Video'"
 				},
-				"awsRegion": {
-					"name": "awsRegion",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"awsBucket": {
-					"name": "awsBucket",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
 				"bucket": {
 					"name": "bucket",
 					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"duration": {
+					"name": "duration",
+					"type": "float",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"width": {
+					"name": "width",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"height": {
+					"name": "height",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"fps": {
+					"name": "fps",
+					"type": "int",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
@@ -1473,67 +1766,31 @@
 					"autoincrement": false,
 					"default": true
 				},
-				"password": {
-					"name": "password",
-					"type": "text",
+				"settings": {
+					"name": "settings",
+					"type": "json",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
-				},
-				"videoStartTime": {
-					"name": "videoStartTime",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"audioStartTime": {
-					"name": "audioStartTime",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"xStreamInfo": {
-					"name": "xStreamInfo",
-					"type": "text",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"jobId": {
-					"name": "jobId",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"jobStatus": {
-					"name": "jobStatus",
-					"type": "varchar(255)",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"isScreenshot": {
-					"name": "isScreenshot",
-					"type": "boolean",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": false
-				},
-				"skipProcessing": {
-					"name": "skipProcessing",
-					"type": "boolean",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": false
 				},
 				"transcriptionStatus": {
 					"name": "transcriptionStatus",
 					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"source": {
+					"name": "source",
+					"type": "json",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "('{\"type\":\"MediaConvert\"}')"
+				},
+				"folderId": {
+					"name": "folderId",
+					"type": "varchar(15)",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
@@ -1555,20 +1812,77 @@
 					"onUpdate": true,
 					"default": "(now())"
 				},
-				"source": {
-					"name": "source",
-					"type": "json",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "('{\"type\":\"MediaConvert\"}')"
-				},
-				"folderId": {
-					"name": "folderId",
-					"type": "varchar(15)",
+				"password": {
+					"name": "password",
+					"type": "text",
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
+				},
+				"xStreamInfo": {
+					"name": "xStreamInfo",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"isScreenshot": {
+					"name": "isScreenshot",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": false
+				},
+				"awsRegion": {
+					"name": "awsRegion",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"awsBucket": {
+					"name": "awsBucket",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"videoStartTime": {
+					"name": "videoStartTime",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"audioStartTime": {
+					"name": "audioStartTime",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"jobId": {
+					"name": "jobId",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"jobStatus": {
+					"name": "jobStatus",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"skipProcessing": {
+					"name": "skipProcessing",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": false
 				}
 			},
 			"indexes": {

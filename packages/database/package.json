@@ -29,6 +29,7 @@
 		"drizzle-orm": "0.44.6",
 		"dub": "^0.64.0",
 		"effect": "^3.18.4",
+		"mysql2": "^3.15.2",
 		"nanoid": "^5.0.4",
 		"next": "15.5.4",
 		"next-auth": "^4.24.5",
@@ -63,7 +64,8 @@
 		"./helpers": "./helpers.ts",
 		"./emails/config": "./emails/config.ts",
 		"./emails/*": "./emails/*.tsx",
-		"./types": "./types/index.ts"
+		"./types": "./types/index.ts",
+		"./migrate": "./migrate.ts"
 	},
 	"publishConfig": {
 		"exports": {

@@ -57,6 +57,26 @@ macro_rules! fail_err {
         }
     };
 }
+#[macro_export]
+macro_rules! fail_ret {
+    ($name:literal) => {
+        #[cfg(debug_assertions)]
+        {
+            const NAME: &'static str = concat!(env!("CARGO_PKG_NAME"), "::", $name);
+
+            $crate::private::inventory::submit! {
+                $crate::Fail { name: NAME }
+            }
+
+            let should_fail = $crate::private::should_fail(NAME);
+
+            if should_fail {
+                eprintln!("Purposely returned at '{NAME}'");
+                return;
+            }
+        }
+    };
+}
 
 #[doc(hidden)]
 pub mod private {

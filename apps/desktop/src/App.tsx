@@ -29,6 +29,8 @@ const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
 			experimental_prefetchInRender: true,
+			refetchOnWindowFocus: false,
+			refetchOnReconnect: false,
 		},
 		mutations: {
 			onError: (e) => {

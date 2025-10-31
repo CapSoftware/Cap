@@ -7,13 +7,12 @@ import {
 	useQueryClient,
 } from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -177,7 +176,7 @@ export default function Recordings() {
 							No {activeTab()} recordings
 						</p>
 					</Show>
-					<ul class="p-4 flex flex-col gap-5 w-full text-[--text-primary]">
+					<ul class="flex flex-col w-full text-[--text-primary]">
 						<For each={filteredRecordings()}>
 							{(recording) => (
 								<RecordingItem
@@ -219,9 +218,23 @@ function RecordingItem(props: {
 		mode().charAt(0).toUpperCase() + mode().slice(1);
 
 	const queryClient = useQueryClient();
+	const studioCompleteCheck = () =>
+		mode() === "studio" && props.recording.meta.status.status === "Complete";
 
 	return (
-		<li class="flex flex-row justify-between [&:not(:last-child)]:border-b [&:not(:last-child)]:pb-5 [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200 hover:bg-gray-2">
+		<li
+			onClick={() => {
+				if (studioCompleteCheck()) {
+					props.onOpenEditor();
+				}
+			}}
+			class={cx(
+				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
+				studioCompleteCheck()
+					? "cursor-pointer hover:bg-gray-3"
+					: "cursor-default",
+			)}
+		>
 			<div class="flex gap-5 items-center">
 				<Show
 					when={imageExists()}
@@ -242,7 +255,7 @@ function RecordingItem(props: {
 						<div
 							class={cx(
 								"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
-								mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+								mode() === "instant" ? "bg-blue-100" : "bg-gray-4",
 							)}
 						>
 							{mode() === "instant" ? (
@@ -310,8 +323,21 @@ function RecordingItem(props: {
 					</Show>
 					<TooltipIconButton
 						tooltipText="Edit"
-						onClick={() => props.onOpenEditor()}
-						disabled={props.recording.meta.status.status !== "Complete"}
+						onClick={async () => {
+							if (
+								props.recording.meta.status.status === "Failed" &&
+								!(await confirm(
+									"The recording failed so this file may have issues in the editor! If your having issues recovering the file please reach out to support!",
+									{
+										title: "Recording is potentially corrupted",
+										kind: "warning",
+									},
+								))
+							)
+								return;
+							props.onOpenEditor();
+						}}
+						disabled={props.recording.meta.status.status === "InProgress"}
 					>
 						<IconLucideEdit class="size-4" />
 					</TooltipIconButton>

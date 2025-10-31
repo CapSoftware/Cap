@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
@@ -45,7 +45,10 @@ impl AACEncoder {
     ) -> Result<Self, AACEncoderError> {
         let codec = encoder::find_by_name("aac").ok_or(AACEncoderError::CodecNotFound)?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
-        encoder_ctx.set_threading(Config::count(4));
+        let thread_count = thread::available_parallelism()
+            .map(|v| v.get())
+            .unwrap_or(1);
+        encoder_ctx.set_threading(Config::count(thread_count));
         let mut encoder = encoder_ctx.encoder().audio()?;
 
         let rate = {
@@ -101,8 +104,8 @@ impl AACEncoder {
         self.base.send_frame(frame, timestamp, output)
     }
 
-    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
-        self.base.finish(output)
+    pub fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.flush(output)
     }
 }
 
@@ -111,7 +114,7 @@ impl AudioEncoder for AACEncoder {
         let _ = self.send_frame(frame, Duration::MAX, output);
     }
 
-    fn finish(&mut self, output: &mut format::context::Output) {
-        let _ = self.finish(output);
+    fn flush(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.flush(output)
     }
 }

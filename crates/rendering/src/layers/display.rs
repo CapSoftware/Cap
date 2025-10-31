@@ -62,7 +62,7 @@ impl DisplayLayer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &segment_frames.screen_frame,
+            segment_frames.screen_frame.data(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(frame_size.x * 4),

@@ -11,6 +11,9 @@ async setMicInput(label: string | null) : Promise<null> {
 async setCameraInput(id: DeviceOrModelID | null) : Promise<null> {
     return await TAURI_INVOKE("set_camera_input", { id });
 },
+async uploadLogs() : Promise<null> {
+    return await TAURI_INVOKE("upload_logs");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },
@@ -173,9 +176,6 @@ async setTheme(theme: AppTheme) : Promise<void> {
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
-async logMessage(level: string, message: string) : Promise<void> {
-    await TAURI_INVOKE("log_message", { level, message });
-},
 async showWindow(window: ShowCapWindow) : Promise<null> {
     return await TAURI_INVOKE("show_window", { window });
 },
@@ -193,9 +193,6 @@ async setFail(name: string, value: boolean) : Promise<void> {
 },
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
-},
-async refreshOrganizations() : Promise<null> {
-    return await TAURI_INVOKE("refresh_organizations");
 },
 async setWindowTransparent(value: boolean) : Promise<void> {
     await TAURI_INVOKE("set_window_transparent", { value });
@@ -269,8 +266,8 @@ async deleteWhisperModel(modelPath: string) : Promise<null> {
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
 },
-async openTargetSelectOverlays() : Promise<null> {
-    return await TAURI_INVOKE("open_target_select_overlays");
+async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null) : Promise<null> {
+    return await TAURI_INVOKE("open_target_select_overlays", { focusedTarget });
 },
 async closeTargetSelectOverlays() : Promise<null> {
     return await TAURI_INVOKE("close_target_select_overlays");
@@ -357,7 +354,7 @@ start_time?: number | null }
 export type AuthSecret = { api_key: string } | { token: string; expires: number }
 export type AuthStore = { secret: AuthSecret; user_id: string | null; plan: Plan | null; intercom_hash: string | null; organizations?: Organization[] }
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null; border?: BorderConfiguration | null }
-export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
+export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number]; alpha?: number } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type BorderConfiguration = { enabled: boolean; width: number; color: [number, number, number]; opacity: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding?: number; shadow?: number; advanced_shadow?: ShadowConfiguration | null; shape?: CameraShape }
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
@@ -384,7 +381,7 @@ export type CurrentRecording = { target: CurrentRecordingTarget; mode: Recording
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: WindowId; bounds: LogicalBounds } } | { screen: { id: DisplayId } } | { area: { screen: DisplayId; bounds: LogicalBounds } }
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
-export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number; useSvg?: boolean }
+export type CursorConfiguration = { hide?: boolean; hideWhenIdle?: boolean; hideWhenIdleDelay?: number; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number; useSvg?: boolean }
 export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: string | null }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
@@ -399,7 +396,7 @@ export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; postDeletionBehaviour?: PostDeletionBehaviour; enableNewUploader: boolean; excludedWindows?: WindowExclusion[] }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**

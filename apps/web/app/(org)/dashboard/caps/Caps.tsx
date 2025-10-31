@@ -2,20 +2,15 @@
 
 import type { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
+import type { ImageUpload, Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useEffectMutation, useEffectQuery } from "@/lib/EffectRuntime";
-import {
-	AnalyticsRequest,
-	useVideosAnalyticsQuery,
-} from "@/lib/Requests/AnalyticsRequest";
-import { Rpc, withRpc } from "@/lib/Rpcs";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
+import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
@@ -39,11 +34,14 @@ export type VideoData = {
 	totalComments: number;
 	totalReactions: number;
 	foldersData: FolderDataType[];
-	sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
+	sharedOrganizations: {
+		id: string;
+		name: string;
+		iconUrl?: ImageUpload.ImageUrl | null;
+	}[];
 	sharedSpaces?: {
 		id: string;
 		name: string;
-		iconUrl: string;
 		isOrg: boolean;
 		organizationId: string;
 	}[];
@@ -150,11 +148,11 @@ export const Caps = ({
 		});
 	};
 
+	const rpc = useRpcClient();
+
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
-
-			const rpc = yield* Rpc;
 
 			const fiber = yield* Effect.gen(function* () {
 				const results = yield* Effect.all(
@@ -206,7 +204,7 @@ export const Caps = ({
 	});
 
 	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();

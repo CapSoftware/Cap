@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
 jobs:
   changes:
     name: Detect Changes
@@ -17,6 +20,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+      branch: ${{ steps.branch.outputs.branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +40,11 @@ jobs:
             tauri-plugins:
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'
+
+      - name: Output branch name
+        id: branch
+        run: |
+          echo "branch=${{ env.BRANCH_NAME }}" >> $GITHUB_OUTPUT
 
   typecheck:
     name: Typecheck
@@ -89,6 +98,8 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
+    env:
+      target: aarch64-apple-darwin
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -96,13 +107,12 @@ jobs:
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.target }}
+          targets: ${{ env.target }}
           components: clippy
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
+          target: ${{ env.target }}
 
       - name: Create .env file in root
         run: |
@@ -115,8 +125,6 @@ jobs:
           echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
           echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
           cat .env >> $GITHUB_ENV
 
@@ -167,10 +175,9 @@ jobs:
         with:
           targets: ${{ matrix.settings.target }}
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-rust-cache
         with:
-          shared-key: ${{ matrix.settings.target }}
+          target: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-js
 
@@ -185,8 +192,6 @@ jobs:
           echo 'VITE_POSTHOG_KEY=${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}' >> .env
           echo 'VITE_POSTHOG_HOST=${{ secrets.NEXT_PUBLIC_POSTHOG_HOST }}' >> .env
           echo 'VITE_SERVER_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}' >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
-          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
@@ -219,3 +224,45 @@ jobs:
       - name: Run verify
         shell: bash
         run: node scripts/check-tauri-plugin-versions.js
+
+  rust-cache:
+    name: Rust cache
+    needs: changes
+    if: needs.changes.outputs.branch == 'main'
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.settings.target }}
+          save-cache: true
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+
+      - run: node scripts/setup.js
+
+      - name: Build debug
+        run: cargo build --all
+
+      - name: Build release
+        run: cargo check --all --release
