@@ -1,7 +1,4 @@
-import {
-	createEventListener,
-	createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -33,14 +30,17 @@ import {
 function formatTime(totalSeconds: number): string {
 	const hours = Math.floor(totalSeconds / 3600);
 	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const seconds = Math.floor(totalSeconds % 60);
+	const seconds = totalSeconds % 60;
 
 	if (hours > 0) {
-		return `${hours}h ${minutes}m ${seconds}s`;
+		return `${hours}h ${minutes}m ${Math.floor(seconds)}s`;
 	} else if (minutes > 0) {
-		return `${minutes}m ${seconds}s`;
+		return `${minutes}m ${Math.floor(seconds)}s`;
+	} else if (seconds >= 1) {
+		return `${Math.floor(seconds)}s`;
 	} else {
-		return `${seconds}s`;
+		// Show one decimal place for sub-second values
+		return `${seconds.toFixed(1)}s`;
 	}
 }
 
@@ -197,19 +197,69 @@ export function ClipTrack(
 
 	const split = () => editorState.timeline.interactMode === "split";
 
+	// Drag and drop state for reordering clips
+	const [dragState, setDragState] = createSignal<{
+		draggedIndex: number;
+		hoverIndex: number | null;
+		startX: number;
+		startY: number;
+		currentX: number;
+		currentY: number;
+		offsetX: number;
+		offsetY: number;
+		width: number;
+		height: number;
+	} | null>(null);
+
+	// Function to reorder segments
+	const reorderSegments = (fromIndex: number, toIndex: number) => {
+		if (fromIndex === toIndex) return;
+
+		setProject(
+			"timeline",
+			"segments",
+			produce((segments) => {
+				const [removed] = segments.splice(fromIndex, 1);
+				segments.splice(toIndex, 0, removed);
+			}),
+		);
+	};
+
+	// Get visual order of segments accounting for drag state
+	const getVisualOrder = (index: number) => {
+		const drag = dragState();
+		if (!drag) return index;
+
+		const { draggedIndex, hoverIndex } = drag;
+
+		if (hoverIndex === null) return index;
+
+		if (index === draggedIndex) {
+			return hoverIndex;
+		}
+
+		if (draggedIndex < hoverIndex) {
+			if (index > draggedIndex && index <= hoverIndex) {
+				return index - 1;
+			}
+		} else {
+			if (index >= hoverIndex && index < draggedIndex) {
+				return index + 1;
+			}
+		}
+
+		return index;
+	};
+
 	return (
 		<TrackRoot
 			ref={props.ref}
+			class={dragState() ? "cursor-grabbing" : ""}
 			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
 			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
 		>
 			<For each={segments()}>
 				{(segment, i) => {
-					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
-						offset: number;
-						initialStart: number;
-					}>(null);
-
 					const prefixOffsets = createMemo(() => {
 						const segs = segments();
 						const out: number[] = new Array(segs.length);
@@ -223,15 +273,11 @@ export function ClipTrack(
 					const prevDuration = createMemo(() => prefixOffsets()[i()] ?? 0);
 
 					const relativeSegment = createMemo(() => {
-						const ds = startHandleDrag();
-						const offset = ds ? ds.offset / segment.timescale : 0;
+						const duration = (segment.end - segment.start) / segment.timescale;
 
 						return {
-							start: Math.max(prevDuration() + offset, 0),
-							end:
-								prevDuration() +
-								offset +
-								(segment.end - segment.start) / segment.timescale,
+							start: prevDuration(),
+							end: prevDuration() + duration,
 							timescale: segment.timescale,
 							recordingSegment: segment.recordingSegment,
 						};
@@ -245,17 +291,9 @@ export function ClipTrack(
 							segments()[s].recordingSegment ?? 0
 						];
 
-					const marker = useSectionMarker(() => ({
-						segments: segments(),
-						i: i(),
-						position: "left",
-					}));
+					const marker = useSectionMarker(segments, i, "left");
 
-					const endMarker = useSectionMarker(() => ({
-						segments: segments(),
-						i: i(),
-						position: "right",
-					}));
+					const endMarker = useSectionMarker(segments, i, "right");
 
 					const isSelected = createMemo(() => {
 						const selection = editorState.timeline.selection;
@@ -269,6 +307,46 @@ export function ClipTrack(
 
 						return selection.indices.includes(segmentIndex);
 					});
+
+					const isDragging = createMemo(() => {
+						const drag = dragState();
+						return drag && drag.draggedIndex === i();
+					});
+					const isHovered = createMemo(() => {
+						const drag = dragState();
+						return drag && drag.hoverIndex === i();
+					});
+					const visualOrder = createMemo(() => getVisualOrder(i()));
+
+					// Handle drag start
+					const startDrag = (e: MouseEvent, element: HTMLElement) => {
+						if (split()) return false;
+						if (segments().length <= 1) return false; // Can't reorder a single clip
+						if (e.shiftKey || e.metaKey || e.ctrlKey) return false; // Don't drag during selection
+
+						try {
+							const rect = element.getBoundingClientRect();
+							const currentIndex = i();
+							const newDragState = {
+								draggedIndex: currentIndex,
+								hoverIndex: null,
+								startX: e.clientX,
+								startY: e.clientY,
+								currentX: e.clientX,
+								currentY: e.clientY,
+								offsetX: e.clientX - rect.left,
+								offsetY: e.clientY - rect.top,
+								width: rect.width,
+								height: rect.height,
+							};
+
+							setDragState(newDragState);
+							return true;
+						} catch (error) {
+							console.error("Error starting drag:", error);
+							return false;
+						}
+					};
 
 					const micWaveform = () => {
 						if (project.audio.micVolumeDb && project.audio.micVolumeDb < -30)
@@ -292,83 +370,134 @@ export function ClipTrack(
 					return (
 						<>
 							<Show when={marker()}>
-								{(marker) => (
+								{(markerAccessor) => (
 									<div
 										class="absolute w-0 z-10 h-full *:absolute"
 										style={{
-											transform: `translateX(${
-												i() === 0 ? segmentX() : segmentX()
-											}px)`,
+											transform: `translateX(${segmentX()}px)`,
 										}}
 									>
 										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
 										<Switch>
-											<Match
-												when={(() => {
-													const m = marker();
-													if (m.type === "single") return m.value;
+											<Match when={markerAccessor()?.type === "single"}>
+												{(() => {
+													const timeValue = createMemo(() => {
+														const m = markerAccessor();
+														if (
+															m?.type === "single" &&
+															m.value.type === "time"
+														) {
+															return m.value.time;
+														}
+														return 0;
+													});
+
+													return (
+														<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
+															<CutOffsetButton
+																value={timeValue()}
+																onClick={() => {
+																	const currentIdx = i();
+																	const segs = segments();
+																	const prevSeg = segs[currentIdx - 1];
+																	const currentSeg = segs[currentIdx];
+
+																	// Check if clips are from same recording and in chronological order
+																	const isSameRecording =
+																		prevSeg?.recordingSegment ===
+																		currentSeg.recordingSegment;
+																	const isChronological =
+																		prevSeg && prevSeg.end <= currentSeg.start;
+
+																	if (isSameRecording && isChronological) {
+																		// Only allow merging if clips are in chronological order
+																		const m = markerAccessor();
+																		setProject(
+																			"timeline",
+																			"segments",
+																			produce((s) => {
+																				if (
+																					m?.type === "single" &&
+																					m.value.type === "reset"
+																				) {
+																					s[currentIdx - 1].end =
+																						s[currentIdx].end;
+																					s.splice(currentIdx, 1);
+																				} else {
+																					s[currentIdx - 1].end =
+																						s[currentIdx].start;
+																				}
+																			}),
+																		);
+																	}
+																}}
+															/>
+														</div>
+													);
 												})()}
-											>
-												{(marker) => (
-													<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
-														<CutOffsetButton
-															value={(() => {
-																const m = marker();
-																return m.type === "time" ? m.time : 0;
-															})()}
-															onClick={() => {
-																setProject(
-																	"timeline",
-																	"segments",
-																	produce((s) => {
-																		if (marker().type === "reset") {
-																			s[i() - 1].end = s[i()].end;
-																			s.splice(i(), 1);
-																		} else {
-																			s[i() - 1].end = s[i()].start;
-																		}
-																	}),
-																);
-															}}
-														/>
-													</div>
-												)}
 											</Match>
 											<Match
-												when={(() => {
-													const m = marker();
-													if (
-														m.type === "dual" &&
-														m.right &&
-														m.right.type === "time"
-													)
-														return m.right;
-												})()}
+												when={
+													markerAccessor()?.type === "dual" &&
+													(markerAccessor() as any)?.right
+												}
 											>
-												{(marker) => {
-													const markerValue = marker();
+												{(() => {
+													const timeVal = createMemo(() => {
+														const m = markerAccessor();
+														if (
+															m?.type === "dual" &&
+															m.right?.type === "time"
+														) {
+															return m.right.time;
+														}
+														return 0;
+													});
+
+													const currentIdx = i();
+													const wouldOverlap = createMemo(() => {
+														const segs = segments();
+														const currentSeg = segs[currentIdx];
+														const targetStart = Math.max(
+															0,
+															currentSeg.start - timeVal(),
+														);
+
+														// Check if extending by marker value would overlap with other clips
+														return segs.some(
+															(seg, idx) =>
+																idx !== currentIdx &&
+																seg.recordingSegment ===
+																	currentSeg.recordingSegment &&
+																seg.start < currentSeg.end &&
+																seg.end > targetStart,
+														);
+													});
+
 													return (
 														<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 															<CutOffsetButton
-																value={
-																	markerValue.type === "time"
-																		? markerValue.time
-																		: 0
-																}
+																value={timeVal()}
 																class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
 																onClick={() => {
+																	if (wouldOverlap()) return;
+																	const currentSeg = segments()[i()];
+																	const newStart = Math.max(
+																		0,
+																		currentSeg.start - timeVal(),
+																	);
 																	setProject(
 																		"timeline",
 																		"segments",
 																		i(),
 																		"start",
-																		0,
+																		newStart,
 																	);
 																}}
 															/>
 														</div>
 													);
-												}}
+												})()}
 											</Match>
 										</Switch>
 									</div>
@@ -381,9 +510,36 @@ export function ClipTrack(
 									isSelected()
 										? "wobble-wrapper border-gray-12"
 										: "border-transparent",
+									isDragging() && "opacity-20 pointer-events-none",
+									isHovered() &&
+										!isDragging() &&
+										"ring-4 ring-yellow-500/60 scale-[1.02]",
+									dragState() &&
+										!isDragging() &&
+										segments().length > 1 &&
+										"cursor-copy",
 								)}
+								style={{
+									transition: isDragging()
+										? "none"
+										: "all 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+									order: `${visualOrder()}`,
+								}}
 								innerClass="ring-blue-9"
 								segment={relativeSegment()}
+								onMouseEnter={() => {
+									try {
+										const drag = dragState();
+										if (drag && drag.draggedIndex !== i()) {
+											setDragState({
+												...drag,
+												hoverIndex: i(),
+											});
+										}
+									} catch (error) {
+										console.error("Error in onMouseEnter:", error);
+									}
+								}}
 								onMouseDown={(e) => {
 									e.stopPropagation();
 
@@ -395,13 +551,48 @@ export function ClipTrack(
 
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {
-										createRoot((dispose) => {
-											createEventListener(
-												e.currentTarget,
-												"mouseup",
-												(upEvent) => {
-													dispose();
+										let hasMoved = false;
+										let dragStarted = false;
+										const startX = e.clientX;
+										const startY = e.clientY;
 
+										createRoot((dispose) => {
+											const handleMouseMove = (moveEvent: MouseEvent) => {
+												try {
+													const deltaX = Math.abs(moveEvent.clientX - startX);
+													const deltaY = Math.abs(moveEvent.clientY - startY);
+
+													if (!dragStarted && (deltaX > 5 || deltaY > 5)) {
+														dragStarted = startDrag(moveEvent, e.currentTarget);
+														hasMoved = true;
+													}
+
+													if (dragStarted) {
+														setDragState((prev) => {
+															if (!prev) return null;
+															return {
+																...prev,
+																currentX: moveEvent.clientX,
+																currentY: moveEvent.clientY,
+															};
+														});
+													}
+												} catch (error) {
+													console.error("Error in handleMouseMove:", error);
+												}
+											};
+
+											const handleMouseUp = (upEvent: MouseEvent) => {
+												dispose();
+
+												if (dragStarted) {
+													const drag = dragState();
+													if (drag && drag.hoverIndex !== null) {
+														reorderSegments(drag.draggedIndex, drag.hoverIndex);
+													}
+													setDragState(null);
+												} else if (!hasMoved) {
+													// Handle selection only if there was no drag
 													const currentIndex = i();
 													const selection = editorState.timeline.selection;
 													const isMac =
@@ -469,8 +660,17 @@ export function ClipTrack(
 													}
 
 													props.handleUpdatePlayhead(upEvent);
+												}
+											};
+
+											createEventListenerMap(window, {
+												mousemove: handleMouseMove,
+												mouseup: handleMouseUp,
+												blur: () => {
+													dispose();
+													setDragState(null);
 												},
-											);
+											});
 										});
 									}
 								}}
@@ -488,13 +688,10 @@ export function ClipTrack(
 									position="start"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
+										downEvent.stopPropagation();
 										if (split()) return;
 
 										const initialStart = segment.start;
-										setStartHandleDrag({
-											offset: 0,
-											initialStart,
-										});
 
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
@@ -524,26 +721,44 @@ export function ClipTrack(
 													segment.recordingSegment
 												: false;
 
-										function update(event: MouseEvent) {
-											const newStart =
-												initialStart +
-												(event.clientX - downEvent.clientX) *
-													secsPerPixel() *
-													segment.timescale;
+										// Check if prev segment is chronologically before current (not reordered)
+										const prevSegmentIsChronological =
+											prevSegmentIsSameClip && prevSegment.end <= segment.start;
 
-											const clampedStart = Math.min(
-												Math.max(
-													newStart,
-													prevSegmentIsSameClip ? prevSegment.end : 0,
-													segment.end - maxDuration,
-												),
-												segment.end - 1,
+										// Check if other clips from same recording exist (prevents extending beyond split boundaries)
+										const hasOtherClipsFromSameRecording = segments().some(
+											(seg, idx) =>
+												idx !== i() &&
+												seg.recordingSegment === segment.recordingSegment,
+										);
+
+										function update(event: MouseEvent) {
+											const delta =
+												(event.clientX - downEvent.clientX) *
+												secsPerPixel() *
+												segment.timescale;
+
+											const newStart = initialStart + delta;
+
+											// Calculate minimum allowed start position
+											// If other clips exist, prevent extending before original start
+											const minStart = Math.max(
+												prevSegmentIsChronological
+													? prevSegment.end
+													: hasOtherClipsFromSameRecording
+														? initialStart
+														: 0,
+												segment.end - maxDuration,
 											);
 
-											setStartHandleDrag({
-												offset: clampedStart - initialStart,
-												initialStart,
-											});
+											// Calculate maximum allowed start position
+											const maxStart = segment.end - 1;
+
+											// Clamp the new start value
+											const clampedStart = Math.max(
+												minStart,
+												Math.min(newStart, maxStart),
+											);
 
 											setProject(
 												"timeline",
@@ -558,8 +773,6 @@ export function ClipTrack(
 										createRoot((dispose) => {
 											onCleanup(() => {
 												resumeHistory();
-												console.log("NUL");
-												setStartHandleDrag(null);
 												onHandleReleased();
 											});
 
@@ -569,8 +782,6 @@ export function ClipTrack(
 													update(e);
 													dispose();
 												},
-												blur: () => dispose(),
-												mouseleave: () => dispose(),
 											});
 										});
 									}}
@@ -600,7 +811,9 @@ export function ClipTrack(
 									position="end"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
+										downEvent.stopPropagation();
 										const end = segment.end;
+										const initialEnd = segment.end;
 
 										if (split()) return;
 										const maxSegmentDuration =
@@ -626,51 +839,66 @@ export function ClipTrack(
 													segment.recordingSegment
 												: false;
 
+										// Check if next segment is chronologically after current (not reordered)
+										const nextSegmentIsChronological =
+											nextSegmentIsSameClip && nextSegment.start >= segment.end;
+
+										// Check if other clips from same recording exist (prevents extending beyond split boundaries)
+										const hasOtherClipsFromSameRecording = segments().some(
+											(seg, idx) =>
+												idx !== i() &&
+												seg.recordingSegment === segment.recordingSegment,
+										);
+
 										function update(event: MouseEvent) {
-											const deltaRecorded =
+											const delta =
 												(event.clientX - downEvent.clientX) *
 												secsPerPixel() *
 												segment.timescale;
-											const newEnd = end + deltaRecorded;
+
+											const newEnd = end + delta;
+
+											// Calculate minimum allowed end position (must be at least 1 second after start)
+											const minEnd = segment.start + 1;
+
+											// Calculate maximum allowed end position
+											// If other clips exist, prevent extending beyond original end
+											const maxEnd = Math.min(
+												nextSegmentIsChronological
+													? nextSegment.start
+													: hasOtherClipsFromSameRecording
+														? initialEnd
+														: maxSegmentDuration, // Can't overlap next segment only if chronological
+												end + availableTimelineDuration * segment.timescale, // Timeline duration constraint
+											);
+
+											// Clamp the new end value
+											const clampedEnd = Math.max(
+												minEnd,
+												Math.min(newEnd, maxEnd),
+											);
 
 											setProject(
 												"timeline",
 												"segments",
 												i(),
 												"end",
-												Math.max(
-													Math.min(
-														newEnd,
-														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
-														end + availableTimelineDuration * segment.timescale,
-														nextSegmentIsSameClip
-															? nextSegment.start
-															: maxSegmentDuration,
-													),
-													segment.start + 1,
-												),
+												clampedEnd,
 											);
 										}
 
 										const resumeHistory = projectHistory.pause();
 										createRoot((dispose) => {
+											onCleanup(() => {
+												resumeHistory();
+												onHandleReleased();
+											});
+
 											createEventListenerMap(window, {
 												mousemove: update,
 												mouseup: (e) => {
-													dispose();
-													resumeHistory();
 													update(e);
-													onHandleReleased();
-												},
-												blur: () => {
 													dispose();
-													resumeHistory();
-													onHandleReleased();
-												},
-												mouseleave: () => {
-													dispose();
-													resumeHistory();
-													onHandleReleased();
 												},
 											});
 										});
@@ -678,45 +906,132 @@ export function ClipTrack(
 								/>
 							</SegmentRoot>
 							<Show
-								when={(() => {
-									const m = endMarker();
-									if (m?.type === "dual" && m.left && m.left.type === "time")
-										return m.left;
-								})()}
+								when={
+									endMarker()?.type === "dual" && (endMarker() as any)?.left
+								}
 							>
-								{(marker) => (
-									<div
-										class="absolute w-0 z-10 h-full *:absolute"
-										style={{
-											transform: `translateX(${segmentX() + segmentWidth()}px)`,
-										}}
-									>
-										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
-										<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
-											<CutOffsetButton
-												value={(() => {
-													const m = marker();
-													return m.type === "time" ? m.time : 0;
-												})()}
-												class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
-												onClick={() => {
-													setProject(
-														"timeline",
-														"segments",
-														i(),
-														"end",
-														segmentRecording().display.duration,
-													);
-												}}
-											/>
+								{(() => {
+									const timeVal = createMemo(() => {
+										const m = endMarker();
+										if (m?.type === "dual" && m.left?.type === "time") {
+											return m.left.time;
+										}
+										return 0;
+									});
+
+									const currentIdx = i();
+									const wouldOverlap = createMemo(() => {
+										const segs = segments();
+										const currentSeg = segs[currentIdx];
+										const fullDuration = segmentRecording().display.duration;
+										const targetEnd = Math.min(
+											fullDuration,
+											currentSeg.end + timeVal(),
+										);
+
+										// Check if extending by marker value would overlap with other clips
+										return segs.some(
+											(seg, idx) =>
+												idx !== currentIdx &&
+												seg.recordingSegment === currentSeg.recordingSegment &&
+												seg.start < targetEnd &&
+												seg.end > currentSeg.start,
+										);
+									});
+
+									return (
+										<div
+											class="absolute w-0 z-10 h-full *:absolute"
+											style={{
+												transform: `translateX(${segmentX() + segmentWidth()}px)`,
+											}}
+										>
+											<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+											<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
+												<CutOffsetButton
+													value={timeVal()}
+													class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
+													onClick={() => {
+														if (wouldOverlap()) return;
+														const currentSeg = segments()[i()];
+														const fullDuration =
+															segmentRecording().display.duration;
+														const newEnd = Math.min(
+															fullDuration,
+															currentSeg.end + timeVal(),
+														);
+														setProject(
+															"timeline",
+															"segments",
+															i(),
+															"end",
+															newEnd,
+														);
+													}}
+												/>
+											</div>
 										</div>
-									</div>
-								)}
+									);
+								})()}
 							</Show>
 						</>
 					);
 				}}
 			</For>
+
+			{/* Floating dragged clip that follows the cursor */}
+			{dragState() &&
+				(() => {
+					const drag = dragState();
+					if (!drag) return null;
+
+					const allSegments = segments();
+					if (
+						!allSegments ||
+						drag.draggedIndex >= allSegments.length ||
+						drag.draggedIndex < 0
+					) {
+						return null;
+					}
+
+					const draggedSegment = allSegments[drag.draggedIndex];
+					if (!draggedSegment) return null;
+
+					const styleObj = {
+						left: `${drag.currentX - drag.offsetX}px`,
+						top: `${drag.currentY - drag.offsetY}px`,
+						width: `${drag.width}px`,
+						height: `${drag.height}px`,
+						transform: "rotate(-2deg) scale(1.05)",
+						filter: "drop-shadow(0 20px 25px rgba(0, 0, 0, 0.3))",
+						transition: "filter 150ms ease-out",
+					};
+
+					return (
+						<div
+							class="fixed z-[100] pointer-events-none cursor-grabbing"
+							style={styleObj}
+						>
+							<div
+								class="w-full h-full rounded-lg border-2 border-blue-400 bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]"
+								style={{ opacity: 0.98 }}
+							>
+								<div class="flex absolute inset-0 flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
+									<span class="text-white/70">
+										{hasMultipleRecordingSegments()
+											? `Clip ${draggedSegment.recordingSegment ?? 0}`
+											: "Clip"}
+									</span>
+									<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
+										<IconLucideClock class="size-3.5" />{" "}
+										{formatTime(draggedSegment.end - draggedSegment.start) ||
+											"0s"}
+									</div>
+								</div>
+							</div>
+						</div>
+					);
+				})()}
 		</TrackRoot>
 	);
 }
@@ -773,20 +1088,26 @@ function CutOffsetButton(props: {
 			{props.value === 0 ? (
 				<IconCapScissors class="size-3.5" />
 			) : (
-				formatTime(props.value)
+				formatTime(Math.abs(props.value))
 			)}
 		</button>
 	);
 }
 
 function useSectionMarker(
-	props: () => {
-		segments: TimelineSegment[];
-		i: number;
-		position: "left" | "right";
-	},
+	segments: () => TimelineSegment[],
+	i: () => number,
+	position: "left" | "right",
 ) {
 	const { editorInstance } = useEditorContext();
-
-	return () => getSectionMarker(props(), editorInstance.recordings.segments);
+	return createMemo(() => {
+		return getSectionMarker(
+			{
+				segments: segments(),
+				i: i(),
+				position,
+			},
+			editorInstance.recordings.segments,
+		);
+	});
 }
