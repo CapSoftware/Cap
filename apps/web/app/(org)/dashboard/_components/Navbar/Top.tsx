@@ -1,10 +1,5 @@
 "use client";
 
-import { markAsRead } from "@/actions/notifications/mark-as-read";
-import Notifications from "@/app/(org)/dashboard/_components/Notifications";
-import { SignedImageUrl } from "@/components/SignedImageUrl";
-import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
-import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
 	Command,
@@ -21,18 +16,23 @@ import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
-import { signOut } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { signOut } from "next-auth/react";
 import {
 	cloneElement,
-	memo,
 	type MutableRefObject,
+	memo,
 	type RefObject,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
+import { markAsRead } from "@/actions/notifications/mark-as-read";
+import Notifications from "@/app/(org)/dashboard/_components/Notifications";
+import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
+import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
 	ArrowUpIcon,

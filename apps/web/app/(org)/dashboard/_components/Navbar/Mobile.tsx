@@ -1,12 +1,13 @@
 "use client";
 
-import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { LogoBadge } from "@cap/ui";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import Link from "next/link";
 import { type MutableRefObject, useState } from "react";
+
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { useTheme } from "../../Contexts";
 import NavItems from "./Items";
 
