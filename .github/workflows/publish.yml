@@ -138,9 +138,9 @@ jobs:
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            runner: macos-latest-large
+            runner: macos-latest-xlarge
           - target: aarch64-apple-darwin
-            runner: macos-latest-large
+            runner: macos-latest-xlarge
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     env:
@@ -155,13 +155,13 @@ jobs:
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
       - uses: apple-actions/import-codesign-certs@v2
-        if: ${{ matrix.settings.runner == 'macos-latest-large' }}
+        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
-        if: ${{ matrix.settings.runner == 'macos-latest-large' }}
+        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
