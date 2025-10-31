@@ -4,7 +4,7 @@ import { LogoBadge } from "@cap/ui";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
-import { ThemeToggleIcon } from "@/components/ThemeToggleIcon";
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import Link from "next/link";
 import { type MutableRefObject, useState } from "react";
 import { useTheme } from "../../Contexts";

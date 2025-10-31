@@ -11,7 +11,7 @@ import {
 } from "@cap/ui";
 import { faBell } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { ThemeToggleIcon } from "@/components/ThemeToggleIcon";
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
