@@ -155,8 +155,10 @@ impl Message<Pause> for Actor {
                 index,
                 ..
             }) => {
-                let (cursors, next_cursor_id) =
-                    self.stop_pipeline(pipeline, segment_start_time).await?;
+                let (cursors, next_cursor_id) = self
+                    .stop_pipeline(pipeline, segment_start_time)
+                    .await
+                    .context("stop_pipeline")?;
 
                 Some(ActorState::Paused {
                     next_index: index + 1,
@@ -265,10 +267,10 @@ impl Pipeline {
 
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen?,
-            microphone: microphone.transpose()?,
-            camera: camera.transpose()?,
-            system_audio: system_audio.transpose()?,
+            screen: screen.context("screen")?,
+            microphone: microphone.transpose().context("microphone")?,
+            camera: camera.transpose().context("camera")?,
+            system_audio: system_audio.transpose().context("system_audio")?,
             cursor: self.cursor,
         })
     }
@@ -287,6 +289,28 @@ impl Pipeline {
 
         if let Some(ref system_audio) = self.system_audio {
             futures.push(system_audio.done_fut());
+        }
+
+        // Ensure non-video pipelines stop promptly when the video pipeline completes
+        {
+            let mic_cancel = self.microphone.as_ref().map(|p| p.cancel_token());
+            let cam_cancel = self.camera.as_ref().map(|p| p.cancel_token());
+            let sys_cancel = self.system_audio.as_ref().map(|p| p.cancel_token());
+
+            let screen_done = self.screen.done_fut();
+            tokio::spawn(async move {
+                // When screen (video) finishes, cancel the other pipelines
+                let _ = screen_done.await;
+                if let Some(token) = mic_cancel.as_ref() {
+                    token.cancel();
+                }
+                if let Some(token) = cam_cancel.as_ref() {
+                    token.cancel();
+                }
+                if let Some(token) = sys_cancel.as_ref() {
+                    token.cancel();
+                }
+            });
         }
 
         tokio::spawn(async move {

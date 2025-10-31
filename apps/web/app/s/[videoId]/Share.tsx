@@ -1,7 +1,6 @@
 "use client";
 
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { comments as commentsSchema } from "@cap/database/schema";
 import type { ImageUpload, Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -22,6 +21,7 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
+import type { VideoData } from "./types";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -34,22 +34,13 @@ export type CommentType = typeof commentsSchema.$inferSelect & {
 	sending?: boolean;
 };
 
-type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
-	organizationMembers?: string[];
-	organizationId?: string;
-	sharedOrganizations?: { id: string; name: string }[];
-	hasPassword?: boolean;
-	orgSettings?: OrganizationSettings | null;
-};
-
 interface ShareProps {
-	data: VideoWithOrganizationInfo;
+	data: VideoData;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
 	customDomain: string | null;
 	domainVerified: boolean;
 	videoSettings?: OrganizationSettings | null;
-	ownerIsPro?: boolean;
 	userOrganizations?: { id: string; name: string }[];
 	initialAiData?: {
 		title?: string | null;
@@ -139,7 +130,6 @@ const useVideoStatus = (
 export const Share = ({
 	data,
 	comments,
-	ownerIsPro,
 	views,
 	initialAiData,
 	aiGenerationEnabled,
@@ -318,7 +308,6 @@ export const Share = ({
 								createdAt: effectiveDate,
 								transcriptionStatus,
 							}}
-							ownerIsPro={ownerIsPro}
 							videoSettings={videoSettings}
 							commentsData={commentsData}
 							setCommentsData={setCommentsData}

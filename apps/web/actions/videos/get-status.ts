@@ -3,6 +3,7 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -45,7 +46,7 @@ export async function getVideoStatus(
 
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
-	if (!video.transcriptionStatus) {
+	if (!video.transcriptionStatus && serverEnv().DEEPGRAM_API_KEY) {
 		console.log(
 			`[Get Status] Transcription not started for video ${videoId}, triggering transcription`,
 		);

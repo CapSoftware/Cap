@@ -1,5 +1,5 @@
 import { CurrentUser, Http, Policy } from "@cap/web-domain";
-import { HttpApiBuilder } from "@effect/platform";
+import { HttpApiBuilder, HttpApiError } from "@effect/platform";
 import { Effect } from "effect";
 
 import { handleDomainError } from "../Http/Errors.ts";
@@ -11,11 +11,15 @@ export const LoomHttpLive = HttpApiBuilder.group(
 	"loom",
 	(handlers) =>
 		Effect.gen(function* () {
-			const workflows = yield* Workflows.RpcClient;
+			const _workflows = yield* Effect.serviceOption(Workflows.RpcClient);
 			const orgPolicy = yield* OrganisationsPolicy;
 
 			return handlers.handle("importVideo", ({ payload }) =>
 				Effect.gen(function* () {
+					const workflows = yield* _workflows.pipe(
+						Effect.catchAll(() => new HttpApiError.ServiceUnavailable()),
+					);
+
 					const user = yield* CurrentUser;
 					if (!user.email.endsWith("@cap.so"))
 						return yield* Effect.die("Internal access only");

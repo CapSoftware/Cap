@@ -1040,6 +1040,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1047,6 +1048,7 @@ name = "cap-api"
 version = "0.0.0"
 dependencies = [
  "reqwest 0.12.24",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1058,6 +1060,7 @@ dependencies = [
  "ffmpeg-next",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1074,6 +1077,7 @@ dependencies = [
  "thiserror 1.0.69",
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1084,6 +1088,7 @@ dependencies = [
  "clap",
  "inquire",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1096,6 +1101,7 @@ dependencies = [
  "tracing-subscriber",
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1111,6 +1117,7 @@ dependencies = [
  "thiserror 1.0.69",
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1123,6 +1130,7 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1136,6 +1144,7 @@ dependencies = [
  "thiserror 1.0.69",
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1144,6 +1153,7 @@ version = "0.1.0"
 dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "ffmpeg-next",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1153,6 +1163,7 @@ dependencies = [
  "core-graphics 0.24.0",
  "device_query",
  "scap-targets",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1167,11 +1178,12 @@ dependencies = [
  "specta",
  "strum 0.27.2",
  "windows 0.60.0",
+ "workspace-hack",
 ]
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.79"
+version = "0.3.80"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1270,6 +1282,7 @@ dependencies = [
  "whisper-rs",
  "windows 0.60.0",
  "windows-sys 0.59.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1293,6 +1306,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1304,6 +1318,7 @@ dependencies = [
  "ffmpeg-next",
  "thiserror 1.0.69",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1314,6 +1329,7 @@ dependencies = [
  "ffmpeg-next",
  "thiserror 1.0.69",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1325,6 +1341,7 @@ dependencies = [
  "rgb",
  "thiserror 1.0.69",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1340,6 +1357,7 @@ dependencies = [
  "windows 0.60.0",
  "windows-core 0.60.1",
  "windows-numerics 0.2.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1372,6 +1390,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1379,6 +1398,7 @@ name = "cap-fail"
 version = "0.1.0"
 dependencies = [
  "inventory",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1387,6 +1407,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "specta",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1394,6 +1415,7 @@ name = "cap-gpu-converters"
 version = "0.1.0"
 dependencies = [
  "wgpu",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1406,6 +1428,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1415,6 +1438,7 @@ dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1429,6 +1453,7 @@ dependencies = [
  "tracing",
  "windows 0.60.0",
  "windows-numerics 0.2.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1437,6 +1462,7 @@ version = "0.1.0"
 dependencies = [
  "windows 0.60.0",
  "windows-core 0.60.1",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1453,6 +1479,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1515,6 +1542,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows 0.60.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1549,6 +1577,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wgpu",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1564,6 +1593,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1573,6 +1603,7 @@ dependencies = [
  "cidre 0.11.0",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "windows 0.60.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1590,6 +1621,7 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "windows-sys 0.52.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1601,6 +1633,7 @@ dependencies = [
  "ffmpeg-next",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3023,6 +3056,7 @@ name = "ffmpeg-hw-device"
 version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7828,6 +7862,7 @@ version = "0.1.0"
 dependencies = [
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7839,6 +7874,7 @@ dependencies = [
  "thiserror 1.0.69",
  "windows 0.60.0",
  "windows-numerics 0.2.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7855,6 +7891,7 @@ dependencies = [
  "scap-targets",
  "tokio",
  "windows 0.60.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7871,6 +7908,7 @@ dependencies = [
  "scap-targets",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -7888,6 +7926,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows 0.60.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -12073,6 +12112,75 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "axum",
+ "bitflags 2.9.4",
+ "bytemuck",
+ "chrono",
+ "clang-sys",
+ "clap",
+ "clap_builder",
+ "deranged",
+ "either",
+ "flate2",
+ "form_urlencoded",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.16",
+ "gif",
+ "hashbrown 0.15.5",
+ "idna",
+ "itertools 0.12.1",
+ "itertools 0.13.0",
+ "libc",
+ "log",
+ "memchr",
+ "miniz_oxide",
+ "nom",
+ "num-rational",
+ "num-traits",
+ "percent-encoding",
+ "phf_shared 0.10.0",
+ "phf_shared 0.11.3",
+ "proc-macro2",
+ "profiling",
+ "quote",
+ "rand 0.8.5",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest 0.12.24",
+ "rgb",
+ "rustc-hash 1.1.0",
+ "schemars 0.8.22",
+ "semver",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "smallvec",
+ "specta",
+ "specta-macros",
+ "stable_deref_trait",
+ "syn 2.0.106",
+ "tauri-utils",
+ "thiserror 2.0.16",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

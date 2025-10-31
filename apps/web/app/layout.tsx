@@ -129,6 +129,8 @@ export default ({ children }: PropsWithChildren) =>
 										<PublicEnvContext
 											value={{
 												webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+												workosAuthAvailable: !!serverEnv().WORKOS_CLIENT_ID,
+												googleAuthAvailable: !!serverEnv().GOOGLE_CLIENT_ID,
 											}}
 										>
 											<ReactQueryProvider>

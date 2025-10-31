@@ -22,7 +22,7 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	isSummaryDisabled?: boolean;
-	ownerIsPro?: boolean;
+	ownerIsPro: boolean;
 }
 
 const formatTime = (time: number) => {

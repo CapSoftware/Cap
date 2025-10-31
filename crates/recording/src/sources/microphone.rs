@@ -37,7 +37,7 @@ impl AudioSource for Microphone {
                 while let Ok(frame) = rx.recv_async().await {
                     let _ = audio_tx
                         .send(AudioFrame::new(
-                            audio_info.wrap_frame(&frame.data),
+                            audio_info.wrap_frame_with_max_channels(&frame.data, 2),
                             frame.timestamp,
                         ))
                         .await;
@@ -45,7 +45,7 @@ impl AudioSource for Microphone {
             });
 
             Ok(Self {
-                info: audio_info,
+                info: audio_info.with_max_channels(2),
                 _lock: feed_lock,
             })
         }

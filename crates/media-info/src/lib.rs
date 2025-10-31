@@ -24,7 +24,7 @@ pub enum AudioInfoError {
 }
 
 impl AudioInfo {
-    pub const MAX_AUDIO_CHANNELS: u16 = 8;
+    pub const MAX_AUDIO_CHANNELS: u16 = 16;
 
     pub const fn new(
         sample_format: Sample,
@@ -133,38 +133,72 @@ impl AudioInfo {
         frame
     }
 
-    pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
-        let sample_size = self.sample_size();
-        let interleaved_chunk_size = sample_size * self.channels;
-        let samples = data.len() / interleaved_chunk_size;
+    /// Always expects packed input data
+    pub fn wrap_frame_with_max_channels(
+        &self,
+        packed_data: &[u8],
+        max_channels: usize,
+    ) -> frame::Audio {
+        let out_channels = self.channels.min(max_channels);
 
-        let mut frame = frame::Audio::new(self.sample_format, samples, self.channel_layout());
+        let sample_size = self.sample_size();
+        let packed_sample_size = sample_size * self.channels;
+        let samples = packed_data.len() / packed_sample_size;
+
+        let mut frame = frame::Audio::new(
+            self.sample_format,
+            samples,
+            ChannelLayout::default(out_channels as i32),
+        );
         frame.set_rate(self.sample_rate);
 
         if self.channels == 0 {
             unreachable!()
-        } else if self.channels == 1 || frame.is_packed() {
-            frame.data_mut(0)[0..data.len()].copy_from_slice(data)
+        } else if self.channels == 1 || (frame.is_packed() && self.channels <= out_channels) {
+            // frame is allocated with parameters derived from packed_data, so this is safe
+            frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
+        } else if frame.is_packed() && self.channels > out_channels {
+            for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
+                let start = chunk_index * sample_size * out_channels;
+
+                let copy_len = sample_size * out_channels;
+
+                if let (Some(chunk_slice), Some(frame_slice)) = (
+                    packed_chunk.get(0..copy_len),
+                    frame.data_mut(0).get_mut(start..start + copy_len),
+                ) {
+                    frame_slice.copy_from_slice(chunk_slice);
+                }
+            }
         } else {
-            // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
-            // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
-            // with planar data, so we de-interleave it here if there is more than one channel.
-
-            for (chunk_index, interleaved_chunk) in data.chunks(interleaved_chunk_size).enumerate()
-            {
+            for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size;
-                let end = start + sample_size;
 
-                for channel in 0..self.channels {
+                for channel in 0..out_channels {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
-                    frame.data_mut(channel)[start..end]
-                        .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
+                    if let (Some(chunk_slice), Some(frame_slice)) = (
+                        packed_chunk.get(channel_start..channel_end),
+                        frame.data_mut(channel).get_mut(start..start + sample_size),
+                    ) {
+                        frame_slice.copy_from_slice(chunk_slice);
+                    }
                 }
             }
         }
 
         frame
+    }
+
+    /// Always expects packed input data
+    pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
+        self.wrap_frame_with_max_channels(data, self.channels)
+    }
+
+    pub fn with_max_channels(&self, channels: u16) -> Self {
+        let mut this = *self;
+        this.channels = this.channels.min(channels as usize);
+        this
     }
 }
 
@@ -290,5 +324,60 @@ pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
         SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
         SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod audio_info {
+        use super::*;
+
+        #[test]
+        fn wrap_packed_frame() {
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 4);
+
+            let input = &[1, 2, 3, 4, 1, 2, 3, 4];
+            let frame = info.wrap_frame(input);
+
+            assert_eq!(&frame.data(0)[0..input.len()], input);
+        }
+
+        #[test]
+        fn wrap_planar_frame() {
+            let info = AudioInfo::new_raw(Sample::U8(Type::Planar), 2, 4);
+
+            let input = &[1, 2, 3, 4, 1, 2, 3, 4];
+            let frame = info.wrap_frame(input);
+
+            assert_eq!(frame.planes(), 4);
+            assert_eq!(&frame.data(0)[0..2], &[1, 1]);
+            assert_eq!(&frame.data(1)[0..2], &[2, 2]);
+            assert_eq!(&frame.data(2)[0..2], &[3, 3]);
+            assert_eq!(&frame.data(3)[0..2], &[4, 4]);
+        }
+
+        #[test]
+        fn wrap_packed_frame_max_channels() {
+            let info = AudioInfo::new_raw(Sample::U8(Type::Packed), 2, 4);
+
+            let input = &[1, 2, 3, 4, 1, 2, 3, 4];
+            let frame = info.wrap_frame_with_max_channels(input, 2);
+
+            assert_eq!(&frame.data(0)[0..4], &[1, 2, 1, 2]);
+        }
+
+        #[test]
+        fn wrap_planar_frame_max_channels() {
+            let info = AudioInfo::new_raw(Sample::U8(Type::Planar), 2, 4);
+
+            let input = &[1, 2, 3, 4, 1, 2, 3, 4];
+            let frame = info.wrap_frame_with_max_channels(input, 2);
+
+            assert_eq!(frame.planes(), 2);
+            assert_eq!(&frame.data(0)[0..2], &[1, 1]);
+            assert_eq!(&frame.data(1)[0..2], &[2, 2]);
+        }
     }
 }

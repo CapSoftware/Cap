@@ -1,22 +1,18 @@
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
-import { Comment, User } from "@cap/web-domain";
+import { Comment } from "@cap/web-domain";
 import { AnimatePresence, motion } from "motion/react";
 import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
-import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import type { CommentType } from "../Share";
+import type { VideoData } from "../types";
 import { AuthOverlay } from "./AuthOverlay";
 
 const MotionButton = motion.create(Button);
 
 // million-ignore
 interface ToolbarProps {
-	data: typeof videos.$inferSelect & {
-		orgSettings?: OrganizationSettings | null;
-	};
+	data: VideoData;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
 	disableReactions?: boolean;
