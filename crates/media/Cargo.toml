@@ -11,6 +11,7 @@ workspace = true
 cap-media-info = { path = "../media-info" }
 ffmpeg.workspace = true
 thiserror.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 inquire = "0.7.5"
