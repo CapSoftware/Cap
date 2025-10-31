@@ -1,11 +1,10 @@
 "use client";
 
 import { LogoBadge } from "@cap/ui";
-import { Sun, Moon } from "lucide-react";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
+import { ThemeToggleIcon } from "@/components/ThemeToggleIcon";
 import Link from "next/link";
 import { type MutableRefObject, useState } from "react";
 import { useTheme } from "../../Contexts";
@@ -61,9 +60,7 @@ export const AdminMobileNav = () => {
 						}}
 						className="flex justify-center items-center rounded-full border transition-colors cursor-pointer lg:hidden bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5"
 					>
-						<span className="view-transition-theme-icon">
-							{theme === "dark" ? <Moon fill="white" size={16} stroke="#313131"/> : <Sun size={16}/>}
-						</span>
+						<ThemeToggleIcon />
 					</div>
 				</div>
 			</div>

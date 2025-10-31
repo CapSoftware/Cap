@@ -10,8 +10,8 @@ import {
 	PopoverTrigger,
 } from "@cap/ui";
 import { faBell } from "@fortawesome/free-solid-svg-icons";
-import { Sun, Moon } from "lucide-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { ThemeToggleIcon } from "@/components/ThemeToggleIcon";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -171,10 +171,7 @@ const Top = () => {
 					}}
 					className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
 				>
-					<span className="view-transition-theme-icon">
-						{theme === "dark" ? <Moon fill="white" size={16} stroke="#313131"/> : <Sun size={16}/>}
-					</span>
-
+					<ThemeToggleIcon />{" "}
 				</div>
 				<User />
 			</div>
