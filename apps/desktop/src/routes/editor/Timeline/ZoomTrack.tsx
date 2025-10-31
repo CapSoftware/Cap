@@ -116,23 +116,27 @@ export function ZoomTrack(props: {
 				if (availableTime < minDuration) return;
 			}
 
-			if (nextSegment.value[0].start - previewTime < 1)
-				return {
-					index: nextSegment.value[1],
-					start: nextSegment.value[0].start - minDuration,
-					end: nextSegment.value[0].start,
-					max: nextSegment.value[0].start,
-				};
+			// Check if there's space between preview time and next segment
+			const spaceToNext = nextSegment.value[0].start - previewTime;
+			if (spaceToNext < minDuration) {
+				// If there's not enough space for minimum duration, don't show proposed zoom
+				return;
+			}
 		}
+
+		const max = nextSegment.pipe(
+			Option.map(([s]) => s.start),
+			Option.getOrElse(() => totalDuration()),
+		);
+
+		// Check if there's enough space before returning
+		if (max - previewTime < minDuration) return;
 
 		return {
 			index: nextSegment.pipe(Option.map(([_, i]) => i)),
 			start: previewTime,
 			end: previewTime + minDuration,
-			max: nextSegment.pipe(
-				Option.map(([s]) => s.start),
-				Option.getOrElse(() => totalDuration()),
-			),
+			max: max,
 		};
 	};
 
@@ -418,7 +422,7 @@ export function ZoomTrack(props: {
 					return (
 						<SegmentRoot
 							class={cx(
-								"border duration-200 hover:border-gray-12 transition-colors group",
+								"border duration-200 hover:border-gray-12 transition-colors group z-10",
 								"bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
 								isSelected()
 									? "wobble-wrapper border-gray-12"
@@ -609,7 +613,7 @@ export function ZoomTrack(props: {
 			>
 				{(details) => (
 					<SegmentRoot
-						class="pointer-events-none"
+						class="z-0 pointer-events-none"
 						innerClass="ring-red-300"
 						segment={details()}
 					>
