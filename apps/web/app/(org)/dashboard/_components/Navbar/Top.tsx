@@ -9,7 +9,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@cap/ui";
-import { faBell, faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
+import { faBell } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
@@ -31,6 +31,7 @@ import {
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
 import {
@@ -170,10 +171,7 @@ const Top = () => {
 					}}
 					className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
 				>
-					<FontAwesomeIcon
-						className="text-gray-12 size-3.5 view-transition-theme-icon"
-						icon={theme === "dark" ? faMoon : faSun}
-					/>
+					<ThemeToggleIcon />
 				</div>
 				<User />
 			</div>

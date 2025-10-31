@@ -1,13 +1,13 @@
 "use client";
 
 import { LogoBadge } from "@cap/ui";
-import { faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import Link from "next/link";
 import { type MutableRefObject, useState } from "react";
+
+import { ThemeToggleIcon } from "@/components/theme-toggle-icon";
 import { useTheme } from "../../Contexts";
 import NavItems from "./Items";
 
@@ -61,10 +61,7 @@ export const AdminMobileNav = () => {
 						}}
 						className="flex justify-center items-center rounded-full border transition-colors cursor-pointer lg:hidden bg-gray-4 hover:border-gray-6 hover:bg-gray-5 size-9 border-gray-5"
 					>
-						<FontAwesomeIcon
-							className="text-gray-12 size-3.5"
-							icon={theme === "dark" ? faSun : faMoon}
-						/>
+						<ThemeToggleIcon />
 					</div>
 				</div>
 			</div>

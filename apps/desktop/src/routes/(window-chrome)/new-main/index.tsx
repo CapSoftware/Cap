@@ -440,6 +440,8 @@ function Page() {
 			currentWindow.setSize(new LogicalSize(size.width, size.height));
 		});
 
+		commands.updateAuthPlan();
+
 		onCleanup(async () => {
 			(await unlistenFocus)?.();
 			(await unlistenResize)?.();

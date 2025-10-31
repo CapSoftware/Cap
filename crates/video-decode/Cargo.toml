@@ -11,6 +11,7 @@ ffmpeg.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

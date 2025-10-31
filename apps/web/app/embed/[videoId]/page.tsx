@@ -162,13 +162,7 @@ export default async function EmbedVideoPage(
 		return Option.fromNullable(video);
 	}).pipe(
 		Effect.flatten,
-		Effect.map(
-			(video) =>
-				({
-					needsPassword: false,
-					video,
-				}) as const,
-		),
+		Effect.map((video) => ({ needsPassword: false, video }) as const),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),
@@ -191,7 +185,7 @@ export default async function EmbedVideoPage(
 						</p>
 					</div>,
 				),
-			NoSuchElementException: () => Effect.sync(notFound()),
+			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,

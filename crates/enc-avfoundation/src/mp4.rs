@@ -327,9 +327,10 @@ impl MP4Encoder {
             let mut offset = 0;
             for plane_i in 0..frame.planes() {
                 let data = frame.data(plane_i);
-                block_buf_slice[offset..offset + data.len()]
-                    .copy_from_slice(&data[0..frame.samples() * frame.format().bytes()]);
-                offset += data.len();
+                let channel_data_len = frame.samples() * frame.format().bytes();
+                block_buf_slice[offset..offset + channel_data_len]
+                    .copy_from_slice(&data[0..channel_data_len]);
+                offset += channel_data_len;
             }
         } else {
             block_buf_slice.copy_from_slice(&frame.data(0)[0..total_data]);
