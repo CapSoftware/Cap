@@ -171,7 +171,7 @@ const Top = () => {
 					}}
 					className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
 				>
-					<ThemeToggleIcon />{" "}
+					<ThemeToggleIcon />
 				</div>
 				<User />
 			</div>

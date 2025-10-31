@@ -8,7 +8,7 @@ export const ThemeToggleIcon = () => {
 	return (
 		<span className="view-transition-theme-icon">
 			{theme === "dark" ? (
-				<Moon size={16} className="fill-white stroke-[#313131]" />
+				<Moon size={16} className="fill-white stroke-gray-3" />
 			) : (
 				<Sun size={16} className="stroke-gray-12" />
 			)}
