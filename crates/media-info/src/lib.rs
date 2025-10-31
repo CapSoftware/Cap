@@ -154,31 +154,35 @@ impl AudioInfo {
 
         if self.channels == 0 {
             unreachable!()
-        } else if self.channels == 1 || (frame.is_packed() && self.channels <= max_channels) {
-            frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data)
+        } else if self.channels == 1 || (frame.is_packed() && self.channels <= out_channels) {
+            // frame is allocated with parameters derived from packed_data, so this is safe
+            frame.data_mut(0)[0..packed_data.len()].copy_from_slice(packed_data);
         } else if frame.is_packed() && self.channels > out_channels {
             for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size * out_channels;
-                let end = start + sample_size * out_channels;
 
-                frame.data_mut(0)[start..end].copy_from_slice(&packed_chunk[0..(end - start)]);
+                let copy_len = sample_size * out_channels;
+
+                if let (Some(chunk_slice), Some(frame_slice)) = (
+                    packed_chunk.get(0..copy_len),
+                    frame.data_mut(0).get_mut(start..start + copy_len),
+                ) {
+                    frame_slice.copy_from_slice(chunk_slice);
+                }
             }
         } else {
-            // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
-            // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
-            // with planar data, so we de-interleave it here if there is more than one channel.
-
-            for (chunk_index, interleaved_chunk) in
-                packed_data.chunks(packed_sample_size).enumerate()
-            {
+            for (chunk_index, packed_chunk) in packed_data.chunks(packed_sample_size).enumerate() {
                 let start = chunk_index * sample_size;
-                let end = start + sample_size;
 
-                for channel in 0..self.channels.min(max_channels) {
+                for channel in 0..out_channels {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
-                    frame.data_mut(channel)[start..end]
-                        .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
+                    if let (Some(chunk_slice), Some(frame_slice)) = (
+                        packed_chunk.get(channel_start..channel_end),
+                        frame.data_mut(channel).get_mut(start..start + sample_size),
+                    ) {
+                        frame_slice.copy_from_slice(chunk_slice);
+                    }
                 }
             }
         }
