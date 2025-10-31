@@ -9,7 +9,8 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@cap/ui";
-import { faBell, faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
+import { faBell } from "@fortawesome/free-solid-svg-icons";
+import { Sun, Moon } from "lucide-react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
@@ -170,10 +171,10 @@ const Top = () => {
 					}}
 					className="hidden justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 lg:flex hover:bg-gray-5 size-9"
 				>
-					<FontAwesomeIcon
-						className="text-gray-12 size-3.5 view-transition-theme-icon"
-						icon={theme === "dark" ? faMoon : faSun}
-					/>
+					<span className="view-transition-theme-icon">
+						{theme === "dark" ? <Moon fill="white" size={16} stroke="#313131"/> : <Sun size={16}/>}
+					</span>
+
 				</div>
 				<User />
 			</div>
