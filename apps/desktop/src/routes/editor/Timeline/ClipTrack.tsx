@@ -309,30 +309,34 @@ export function ClipTrack(
 													if (m.type === "single") return m.value;
 												})()}
 											>
-												{(marker) => (
-													<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
-														<CutOffsetButton
-															value={(() => {
-																const m = marker();
-																return m.type === "time" ? m.time : 0;
-															})()}
-															onClick={() => {
-																setProject(
-																	"timeline",
-																	"segments",
-																	produce((s) => {
-																		if (marker().type === "reset") {
-																			s[i() - 1].end = s[i()].end;
-																			s.splice(i(), 1);
-																		} else {
-																			s[i() - 1].end = s[i()].start;
-																		}
-																	}),
-																);
-															}}
-														/>
-													</div>
-												)}
+												{(markerValue) => {
+													const value = createMemo(() => {
+														const m = markerValue();
+														return m.type === "time" ? m.time : 0;
+													});
+
+													return (
+														<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
+															<CutOffsetButton
+																value={value()}
+																onClick={() => {
+																	setProject(
+																		"timeline",
+																		"segments",
+																		produce((s) => {
+																			if (markerValue().type === "reset") {
+																				s[i() - 1].end = s[i()].end;
+																				s.splice(i(), 1);
+																			} else {
+																				s[i() - 1].end = s[i()].start;
+																			}
+																		}),
+																	);
+																}}
+															/>
+														</div>
+													);
+												}}
 											</Match>
 											<Match
 												when={(() => {
@@ -345,16 +349,16 @@ export function ClipTrack(
 														return m.right;
 												})()}
 											>
-												{(marker) => {
-													const markerValue = marker();
+												{(markerValue) => {
+													const value = createMemo(() => {
+														const m = markerValue();
+														return m.type === "time" ? m.time : 0;
+													});
+
 													return (
 														<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 															<CutOffsetButton
-																value={
-																	markerValue.type === "time"
-																		? markerValue.time
-																		: 0
-																}
+																value={value()}
 																class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
 																onClick={() => {
 																	setProject(
@@ -684,34 +688,38 @@ export function ClipTrack(
 										return m.left;
 								})()}
 							>
-								{(marker) => (
-									<div
-										class="absolute w-0 z-10 h-full *:absolute"
-										style={{
-											transform: `translateX(${segmentX() + segmentWidth()}px)`,
-										}}
-									>
-										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
-										<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
-											<CutOffsetButton
-												value={(() => {
-													const m = marker();
-													return m.type === "time" ? m.time : 0;
-												})()}
-												class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
-												onClick={() => {
-													setProject(
-														"timeline",
-														"segments",
-														i(),
-														"end",
-														segmentRecording().display.duration,
-													);
-												}}
-											/>
+								{(markerValue) => {
+									const value = createMemo(() => {
+										const m = markerValue();
+										return m.type === "time" ? m.time : 0;
+									});
+
+									return (
+										<div
+											class="absolute w-0 z-10 h-full *:absolute"
+											style={{
+												transform: `translateX(${segmentX() + segmentWidth()}px)`,
+											}}
+										>
+											<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+											<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
+												<CutOffsetButton
+													value={value()}
+													class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
+													onClick={() => {
+														setProject(
+															"timeline",
+															"segments",
+															i(),
+															"end",
+															segmentRecording().display.duration,
+														);
+													}}
+												/>
+											</div>
 										</div>
-									</div>
-								)}
+									);
+								}}
 							</Show>
 						</>
 					);
@@ -770,11 +778,12 @@ function CutOffsetButton(props: {
 			)}
 			onClick={() => props.onClick?.()}
 		>
-			{props.value === 0 ? (
-				<IconCapScissors class="size-3.5" />
-			) : (
-				formatTime(props.value)
-			)}
+			<Show
+				when={props.value !== 0}
+				fallback={<IconCapScissors class="size-3.5" />}
+			>
+				{formatTime(props.value)}
+			</Show>
 		</button>
 	);
 }

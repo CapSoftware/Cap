@@ -147,7 +147,13 @@ export function Player() {
 
 	// Register keyboard shortcuts in one place
 	useEditorShortcuts(
-		() => document.activeElement === document.body,
+		() => {
+			const el = document.activeElement;
+			if (!el) return true;
+			const tagName = el.tagName.toLowerCase();
+			const isContentEditable = el.getAttribute("contenteditable") === "true";
+			return !(tagName === "input" || tagName === "textarea" || isContentEditable);
+		},
 		[
 			{
 				combo: "S",
