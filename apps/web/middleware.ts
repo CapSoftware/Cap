@@ -45,6 +45,7 @@ export async function middleware(request: NextRequest) {
 				path.startsWith("/onboarding") ||
 				path.startsWith("/api") ||
 				path.startsWith("/login") ||
+				path.startsWith("/signup") ||
 				path.startsWith("/invite") ||
 				path.startsWith("/self-hosting") ||
 				path.startsWith("/terms") ||

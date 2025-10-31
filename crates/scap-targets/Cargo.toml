@@ -11,6 +11,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 specta.workspace = true
 image = "0.24"
 tracing.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = ["sc"] }

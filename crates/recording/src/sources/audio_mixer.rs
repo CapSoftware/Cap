@@ -1,13 +1,15 @@
 use cap_media_info::AudioInfo;
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::channel::{mpsc, oneshot};
+#[cfg(not(any(target_os = "macos", windows)))]
+use std::time::Instant;
 use std::{
     collections::VecDeque,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tracing::{debug, info};
 
@@ -238,43 +240,10 @@ impl AudioMixer {
     fn buffer_sources(&mut self, now: Timestamp) {
         for source in &mut self.sources {
             let rate = source.info.rate();
-            let buffer_timeout = source.buffer_timeout;
+            let _buffer_timeout = source.buffer_timeout;
 
-            if let Some(last) = source.buffer_last {
-                let last_end = last.0 + last.1;
-                if let Some(elapsed_since_last) = now
-                    .duration_since(self.timestamps)
-                    .checked_sub(last_end.duration_since(self.timestamps))
-                {
-                    let mut remaining = elapsed_since_last;
-
-                    while remaining > buffer_timeout {
-                        let chunk_samples = samples_for_timeout(rate, buffer_timeout);
-                        let frame_duration = duration_from_samples(chunk_samples, rate);
-
-                        let mut frame = ffmpeg::frame::Audio::new(
-                            source.info.sample_format,
-                            chunk_samples,
-                            source.info.channel_layout(),
-                        );
-                        frame.set_rate(source.info.rate() as u32);
-
-                        for i in 0..frame.planes() {
-                            frame.data_mut(i).fill(0);
-                        }
-
-                        let timestamp = last_end + (elapsed_since_last - remaining);
-                        source.buffer_last = Some((timestamp, frame_duration));
-                        source.buffer.push_back(AudioFrame::new(frame, timestamp));
-
-                        if frame_duration.is_zero() {
-                            break;
-                        }
-
-                        remaining = remaining.saturating_sub(frame_duration);
-                    }
-                }
-            }
+            // Do not inject silence based on wall-clock pacing. We only bridge actual gaps
+            // when a new frame arrives (below), to keep emission data-driven.
 
             while let Ok(Some(AudioFrame {
                 inner: frame,

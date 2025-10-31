@@ -105,9 +105,6 @@ export const provideOptionalAuth = <A, E, R>(
 	Effect.gen(function* () {
 		const user = yield* getCurrentUser;
 
-		if (Option.isSome(user))
-			yield* Effect.log(`Providing auth for user ${user.value.id}`);
-
 		return yield* user.pipe(
 			Option.match({
 				onNone: () => app,

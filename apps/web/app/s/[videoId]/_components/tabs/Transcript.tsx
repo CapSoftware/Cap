@@ -7,9 +7,11 @@ import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
+import { useCurrentUser } from "@/app/Layout/AuthContext";
+import type { VideoData } from "../../types";
 
 interface TranscriptProps {
-	data: typeof videos.$inferSelect;
+	data: VideoData;
 	onSeek?: (time: number) => void;
 	user?: { id: string } | null;
 }
@@ -117,11 +119,8 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 	return sortedEntries;
 };
 
-export const Transcript: React.FC<TranscriptProps> = ({
-	data,
-	user,
-	onSeek,
-}) => {
+export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
+	const user = useCurrentUser();
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
@@ -379,7 +378,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 		}, 2000);
 	};
 
-	const canEdit = user?.id === data.ownerId;
+	const canEdit = user?.id === data.owner.id;
 
 	if (isLoading) {
 		return (

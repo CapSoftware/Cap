@@ -14,6 +14,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
+import { userIsPro } from "@cap/utils";
 import {
 	Database,
 	ImageUploads,
@@ -106,19 +107,6 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 
 	return sharedSpaces;
 }
-
-type VideoWithOrganization = typeof videos.$inferSelect & {
-	sharedOrganization?: {
-		organizationId: string;
-	} | null;
-	organizationMembers?: string[];
-	organizationId?: string;
-	sharedOrganizations?: { id: string; name: string }[];
-	password?: string | null;
-	hasPassword?: boolean;
-	ownerIsPro?: boolean;
-	orgSettings?: OrganizationSettings | null;
-};
 
 const ALLOWED_REFERRERS = [
 	"x.com",
@@ -276,9 +264,6 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.select({
 					id: videos.id,
 					name: videos.name,
-					ownerId: videos.ownerId,
-					ownerName: users.name,
-					ownerImageUrlOrKey: users.image,
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
@@ -306,17 +291,14 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						organizationId: sharedVideos.organizationId,
 					},
 					orgSettings: organizations.settings,
-					ownerIsPro:
-						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
-							Boolean,
-						),
 					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
+					owner: users,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-				.leftJoin(users, eq(videos.ownerId, users.id))
+				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
 				.where(eq(videos.id, videoId)),
@@ -367,13 +349,11 @@ async function AuthorizedContent({
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"folderId" | "password" | "settings"
+		"folderId" | "password" | "settings" | "ownerId"
 	> & {
+		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasPassword: boolean;
-		ownerIsPro?: boolean;
-		ownerName?: string | null;
-		ownerImageUrlOrKey?: ImageUpload.ImageUrlOrKey | null;
 		orgSettings?: OrganizationSettings | null;
 		videoSettings?: OrganizationSettings | null;
 	};
@@ -383,7 +363,7 @@ async function AuthorizedContent({
 	const user = await getCurrentUser();
 	const videoId = video.id;
 
-	if (user && video && user.id !== video.ownerId) {
+	if (user && video && user.id !== video.owner.id) {
 		try {
 			await createNotification({
 				type: "view",
@@ -425,7 +405,7 @@ async function AuthorizedContent({
 			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
 		})
 		.from(users)
-		.where(eq(users.id, video.ownerId))
+		.where(eq(users.id, video.owner.id))
 		.limit(1);
 
 	if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
@@ -470,19 +450,12 @@ async function AuthorizedContent({
 		video.transcriptionStatus !== "PROCESSING"
 	) {
 		console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-		await transcribeVideo(videoId, video.ownerId, aiGenerationEnabled);
+		await transcribeVideo(videoId, video.owner.id, aiGenerationEnabled);
 
 		const updatedVideoQuery = await db()
 			.select({
 				id: videos.id,
 				name: videos.name,
-				ownerId: videos.ownerId,
-				ownerName: users.name,
-				ownerImageUrlOrKey: users.image,
-				ownerIsPro:
-					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
-						Boolean,
-					),
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				bucket: videos.bucket,
@@ -505,7 +478,7 @@ async function AuthorizedContent({
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-			.leftJoin(users, eq(videos.ownerId, users.id))
+			.innerJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(organizations, eq(videos.orgId, organizations.id))
 			.where(eq(videos.id, videoId))
 			.execute();
@@ -548,7 +521,7 @@ async function AuthorizedContent({
 		aiGenerationEnabled
 	) {
 		try {
-			generateAiMetadata(videoId, video.ownerId).catch((error) => {
+			generateAiMetadata(videoId, video.owner.id).catch((error) => {
 				console.error(
 					`[ShareVideoPage] Error generating AI metadata for video ${videoId}:`,
 					error,
@@ -586,7 +559,7 @@ async function AuthorizedContent({
 			org &&
 			org.customDomain &&
 			org.domainVerified !== null &&
-			user.id === video.ownerId
+			user.id === video.owner.id
 		) {
 			return { customDomain: org.customDomain, domainVerified: true };
 		}
@@ -725,13 +698,19 @@ async function AuthorizedContent({
 
 		return {
 			...video,
-			ownerImage: video.ownerImageUrlOrKey
-				? yield* imageUploads.resolveImageUrl(video.ownerImageUrlOrKey)
-				: null,
-			organizationMembers: membersList.map((member) => member.userId),
-			organizationId: video.sharedOrganization?.organizationId ?? undefined,
+			owner: {
+				id: video.owner.id,
+				name: video.owner.name,
+				isPro: userIsPro(video.owner),
+				image: video.owner.image
+					? yield* imageUploads.resolveImageUrl(video.owner.image)
+					: null,
+			},
+			organization: {
+				organizationMembers: membersList.map((member) => member.userId),
+				organizationId: video.sharedOrganization?.organizationId ?? undefined,
+			},
 			sharedOrganizations: sharedOrganizations,
-			ownerIsPro: video.ownerIsPro ?? false,
 			password: null,
 			folderId: null,
 			orgSettings: video.orgSettings || null,
@@ -762,7 +741,6 @@ async function AuthorizedContent({
 				<Share
 					data={videoWithOrganizationInfo}
 					videoSettings={videoWithOrganizationInfo.settings}
-					ownerIsPro={videoWithOrganizationInfo.ownerIsPro}
 					comments={commentsPromise}
 					views={viewsPromise}
 					customDomain={customDomain}
