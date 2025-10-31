@@ -67,6 +67,36 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	updatedAt: Schema.Date,
 }) {}
 
+export const UploadProgressUpdateInput = Schema.Struct({
+	videoId: VideoId,
+	uploaded: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+	total: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+	updatedAt: Schema.Date,
+});
+
+export const PresignedPost = Schema.Struct({
+	url: Schema.String,
+	fields: Schema.Record({ key: Schema.String, value: Schema.String }),
+});
+
+export const InstantRecordingCreateInput = Schema.Struct({
+	orgId: OrganisationId,
+	folderId: Schema.OptionFromUndefinedOr(FolderId),
+	durationSeconds: Schema.optional(Schema.Number),
+	resolution: Schema.optional(Schema.String),
+	width: Schema.optional(Schema.Number),
+	height: Schema.optional(Schema.Number),
+	videoCodec: Schema.optional(Schema.String),
+	audioCodec: Schema.optional(Schema.String),
+	supportsUploadProgress: Schema.optional(Schema.Boolean),
+});
+
+export const InstantRecordingCreateSuccess = Schema.Struct({
+	id: VideoId,
+	shareUrl: Schema.String,
+	upload: PresignedPost,
+});
+
 export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
 	source: Schema.Literal("loom"),
 	id: Schema.String,
@@ -157,6 +187,20 @@ export class VideoRpcs extends RpcGroup.make(
 			VerifyVideoPasswordError,
 		),
 	}),
+	Rpc.make("VideoInstantCreate", {
+		payload: InstantRecordingCreateInput,
+		success: InstantRecordingCreateSuccess,
+		error: Schema.Union(InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("VideoUploadProgressUpdate", {
+		payload: UploadProgressUpdateInput,
+		success: Schema.Boolean,
+		error: Schema.Union(
+			NotFoundError,
+			InternalError,
+			PolicyDeniedError,
+		),
+	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoGetDownloadInfo", {
 		payload: VideoId,
 		success: Schema.Option(
