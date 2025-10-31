@@ -532,7 +532,7 @@ export function ExportDialog() {
 										<Show
 											when={
 												settings.exportTo === "link" &&
-												organisations().length > 0
+												organisations().length > 1
 											}
 										>
 											<div
