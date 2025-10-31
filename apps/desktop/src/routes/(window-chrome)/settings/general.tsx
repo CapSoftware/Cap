@@ -420,12 +420,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								handleChange("enableNotifications", value);
 							}}
 						/>
-						<ToggleSettingItem
-							label="Enable haptics"
-							description="Use haptics on Force Touch™ trackpads"
-							value={!!settings.hapticsEnabled}
-							onChange={(v) => handleChange("hapticsEnabled", v)}
-						/>
 					</SettingGroup>
 				)}
 
