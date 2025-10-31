@@ -1,5 +1,6 @@
 import {
 	LogoBadge,
+	Select,
 	Table,
 	TableBody,
 	TableCell,
@@ -11,7 +12,9 @@ import {
 	faAppleWhole,
 	faDesktop,
 	faMobileScreen,
+	faFilter,
 	faTablet,
+	faDownLong,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -120,7 +123,22 @@ const TableCard = ({
 }: TableCardProps) => {
 	return (
 		<div className="p-5 w-full rounded-xl border bg-gray-2 border-gray-4">
-			<p className="text-lg font-medium text-gray-12">{title}</p>
+			<div className="flex flex-1 gap-2 justify-between items-center h-[48px]">
+				<p className="text-lg font-medium text-gray-12">{title}</p>
+				<Select
+					variant="light"
+					icon={<FontAwesomeIcon icon={faFilter} />}
+					size="md"
+					options={[
+						{ label: "Views", value: "views_desc" },
+						{ label: "Comments", value: "comments_desc" },
+						{ label: "Reactions", value: "reactions_desc" },
+						{ label: "Percentage", value: "percentage_desc" },
+					]}
+					onValueChange={() => {}}
+					placeholder="Sort by"
+				/>
+			</div>
 			<div className="w-full">
 				<Table
 					className={clsx(
@@ -159,16 +177,16 @@ const TableCard = ({
 											<span className="truncate">{row.name}</span>
 										</div>
 									</TableCell>
-									<TableCell className="p-2.5 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
+									<TableCell className="py-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
 										{row.views}
 									</TableCell>
-									<TableCell className="p-2.5 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
+									<TableCell className="p-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
 										{row.comments}
 									</TableCell>
-									<TableCell className="p-2.5 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
+									<TableCell className="p-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
 										{row.reactions}
 									</TableCell>
-									<TableCell className="p-2.5 text-sm text-nowrap rounded-r-lg border-r text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
+									<TableCell className="p-2.5 px-3 text-sm text-nowrap rounded-r-lg border-r text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
 										{row.percentage}
 									</TableCell>
 								</TableRow>

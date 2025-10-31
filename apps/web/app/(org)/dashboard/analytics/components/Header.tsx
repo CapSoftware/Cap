@@ -3,6 +3,8 @@
 import { Button, Select } from "@cap/ui";
 import { useState } from "react";
 import { CompareDataDialog } from "./CompareDataDialog";
+import { faCalendar } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
 export default function Header() {
 	const [openCompareDataDialog, setOpenCompareDataDialog] = useState(false);
@@ -13,20 +15,10 @@ export default function Header() {
 				onOpenChange={setOpenCompareDataDialog}
 			/>
 			<div className="flex gap-2 items-center">
-				{/* <Select
-					variant="dark"
-					size="fit"
-					options={[
-						{ value: "views", label: "Views" },
-						{ value: "comments", label: "Comments" },
-						{ value: "reactions", label: "Reactions" },
-					]}
-					onValueChange={() => {}}
-					placeholder="Metric"
-				/> */}
 				<Select
-					variant="dark"
-					size="fit"
+					variant="light"
+					icon={<FontAwesomeIcon icon={faCalendar} />}
+					size="md"
 					options={[
 						{ value: "24_hours", label: "24 hours" },
 						{ value: "7_days", label: "7 days" },
