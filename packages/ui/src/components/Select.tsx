@@ -135,7 +135,7 @@ function Select({
 			<SelectContent variant={variant}>
 				{options.map((option) => (
 					<SelectItem key={option.value} value={option.value} icon={option.icon}>
-						<div className="flex items-center">
+						<div className="flex gap-2 items-center">
 							{option.image && option.image}
 							{option.label}
 						</div>
