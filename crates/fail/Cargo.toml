@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 inventory = "0.3.19"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]
 workspace = true

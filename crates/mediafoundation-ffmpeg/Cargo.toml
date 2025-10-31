@@ -9,6 +9,7 @@ cap-media-info = { path = "../media-info" }
 tracing = { workspace = true }
 flume = { workspace = true }
 thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
 cap-mediafoundation-utils = { path = "../mediafoundation-utils" }

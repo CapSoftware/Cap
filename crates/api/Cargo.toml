@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 reqwest = "0.12.24"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]
 workspace = true
