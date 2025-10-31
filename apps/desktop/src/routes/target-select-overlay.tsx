@@ -83,7 +83,6 @@ function Inner() {
 		displayId: DisplayId;
 		isHoveredDisplay: string;
 	}>();
-	const isHoveredDisplay = params.isHoveredDisplay === "true";
 	const [options, setOptions] = useOptions();
 
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);

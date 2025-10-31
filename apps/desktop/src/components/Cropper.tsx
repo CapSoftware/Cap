@@ -726,13 +726,14 @@ export default function Cropper(
 		let nextBounds: CropBounds;
 
 		if (ratioValue !== null) {
-			nextBounds = computeAspectRatioResize(
-				pointX,
-				pointY,
-				context.startBounds,
-				context.activeHandle,
-				options,
-			);
+			nextBounds =
+				computeAspectRatioResize(
+					pointX,
+					pointY,
+					context.startBounds,
+					context.activeHandle,
+					options,
+				) ?? rawBounds();
 		} else {
 			const { bounds, snappedRatio } = computeFreeResize(
 				pointX,
@@ -1265,7 +1266,7 @@ function computeAspectRatioResize(
 	startBounds: CropBounds,
 	handle: HandleSide,
 	options: ResizeOptions,
-): CropBounds {
+): CropBounds | null {
 	const { container, min, max, ratioValue } = options;
 	if (ratioValue === null) return startBounds;
 
@@ -1303,6 +1304,15 @@ function computeAspectRatioResize(
 	const newX = mX < anchorX ? anchorX - targetW : anchorX;
 	const newY = mY < anchorY ? anchorY - targetH : anchorY;
 	let finalBounds = { x: newX, y: newY, width: targetW, height: targetH };
+
+	if (
+		finalBounds.x < 0 ||
+		finalBounds.y < 0 ||
+		finalBounds.x + finalBounds.width > container.x ||
+		finalBounds.y + finalBounds.height > container.y
+	) {
+		return null;
+	}
 
 	const resizeOrigin = { x: mX < anchorX ? 1 : 0, y: mY < anchorY ? 1 : 0 };
 	finalBounds = constrainBoundsToSize(
