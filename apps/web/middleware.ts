@@ -41,6 +41,7 @@ export async function middleware(request: NextRequest) {
 		if (
 			!(
 				path.startsWith("/s/") ||
+				path.startsWith("/middleware") ||
 				path.startsWith("/dashboard") ||
 				path.startsWith("/onboarding") ||
 				path.startsWith("/api") ||
