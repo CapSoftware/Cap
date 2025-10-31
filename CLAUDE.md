@@ -17,7 +17,6 @@ Cap is the open source alternative to Loom. It's a Turborepo monorepo with a Tau
 ### Core Applications
 - `apps/web/` — Next.js web application (sharing, management, dashboard)
 - `apps/desktop/` — Tauri desktop app (recording, editing)
-- `apps/tasks/` — Background job processing service
 - `apps/discord-bot/` — Discord integration bot
 - `apps/storybook/` — UI component documentation
 
