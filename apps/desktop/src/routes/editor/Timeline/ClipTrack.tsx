@@ -240,15 +240,18 @@ export function ClipTrack(
 							previousDragOffset = dragState.offset / segment.timescale;
 						}
 
+						// Calculate proposed start position
+						const proposedStart =
+							prevDuration() + currentOffset + previousDragOffset;
+
+						// Ensure we never visually overlap with the previous segment
+						// prevDuration already includes previous segments' durations
+						const clampedStart = Math.max(proposedStart, prevDuration());
+
 						return {
-							start: Math.max(
-								prevDuration() + currentOffset + previousDragOffset,
-								0,
-							),
+							start: Math.max(clampedStart, 0),
 							end:
-								prevDuration() +
-								currentOffset +
-								previousDragOffset +
+								clampedStart +
 								(segment.end - segment.start) / segment.timescale,
 							timescale: segment.timescale,
 							recordingSegment: segment.recordingSegment,
@@ -541,11 +544,6 @@ export function ClipTrack(
 										);
 
 										const prevSegment = segments()[i() - 1];
-										const prevSegmentIsSameClip =
-											prevSegment?.recordingSegment !== undefined
-												? prevSegment.recordingSegment ===
-													segment.recordingSegment
-												: false;
 
 										function update(event: MouseEvent) {
 											const newStart =
@@ -554,10 +552,14 @@ export function ClipTrack(
 													secsPerPixel() *
 													segment.timescale;
 
+											// Calculate the minimum allowed start position
+											// Must not overlap with previous segment, regardless of clip
+											const minAllowedStart = prevSegment ? prevSegment.end : 0;
+
 											const clampedStart = Math.min(
 												Math.max(
 													newStart,
-													prevSegmentIsSameClip ? prevSegment.end : 0,
+													minAllowedStart,
 													segment.end - maxDuration,
 												),
 												segment.end - 1,
@@ -570,10 +572,11 @@ export function ClipTrack(
 												initialStart,
 											});
 
-											// Update shared drag state for following segments
-											setActiveDragState({
-												segmentIndex: i(),
-												offset: offset,
+											requestAnimationFrame(() => {
+												setActiveDragState({
+													segmentIndex: i(),
+													offset: offset,
+												});
 											});
 
 											setProject(
