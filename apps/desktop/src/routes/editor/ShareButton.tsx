@@ -100,6 +100,7 @@ function ShareButton() {
 						projectPath,
 						"Reupload",
 						uploadChannel,
+						null,
 					)
 				: await commands.uploadExportedVideo(
 						projectPath,
@@ -107,6 +108,7 @@ function ShareButton() {
 							Initial: { pre_created_video: null },
 						},
 						uploadChannel,
+						null,
 					);
 
 			if (result === "NotAuthenticated") {

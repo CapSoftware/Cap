@@ -7,6 +7,7 @@ import {
 	keepPreviousData,
 } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
@@ -19,6 +20,7 @@ import {
 	mergeProps,
 	on,
 	Show,
+	Suspense,
 	Switch,
 	type ValidComponent,
 } from "solid-js";
@@ -30,6 +32,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { exportVideo } from "~/utils/export";
+import { createOrganizationsQuery } from "~/utils/queries";
 import {
 	commands,
 	type ExportCompression,
@@ -107,6 +110,7 @@ interface Settings {
 	exportTo: ExportToOption;
 	resolution: { label: string; value: string; width: number; height: number };
 	compression: ExportCompression;
+	organizationId?: string | null;
 }
 export function ExportDialog() {
 	const {
@@ -120,6 +124,7 @@ export function ExportDialog() {
 	} = useEditorContext();
 
 	const auth = authStore.createQuery();
+	const organisations = createOrganizationsQuery();
 
 	const hasTransparentBackground = () => {
 		const backgroundSource =
@@ -146,15 +151,22 @@ export function ExportDialog() {
 		const ret: Partial<Settings> = {};
 		if (hasTransparentBackground() && _settings.format === "Mp4")
 			ret.format = "Gif";
+		// Ensure GIF is not selected when exportTo is "link"
+		else if (_settings.format === "Gif" && _settings.exportTo === "link")
+			ret.format = "Mp4";
+		else if (!["Mp4", "Gif"].includes(_settings.format)) ret.format = "Mp4";
+
+		Object.defineProperty(ret, "organizationId", {
+			get() {
+				if (!_settings.organizationId && organisations().length > 0)
+					return organisations()[0].id;
+
+				return _settings.organizationId;
+			},
+		});
 
 		return ret;
 	});
-
-	if (!["Mp4", "Gif"].includes(settings.format)) setSettings("format", "Mp4");
-
-	// Ensure GIF is not selected when exportTo is "link"
-	if (settings.format === "Gif" && settings.exportTo === "link")
-		setSettings("format", "Mp4");
 
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
@@ -365,19 +377,21 @@ export function ExportDialog() {
 
 			setExportState({ type: "uploading", progress: 0 });
 
+			console.log({ organizationId: settings.organizationId });
+
 			// Now proceed with upload
 			const result = meta().sharing
 				? await commands.uploadExportedVideo(
 						projectPath,
 						"Reupload",
 						uploadChannel,
+						settings.organizationId ?? null,
 					)
 				: await commands.uploadExportedVideo(
 						projectPath,
-						{
-							Initial: { pre_created_video: null },
-						},
+						{ Initial: { pre_created_video: null } },
 						uploadChannel,
+						settings.organizationId ?? null,
 					);
 
 			if (result === "NotAuthenticated")
@@ -436,14 +450,14 @@ export function ExportDialog() {
 						)
 					}
 					leftFooterContent={
-						<div>
-							<Show when={exportEstimates.data}>
-								{(est) => (
-									<div
-										class={cx(
-											"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none",
-										)}
-									>
+						<div
+							class={cx(
+								"flex overflow-hidden z-40 justify-between items-center max-w-full text-xs font-medium transition-all pointer-events-none",
+							)}
+						>
+							<Suspense>
+								<Show when={exportEstimates.data}>
+									{(est) => (
 										<p class="flex gap-4 items-center">
 											<span class="flex items-center text-gray-12">
 												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
@@ -502,9 +516,9 @@ export function ExportDialog() {
 												})()}
 											</span>
 										</p>
-									</div>
-								)}
-							</Show>
+									)}
+								</Show>
+							</Suspense>
 						</div>
 					}
 				>
@@ -512,7 +526,49 @@ export function ExportDialog() {
 						{/* Export to */}
 						<div class="flex-1 p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
-								<h3 class="text-gray-12">Export to</h3>
+								<div class="flex flex-row justify-between items-center">
+									<h3 class="text-gray-12">Export to</h3>
+									<Suspense>
+										<Show
+											when={
+												settings.exportTo === "link" &&
+												organisations().length > 0
+											}
+										>
+											<div
+												class="text-sm text-gray-12 flex flex-row hover:opacity-60 transition-opacity duration-200"
+												onClick={async () => {
+													const menu = await Menu.new({
+														items: await Promise.all(
+															organisations().map((org) =>
+																CheckMenuItem.new({
+																	text: org.name,
+																	action: () => {
+																		setSettings("organizationId", org.id);
+																	},
+																	checked: settings.organizationId === org.id,
+																}),
+															),
+														),
+													});
+													menu.popup();
+												}}
+											>
+												<span class="opacity-70">Organization:</span>
+												<span class="ml-1 flex flex-row ">
+													{
+														(
+															organisations().find(
+																(o) => o.id === settings.organizationId,
+															) ?? organisations()[0]
+														)?.name
+													}
+													<IconCapChevronDown />
+												</span>
+											</div>
+										</Show>
+									</Suspense>
+								</div>
 								<div class="flex gap-2">
 									<For each={EXPORT_TO_OPTIONS}>
 										{(option) => (
