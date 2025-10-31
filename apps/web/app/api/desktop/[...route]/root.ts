@@ -197,9 +197,7 @@ app.get("/plan", withAuth, async (c) => {
 	});
 });
 
-app.get("/organizations",
-	withAuth,
-	async (c) => {
+app.get("/organizations", withAuth, async (c) => {
 	const user = c.get("user");
 
 	const orgs = await db()

@@ -30,6 +30,7 @@ import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
@@ -42,7 +43,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { handleRecordingResult } from "~/utils/recording";
 
 const MIN_WIDTH = 200;
 const MIN_HEIGHT = 100;

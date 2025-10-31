@@ -7,6 +7,7 @@ import {
 	keepPreviousData,
 } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import {
@@ -31,6 +32,7 @@ import { authStore } from "~/store";
 import { trackEvent } from "~/utils/analytics";
 import { createSignInMutation } from "~/utils/auth";
 import { exportVideo } from "~/utils/export";
+import { createOrganizationsQuery } from "~/utils/queries";
 import {
 	commands,
 	type ExportCompression,
@@ -48,8 +50,6 @@ import {
 	PopperContent,
 	topSlideAnimateClasses,
 } from "./ui";
-import { createOrganizationsQuery } from "~/utils/queries";
-import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 
 class SilentError extends Error {}
 

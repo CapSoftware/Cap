@@ -243,14 +243,17 @@ export function createCustomDomainQuery() {
 }
 
 export function createOrganizationsQuery() {
-  const auth = authStore.createQuery();
+	const auth = authStore.createQuery();
 
-  // Refresh organizations if they're missing
-  createEffect(() => {
-    if (auth.data?.user_id && (!auth.data?.organizations || auth.data.organizations.length === 0)) {
-      commands.updateAuthPlan().catch(console.error);
-    }
-  });
+	// Refresh organizations if they're missing
+	createEffect(() => {
+		if (
+			auth.data?.user_id &&
+			(!auth.data?.organizations || auth.data.organizations.length === 0)
+		) {
+			commands.updateAuthPlan().catch(console.error);
+		}
+	});
 
-  return () => auth.data?.organizations ?? [];
+	return () => auth.data?.organizations ?? [];
 }
