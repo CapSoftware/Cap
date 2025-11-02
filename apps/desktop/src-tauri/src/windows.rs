@@ -13,8 +13,8 @@ use std::{
     sync::{Arc, Mutex, atomic::AtomicU32},
 };
 use tauri::{
-    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, Wry,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tauri_specta::Event;
 use tokio::sync::RwLock;

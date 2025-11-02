@@ -103,7 +103,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		<div
 			data-variant={props.variant}
 			class={cx(
-				"grid w-full grid-cols-2 content-start items-start justify-items-stretch gap-2",
+				"grid w-full grid-cols-3 content-start items-start justify-items-stretch gap-2",
 				props.class,
 			)}
 			ref={(node) => {
@@ -112,7 +112,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		>
 			<Switch>
 				<Match when={props.errorMessage}>
-					<div class="flex flex-col col-span-2 gap-2 justify-center items-center py-6 text-sm text-center text-gray-11">
+					<div class="flex flex-col col-span-3 gap-2 justify-center items-center py-6 text-sm text-center text-gray-11">
 						<p>{props.errorMessage}</p>
 					</div>
 				</Match>
@@ -122,7 +122,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 					</For>
 				</Match>
 				<Match when={isEmpty()}>
-					<div class="col-span-2 py-6 text-sm text-center text-gray-11">
+					<div class="col-span-3 py-6 text-sm text-center text-gray-11">
 						{props.emptyMessage ?? defaultEmptyMessage()}
 					</div>
 				</Match>
