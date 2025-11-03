@@ -29,7 +29,7 @@ import {
 	Policy,
 	type Video,
 } from "@cap/web-domain";
-import { eq, type InferSelectModel, sql } from "drizzle-orm";
+import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
@@ -301,7 +301,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				.innerJoin(users, eq(videos.ownerId, users.id))
 				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.leftJoin(organizations, eq(videos.orgId, organizations.id))
-				.where(eq(videos.id, videoId)),
+				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
 		return Option.fromNullable(video);

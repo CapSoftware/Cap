@@ -1,8 +1,7 @@
 import * as Db from "@cap/database/schema";
-import { type ImageUpload, Organisation, Policy } from "@cap/web-domain";
+import { CurrentUser, Organisation, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option } from "effect";
-
 import { Database } from "../Database";
 import { ImageUploads } from "../ImageUploads";
 import { S3Buckets } from "../S3Buckets";
@@ -49,7 +48,48 @@ export class Organisations extends Effect.Service<Organisations>()(
 				}
 			});
 
-			return { update };
+			const deleteOrg = Effect.fn("Organisations.deleteOrg")(function* (
+				id: Organisation.OrganisationId,
+			) {
+				const user = yield* CurrentUser;
+
+				yield* Policy.withPolicy(policy.isOwner(id))(Effect.void);
+
+				// Perform tombstone, find other org, and update user in a single transaction
+				yield* db.use((db) =>
+					db.transaction(async (tx) => {
+						await tx
+							.update(Db.organizations)
+							.set({ tombstoneAt: new Date() })
+							.where(Dz.eq(Db.organizations.id, id));
+
+						// Find another active organization owned by the user
+						const [otherOrg] = await tx
+							.select({ id: Db.organizations.id })
+							.from(Db.organizations)
+							.where(
+								Dz.and(
+									Dz.ne(Db.organizations.id, id),
+									Dz.isNull(Db.organizations.tombstoneAt),
+									Dz.eq(Db.organizations.ownerId, user.id),
+								),
+							)
+							.orderBy(Dz.asc(Db.organizations.createdAt))
+							.limit(1);
+
+						if (otherOrg) {
+							await tx
+								.update(Db.users)
+								.set({
+									activeOrganizationId: otherOrg.id,
+									defaultOrgId: otherOrg.id,
+								})
+								.where(Dz.eq(Db.users.id, user.id));
+						}
+					}),
+				);
+			});
+			return { update, deleteOrg };
 		}),
 		dependencies: [
 			ImageUploads.Default,

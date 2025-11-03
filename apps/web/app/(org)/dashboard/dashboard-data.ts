@@ -71,9 +71,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 			)
 			.leftJoin(users, eq(organizationMembers.userId, users.id))
 			.where(
-				or(
-					eq(organizations.ownerId, user.id),
-					eq(organizationMembers.userId, user.id),
+				and(
+					or(
+						eq(organizations.ownerId, user.id),
+						eq(organizationMembers.userId, user.id),
+					),
+					isNull(organizations.tombstoneAt),
 				),
 			);
 
@@ -322,7 +325,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 									organizationInvites,
 									eq(organizations.id, organizationInvites.organizationId),
 								)
-								.where(eq(organizations.ownerId, organization.ownerId)),
+								.where(
+									and(
+										eq(organizations.ownerId, organization.ownerId),
+										isNull(organizations.tombstoneAt),
+									),
+								),
 						);
 
 						const totalInvites = totalInvitesResult[0]?.value || 0;

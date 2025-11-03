@@ -8,7 +8,7 @@ import {
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
-import { eq, or } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
@@ -212,9 +212,12 @@ app.get("/organizations", withAuth, async (c) => {
 			eq(organizations.id, organizationMembers.organizationId),
 		)
 		.where(
-			or(
-				eq(organizations.ownerId, user.id),
-				eq(organizationMembers.userId, user.id),
+			and(
+				isNull(organizations.tombstoneAt),
+				or(
+					eq(organizations.ownerId, user.id),
+					eq(organizationMembers.userId, user.id),
+				),
 			),
 		)
 		.groupBy(organizations.id);
