@@ -219,14 +219,17 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.leftJoin(users, eq(videos.ownerId, users.id))
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(
-				and(
-					root.variant === "space"
-						? eq(spaceVideos.folderId, folderId)
-						: root.variant === "org"
-							? eq(sharedVideos.folderId, folderId)
-							: eq(videos.folderId, folderId),
-					isNull(organizations.tombstoneAt),
-				),
+				root.variant === "space"
+					? and(
+							eq(spaceVideos.folderId, folderId),
+							isNull(organizations.tombstoneAt),
+						)
+					: root.variant === "org"
+						? and(
+								eq(sharedVideos.folderId, folderId),
+								isNull(organizations.tombstoneAt),
+							)
+						: eq(videos.folderId, folderId),
 			)
 			.groupBy(
 				videos.id,
