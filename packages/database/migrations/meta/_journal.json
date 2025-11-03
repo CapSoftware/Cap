@@ -43,13 +43,6 @@
 			"when": 1761711605408,
 			"tag": "0005_video-org-id-required",
 			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "5",
-			"when": 1762162057689,
-			"tag": "0006_past_carlie_cooper",
-			"breakpoints": true
 		}
 	]
 }
