@@ -15,14 +15,11 @@ export const OrganisationsRpcsLive = Organisation.OrganisationRpcs.toLayer(
 					}),
 				),
 			OrganisationDelete: (data) =>
-				orgs
-					.deleteOrg(data.id)
-					.pipe(
-						Effect.catchTag(
-							"DatabaseError",
-							() => new InternalError({ type: "database" }),
-						),
-					),
+				orgs.deleteOrg(data.id).pipe(
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+					}),
+				),
 		};
 	}),
 );

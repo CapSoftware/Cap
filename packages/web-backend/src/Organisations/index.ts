@@ -53,15 +53,22 @@ export class Organisations extends Effect.Service<Organisations>()(
 			) {
 				const user = yield* CurrentUser;
 
-				yield* Policy.withPolicy(policy.isOwner(id))(Effect.void);
-
 				//this is fake deleting for now
-				yield* db.use((db) =>
-					db
-						.update(Db.organizations)
-						.set({ tombstoneAt: new Date() })
-						.where(Dz.eq(Db.organizations.id, id)),
-				);
+				yield* db
+					.use((db) =>
+						db
+							.update(Db.organizations)
+							.set({ tombstoneAt: new Date() })
+							.where(Dz.eq(Db.organizations.id, id)),
+					)
+					.pipe(
+						Effect.flatMap(Array.get(0)),
+						Effect.catchTag(
+							"NoSuchElementException",
+							() => new Organisation.NotFoundError(),
+						),
+						Policy.withPolicy(policy.isOwner(id)),
+					);
 
 				//set another org as active org
 				const [otherOrg] = yield* db.use((db) =>
