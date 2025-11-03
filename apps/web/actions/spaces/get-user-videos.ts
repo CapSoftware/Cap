@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
+	organizations,
 	sharedVideos,
 	spaces,
 	spaceVideos,
@@ -13,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -48,23 +49,24 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 			),
 		};
 
-		const videoData = isAllSpacesEntry
-			? await db()
-					.select(selectFields)
-					.from(videos)
-					.leftJoin(comments, eq(videos.id, comments.videoId))
-					.leftJoin(users, eq(videos.ownerId, users.id))
-					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-					.leftJoin(
-						sharedVideos,
-						and(
-							eq(videos.id, sharedVideos.videoId),
-							eq(sharedVideos.organizationId, spaceId),
-						),
-					)
-					.leftJoin(folders, eq(sharedVideos.folderId, folders.id))
-					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+	const videoData = isAllSpacesEntry
+		? await db()
+				.select(selectFields)
+				.from(videos)
+				.leftJoin(comments, eq(videos.id, comments.videoId))
+				.leftJoin(users, eq(videos.ownerId, users.id))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+				.leftJoin(
+					sharedVideos,
+					and(
+						eq(videos.id, sharedVideos.videoId),
+						eq(sharedVideos.organizationId, spaceId),
+					),
+				)
+				.leftJoin(folders, eq(sharedVideos.folderId, folders.id))
+				.leftJoin(spaces, eq(folders.spaceId, spaces.id))
+				.leftJoin(organizations, eq(videos.orgId, organizations.id))
+				.where(and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)))
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -83,22 +85,23 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
           ${videos.createdAt}
         )`),
 					)
-			: await db()
-					.select(selectFields)
-					.from(videos)
-					.leftJoin(comments, eq(videos.id, comments.videoId))
-					.leftJoin(users, eq(videos.ownerId, users.id))
-					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-					.leftJoin(
-						spaceVideos,
-						and(
-							eq(videos.id, spaceVideos.videoId),
-							eq(spaceVideos.spaceId, spaceId),
-						),
-					)
-					.leftJoin(folders, eq(spaceVideos.folderId, folders.id))
-					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+		: await db()
+				.select(selectFields)
+				.from(videos)
+				.leftJoin(comments, eq(videos.id, comments.videoId))
+				.leftJoin(users, eq(videos.ownerId, users.id))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+				.leftJoin(
+					spaceVideos,
+					and(
+						eq(videos.id, spaceVideos.videoId),
+						eq(spaceVideos.spaceId, spaceId),
+					),
+				)
+				.leftJoin(folders, eq(spaceVideos.folderId, folders.id))
+				.leftJoin(spaces, eq(folders.spaceId, spaces.id))
+				.leftJoin(organizations, eq(videos.orgId, organizations.id))
+				.where(and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)))
 					.groupBy(
 						videos.id,
 						videos.ownerId,
