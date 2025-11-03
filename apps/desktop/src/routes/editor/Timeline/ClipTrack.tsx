@@ -472,12 +472,14 @@ export function ClipTrack(
 									}
 								}}
 							>
-								<WaveformCanvas
-									micWaveform={micWaveform()}
-									systemWaveform={systemAudioWaveform()}
-									segment={segment}
-									secsPerPixel={secsPerPixel()}
-								/>
+								{segment.timescale === 1 && (
+									<WaveformCanvas
+										micWaveform={micWaveform()}
+										systemWaveform={systemAudioWaveform()}
+										segment={segment}
+										secsPerPixel={secsPerPixel()}
+									/>
+								)}
 
 								<Markings segment={segment} prevDuration={prevDuration()} />
 
@@ -588,10 +590,9 @@ export function ClipTrack(
 														<IconLucideClock class="size-3.5" />{" "}
 														{formatTime(segment.end - segment.start)}
 														<Show when={segment.timescale !== 1}>
-															<div class="flex gap-1 items-center text-xs font-bold text-blue-11">
-																<IconLucideFastForward class="size-3" />
-																{segment.timescale}x
-															</div>
+															<div class="w-0.5" />
+															<IconLucideFastForward class="size-3" />
+															{segment.timescale}x
 														</Show>
 													</div>
 												</div>

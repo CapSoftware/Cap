@@ -1747,7 +1747,7 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
-    for segment in editor_instance.segments.iter() {
+    for segment in editor_instance.segment_medias.iter() {
         if let Some(audio) = &segment.audio {
             out.push(audio::get_waveform(audio));
         } else {
@@ -1766,7 +1766,7 @@ async fn get_system_audio_waveforms(
 ) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
-    for segment in editor_instance.segments.iter() {
+    for segment in editor_instance.segment_medias.iter() {
         if let Some(audio) = &segment.system_audio {
             out.push(audio::get_waveform(audio));
         } else {
