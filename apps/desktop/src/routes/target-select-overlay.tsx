@@ -1,6 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { createResizeObserver } from "@solid-primitives/resize-observer";
+import { createElementSize } from "@solid-primitives/resize-observer";
 import { useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -309,18 +309,6 @@ function Inner() {
 						await menu.close();
 					}
 
-					const [controlsSize, setControlsSize] = createStore({
-						width: 0,
-						height: 0,
-					});
-
-					createResizeObserver(
-						() => controlsEl,
-						({ width, height }) => {
-							setControlsSize({ width, height });
-						},
-					);
-
 					// Spacing rules:
 					// Prefer below the crop (smaller margin)
 					// If no space below, place above the crop (larger top margin)
@@ -332,11 +320,21 @@ function Inner() {
 					const MARGIN_TOP_INSIDE = macos ? 40 : 28;
 					const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
 
-					const [controllerInside, setControllerInside] = createSignal(false);
+					const controlsSize = createElementSize(() => controlsEl);
+					const [controllerInside, _setControllerInside] = createSignal(false);
+
+					// This is required due to the use of a ResizeObserver within the createElementSize function
+					// Otherwise there will be an infinite loop: ResizeObserver loop completed with undelivered notifications.
+					let raf: number | null = null;
+					function setControllerInside(value: boolean) {
+						if (raf) cancelAnimationFrame(raf);
+						raf = requestAnimationFrame(() => _setControllerInside(value));
+					}
 
 					const controlsStyle = createMemo(() => {
 						const bounds = crop();
 						const size = controlsSize;
+						if (!size?.width || !size?.height) return undefined;
 
 						if (size.width === 0 || bounds.width === 0) {
 							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
@@ -349,6 +347,7 @@ function Inner() {
 						const belowY = bounds.y + bounds.height + MARGIN_BELOW;
 						if (belowY + size.height <= window.innerHeight) {
 							finalY = belowY;
+							setControllerInside(false);
 						} else {
 							// Try above the crop with a larger top margin
 							const aboveY = bounds.y - size.height - MARGIN_TOP_OUTSIDE;
