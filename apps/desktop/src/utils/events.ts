@@ -26,6 +26,9 @@ export function createKeyDownSignal(
 		keyup: (e) => {
 			if (e.key === key) setDown(false);
 		},
+		blur: () => {
+			setDown(false);
+		},
 	});
 
 	return isDown;
