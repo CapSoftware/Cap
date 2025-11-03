@@ -1,4 +1,4 @@
-name: Tinybird
+name: Tinybird CI
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 
 jobs:
   ci:
-    name: Deploy
+    name: Validate
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,4 +39,4 @@ jobs:
         run: tb test run
 
       - name: Deployment check
-        run: tb --cloud --host ${{ env.TINYBIRD_HOST }} --token ${{ env.TINYBIRD_TOKEN }} deploy --check
+        run: tb --cloud --host "${{ env.TINYBIRD_HOST }}" --token "${{ env.TINYBIRD_TOKEN }}" deploy --check
