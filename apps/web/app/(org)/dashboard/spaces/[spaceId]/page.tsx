@@ -4,6 +4,7 @@ import {
 	comments,
 	folders,
 	organizationMembers,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
