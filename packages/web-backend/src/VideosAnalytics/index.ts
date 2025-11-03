@@ -3,8 +3,8 @@ import { dub } from "@cap/utils";
 import { Policy, Video, VideoAnalytics } from "@cap/web-domain";
 import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 import { Effect } from "effect";
-import { VideosRepo } from "../Videos/VideosRepo";
 import { VideosPolicy } from "../Videos/VideosPolicy";
+import { VideosRepo } from "../Videos/VideosRepo";
 
 export class VideosAnalytics extends Effect.Service<VideosAnalytics>()(
 	"VideosAnalytics",

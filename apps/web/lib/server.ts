@@ -15,9 +15,9 @@ import {
 	SpacesPolicy,
 	Users,
 	Videos,
+	VideosAnalytics,
 	VideosPolicy,
 	VideosRepo,
-	VideosAnalytics,
 	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
