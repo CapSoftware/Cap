@@ -1,55 +1,55 @@
 {
-  "version": "5",
-  "dialect": "mysql",
-  "entries": [
-    {
-      "idx": 0,
-      "version": "5",
-      "when": 1743020179593,
-      "tag": "0000_brown_sunfire",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1749268354138,
-      "tag": "0001_white_young_avengers",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1750935538683,
-      "tag": "0002_dusty_maginty",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1761710697286,
-      "tag": "0003_thin_gressill",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1761711378574,
-      "tag": "0004_video-org-id",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1761711605408,
-      "tag": "0005_video-org-id-required",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "5",
-      "when": 1762162057689,
-      "tag": "0006_past_carlie_cooper",
-      "breakpoints": true
-    }
-  ]
+	"version": "5",
+	"dialect": "mysql",
+	"entries": [
+		{
+			"idx": 0,
+			"version": "5",
+			"when": 1743020179593,
+			"tag": "0000_brown_sunfire",
+			"breakpoints": true
+		},
+		{
+			"idx": 1,
+			"version": "5",
+			"when": 1749268354138,
+			"tag": "0001_white_young_avengers",
+			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "5",
+			"when": 1750935538683,
+			"tag": "0002_dusty_maginty",
+			"breakpoints": true
+		},
+		{
+			"idx": 3,
+			"version": "5",
+			"when": 1761710697286,
+			"tag": "0003_thin_gressill",
+			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "5",
+			"when": 1761711378574,
+			"tag": "0004_video-org-id",
+			"breakpoints": true
+		},
+		{
+			"idx": 5,
+			"version": "5",
+			"when": 1761711605408,
+			"tag": "0005_video-org-id-required",
+			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "5",
+			"when": 1762162057689,
+			"tag": "0006_past_carlie_cooper",
+			"breakpoints": true
+		}
+	]
 }
