@@ -19,7 +19,7 @@ import Cropper, {
 	type Ratio,
 } from "~/components/Cropper";
 import { createOptionsQuery } from "~/utils/queries";
-import { type DisplayId } from "~/utils/tauri";
+import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";
 
 const MIN_SIZE = { width: 150, height: 150 };

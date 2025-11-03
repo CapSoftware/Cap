@@ -1,5 +1,9 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createResizeObserver } from "@solid-primitives/resize-observer";
+import type {
+	CheckMenuItemOptions,
+	PredefinedMenuItemOptions,
+} from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	type Accessor,
@@ -16,6 +20,7 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
+import { createKeyDownSignal } from "~/utils/events";
 
 import { commands } from "~/utils/tauri";
 export interface CropBounds {
@@ -699,14 +704,16 @@ export default function Cropper(
 		if (e.altKey !== context.isAltMode) {
 			context.isAltMode = e.altKey;
 			context.startBounds = rawBounds();
-			if (!context.isAltMode)
+			if (context.isAltMode) {
+				context.activeHandle = context.originalHandle;
+			} else {
 				context.activeHandle = updateHandleForModeSwitch(
 					context.originalHandle,
 					context.startBounds,
 					pointX,
 					pointY,
 				);
-			else context.activeHandle = context.originalHandle;
+			}
 		}
 
 		const { min, max } = rawSizeConstraint();
@@ -775,7 +782,7 @@ export default function Cropper(
 		};
 
 		createRoot((dispose) =>
-			createEventListenerMap(window, {
+			createEventListenerMap(containerRef, {
 				pointerup: () => {
 					setState({ cursorStyle: null, resizing: false });
 					// Note: may need to be added back
@@ -956,7 +963,6 @@ export default function Cropper(
 			return;
 
 		e.preventDefault();
-		e.stopPropagation();
 
 		setKeyboardState("pressedKeys", (p) => {
 			p.delete(e.key);
@@ -1007,6 +1013,8 @@ export default function Cropper(
 			});
 		}),
 	);
+
+	const altDown = createKeyDownSignal(window, "Alt");
 
 	return (
 		<div
@@ -1063,7 +1071,9 @@ export default function Cropper(
 				<div
 					ref={regionRef}
 					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
-					style={{ cursor: state.cursorStyle ?? "grab" }}
+					style={{
+						cursor: state.cursorStyle ?? "grab",
+					}}
 					onDblClick={(e) => e.stopPropagation()}
 				>
 					<button
@@ -1074,19 +1084,25 @@ export default function Cropper(
 						onPointerDown={onRegionPointerDown}
 					/>
 
+					<Show when={altDown()}>
+						<div class="absolute opacity-70 pointer-events-none flex items-center justify-center size-full">
+							<IconLucidePlus class="pointer-events-none size-6" />
+						</div>
+					</Show>
+
 					<Transition
 						appear
-						enterClass="opacity-0"
 						enterActiveClass="transition-opacity duration-300"
+						enterClass="opacity-0"
 						enterToClass="opacity-100"
-						exitClass="opacity-100"
 						exitActiveClass="transition-opacity duration-300"
+						exitClass="opacity-100"
 						exitToClass="opacity-0"
 					>
 						<Show when={state.dragging || state.resizing}>
-							<div class="pointer-events-none">
-								<div class="absolute left-0 w-full border-t border-b border-white/50 pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
-								<div class="absolute top-0 h-full border-l border-r border-white/50 pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
+							<div class="pointer-events-none *:absolute *:border-white/40">
+								<div class="left-0 w-full border-t border-b pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
+								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
 							</div>
 						</Show>
 					</Transition>
@@ -1474,11 +1490,6 @@ function computeFreeResize(
 	}
 	return { bounds, snappedRatio };
 }
-
-import type {
-	CheckMenuItemOptions,
-	PredefinedMenuItemOptions,
-} from "@tauri-apps/api/menu";
 
 export function createCropOptionsMenuItems(options: {
 	aspect: Ratio | null;

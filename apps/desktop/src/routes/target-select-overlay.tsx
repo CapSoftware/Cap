@@ -143,10 +143,10 @@ function Inner() {
 
 	return (
 		<Switch>
-			<Match when={options.targetMode === "display"}>
-				{(_) => (
+			<Match when={options.targetMode === "display" && params.displayId}>
+				{(displayId) => (
 					<div
-						data-over={targetUnderCursor.display_id === params.displayId}
+						data-over={targetUnderCursor.display_id === displayId()}
 						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
 						<div class="absolute inset-0 bg-black/50 -z-10" />
@@ -182,7 +182,7 @@ function Inner() {
 
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
-							target={{ variant: "display", id: params.displayId! }}
+							target={{ variant: "display", id: displayId() }}
 						/>
 						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
@@ -263,8 +263,8 @@ function Inner() {
 					)}
 				</Show>
 			</Match>
-			<Match when={options.targetMode === "area"}>
-				{(_) => {
+			<Match when={options.targetMode === "area" && params.displayId}>
+				{(displayId) => {
 					let controlsEl: HTMLDivElement | undefined;
 					let cropperRef: CropperRef | undefined;
 
@@ -368,7 +368,7 @@ function Inner() {
 								<RecordingControls
 									target={{
 										variant: "area",
-										screen: params.displayId!,
+										screen: displayId(),
 										bounds: {
 											position: { x: crop().x, y: crop().y },
 											size: { width: crop().width, height: crop().height },
