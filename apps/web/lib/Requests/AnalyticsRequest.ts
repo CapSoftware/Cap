@@ -19,7 +19,7 @@ export namespace AnalyticsRequest {
 
 				const requestResolver = RequestResolver.makeBatched(
 					(requests: NonEmptyArray<AnalyticsRequest>) =>
-						rpc.VideosGetAnalytics(requests.map((r) => r.videoId)).pipe(
+						rpc.VideosGetViewCount(requests.map((r) => r.videoId)).pipe(
 							Effect.flatMap(
 								// biome-ignore lint/suspicious/useIterableCallbackReturn: effect
 								Effect.forEach((result, index) =>

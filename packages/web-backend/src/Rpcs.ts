@@ -11,9 +11,11 @@ import { FolderRpcsLive } from "./Folders/FoldersRpcs.ts";
 import { OrganisationsRpcsLive } from "./Organisations/OrganisationsRpcs.ts";
 import { UsersRpcsLive } from "./Users/UsersRpcs.ts";
 import { VideosRpcsLive } from "./Videos/VideosRpcs.ts";
+import { VideosAnalyticsRpcsLive } from "./VideosAnalytics/VideosAnalyticsRpcs.ts";
 
 export const RpcsLive = Layer.mergeAll(
 	VideosRpcsLive,
+	VideosAnalyticsRpcsLive,
 	FolderRpcsLive,
 	UsersRpcsLive,
 	OrganisationsRpcsLive,

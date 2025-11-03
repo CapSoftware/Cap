@@ -18,3 +18,4 @@ export { SpaceMemberId, SpaceMemberRole } from "./Space.ts";
 export * as User from "./User.ts";
 export { UserId } from "./User.ts";
 export * as Video from "./Video.ts";
+export * as VideoAnalytics from "./VideoAnalytics.ts";

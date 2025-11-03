@@ -70,47 +70,6 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
-
-			VideosGetAnalytics: (videoIds) =>
-				Effect.all(
-					videoIds.map((id) =>
-						videos.getAnalytics(id).pipe(
-							Effect.catchTags({
-								DatabaseError: () => new InternalError({ type: "database" }),
-								RequestError: () => new InternalError({ type: "httpRequest" }),
-								ResponseError: () =>
-									new InternalError({ type: "httpResponse" }),
-								UnknownException: () => new InternalError({ type: "unknown" }),
-							}),
-							Effect.matchEffect({
-								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
-								onFailure: (e) =>
-									Schema.is(InternalError)(e)
-										? Effect.fail(e)
-										: Effect.succeed(Exit.fail(e)),
-							}),
-							Effect.map((v) => Unify.unify(v)),
-						),
-					),
-					{ concurrency: 10 },
-				).pipe(
-					provideOptionalAuth,
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						UnknownException: () => new InternalError({ type: "unknown" }),
-					}),
-				),
-
-			VideoCaptureAnalytics: (videoId) =>
-				videos.captureAnalytics(videoId).pipe(
-					provideOptionalAuth,
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						RequestError: () => new InternalError({ type: "httpRequest" }),
-						ResponseError: () => new InternalError({ type: "httpResponse" }),
-						UnknownException: () => new InternalError({ type: "unknown" }),
-					}),
-				),
 		};
 	}),
 );

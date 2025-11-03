@@ -17,6 +17,7 @@ import {
 	Videos,
 	VideosPolicy,
 	VideosRepo,
+	VideosAnalytics,
 	Workflows,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
@@ -113,6 +114,7 @@ export const Dependencies = Layer.mergeAll(
 	Videos.Default,
 	VideosPolicy.Default,
 	VideosRepo.Default,
+	VideosAnalytics.Default,
 	Folders.Default,
 	SpacesPolicy.Default,
 	OrganisationsPolicy.Default,

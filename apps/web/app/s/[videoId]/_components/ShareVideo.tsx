@@ -76,7 +76,10 @@ export const ShareVideo = forwardRef<
 
 		const rpc = useRpcClient();
 		const mutation = useEffectMutation({
-			mutationFn: () => rpc.VideoCaptureAnalytics(data.id),
+			mutationFn: () =>
+				rpc.VideosCaptureEvent({
+					video: data.id,
+				}),
 		});
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: just cause
