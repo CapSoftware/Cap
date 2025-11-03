@@ -48,7 +48,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 				}
 			});
 
-			const deleteOrg = Effect.fn("Organisations.deleteOrg")(function* (
+			const softDelete = Effect.fn("Organisations.softDelete")(function* (
 				id: Organisation.OrganisationId,
 			) {
 				const user = yield* CurrentUser;
@@ -89,7 +89,7 @@ export class Organisations extends Effect.Service<Organisations>()(
 					}),
 				);
 			});
-			return { update, deleteOrg };
+			return { update, softDelete };
 		}),
 		dependencies: [
 			ImageUploads.Default,
