@@ -6,8 +6,8 @@ on:
     branches:
       - main
       - master
-    # paths:
-    #   - 'tinybird/**' # TODO: Reenable this
+    paths:
+      - 'tinybird/**' # TODO: Reenable this
     types: [opened, reopened, labeled, unlabeled, synchronize]
 
 concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -42,12 +42,6 @@ jobs:
 
       - name: Test project
         run: tb test run
-
-      - name: Check auth
-        run: tb --host ${{ secrets.TINYBIRD_HOST }} --token ${{ secrets.TINYBIRD_TOKEN }} auth info
-
-      - name: DEBUG
-        run: tb --cloud --host ${{ env.TINYBIRD_HOST }} --token ${{ env.TINYBIRD_TOKEN }} info && echo "$TINYBIRD_HOST $TINYBIRD_TOKEN"
 
       - name: Deployment check
         run: tb --cloud --host ${{ env.TINYBIRD_HOST }} --token ${{ env.TINYBIRD_TOKEN }} deploy --check
