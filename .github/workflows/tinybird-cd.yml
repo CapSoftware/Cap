@@ -11,6 +11,9 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.event.ref }}
 
+permissions:
+  contents: read
+
 jobs:
   cd:
     name: Deploy

@@ -12,6 +12,9 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: Validate
