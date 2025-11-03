@@ -53,6 +53,8 @@ export class Organisations extends Effect.Service<Organisations>()(
 			) {
 				const user = yield* CurrentUser;
 
+				yield* Policy.withPolicy(policy.isOwner(id))(Effect.void);
+
 				//this is fake deleting for now
 				yield* db.use((db) =>
 					db

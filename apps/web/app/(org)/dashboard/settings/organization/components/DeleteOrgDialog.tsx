@@ -23,14 +23,16 @@ interface DeleteOrgDialogProps {
 }
 
 const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
-	const { activeOrganization, organizationData, user } = useDashboardContext();
+	const { activeOrganization, organizationData } = useDashboardContext();
 	const [organizationName, setOrganizationName] = useState("");
 	const rpc = useRpcClient();
+	const inputId = useId();
 	const router = useRouter();
 	const deleteOrg = useEffectMutation({
 		mutationFn: Effect.fn(function* () {
+			if (!activeOrganization) return;
 			yield* rpc.OrganisationDelete({
-				id: activeOrganization?.organization.id as Organisation.OrganisationId,
+				id: activeOrganization.organization.id,
 			});
 		}),
 		onSuccess: () => {
@@ -58,7 +60,7 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 				</DialogHeader>
 				<div className="p-5">
 					<Input
-						id={useId()}
+						id={inputId}
 						value={organizationName}
 						onChange={(e) => setOrganizationName(e.target.value)}
 						placeholder="Organization name"
