@@ -53,49 +53,41 @@ export class Organisations extends Effect.Service<Organisations>()(
 			) {
 				const user = yield* CurrentUser;
 
-				//this is fake deleting for now
-				yield* db
-					.use((db) =>
-						db
+				yield* Policy.withPolicy(policy.isOwner(id))(Effect.void);
+
+				// Perform tombstone, find other org, and update user in a single transaction
+				yield* db.use((db) =>
+					db.transaction(async (tx) => {
+						await tx
 							.update(Db.organizations)
 							.set({ tombstoneAt: new Date() })
-							.where(Dz.eq(Db.organizations.id, id)),
-					)
-					.pipe(
-						Effect.flatMap(Array.get(0)),
-						Effect.catchTag(
-							"NoSuchElementException",
-							() => new Organisation.NotFoundError(),
-						),
-						Policy.withPolicy(policy.isOwner(id)),
-					);
+							.where(Dz.eq(Db.organizations.id, id));
 
-				//set another org as active org
-				const [otherOrg] = yield* db.use((db) =>
-					db
-						.select({ id: Db.organizations.id })
-						.from(Db.organizations)
-						.where(
-							Dz.and(
-								Dz.ne(Db.organizations.id, id),
-								Dz.isNull(Db.organizations.tombstoneAt),
-								Dz.eq(Db.organizations.ownerId, user.id),
-							),
-						)
-						.orderBy(Dz.asc(Db.organizations.createdAt))
-						.limit(1),
+						// Find another active organization owned by the user
+						const [otherOrg] = await tx
+							.select({ id: Db.organizations.id })
+							.from(Db.organizations)
+							.where(
+								Dz.and(
+									Dz.ne(Db.organizations.id, id),
+									Dz.isNull(Db.organizations.tombstoneAt),
+									Dz.eq(Db.organizations.ownerId, user.id),
+								),
+							)
+							.orderBy(Dz.asc(Db.organizations.createdAt))
+							.limit(1);
+
+						if (otherOrg) {
+							await tx
+								.update(Db.users)
+								.set({
+									activeOrganizationId: otherOrg.id,
+									defaultOrgId: otherOrg.id,
+								})
+								.where(Dz.eq(Db.users.id, user.id));
+						}
+					}),
 				);
-				if (otherOrg) {
-					yield* db.use((db) =>
-						db
-							.update(Db.users)
-							.set({
-								activeOrganizationId: otherOrg.id,
-								defaultOrgId: otherOrg.id,
-							})
-							.where(Dz.eq(Db.users.id, user.id)),
-					);
-				}
 			});
 			return { update, deleteOrg };
 		}),
