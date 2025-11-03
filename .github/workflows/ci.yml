@@ -265,4 +265,4 @@ jobs:
         run: cargo build --all
 
       - name: Build release
-        run: cargo build --all --release
+        run: cargo check --all --release

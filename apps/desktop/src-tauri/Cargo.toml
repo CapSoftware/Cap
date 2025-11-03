@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.80"
+version = "0.3.81"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -113,6 +113,7 @@ opentelemetry = "0.31.0"
 opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
+workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

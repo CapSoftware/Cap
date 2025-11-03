@@ -8,6 +8,7 @@ publish = false
 serde = { version = "1.0.219", features = ["derive"] }
 specta = { workspace = true, features = ["derive"] }
 strum = { version = "0.27.2", features = ["derive"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [

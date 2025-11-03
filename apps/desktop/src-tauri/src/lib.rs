@@ -86,7 +86,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{RwLock, oneshot};
-use tracing::{error, instrument, trace, warn};
+use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
@@ -1081,6 +1081,7 @@ async fn upload_exported_video(
     path: PathBuf,
     mode: UploadMode,
     channel: Channel<UploadProgress>,
+    organization_id: Option<String>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1127,6 +1128,7 @@ async fn upload_exported_video(
             video_id,
             Some(meta.pretty_name.clone()),
             Some(metadata.clone()),
+            organization_id,
         )
         .await
     }
@@ -1656,6 +1658,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             manual: auth.plan.map(|p| p.manual).unwrap_or(false),
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
+        organizations: auth.organizations,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
@@ -2323,19 +2326,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 let _ = set_mic_input(app.state(), settings.mic_name).await;
                 let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
 
-                let _ = start_recording(
-                    app.clone(),
-                    app.state(),
+                let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
                         capture_target: settings.target.unwrap_or_else(|| {
                             ScreenCaptureTarget::Display {
                                 id: Display::primary().id(),
                             }
                         }),
-                        capture_system_audio: settings.system_audio,
                         mode: event.mode,
-                    },
-                )
+                        capture_system_audio: settings.system_audio,
+                        organization_id: settings.organization_id,
+                    }
+                })
                 .await;
             });
 

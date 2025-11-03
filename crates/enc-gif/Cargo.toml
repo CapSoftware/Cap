@@ -9,6 +9,7 @@ tracing.workspace = true
 gifski = "1.32"
 imgref = "1.10"
 rgb = "0.8"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]
 workspace = true

@@ -10,8 +10,8 @@ import { signIn } from "next-auth/react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { trackEvent } from "@/app/utils/analytics";
-import OtpForm from "./OtpForm";
 import { usePublicEnv } from "@/utils/public-env";
+import OtpForm from "./OtpForm";
 
 interface AuthOverlayProps {
 	isOpen: boolean;

@@ -155,8 +155,10 @@ impl Message<Pause> for Actor {
                 index,
                 ..
             }) => {
-                let (cursors, next_cursor_id) =
-                    self.stop_pipeline(pipeline, segment_start_time).await?;
+                let (cursors, next_cursor_id) = self
+                    .stop_pipeline(pipeline, segment_start_time)
+                    .await
+                    .context("stop_pipeline")?;
 
                 Some(ActorState::Paused {
                     next_index: index + 1,
@@ -265,10 +267,10 @@ impl Pipeline {
 
         Ok(FinishedPipeline {
             start_time: self.start_time,
-            screen: screen?,
-            microphone: microphone.transpose()?,
-            camera: camera.transpose()?,
-            system_audio: system_audio.transpose()?,
+            screen: screen.context("screen")?,
+            microphone: microphone.transpose().context("microphone")?,
+            camera: camera.transpose().context("camera")?,
+            system_audio: system_audio.transpose().context("system_audio")?,
             cursor: self.cursor,
         })
     }

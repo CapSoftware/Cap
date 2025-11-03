@@ -9,6 +9,7 @@ ffmpeg = { workspace = true }
 cpal = { workspace = true }
 tokio.workspace = true
 tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
