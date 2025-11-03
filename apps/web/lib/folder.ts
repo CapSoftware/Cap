@@ -14,10 +14,9 @@ import {
 import { Database, ImageUploads } from "@cap/web-backend";
 import type { ImageUpload, Organisation, Space, Video } from "@cap/web-domain";
 import { CurrentUser, Folder } from "@cap/web-domain";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
-import { runPromise } from "./server";
 
 export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
@@ -221,9 +220,15 @@ export const getVideosByFolderId = Effect.fn(function* (
 			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(
 				root.variant === "space"
-					? eq(spaceVideos.folderId, folderId)
+					? and(
+							eq(spaceVideos.folderId, folderId),
+							isNull(organizations.tombstoneAt),
+						)
 					: root.variant === "org"
-						? eq(sharedVideos.folderId, folderId)
+						? and(
+								eq(sharedVideos.folderId, folderId),
+								isNull(organizations.tombstoneAt),
+							)
 						: eq(videos.folderId, folderId),
 			)
 			.groupBy(

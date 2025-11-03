@@ -4,6 +4,7 @@ import {
 	comments,
 	folders,
 	organizationMembers,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
@@ -201,8 +202,13 @@ export default async function SharedCapsPage(props: {
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							isNull(organizations.tombstoneAt),
+						),
 					)
 					.groupBy(
 						videos.id,
