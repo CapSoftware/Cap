@@ -1,15 +1,14 @@
 import * as Db from "@cap/database/schema";
+import { serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
+import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
-import { serverEnv } from "@cap/env";
-
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import { VideosRepo } from "./VideosRepo.ts";
-import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {

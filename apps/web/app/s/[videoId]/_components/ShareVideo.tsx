@@ -11,6 +11,7 @@ import {
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { VideoData } from "../types";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
@@ -20,7 +21,6 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "./utils/transcript-utils";
-import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 
 declare global {
 	interface Window {

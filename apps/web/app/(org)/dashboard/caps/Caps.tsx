@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { useVideosAnalyticsQuery } from "@/lib/Queries/Analytics";
+import { usePublicEnv } from "@/utils/public-env";
 import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
@@ -24,7 +25,6 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
 import { useUploadingStatus } from "./UploadingContext";
-import { usePublicEnv } from "@/utils/public-env";
 
 export type VideoData = {
 	id: Video.VideoId;
