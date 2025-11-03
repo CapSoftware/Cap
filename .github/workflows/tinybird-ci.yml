@@ -15,6 +15,10 @@ concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
 permissions:
   contents: read
 
+env:
+  TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
+  TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+
 jobs:
   ci:
     name: Validate
@@ -39,8 +43,8 @@ jobs:
       - name: Test project
         run: tb test run
 
+      - name: DEBUG
+        run: tb --cloud info
+
       - name: Deployment check
-        with:
-          TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
         run: tb --cloud deploy --check
