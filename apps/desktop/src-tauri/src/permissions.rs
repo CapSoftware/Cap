@@ -71,7 +71,8 @@ pub async fn request_permission(_permission: OSPermission) {
 
         match _permission {
             OSPermission::ScreenRecording => {
-                scap::request_permission();
+                #[cfg(target_os = "macos")]
+                scap_screencapturekit::request_permission();
             }
             OSPermission::Camera => {
                 thread::spawn(|| {
@@ -163,7 +164,7 @@ pub fn do_permissions_check(_initial_check: bool) -> OSPermissionsCheck {
 
         OSPermissionsCheck {
             screen_recording: {
-                let result = scap::has_permission();
+                let result = scap_screencapturekit::has_permission();
                 match (result, _initial_check) {
                     (true, _) => OSPermissionStatus::Granted,
                     (false, true) => OSPermissionStatus::Empty,

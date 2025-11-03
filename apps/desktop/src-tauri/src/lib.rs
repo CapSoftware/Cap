@@ -55,22 +55,14 @@ use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
-use png::{ColorType, Encoder};
 use recording::InProgressRecording;
-use relative_path::RelativePathBuf;
-use scap::{
-    capturer::Capturer,
-    frame::{Frame, VideoFrame},
-};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::{
     collections::BTreeMap,
-    fs::File,
     future::Future,
-    io::BufWriter,
     marker::PhantomData,
     path::{Path, PathBuf},
     process::Command,
@@ -311,9 +303,6 @@ pub struct RecordingStopped;
 pub struct RequestStartRecording {
     pub mode: RecordingMode,
 }
-
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestNewScreenshot;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenRecordingPicker {
@@ -1255,135 +1244,6 @@ async fn upload_screenshot(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app, _state))]
-async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
-    let id = uuid::Uuid::new_v4().to_string();
-
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("screenshots")
-        .join(format!("{id}.cap"));
-
-    std::fs::create_dir_all(&recording_dir).map_err(|e| e.to_string())?;
-
-    let (width, height, bgra_data) = {
-        let options = scap::capturer::Options {
-            fps: 1,
-            output_type: scap::frame::FrameType::BGRAFrame,
-            show_highlight: false,
-            ..Default::default()
-        };
-
-        if let Some(window) = CapWindowId::Main.get(&app) {
-            let _ = window.hide();
-        }
-
-        let mut capturer =
-            Capturer::build(options).map_err(|e| format!("Failed to construct error: {e}"))?;
-        capturer.start_capture();
-        let frame = capturer
-            .get_next_frame()
-            .map_err(|e| format!("Failed to get frame: {e}"))?;
-        capturer.stop_capture();
-
-        if let Some(window) = CapWindowId::Main.get(&app) {
-            let _ = window.show();
-        }
-
-        match frame {
-            Frame::Video(VideoFrame::BGRA(bgra_frame)) => Ok((
-                bgra_frame.width as u32,
-                bgra_frame.height as u32,
-                bgra_frame.data,
-            )),
-            _ => Err("Unexpected frame type".to_string()),
-        }
-    }?;
-
-    let now = chrono::Local::now();
-    let screenshot_name = format!(
-        "Cap {} at {}.png",
-        now.format("%Y-%m-%d"),
-        now.format("%H.%M.%S")
-    );
-    let screenshot_path = recording_dir.join(&screenshot_name);
-
-    let app_handle = app.clone();
-    let recording_dir = recording_dir.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut rgba_data = vec![0; bgra_data.len()];
-        for (bgra, rgba) in bgra_data.chunks_exact(4).zip(rgba_data.chunks_exact_mut(4)) {
-            rgba[0] = bgra[2];
-            rgba[1] = bgra[1];
-            rgba[2] = bgra[0];
-            rgba[3] = bgra[3];
-        }
-
-        let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
-        let w = &mut BufWriter::new(file);
-
-        let mut encoder = Encoder::new(w, width, height);
-        encoder.set_color(ColorType::Rgba);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-
-        writer
-            .write_image_data(&rgba_data)
-            .map_err(|e| e.to_string())?;
-
-        AppSounds::Screenshot.play();
-
-        let now = chrono::Local::now();
-        let screenshot_name = format!(
-            "Cap {} at {}.png",
-            now.format("%Y-%m-%d"),
-            now.format("%H.%M.%S")
-        );
-
-        use cap_project::*;
-        RecordingMeta {
-            platform: Some(Platform::default()),
-            project_path: recording_dir.clone(),
-            sharing: None,
-            pretty_name: screenshot_name,
-            inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
-                segment: cap_project::SingleSegment {
-                    display: VideoMeta {
-                        path: RelativePathBuf::from_path(
-                            screenshot_path.strip_prefix(&recording_dir).unwrap(),
-                        )
-                        .unwrap(),
-                        fps: 0,
-                        start_time: None,
-                    },
-                    camera: None,
-                    audio: None,
-                    cursor: None,
-                },
-            }),
-            upload: None,
-        }
-        .save_for_project()
-        .unwrap();
-
-        NewScreenshotAdded {
-            path: screenshot_path,
-        }
-        .emit(&app_handle)
-        .ok();
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))??;
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
 #[instrument(skip(app))]
 async fn save_file_dialog(
     app: AppHandle,
@@ -1973,7 +1833,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
             general_settings::get_default_excluded_windows,
-            take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
             fake_window::set_fake_window_bounds,
@@ -2053,7 +1912,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RecordingStopped,
             RequestStartRecording,
             RequestOpenRecordingPicker,
-            RequestNewScreenshot,
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,
