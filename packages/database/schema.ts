@@ -180,6 +180,7 @@ export const organizations = mysqlTable(
 		name: varchar("name", { length: 255 }).notNull(),
 		ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
 		metadata: json("metadata"),
+		tombstoneAt: timestamp("tombstoneAt"),
 		allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
 		customDomain: varchar("customDomain", { length: 255 }),
 		domainVerified: timestamp("domainVerified"),

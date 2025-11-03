@@ -160,7 +160,7 @@ const CapSettingsCard = () => {
 				{options.map((option) => (
 					<div
 						key={option.value}
-						className="flex gap-10 justify-between items-center p-4 text-left rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
+						className="flex gap-10 justify-between items-center p-4 text-left rounded-xl border transition-colors bg-gray-2 min-w-fit border-gray-3"
 					>
 						<div
 							className={clsx("flex flex-col flex-1", option.pro && "gap-1")}

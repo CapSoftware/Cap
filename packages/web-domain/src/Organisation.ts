@@ -23,6 +23,11 @@ export class Organisation extends Schema.Class<Organisation>("Organisation")({
 	name: Schema.String,
 }) {}
 
+export const OrganisationDelete = Schema.Struct({
+	id: OrganisationId,
+});
+export type OrganisationDelete = Schema.Schema.Type<typeof OrganisationDelete>;
+
 export const OrganisationUpdate = Schema.Struct({
 	id: OrganisationId,
 	image: Schema.optional(ImageUpdatePayload),
@@ -32,6 +37,10 @@ export type OrganisationUpdate = Schema.Schema.Type<typeof OrganisationUpdate>;
 export class OrganisationRpcs extends RpcGroup.make(
 	Rpc.make("OrganisationUpdate", {
 		payload: OrganisationUpdate,
+		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("OrganisationDelete", {
+		payload: OrganisationDelete,
 		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
 	}).middleware(RpcAuthMiddleware),
 ) {}
