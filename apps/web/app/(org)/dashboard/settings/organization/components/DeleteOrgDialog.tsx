@@ -7,7 +7,6 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
-import type { Organisation } from "@cap/web-domain";
 import { faTrashCan } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Effect } from "effect";
@@ -28,10 +27,10 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 	const rpc = useRpcClient();
 	const inputId = useId();
 	const router = useRouter();
-	const deleteOrg = useEffectMutation({
+	const softDeleteOrg = useEffectMutation({
 		mutationFn: Effect.fn(function* () {
 			if (!activeOrganization) return;
-			yield* rpc.OrganisationDelete({
+			yield* rpc.OrganisationSoftDelete({
 				id: activeOrganization.organization.id,
 			});
 		}),
@@ -73,15 +72,15 @@ const DeleteOrgDialog = ({ open, onOpenChange }: DeleteOrgDialogProps) => {
 					<Button
 						size="sm"
 						variant="destructive"
-						onClick={() => deleteOrg.mutate()}
-						spinner={deleteOrg.isPending}
+						onClick={() => softDeleteOrg.mutate()}
+						spinner={softDeleteOrg.isPending}
 						disabled={
 							organizationData?.length === 1 ||
 							organizationName !== activeOrganization?.organization.name ||
-							deleteOrg.isPending
+							softDeleteOrg.isPending
 						}
 					>
-						{deleteOrg.isPending ? "Deleting..." : "Delete"}
+						{softDeleteOrg.isPending ? "Deleting..." : "Delete"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
