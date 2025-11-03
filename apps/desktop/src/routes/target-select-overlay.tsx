@@ -44,6 +44,9 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { createScheduled, debounce } from "@solid-primitives/scheduled";
+
+const MIN_SIZE = { width: 150, height: 150 };
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -272,6 +275,15 @@ function Inner() {
 					const [snapToRatioEnabled, setSnapToRatioEnabled] =
 						createSignal(true);
 
+					const scheduled = createScheduled((fn) => debounce(fn, 30));
+
+					const isValid = createMemo((p: boolean = true) => {
+						const b = crop();
+						return scheduled()
+							? b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height
+							: p;
+					});
+
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
 						const items = [
@@ -301,6 +313,7 @@ function Inner() {
 						width: 0,
 						height: 0,
 					});
+
 					createResizeObserver(
 						() => controlsEl,
 						({ width, height }) => {
@@ -318,6 +331,8 @@ function Inner() {
 					const MARGIN_TOP_OUTSIDE = 16;
 					const MARGIN_TOP_INSIDE = macos ? 40 : 28;
 					const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
+
+					const [controllerInside, setControllerInside] = createSignal(false);
 
 					const controlsStyle = createMemo(() => {
 						const bounds = crop();
@@ -339,9 +354,11 @@ function Inner() {
 							const aboveY = bounds.y - size.height - MARGIN_TOP_OUTSIDE;
 							if (aboveY >= TOP_SAFE_MARGIN) {
 								finalY = aboveY;
+								setControllerInside(false);
 							} else {
 								// Default to inside
 								finalY = bounds.y + MARGIN_TOP_INSIDE;
+								setControllerInside(true);
 							}
 						}
 
@@ -365,27 +382,44 @@ function Inner() {
 								class="fixed z-50 transition-opacity"
 								style={controlsStyle()}
 							>
-								<RecordingControls
-									target={{
-										variant: "area",
-										screen: displayId(),
-										bounds: {
-											position: { x: crop().x, y: crop().y },
-											size: { width: crop().width, height: crop().height },
-										},
-									}}
-								/>
-								<ShowCapFreeWarning
-									isInstantMode={options.mode === "instant"}
-								/>
+								<Show
+									when={isValid()}
+									fallback={
+										<div>
+											<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
+												<p>Minimum size is 150 x 150</p>
+												<small>
+													<code>
+														{crop().width} x {crop().height}
+													</code>{" "}
+													is too small
+												</small>
+											</div>
+										</div>
+									}
+								>
+									<RecordingControls
+										target={{
+											variant: "area",
+											screen: displayId(),
+											bounds: {
+												position: { x: crop().x, y: crop().y },
+												size: { width: crop().width, height: crop().height },
+											},
+										}}
+										showBackground={controllerInside()}
+									/>
+									<ShowCapFreeWarning
+										isInstantMode={options.mode === "instant"}
+									/>
+								</Show>
 							</div>
 
 							<Cropper
 								ref={cropperRef}
 								onCropChange={setCrop}
 								initialCrop={initialAreaBounds()}
-								minSize={{ x: 150, y: 150 }}
-								showBounds={true}
+								showBounds={isValid()}
 								aspectRatio={aspect() ?? undefined}
 								snapToRatioEnabled={snapToRatioEnabled()}
 								onContextMenu={(e) => showCropOptionsMenu(e)}
@@ -401,6 +435,7 @@ function Inner() {
 function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
+	showBackground?: boolean;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -531,15 +566,22 @@ function RecordingControls(props: {
 					<IconCapGear class="will-change-transform size-5 pointer-events-none" />
 				</div>
 			</div>
-			<div
-				onClick={() => props.setToggleModeSelect?.(true)}
-				class="flex gap-1 items-center justify-center mb-5 transition-opacity duration-200 hover:opacity-60"
-			>
-				<IconCapInfo class="opacity-70 will-change-transform size-3" />
-				<p class="text-sm text-white drop-shadow-lg">
-					<span class="opacity-70">What is </span>
-					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
-				</p>
+			<div class="flex w-full justify-center items-center">
+				<div
+					onClick={() => props.setToggleModeSelect?.(true)}
+					class="self-center w-fit flex gap-1 items-center justify-center mb-5 transition-opacity duration-200 hover:opacity-60"
+					classList={{
+						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
+							props.showBackground,
+						"hover:opacity-60": !props.showBackground,
+					}}
+				>
+					<IconCapInfo class="opacity-70 will-change-transform size-3" />
+					<p class="text-sm text-white drop-shadow-md">
+						<span class="opacity-70">What is </span>
+						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+					</p>
+				</div>
 			</div>
 		</>
 	);
