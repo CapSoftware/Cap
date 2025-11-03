@@ -6,17 +6,18 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'tinybird/**'
 
 concurrency: ${{ github.workflow }}-${{ github.event.ref }}
-
-env:
-  TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
-  TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
 
 jobs:
   cd:
     name: Deploy
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 'tinybird'
     steps:
       - uses: actions/checkout@v3
 
@@ -24,4 +25,7 @@ jobs:
         run: curl https://tinybird.co | sh
 
       - name: Deploy project
+        with:
+          TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
         run: tb --cloud --host "${{ env.TINYBIRD_HOST }}" --token "${{ env.TINYBIRD_TOKEN }}" deploy

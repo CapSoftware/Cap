@@ -6,13 +6,11 @@ on:
     branches:
       - main
       - master
+    paths:
+      - 'tinybird/**'
     types: [opened, reopened, labeled, unlabeled, synchronize]
 
 concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-
-env:
-  TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
-  TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
 
 jobs:
   ci:
@@ -20,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: '.'
+        working-directory: 'tinybird'
     services:
       tinybird:
         image: tinybirdco/tinybird-local:latest
@@ -39,4 +37,7 @@ jobs:
         run: tb test run
 
       - name: Deployment check
+        with:
+          TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
         run: tb --cloud deploy --check
