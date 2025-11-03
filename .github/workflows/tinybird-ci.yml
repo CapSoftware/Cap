@@ -44,7 +44,7 @@ jobs:
         run: tb test run
 
       - name: DEBUG
-        run: tb --cloud info
+        run: tb --cloud info && echo "$TINYBIRD_HOST $TINYBIRD_TOKEN"
 
       - name: Deployment check
         run: tb --cloud deploy --check
