@@ -32,4 +32,4 @@ jobs:
         run: curl https://tinybird.co | sh
 
       - name: Deploy project
-        run: tb --cloud --host "${{ env.TINYBIRD_HOST }}" --token "${{ env.TINYBIRD_TOKEN }}" deploy
+        run: tb --cloud --host ${{ env.TINYBIRD_HOST }} --token ${{ env.TINYBIRD_TOKEN }} deploy
