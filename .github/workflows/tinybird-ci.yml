@@ -7,7 +7,7 @@ on:
       - main
       - master
     paths:
-      - 'tinybird/**' # TODO: Reenable this
+      - 'tinybird/**'
     types: [opened, reopened, labeled, unlabeled, synchronize]
 
 concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
