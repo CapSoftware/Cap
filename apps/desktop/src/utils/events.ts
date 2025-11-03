@@ -24,7 +24,6 @@ export function createKeyDownSignal(
 			if (e.key === key) setDown(true);
 		},
 		keyup: (e) => {
-			console.log(`Key ${e.key} released`);
 			if (e.key === key) setDown(false);
 		},
 	});

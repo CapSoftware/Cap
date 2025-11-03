@@ -474,7 +474,10 @@ function RecordingControls(props: {
 		<>
 			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 shadow-sm border-gray-4">
 				<div
-					onClick={() => setOptions("targetMode", null)}
+					onClick={() => {
+						setOptions("targetMode", null);
+						commands.closeTargetSelectOverlays();
+					}}
 					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
 				>
 					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />

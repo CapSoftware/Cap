@@ -1032,12 +1032,12 @@ export default function Cropper(
 		>
 			<Transition
 				appear
-				enterClass="opacity-0"
-				enterActiveClass="transition-opacity duration-200"
-				enterToClass="opacity-100"
-				exitClass="opacity-100"
-				exitActiveClass="transition-opacity duration-200"
-				exitToClass="opacity-0"
+				enterActiveClass="transition-opacity duration-300 ease-in-out"
+				enterClass="opacity-0 blur-sm"
+				enterToClass="opacity-100 blur-none"
+				exitActiveClass="transition-opacity duration-300 ease-in-out"
+				exitClass="opacity-100 blur-none"
+				exitToClass="opacity-0 blur-sm"
 			>
 				<Show when={props.showBounds && labelTransform()}>
 					{(transform) => (
