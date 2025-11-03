@@ -350,6 +350,7 @@ function RecordingItem(props: {
 									props.recording.path,
 									"Reupload",
 									new Channel<UploadProgress>((progress) => {}),
+									null,
 								),
 						}));
 

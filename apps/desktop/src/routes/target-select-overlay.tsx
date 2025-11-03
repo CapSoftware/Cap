@@ -12,11 +12,14 @@ import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
 	type ComponentProps,
+	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
+	For,
 	type JSX,
 	Match,
+	mergeProps,
 	onCleanup,
 	onMount,
 	Show,
@@ -26,12 +29,13 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery } from "~/utils/queries";
+import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
 	events,
+	Organization,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
@@ -65,13 +69,34 @@ export default function () {
 	);
 }
 
+function useOptions() {
+	const { rawOptions: _rawOptions, setOptions } = createOptionsQuery();
+
+	const organizations = createOrganizationsQuery();
+	const options = mergeProps(_rawOptions, () => {
+		const ret: Partial<typeof _rawOptions> = {};
+
+		if (
+			(!_rawOptions.organizationId && organizations().length > 0) ||
+			(_rawOptions.organizationId &&
+				organizations().every((o) => o.id !== _rawOptions.organizationId) &&
+				organizations().length > 0)
+		)
+			ret.organizationId = organizations()[0]?.id;
+
+		return ret;
+	});
+
+	return [options, setOptions] as const;
+}
+
 function Inner() {
 	const [params] = useSearchParams<{
 		displayId: DisplayId;
 		isHoveredDisplay: string;
 	}>();
 	const isHoveredDisplay = params.isHoveredDisplay === "true";
-	const { rawOptions, setOptions } = createOptionsQuery();
+	const [options, setOptions] = useOptions();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
 	const [targetUnderCursor, setTargetUnderCursor] =
@@ -109,8 +134,7 @@ function Inner() {
 				return null;
 			}
 		},
-		enabled:
-			params.displayId !== undefined && rawOptions.targetMode === "display",
+		enabled: params.displayId !== undefined && options.targetMode === "display",
 	}));
 
 	const [bounds, setBounds] = createStore(
@@ -138,7 +162,7 @@ function Inner() {
 
 	return (
 		<Switch>
-			<Match when={rawOptions.targetMode === "display"}>
+			<Match when={options.targetMode === "display"}>
 				{(_) => (
 					<div
 						data-over={targetUnderCursor.display_id === params.displayId}
@@ -179,13 +203,13 @@ function Inner() {
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: params.displayId! }}
 						/>
-						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
+						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
 				)}
 			</Match>
 			<Match
 				when={
-					rawOptions.targetMode === "window" &&
+					options.targetMode === "window" &&
 					targetUnderCursor.display_id === params.displayId
 				}
 			>
@@ -247,14 +271,14 @@ function Inner() {
 									Adjust recording area
 								</Button>
 								<ShowCapFreeWarning
-									isInstantMode={rawOptions.mode === "instant"}
+									isInstantMode={options.mode === "instant"}
 								/>
 							</div>
 						</div>
 					)}
 				</Show>
 			</Match>
-			<Match when={rawOptions.targetMode === "area"}>
+			<Match when={options.targetMode === "area"}>
 				{(_) => {
 					const [state, setState] = createSignal<
 						"creating" | "dragging" | undefined
@@ -785,7 +809,7 @@ function Inner() {
 											}
 										/>
 										<ShowCapFreeWarning
-											isInstantMode={rawOptions.mode === "instant"}
+											isInstantMode={options.mode === "instant"}
 										/>
 									</div>
 								</div>
@@ -833,7 +857,7 @@ function RecordingControls(props: {
 	showBackground?: boolean;
 }) {
 	const auth = authStore.createQuery();
-	const { setOptions, rawOptions } = useRecordingOptions();
+	const [options, setOptions] = useOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
 
@@ -851,14 +875,14 @@ function RecordingControls(props: {
 					action: () => {
 						setOptions("mode", "studio");
 					},
-					checked: rawOptions.mode === "studio",
+					checked: options.mode === "studio",
 				}),
 				await CheckMenuItem.new({
 					text: "Instant Mode",
 					action: () => {
 						setOptions("mode", "instant");
 					},
-					checked: rawOptions.mode === "instant",
+					checked: options.mode === "instant",
 				}),
 			],
 		});
@@ -901,8 +925,9 @@ function RecordingControls(props: {
 			handleRecordingResult(
 				commands.startRecording({
 					capture_target: props.target,
-					mode: rawOptions.mode,
-					capture_system_audio: rawOptions.captureSystemAudio,
+					mode: options.mode,
+					capture_system_audio: options.captureSystemAudio,
+					organization_id: options.organizationId ?? null,
 				}),
 				setOptions,
 			),
@@ -937,12 +962,12 @@ function RecordingControls(props: {
 				</div>
 				<div
 					data-inactive={
-						(rawOptions.mode === "instant" && !auth.data) ||
+						(options.mode === "instant" && !auth.data) ||
 						startRecording.isPending
 					}
 					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
 					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
+						if (options.mode === "instant" && !auth.data) {
 							emit("start-sign-in");
 							return;
 						}
@@ -957,19 +982,19 @@ function RecordingControls(props: {
 							!startRecording.isPending && "hover:bg-blue-10",
 						)}
 					>
-						{rawOptions.mode === "studio" ? (
+						{options.mode === "studio" ? (
 							<IconCapFilmCut class="size-4" />
 						) : (
 							<IconCapInstant class="size-4" />
 						)}
 						<div class="flex flex-col mr-2 ml-3">
 							<span class="text-sm font-medium text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
+								{options.mode === "instant" && !auth.data
 									? "Sign In To Use"
 									: "Start Recording"}
 							</span>
 							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
+								{`${capitalize(options.mode)} Mode`}
 							</span>
 						</div>
 					</div>
@@ -996,20 +1021,69 @@ function RecordingControls(props: {
 					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
+			<div class="flex flex-col items-center gap-2">
+				<button
+					onClick={() => props.setToggleModeSelect?.(true)}
+					class="cursor-pointer flex gap-1 items-center transition-all duration-200 relative z-20"
+					classList={{
+						"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
+							props.showBackground,
+						"hover:opacity-60": !props.showBackground,
+					}}
+				>
+					<IconCapInfo class="opacity-70 will-change-transform size-3" />
+					<p class="text-sm text-white">
+						<span class="opacity-70">What is </span>
+						<span class="font-medium">{capitalize(options.mode)} Mode</span>?
+					</p>
+				</button>
+				<OrganizationSelect />
+			</div>
+		</Show>
+	);
+}
+
+function OrganizationSelect(props: { showBackground?: boolean }) {
+	const organisations = createOrganizationsQuery();
+	const [options, setOptions] = useOptions();
+
+	return (
+		<Show when={organisations().length > 1}>
 			<button
-				onClick={() => props.setToggleModeSelect?.(true)}
-				class="cursor-pointer flex gap-1 items-center mb-5 transition-all duration-200 relative z-20"
+				class="flex gap-1 items-center mb-5 group hover:opacity-60 transition-opacity duration-200"
 				classList={{
-					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
+					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10":
 						props.showBackground,
-					"hover:opacity-60": !props.showBackground,
+				}}
+				onClick={async () => {
+					const menu = await Menu.new({
+						items: await Promise.all(
+							organisations().map((org) =>
+								CheckMenuItem.new({
+									text: org.name,
+									action: () => {
+										setOptions("organizationId", org.id);
+									},
+									checked: options.organizationId === org.id,
+								}),
+							),
+						),
+					});
+					menu.popup();
 				}}
 			>
-				<IconCapInfo class="opacity-70 will-change-transform size-3" />
-				<p class="text-sm text-white">
-					<span class="opacity-70">What is </span>
-					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
-				</p>
+				<div class="text-sm text-white flex flex-row">
+					<span class="opacity-70">Organization:</span>
+					<span class="ml-1 flex flex-row ">
+						{
+							(
+								organisations().find((o) => o.id === options.organizationId) ??
+								organisations()[0]
+							)?.name
+						}
+						<IconCapChevronDown />
+					</span>
+				</div>
 			</button>
 		</Show>
 	);
@@ -1050,10 +1124,4 @@ function ResizeHandle(
 			style={{ ...props.style, transform: "translate(-50%, -50%)" }}
 		/>
 	);
-}
-
-function getDisplayId(displayId: string | undefined) {
-	const id = Number(displayId);
-	if (Number.isNaN(id)) return 0;
-	return id;
 }

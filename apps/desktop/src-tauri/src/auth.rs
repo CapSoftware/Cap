@@ -6,7 +6,10 @@ use tauri_plugin_store::StoreExt;
 
 use web_api::ManagerExt;
 
-use crate::web_api;
+use crate::{
+    api::{self, Organization},
+    web_api,
+};
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
@@ -14,6 +17,8 @@ pub struct AuthStore {
     pub user_id: Option<String>,
     pub plan: Option<Plan>,
     pub intercom_hash: Option<String>,
+    #[serde(default)]
+    pub organizations: Vec<Organization>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -96,6 +101,9 @@ impl AuthStore {
             manual: auth.plan.as_ref().is_some_and(|p| p.manual),
         });
         auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
+        auth.organizations = api::fetch_organizations(app)
+            .await
+            .map_err(|e| e.to_string())?;
 
         Self::set(app, Some(auth))?;
 

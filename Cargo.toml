@@ -25,7 +25,6 @@ specta = { version = "=2.0.0-rc.20", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "3cefe71561ff" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
     "input-native",
     "serialize",

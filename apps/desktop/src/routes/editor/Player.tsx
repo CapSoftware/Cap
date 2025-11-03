@@ -146,50 +146,57 @@ export function Player() {
 	};
 
 	// Register keyboard shortcuts in one place
-	useEditorShortcuts(
-		() => document.activeElement === document.body,
-		[
-			{
-				combo: "S",
-				handler: () =>
-					setEditorState(
-						"timeline",
-						"interactMode",
-						editorState.timeline.interactMode === "split" ? "seek" : "split",
-					),
-			},
-			{
-				combo: "Mod+=",
-				handler: () =>
-					editorState.timeline.transform.updateZoom(
-						editorState.timeline.transform.zoom / 1.1,
-						editorState.playbackTime,
-					),
-			},
-			{
-				combo: "Mod+-",
-				handler: () =>
-					editorState.timeline.transform.updateZoom(
-						editorState.timeline.transform.zoom * 1.1,
-						editorState.playbackTime,
-					),
-			},
-			{
-				combo: "Space",
-				handler: async () => {
-					const prevTime = editorState.previewTime;
+	useEditorShortcuts(() => {
+		const el = document.activeElement;
+		if (!el) return true;
+		const tagName = el.tagName.toLowerCase();
+		const isContentEditable = el.getAttribute("contenteditable") === "true";
+		return !(
+			tagName === "input" ||
+			tagName === "textarea" ||
+			isContentEditable
+		);
+	}, [
+		{
+			combo: "S",
+			handler: () =>
+				setEditorState(
+					"timeline",
+					"interactMode",
+					editorState.timeline.interactMode === "split" ? "seek" : "split",
+				),
+		},
+		{
+			combo: "Mod+=",
+			handler: () =>
+				editorState.timeline.transform.updateZoom(
+					editorState.timeline.transform.zoom / 1.1,
+					editorState.playbackTime,
+				),
+		},
+		{
+			combo: "Mod+-",
+			handler: () =>
+				editorState.timeline.transform.updateZoom(
+					editorState.timeline.transform.zoom * 1.1,
+					editorState.playbackTime,
+				),
+		},
+		{
+			combo: "Space",
+			handler: async () => {
+				const prevTime = editorState.previewTime;
 
-					if (!editorState.playing) {
-						if (prevTime !== null) setEditorState("playbackTime", prevTime);
+				if (!editorState.playing) {
+					if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-					}
+					await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+				}
 
-					await handlePlayPauseClick();
-				},
+				await handlePlayPauseClick();
 			},
-		],
-	);
+		},
+	]);
 
 	return (
 		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">

@@ -772,10 +772,9 @@ function createRecordingMutations(
 
 				res = await commands.uploadExportedVideo(
 					media.path,
-					{
-						Initial: { pre_created_video: null },
-					},
+					{ Initial: { pre_created_video: null } },
 					uploadChannel,
+					null,
 				);
 			} else {
 				setActionState({

@@ -1,7 +1,5 @@
 use crate::windows::ShowCapWindow;
-use crate::{
-    RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings, recording,
-};
+use crate::{RecordingStarted, RecordingStopped, RequestOpenSettings, recording};
 
 use std::sync::{
     Arc,
@@ -20,7 +18,6 @@ use tauri_specta::Event;
 
 pub enum TrayItem {
     OpenCap,
-    TakeScreenshot,
     PreviousRecordings,
     PreviousScreenshots,
     OpenSettings,
@@ -32,7 +29,6 @@ impl From<TrayItem> for MenuId {
     fn from(value: TrayItem) -> Self {
         match value {
             TrayItem::OpenCap => "open_cap",
-            TrayItem::TakeScreenshot => "take_screenshot",
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
             TrayItem::OpenSettings => "open_settings",
@@ -49,7 +45,6 @@ impl TryFrom<MenuId> for TrayItem {
     fn try_from(value: MenuId) -> Result<Self, Self::Error> {
         match value.0.as_str() {
             "open_cap" => Ok(TrayItem::OpenCap),
-            "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
             "open_settings" => Ok(TrayItem::OpenSettings),
@@ -113,9 +108,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         .show(&app)
                         .await;
                     });
-                }
-                Ok(TrayItem::TakeScreenshot) => {
-                    let _ = RequestNewScreenshot.emit(&app_handle);
                 }
                 Ok(TrayItem::PreviousRecordings) => {
                     let _ = RequestOpenSettings {
