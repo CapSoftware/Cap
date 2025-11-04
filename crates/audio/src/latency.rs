@@ -440,8 +440,7 @@ pub fn default_output_latency_hint(
     #[cfg(not(target_os = "macos"))]
     {
         let fallback = (buffer_size_frames as f64 / sample_rate as f64)
-            .max(FALLBACK_WIRED_LATENCY_SECS)
-            .min(MAX_LATENCY_SECS);
+            .clamp(FALLBACK_WIRED_LATENCY_SECS, MAX_LATENCY_SECS);
         Some(OutputLatencyHint::new(
             fallback,
             OutputTransportKind::Unknown,
