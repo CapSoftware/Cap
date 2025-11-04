@@ -285,6 +285,9 @@ pub struct RecordingDeleted {
     path: PathBuf,
 }
 
+#[derive(specta::Type, tauri_specta::Event, Serialize)]
+pub struct SetCaptureAreaPending(bool);
+
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
     path: PathBuf,
@@ -1920,6 +1923,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
+            SetCaptureAreaPending,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
