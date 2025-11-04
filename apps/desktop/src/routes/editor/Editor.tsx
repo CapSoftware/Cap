@@ -461,7 +461,9 @@ function Dialogs() {
 											<div class="flex flex-row justify-center">
 												<div class="rounded divide-black-transparent-10">
 													<Cropper
-														ref={cropperRef}
+														ref={(instance) => {
+															cropperRef = instance;
+														}}
 														onCropChange={setCrop}
 														aspectRatio={aspect() ?? undefined}
 														targetSize={{ x: display.width, y: display.height }}

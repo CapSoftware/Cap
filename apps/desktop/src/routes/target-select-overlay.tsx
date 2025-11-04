@@ -330,6 +330,9 @@ function Inner() {
 						if (raf) cancelAnimationFrame(raf);
 						raf = requestAnimationFrame(() => _setControllerInside(value));
 					}
+					onCleanup(() => {
+						if (raf) cancelAnimationFrame(raf);
+					});
 
 					const controlsStyle = createMemo(() => {
 						const bounds = crop();

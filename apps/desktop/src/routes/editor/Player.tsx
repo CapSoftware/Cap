@@ -97,7 +97,7 @@ export function Player() {
 		return total > 0 && total - editorState.playbackTime <= 0.1;
 	};
 
-	const cropDialogHandler = () => {
+	const cropDialogHandler = async () => {
 		const display = editorInstance.recordings.segments[0].display;
 		setDialog({
 			open: true,
@@ -112,7 +112,7 @@ export function Player() {
 				}),
 			},
 		});
-		commands.stopPlayback();
+		await commands.stopPlayback();
 		setEditorState("playing", false);
 	};
 
@@ -206,7 +206,7 @@ export function Player() {
 				<AspectRatioSelect />
 				<EditorButton
 					tooltipText="Crop Video"
-					onClick={() => cropDialogHandler()}
+					onClick={cropDialogHandler}
 					leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 				>
 					Crop
