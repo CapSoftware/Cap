@@ -95,7 +95,6 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: macos-latest
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     strategy:
@@ -106,6 +105,7 @@ jobs:
             runner: macos-latest
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
+    runs-on: ${{ matrix.settings.runner }}
     permissions:
       contents: read
     steps:
