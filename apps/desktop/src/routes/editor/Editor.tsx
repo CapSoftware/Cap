@@ -139,8 +139,7 @@ function Inner() {
 }
 
 function Dialogs() {
-	const { dialog, setDialog, presets, project, latestFrame } =
-		useEditorContext();
+	const { dialog, setDialog, presets, project } = useEditorContext();
 
 	return (
 		<Dialog.Root
@@ -302,10 +301,7 @@ function Dialogs() {
 							{(dialog) => {
 								const { setProject: setState, editorInstance } =
 									useEditorContext();
-								const firstSegment = editorInstance.recordings.segments[0];
-								if (!firstSegment)
-									throw new Error("Project doesn't have a first segment");
-								const display = firstSegment.display;
+								const display = editorInstance.recordings.segments[0].display;
 
 								let cropperRef: CropperRef | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
@@ -461,9 +457,7 @@ function Dialogs() {
 											<div class="flex flex-row justify-center">
 												<div class="rounded divide-black-transparent-10">
 													<Cropper
-														ref={(instance) => {
-															cropperRef = instance;
-														}}
+														ref={cropperRef}
 														onCropChange={setCrop}
 														aspectRatio={aspect() ?? undefined}
 														targetSize={{ x: display.width, y: display.height }}
@@ -473,39 +467,13 @@ function Dialogs() {
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
-														<div>
-															{/** Render current frame */}
-															<Show
-																when={latestFrame()}
-																fallback={
-																	<img
-																		class="shadow pointer-events-none w-full max-h-[70vh]"
-																		alt="screenshot"
-																		src={convertFileSrc(
-																			`${editorInstance.path}/screenshots/display.jpg`,
-																		)}
-																	/>
-																}
-															>
-																{(frame) => {
-																	const canvas =
-																		document.createElement("canvas");
-																	const imageData = frame().data;
-																	canvas.width = imageData.width;
-																	canvas.height = imageData.height;
-																	const ctx = canvas.getContext("2d");
-																	ctx?.putImageData(imageData, 0, 0);
-
-																	return (
-																		<img
-																			class="shadow pointer-events-none w-full max-h-[70vh]"
-																			alt="screenshot"
-																			src={canvas.toDataURL()}
-																		/>
-																	);
-																}}
-															</Show>
-														</div>
+														<img
+															class="shadow pointer-events-none max-h-[70vh]"
+															alt="screenshot"
+															src={convertFileSrc(
+																`${editorInstance.path}/screenshots/display.jpg`,
+															)}
+														/>
 													</Cropper>
 												</div>
 											</div>
