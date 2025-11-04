@@ -112,6 +112,12 @@ export const getPermissions = queryOptions({
 	refetchInterval: 1000,
 });
 
+export const isSystemAudioSupported = queryOptions({
+	queryKey: ["systemAudioSupported"] as const,
+	queryFn: () => commands.isSystemAudioCaptureSupported(),
+	staleTime: Number.POSITIVE_INFINITY, // This won't change during runtime
+});
+
 export function createOptionsQuery() {
 	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{

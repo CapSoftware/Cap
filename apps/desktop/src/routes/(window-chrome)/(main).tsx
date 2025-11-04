@@ -30,6 +30,7 @@ import {
 	createLicenseQuery,
 	createVideoDevicesQuery,
 	getPermissions,
+	isSystemAudioSupported,
 	listAudioDevices,
 	listScreens,
 	listWindows,
@@ -952,15 +953,25 @@ function MicrophoneSelect(props: {
 function SystemAudio() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
+	const systemAudioSupported = createQuery(() => isSystemAudioSupported);
 
-	return (
+	const isDisabled = () =>
+		!!currentRecording.data || systemAudioSupported.data === false;
+	const tooltipMessage = () => {
+		if (systemAudioSupported.data === false) {
+			return "System audio capture requires macOS 13.0 or later";
+		}
+		return undefined;
+	};
+
+	const button = (
 		<button
 			type="button"
 			onClick={() => {
-				if (!rawOptions) return;
+				if (!rawOptions || isDisabled()) return;
 				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
 			}}
-			disabled={!!currentRecording.data}
+			disabled={isDisabled()}
 			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 		>
 			<div class="size-[1.25rem] flex items-center justify-center">
@@ -975,6 +986,12 @@ function SystemAudio() {
 				{rawOptions.captureSystemAudio ? "On" : "Off"}
 			</InfoPill>
 		</button>
+	);
+
+	return tooltipMessage() ? (
+		<Tooltip content={tooltipMessage()!}>{button}</Tooltip>
+	) : (
+		button
 	);
 }
 

@@ -1,4 +1,4 @@
-use cidre::{api, arc, cg, cm, sc};
+use cidre::{arc, cg, cm, sc};
 
 pub struct StreamCfgBuilder(arc::R<sc::StreamCfg>);
 
@@ -33,7 +33,7 @@ impl StreamCfgBuilder {
 
     // Only supported on macOS 13.0+
     pub fn set_captures_audio(&mut self, captures_audio: bool) {
-        if api::macos_available("13.0") {
+        if crate::is_system_audio_supported() {
             unsafe {
                 self.0.set_captures_audio(captures_audio);
             }
