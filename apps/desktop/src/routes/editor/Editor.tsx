@@ -122,7 +122,7 @@ function Inner() {
 		<>
 			<Header />
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 min-h-0 gap-2 pb-4 w-full leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
@@ -139,7 +139,8 @@ function Inner() {
 }
 
 function Dialogs() {
-	const { dialog, setDialog, presets, project } = useEditorContext();
+	const { dialog, setDialog, presets, project, latestFrame } =
+		useEditorContext();
 
 	return (
 		<Dialog.Root
@@ -406,7 +407,7 @@ function Dialogs() {
 													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
-													<div class="relative size-4 pointer-events-none">
+													<div class="relative pointer-events-none size-4">
 														<Show when={!aspect()}>
 															<IconLucideRatio class="group-active:scale-90 transition-transform size-4 pointer-events-none *:pointer-events-none" />
 														</Show>
@@ -420,7 +421,7 @@ function Dialogs() {
 														>
 															<Show when={aspect()} keyed>
 																{(ratio) => (
-																	<span class="absolute inset-0 flex items-center justify-center text-xs text font-medium leading-none tracking-tight text-blue-10 pointer-events-none">
+																	<span class="flex absolute inset-0 justify-center items-center text-xs font-medium tracking-tight leading-none pointer-events-none text text-blue-10">
 																		{ratio[0]}:{ratio[1]}
 																	</span>
 																)}
@@ -470,13 +471,39 @@ function Dialogs() {
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
-														<img
-															class="shadow pointer-events-none max-h-[70vh]"
-															alt="screenshot"
-															src={convertFileSrc(
-																`${editorInstance.path}/screenshots/display.jpg`,
-															)}
-														/>
+														<div>
+															{/** Render current frame */}
+															<Show
+																when={latestFrame()}
+																fallback={
+																	<img
+																		class="shadow pointer-events-none w-full max-h-[70vh]"
+																		alt="screenshot"
+																		src={convertFileSrc(
+																			`${editorInstance.path}/screenshots/display.jpg`,
+																		)}
+																	/>
+																}
+															>
+																{(frame) => {
+																	const canvas =
+																		document.createElement("canvas");
+																	const imageData = frame().data;
+																	canvas.width = imageData.width;
+																	canvas.height = imageData.height;
+																	const ctx = canvas.getContext("2d");
+																	ctx?.putImageData(imageData, 0, 0);
+
+																	return (
+																		<img
+																			class="shadow pointer-events-none w-full max-h-[70vh]"
+																			alt="screenshot"
+																			src={canvas.toDataURL()}
+																		/>
+																	);
+																}}
+															</Show>
+														</div>
 													</Cropper>
 												</div>
 											</div>

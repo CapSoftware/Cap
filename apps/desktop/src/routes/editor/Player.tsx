@@ -112,6 +112,8 @@ export function Player() {
 				}),
 			},
 		});
+		commands.stopPlayback();
+		setEditorState("playing", false);
 	};
 
 	createEffect(() => {
