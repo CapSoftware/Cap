@@ -652,7 +652,7 @@ export function ConfigSidebar() {
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
-				class="custom-scroll p-5 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
+				class="custom-scroll p-4 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
 				classList={{
 					hidden: !editorState.timeline.selection,
 					"animate-in slide-in-from-bottom-2 fade-in":
@@ -2570,7 +2570,41 @@ function ClipSegmentConfig(props: {
 				</EditorButton>
 			</div>
 
-			<div class="space-y-1">
+			<div class="space-y-0.5">
+				<h3 class="font-medium text-gray-12">Segment Settings</h3>
+				<p class="text-gray-11">
+					These settings apply to only the selected segment
+				</p>
+			</div>
+
+			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
+				<p class="text-gray-11 -mt-3">
+					Modifying speed will mute this segment's audio.
+				</p>
+
+				<KRadioGroup
+					class="flex flex-row gap-1.5 -mt-1"
+					value={props.segment.timescale.toString()}
+					onChange={(v) => {
+						projectActions.setClipSegmentTimescale(
+							props.segmentIndex,
+							parseFloat(v),
+						);
+					}}
+				>
+					<For each={[0.25, 0.5, 1, 1.5, 2, 4, 8]}>
+						{(mult) => (
+							<KRadioGroup.Item value={mult.toString()}>
+								<KRadioGroup.ItemControl class="px-2 py-1 text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md ui-checked:bg-gray-3 ui-checked:border-gray-4 ui-checked:text-gray-12">
+									{mult}x
+								</KRadioGroup.ItemControl>
+							</KRadioGroup.Item>
+						)}
+					</For>
+				</KRadioGroup>
+			</Field>
+
+			<div class="space-y-0.5 pt-2">
 				<h3 class="font-medium text-gray-12">Clip Settings</h3>
 				<p class="text-gray-11">
 					These settings apply to all segments for the current clip

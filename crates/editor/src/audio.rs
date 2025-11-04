@@ -21,7 +21,8 @@ pub struct AudioRenderer {
 
 #[derive(Clone, Copy, Debug)]
 pub struct AudioRendererCursor {
-    segment_index: u32,
+    clip_index: u32,
+    timescale: f64,
     // excludes channels
     samples: usize,
 }
@@ -85,8 +86,9 @@ impl AudioRenderer {
         Self {
             data,
             cursor: AudioRendererCursor {
-                segment_index: 0,
+                clip_index: 0,
                 samples: 0,
+                timescale: 1.0,
             },
             elapsed_samples: 0,
         }
@@ -96,12 +98,14 @@ impl AudioRenderer {
         self.elapsed_samples = self.playhead_to_samples(playhead);
 
         self.cursor = match project.get_segment_time(playhead) {
-            Some((segment_time, segment_i)) => AudioRendererCursor {
-                segment_index: segment_i,
+            Some((segment_time, segment)) => AudioRendererCursor {
+                clip_index: segment.recording_clip,
+                timescale: segment.timescale,
                 samples: self.playhead_to_samples(segment_time),
             },
             None => AudioRendererCursor {
-                segment_index: 0,
+                clip_index: 0,
+                timescale: 1.0,
                 samples: self.elapsed_samples,
             },
         };
@@ -115,18 +119,20 @@ impl AudioRenderer {
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
         let new_cursor = match timeline.get_segment_time(playhead) {
-            Some((segment_time, segment_i)) => AudioRendererCursor {
-                segment_index: segment_i,
+            Some((segment_time, segment)) => AudioRendererCursor {
+                clip_index: segment.recording_clip,
+                timescale: segment.timescale,
                 samples: self.playhead_to_samples(segment_time),
             },
             None => AudioRendererCursor {
-                segment_index: 0,
+                clip_index: 0,
+                timescale: 1.0,
                 samples: 0,
             },
         };
 
         let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
-        if new_cursor.segment_index != self.cursor.segment_index
+        if new_cursor.clip_index != self.cursor.clip_index
             || cursor_diff.unsigned_abs() > (AudioData::SAMPLE_RATE as usize) / 5
         {
             self.cursor = new_cursor;
@@ -168,7 +174,11 @@ impl AudioRenderer {
         }
         let channels: usize = 2;
 
-        let tracks = &self.data[self.cursor.segment_index as usize].tracks;
+        if self.cursor.timescale != 1.0 {
+            return None;
+        };
+
+        let tracks = &self.data[self.cursor.clip_index as usize].tracks;
 
         if tracks.is_empty() {
             return None;
@@ -197,7 +207,7 @@ impl AudioRenderer {
                 let offsets = project
                     .clips
                     .iter()
-                    .find(|c| c.index == start.segment_index)
+                    .find(|c| c.index == start.clip_index)
                     .map(|c| c.offsets)
                     .unwrap_or_default();
 
