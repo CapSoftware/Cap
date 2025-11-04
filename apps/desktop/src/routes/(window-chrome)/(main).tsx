@@ -33,6 +33,7 @@ import {
 	type CaptureDisplay,
 	type CaptureWindow,
 	commands,
+	events,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
@@ -641,8 +642,10 @@ function AreaSelectButton(props: {
 	onMount(async () => {
 		const unlistenCaptureAreaWindow = await events
 			.setCaptureAreaPending(getCurrentWebviewWindow())
-			.listen((event) => setAreaSelection("pending", event.payload));
-		onCleanup(unlistenCaptureAreaWindow);
+			.listen((event: { payload: boolean }) =>
+				setAreaSelection("pending", event.payload),
+			);
+		onCleanup(() => unlistenCaptureAreaWindow());
 	});
 
 	return (
