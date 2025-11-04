@@ -1,5 +1,5 @@
 use cidre::{
-    arc, cm, cv, define_obj_type, dispatch, ns, objc,
+    api, arc, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
 
@@ -193,7 +193,7 @@ impl CapturerBuilder {
 
         let queue = dispatch::Queue::serial_with_ar_pool();
 
-        if self.config.captures_audio() {
+        if api::macos_available("13.0") && unsafe { self.config.captures_audio() } {
             stream
                 .add_stream_output(callbacks.as_ref(), sc::OutputType::Audio, Some(&queue))
                 .map_err(|e| e.retained())?;

@@ -42,7 +42,7 @@ tracing = "0.1.41"
 futures = "0.3.31"
 
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
-    "macos_13_0",
+    "macos_12_7",
     "cv",
     "cf",
     "core_audio",

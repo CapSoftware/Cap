@@ -1,4 +1,4 @@
-use cidre::{arc, cg, cm, sc};
+use cidre::{api, arc, cg, cm, sc};
 
 pub struct StreamCfgBuilder(arc::R<sc::StreamCfg>);
 
@@ -31,8 +31,13 @@ impl StreamCfgBuilder {
         });
     }
 
+    // Only supported on macOS 13.0+
     pub fn set_captures_audio(&mut self, captures_audio: bool) {
-        self.0.set_captures_audio(captures_audio);
+        if api::macos_available("13.0") {
+            unsafe {
+                self.0.set_captures_audio(captures_audio);
+            }
+        }
     }
 
     /// Logical width of the capture area
