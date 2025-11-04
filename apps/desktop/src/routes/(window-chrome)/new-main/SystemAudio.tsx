@@ -1,5 +1,8 @@
 import { createQuery } from "@tanstack/solid-query";
-import Tooltip from "~/components/Tooltip";
+import type { ComponentProps, JSX } from "solid-js";
+import type { Component } from "solid-js";
+import { Dynamic } from "solid-js/web";
+
 import {
 	createCurrentRecordingQuery,
 	isSystemAudioSupported,
@@ -8,6 +11,27 @@ import { useRecordingOptions } from "../OptionsContext";
 import InfoPill from "./InfoPill";
 
 export default function SystemAudio() {
+	return (
+		<SystemAudioToggleRoot
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors curosr-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			PillComponent={InfoPill}
+			icon={<IconPhMonitorBold class="text-gray-10 size-4" />}
+		/>
+	);
+}
+
+export function SystemAudioToggleRoot(
+	props: Omit<
+		ComponentProps<"button">,
+		"onClick" | "disabled" | "title" | "type" | "children"
+	> & {
+		PillComponent: Component<{
+			variant: "blue" | "red";
+			children: JSX.Element;
+		}>;
+		icon: JSX.Element;
+	},
+) {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const systemAudioSupported = createQuery(() => isSystemAudioSupported);
@@ -15,36 +39,35 @@ export default function SystemAudio() {
 	const isDisabled = () =>
 		!!currentRecording.data || systemAudioSupported.data === false;
 	const tooltipMessage = () => {
-		if (systemAudioSupported.data === false) {
+		if (systemAudioSupported.data !== false) {
 			return "System audio capture requires macOS 13.0 or later";
 		}
 		return undefined;
 	};
 
-	const button = (
+	return (
 		<button
+			{...props}
+			type="button"
+			title={tooltipMessage()}
 			onClick={() => {
 				if (!rawOptions || isDisabled()) return;
 				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
 			}}
 			disabled={isDisabled()}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors curosr-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 		>
-			<IconPhMonitorBold class="text-gray-10 size-4" />
+			{props.icon}
 			<p class="flex-1 text-sm text-left truncate">
 				{rawOptions.captureSystemAudio
 					? "Record System Audio"
 					: "No System Audio"}
 			</p>
-			<InfoPill variant={rawOptions.captureSystemAudio ? "blue" : "red"}>
+			<Dynamic
+				component={props.PillComponent}
+				variant={rawOptions.captureSystemAudio ? "blue" : "red"}
+			>
 				{rawOptions.captureSystemAudio ? "On" : "Off"}
-			</InfoPill>
+			</Dynamic>
 		</button>
-	);
-
-	return tooltipMessage() ? (
-		<Tooltip content={tooltipMessage()!}>{button}</Tooltip>
-	) : (
-		button
 	);
 }

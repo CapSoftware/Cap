@@ -30,7 +30,6 @@ import {
 	createLicenseQuery,
 	createVideoDevicesQuery,
 	getPermissions,
-	isSystemAudioSupported,
 	listAudioDevices,
 	listScreens,
 	listWindows,
@@ -173,10 +172,11 @@ function Page() {
 		cameraID: () =>
 			cameras.find((c) => {
 				const { cameraID } = rawOptions;
-				if (!cameraID) return;
+				if (!cameraID) return null;
 				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
 				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
+				return null;
 			}),
 		micName: () => mics.data?.find((name: any) => name === rawOptions.micName),
 	};
@@ -600,6 +600,7 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./OptionsContext";
+import { SystemAudioToggleRoot } from "./new-main/SystemAudio";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -951,47 +952,16 @@ function MicrophoneSelect(props: {
 }
 
 function SystemAudio() {
-	const { rawOptions, setOptions } = useRecordingOptions();
-	const currentRecording = createCurrentRecordingQuery();
-	const systemAudioSupported = createQuery(() => isSystemAudioSupported);
-
-	const isDisabled = () =>
-		!!currentRecording.data || systemAudioSupported.data === false;
-	const tooltipMessage = () => {
-		if (systemAudioSupported.data === false) {
-			return "System audio capture requires macOS 13.0 or later";
-		}
-		return undefined;
-	};
-
-	const button = (
-		<button
-			type="button"
-			onClick={() => {
-				if (!rawOptions || isDisabled()) return;
-				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
-			}}
-			disabled={isDisabled()}
+	return (
+		<SystemAudioToggleRoot
 			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
-		>
-			<div class="size-[1.25rem] flex items-center justify-center">
-				<IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
-			</div>
-			<span class="flex-1 text-left truncate">
-				{rawOptions.captureSystemAudio
-					? "Record System Audio"
-					: "No System Audio"}
-			</span>
-			<InfoPill variant={rawOptions.captureSystemAudio ? "blue" : "red"}>
-				{rawOptions.captureSystemAudio ? "On" : "Off"}
-			</InfoPill>
-		</button>
-	);
-
-	return tooltipMessage() ? (
-		<Tooltip content={tooltipMessage()!}>{button}</Tooltip>
-	) : (
-		button
+			PillComponent={InfoPill}
+			icon={
+				<div class="size-[1.25rem] flex items-center justify-center">
+					<IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
+				</div>
+			}
+		/>
 	);
 }
 
