@@ -270,3 +270,9 @@ jobs:
 
       - name: Build release
         run: cargo check --all --release
+
+      - name: Run Clippy
+        if: ${{ matrix.settings.target == 'aarch64-apple-darwin' }}
+        uses: actions-rs-plus/clippy-check@v2
+        with:
+          args: --workspace --all-features --locked
