@@ -566,6 +566,7 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
@@ -639,14 +640,10 @@ function AreaSelectButton(props: {
 		});
 	}
 
-	onMount(async () => {
-		const unlistenCaptureAreaWindow = await events
-			.setCaptureAreaPending(getCurrentWebviewWindow())
-			.listen((event: { payload: boolean }) =>
-				setAreaSelection("pending", event.payload),
-			);
-		onCleanup(() => unlistenCaptureAreaWindow());
-	});
+	createTauriEventListener(
+		events.setCaptureAreaPending(getCurrentWebviewWindow()),
+		(pending) => setAreaSelection("pending", pending),
+	);
 
 	return (
 		<Tooltip

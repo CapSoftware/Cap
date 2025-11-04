@@ -16,9 +16,13 @@ type __EventObj__<T> = {
 		: (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
 };
 
-export const emitTo = <K extends keyof typeof events>(
+const mappings = {
+	setCaptureAreaPending: "set-capture-area-pending",
+};
+
+export const emitTo = <K extends keyof typeof mappings>(
 	webview: WebviewWindow,
 	event: K,
 	target: string,
 	value: (typeof events)[K] extends __EventObj__<infer U> ? U : never,
-) => webview.emitTo(target, event, value);
+) => webview.emitTo(target, mappings[event], value);
