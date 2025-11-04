@@ -197,6 +197,12 @@ export function ClipTrack(
 
 	const split = () => editorState.timeline.interactMode === "split";
 
+	// Shared state for tracking which segment is being dragged and its offset
+	const [activeDragState, setActiveDragState] = createSignal<null | {
+		segmentIndex: number;
+		offset: number;
+	}>(null);
+
 	return (
 		<TrackRoot
 			ref={props.ref}
@@ -224,13 +230,28 @@ export function ClipTrack(
 
 					const relativeSegment = createMemo(() => {
 						const ds = startHandleDrag();
-						const offset = ds ? ds.offset / segment.timescale : 0;
+						const currentOffset = ds ? ds.offset / segment.timescale : 0;
+
+						// Check if any previous segment is being dragged
+						const dragState = activeDragState();
+						let previousDragOffset = 0;
+						if (dragState && dragState.segmentIndex < i()) {
+							// Apply the drag offset from the previous segment
+							previousDragOffset = dragState.offset / segment.timescale;
+						}
+
+						// Calculate proposed start position
+						const proposedStart =
+							prevDuration() + currentOffset + previousDragOffset;
+
+						// Ensure we never visually overlap with the previous segment
+						// prevDuration already includes previous segments' durations
+						const clampedStart = Math.max(proposedStart, prevDuration());
 
 						return {
-							start: Math.max(prevDuration() + offset, 0),
+							start: Math.max(clampedStart, 0),
 							end:
-								prevDuration() +
-								offset +
+								clampedStart +
 								(segment.end - segment.start) / segment.timescale,
 							timescale: segment.timescale,
 							recordingSegment: segment.recordingSegment,
@@ -385,6 +406,7 @@ export function ClipTrack(
 									isSelected()
 										? "wobble-wrapper border-gray-12"
 										: "border-transparent",
+									startHandleDrag() && "z-50",
 								)}
 								innerClass="ring-blue-9"
 								segment={relativeSegment()}
@@ -522,11 +544,6 @@ export function ClipTrack(
 										);
 
 										const prevSegment = segments()[i() - 1];
-										const prevSegmentIsSameClip =
-											prevSegment?.recordingSegment !== undefined
-												? prevSegment.recordingSegment ===
-													segment.recordingSegment
-												: false;
 
 										function update(event: MouseEvent) {
 											const newStart =
@@ -535,18 +552,31 @@ export function ClipTrack(
 													secsPerPixel() *
 													segment.timescale;
 
+											// Calculate the minimum allowed start position
+											// Must not overlap with previous segment, regardless of clip
+											const minAllowedStart = prevSegment ? prevSegment.end : 0;
+
 											const clampedStart = Math.min(
 												Math.max(
 													newStart,
-													prevSegmentIsSameClip ? prevSegment.end : 0,
+													minAllowedStart,
 													segment.end - maxDuration,
 												),
 												segment.end - 1,
 											);
 
+											const offset = clampedStart - initialStart;
+
 											setStartHandleDrag({
-												offset: clampedStart - initialStart,
+												offset: offset,
 												initialStart,
+											});
+
+											requestAnimationFrame(() => {
+												setActiveDragState({
+													segmentIndex: i(),
+													offset: offset,
+												});
 											});
 
 											setProject(
@@ -562,8 +592,8 @@ export function ClipTrack(
 										createRoot((dispose) => {
 											onCleanup(() => {
 												resumeHistory();
-												console.log("NUL");
 												setStartHandleDrag(null);
+												setActiveDragState(null);
 												onHandleReleased();
 											});
 
