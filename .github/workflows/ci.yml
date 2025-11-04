@@ -103,8 +103,9 @@ jobs:
         settings:
           - target: aarch64-apple-darwin
             runner: macos-latest
-          - target: x86_64-pc-windows-msvc
-            runner: windows-latest
+          # Windows can't take the disk usage lol
+          # - target: x86_64-pc-windows-msvc
+          #   runner: windows-latest
     runs-on: ${{ matrix.settings.runner }}
     permissions:
       contents: read
