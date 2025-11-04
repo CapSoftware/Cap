@@ -37,9 +37,9 @@ impl StreamCfgBuilder {
 
     /// Sets the queue depth (number of frames to buffer).
     /// Higher values provide more tolerance for processing delays but use more memory.
-    /// Apple's default is 3. Recommended: 8-12 for 30fps, 12-16 for 60fps.
+    /// Apple's default is 3. Maximum is 8.
     pub fn set_queue_depth(&mut self, depth: isize) {
-        self.0.set_queue_depth(depth);
+        self.0.set_queue_depth(depth.min(8));
     }
 
     /// Logical width of the capture area

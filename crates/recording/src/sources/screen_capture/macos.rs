@@ -129,10 +129,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         debug!("size: {:?}", size);
 
-        // Calculate queue depth based on FPS to provide adequate buffering
-        // Formula: (fps / 30.0 * 10.0).ceil() gives ~10 frames at 30fps, scaling with higher fps
-        // Minimum of 8, maximum of 16 to balance memory usage and tolerance for processing delays
-        let queue_depth = ((self.config.fps as f32 / 30.0 * 10.0).ceil() as isize).clamp(8, 16);
+        let queue_depth = ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, 8);
         debug!("Using queue depth: {}", queue_depth);
 
         let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
