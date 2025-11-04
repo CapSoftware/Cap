@@ -333,6 +333,9 @@ export function ConfigSidebar() {
 					"--margin-top-scroll": "5px",
 				}}
 				class="custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
+				classList={{
+					hidden: !!editorState.timeline.selection,
+				}}
 			>
 				<BackgroundConfig scrollRef={scrollRef} />
 				<CameraConfig scrollRef={scrollRef} />
@@ -645,14 +648,19 @@ export function ConfigSidebar() {
 					<CaptionsTab />
 				</KTabs.Content>
 			</div>
-			<Show when={editorState.timeline.selection}>
-				{(selection) => (
-					<div
-						style={{
-							"--margin-top-scroll": "5px",
-						}}
-						class="absolute custom-scroll p-5 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
-					>
+			<div
+				style={{
+					"--margin-top-scroll": "5px",
+				}}
+				class="custom-scroll p-5 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
+				classList={{
+					hidden: !editorState.timeline.selection,
+					"animate-in slide-in-from-bottom-2 fade-in":
+						!!editorState.timeline.selection,
+				}}
+			>
+				<Show when={editorState.timeline.selection}>
+					{(selection) => (
 						<Suspense>
 							<Show
 								when={(() => {
@@ -872,9 +880,9 @@ export function ConfigSidebar() {
 								)}
 							</Show>
 						</Suspense>
-					</div>
-				)}
-			</Show>
+					)}
+				</Show>
+			</div>
 		</KTabs>
 	);
 }
