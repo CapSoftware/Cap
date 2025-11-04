@@ -1,6 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
+import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -44,7 +45,6 @@ import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
-import { createScheduled, debounce } from "@solid-primitives/scheduled";
 
 const MIN_SIZE = { width: 150, height: 150 };
 
@@ -375,7 +375,7 @@ function Inner() {
 					});
 
 					return (
-						<div class="w-screen h-screen fixed">
+						<div class="fixed w-screen h-screen">
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
@@ -554,7 +554,7 @@ function RecordingControls(props: {
 						onMouseDown={(e) => showMenu(menuModes(), e)}
 						onClick={(e) => showMenu(menuModes(), e)}
 					>
-						<IconCapCaretDown class="focus:rotate-90 pointer-events-none" />
+						<IconCapCaretDown class="pointer-events-none focus:rotate-90" />
 					</div>
 				</div>
 				<div
@@ -562,13 +562,13 @@ function RecordingControls(props: {
 					onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
 					onClick={(e) => showMenu(preRecordingMenu(), e)}
 				>
-					<IconCapGear class="will-change-transform size-5 pointer-events-none" />
+					<IconCapGear class="pointer-events-none will-change-transform size-5" />
 				</div>
 			</div>
-			<div class="flex w-full justify-center items-center">
+			<div class="flex justify-center items-center w-full">
 				<div
 					onClick={() => props.setToggleModeSelect?.(true)}
-					class="self-center w-fit flex gap-1 items-center justify-center mb-5 transition-opacity duration-200 hover:opacity-60"
+					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
 					classList={{
 						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
 							props.showBackground,
