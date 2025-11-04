@@ -35,6 +35,13 @@ impl StreamCfgBuilder {
         self.0.set_captures_audio(captures_audio);
     }
 
+    /// Sets the queue depth (number of frames to buffer).
+    /// Higher values provide more tolerance for processing delays but use more memory.
+    /// Apple's default is 3. Maximum is 8.
+    pub fn set_queue_depth(&mut self, depth: isize) {
+        self.0.set_queue_depth(depth.min(8));
+    }
+
     /// Logical width of the capture area
     pub fn with_width(mut self, width: usize) -> Self {
         self.set_width(width);
@@ -65,6 +72,11 @@ impl StreamCfgBuilder {
 
     pub fn with_fps(mut self, fps: f32) -> Self {
         self.set_fps(fps);
+        self
+    }
+
+    pub fn with_queue_depth(mut self, depth: isize) -> Self {
+        self.set_queue_depth(depth);
         self
     }
 

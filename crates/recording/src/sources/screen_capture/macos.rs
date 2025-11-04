@@ -68,7 +68,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
-        let (video_tx, video_rx) = flume::bounded(4);
+        // Increased from 4 to 12 to provide more buffer tolerance for frame processing delays
+        let (video_tx, video_rx) = flume::bounded(12);
         let (mut audio_tx, audio_rx) = if self.system_audio {
             let (tx, rx) = mpsc::channel(32);
             (Some(tx), Some(rx))
@@ -128,12 +129,16 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         debug!("size: {:?}", size);
 
+        let queue_depth = ((self.config.fps as f32 / 30.0 * 5.0).ceil() as isize).clamp(3, 8);
+        debug!("Using queue depth: {}", queue_depth);
+
         let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
             .with_width(size.width() as usize)
             .with_height(size.height() as usize)
             .with_fps(self.config.fps as f32)
             .with_shows_cursor(self.config.show_cursor)
             .with_captures_audio(self.system_audio)
+            .with_queue_depth(queue_depth)
             .build();
 
         settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
