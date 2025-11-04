@@ -1,771 +1,1520 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { makePersisted } from "@solid-primitives/storage";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { createResizeObserver } from "@solid-primitives/resize-observer";
+import type {
+	CheckMenuItemOptions,
+	PredefinedMenuItemOptions,
+} from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
-	batch,
+	type Accessor,
+	children,
 	createEffect,
 	createMemo,
-	createResource,
 	createRoot,
 	createSignal,
 	For,
 	on,
-	onCleanup,
 	onMount,
 	type ParentProps,
 	Show,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import { generalSettingsStore } from "~/store";
-import Box from "~/utils/box";
-import { type Crop, commands, type XY } from "~/utils/tauri";
-import CropAreaRenderer from "./CropAreaRenderer";
+import { createKeyDownSignal } from "~/utils/events";
+
+import { commands } from "~/utils/tauri";
+export interface CropBounds {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+export const CROP_ZERO: CropBounds = { x: 0, y: 0, width: 0, height: 0 };
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
+type BoundsConstraints = {
+	top: boolean;
+	right: boolean;
+	bottom: boolean;
+	left: boolean;
+};
+type Vec2 = { x: number; y: number };
+
 type HandleSide = {
 	x: "l" | "r" | "c";
 	y: "t" | "b" | "c";
 	direction: Direction;
-	cursor: "ew" | "ns" | "nesw" | "nwse";
+	cursor: string;
+	movable: BoundsConstraints;
+	origin: Vec2;
+	isCorner: boolean;
 };
 
-const HANDLES: HandleSide[] = [
-	{ x: "l", y: "t", direction: "nw", cursor: "nwse" },
-	{ x: "r", y: "t", direction: "ne", cursor: "nesw" },
-	{ x: "l", y: "b", direction: "sw", cursor: "nesw" },
-	{ x: "r", y: "b", direction: "se", cursor: "nwse" },
-	{ x: "c", y: "t", direction: "n", cursor: "ns" },
-	{ x: "c", y: "b", direction: "s", cursor: "ns" },
-	{ x: "l", y: "c", direction: "w", cursor: "ew" },
-	{ x: "r", y: "c", direction: "e", cursor: "ew" },
-];
-
-type Ratio = [number, number];
-const COMMON_RATIOS: Ratio[] = [
+const HANDLES: readonly HandleSide[] = [
+	{ x: "l", y: "t", direction: "nw", cursor: "nwse-resize" },
+	{ x: "r", y: "t", direction: "ne", cursor: "nesw-resize" },
+	{ x: "l", y: "b", direction: "sw", cursor: "nesw-resize" },
+	{ x: "r", y: "b", direction: "se", cursor: "nwse-resize" },
+	{ x: "c", y: "t", direction: "n", cursor: "ns-resize" },
+	{ x: "c", y: "b", direction: "s", cursor: "ns-resize" },
+	{ x: "l", y: "c", direction: "w", cursor: "ew-resize" },
+	{ x: "r", y: "c", direction: "e", cursor: "ew-resize" },
+].map(
+	(handle) =>
+		({
+			...handle,
+			movable: {
+				top: handle.y === "t",
+				bottom: handle.y === "b",
+				left: handle.x === "l",
+				right: handle.x === "r",
+			},
+			origin: {
+				x: handle.x === "l" ? 1 : handle.x === "r" ? 0 : 0.5,
+				y: handle.y === "t" ? 1 : handle.y === "b" ? 0 : 0.5,
+			},
+			isCorner: handle.x !== "c" && handle.y !== "c",
+		}) as HandleSide,
+);
+export type Ratio = [number, number];
+export const COMMON_RATIOS: readonly Ratio[] = [
 	[1, 1],
-	[4, 3],
-	[3, 2],
-	[16, 9],
 	[2, 1],
+	[3, 2],
+	[4, 3],
+	[9, 16],
+	[16, 9],
+	[16, 10],
 	[21, 9],
 ];
+const ORIGIN_CENTER: Vec2 = { x: 0.5, y: 0.5 };
 
-const KEY_MAPPINGS = new Map([
-	["ArrowRight", "e"],
-	["ArrowDown", "s"],
-	["ArrowLeft", "w"],
-	["ArrowUp", "n"],
-]);
+const ratioToValue = (r: Ratio) => r[0] / r[1];
+const clamp = (n: number, min = 0, max = 1) => Math.max(min, Math.min(max, n));
+const easeInOutCubic = (t: number) =>
+	t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 
-const ORIGIN_CENTER: XY<number> = { x: 0.5, y: 0.5 };
-
-function clamp(n: number, min = 0, max = 1) {
-	return Math.max(min, Math.min(max, n));
+const shouldTriggerHaptic = ostype() === "macos";
+function triggerHaptic() {
+	if (shouldTriggerHaptic) commands.performHapticFeedback("alignment", null);
 }
 
-function distanceOf(firstPoint: Touch, secondPoint: Touch): number {
-	const dx = firstPoint.clientX - secondPoint.clientX;
-	const dy = firstPoint.clientY - secondPoint.clientY;
-	return Math.sqrt(dx * dx + dy * dy);
+function findClosestRatio(
+	width: number,
+	height: number,
+	threshold = 0.01,
+): Ratio | null {
+	const currentRatio = width / height;
+	for (const ratio of COMMON_RATIOS) {
+		if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold)
+			return [ratio[0], ratio[1]];
+		if (Math.abs(currentRatio - ratio[1] / ratio[0]) < threshold)
+			return [ratio[1], ratio[0]];
+	}
+	return null;
 }
 
-export function cropToFloor(value: Crop): Crop {
+// -----------------------------
+// Bounds helpers
+// -----------------------------
+function moveBounds(
+	bounds: CropBounds,
+	x: number | null,
+	y: number | null,
+): CropBounds {
 	return {
-		size: {
-			x: Math.floor(value.size.x),
-			y: Math.floor(value.size.y),
-		},
-		position: {
-			x: Math.floor(value.position.x),
-			y: Math.floor(value.position.y),
-		},
+		...bounds,
+		x: x !== null ? Math.round(x) : bounds.x,
+		y: y !== null ? Math.round(y) : bounds.y,
 	};
 }
 
-export default function Cropper(
+function resizeBounds(
+	bounds: CropBounds,
+	newWidth: number,
+	newHeight: number,
+	origin: Vec2,
+): CropBounds {
+	const fromX = bounds.x + bounds.width * origin.x;
+	const fromY = bounds.y + bounds.height * origin.y;
+	return {
+		x: Math.round(fromX - newWidth * origin.x),
+		y: Math.round(fromY - newHeight * origin.y),
+		width: Math.round(newWidth),
+		height: Math.round(newHeight),
+	};
+}
+
+function scaleBounds(bounds: CropBounds, factor: number, origin: Vec2) {
+	return resizeBounds(
+		bounds,
+		bounds.width * factor,
+		bounds.height * factor,
+		origin,
+	);
+}
+
+function constrainBoundsToRatio(
+	bounds: CropBounds,
+	ratio: number,
+	origin: Vec2,
+) {
+	const currentRatio = bounds.width / bounds.height;
+	if (Math.abs(currentRatio - ratio) < 0.001) return bounds;
+	return resizeBounds(bounds, bounds.width, bounds.width / ratio, origin);
+}
+
+function constrainBoundsToSize(
+	bounds: CropBounds,
+	max: Vec2 | null,
+	min: Vec2 | null,
+	origin: Vec2,
+	ratio: number | null = null,
+) {
+	let next = { ...bounds };
+	let maxW = max?.x ?? null;
+	let maxH = max?.y ?? null;
+	let minW = min?.x ?? null;
+	let minH = min?.y ?? null;
+
+	if (ratio) {
+		// Correctly calculate effective min/max sizes when a ratio is present
+		if (minW && minH) {
+			const effectiveMinW = Math.max(minW, minH * ratio);
+			minW = effectiveMinW;
+			minH = effectiveMinW / ratio;
+		}
+		if (maxW && maxH) {
+			const effectiveMaxW = Math.min(maxW, maxH * ratio);
+			maxW = effectiveMaxW;
+			maxH = effectiveMaxW / ratio;
+		}
+	}
+
+	if (maxW && next.width > maxW)
+		next = resizeBounds(next, maxW, ratio ? maxW / ratio : next.height, origin);
+	if (maxH && next.height > maxH)
+		next = resizeBounds(next, ratio ? maxH * ratio : next.width, maxH, origin);
+	if (minW && next.width < minW)
+		next = resizeBounds(next, minW, ratio ? minW / ratio : next.height, origin);
+	if (minH && next.height < minH)
+		next = resizeBounds(next, ratio ? minH * ratio : next.width, minH, origin);
+
+	return next;
+}
+
+function slideBoundsIntoContainer(
+	bounds: CropBounds,
+	containerWidth: number,
+	containerHeight: number,
+): CropBounds {
+	let { x, y, width, height } = bounds;
+
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x + width > containerWidth) x = containerWidth - width;
+	if (y + height > containerHeight) y = containerHeight - height;
+
+	return { ...bounds, x, y };
+}
+
+export type CropperRef = {
+	fill: () => void;
+	reset: () => void;
+	setCropProperty: (field: keyof CropBounds, value: number) => void;
+	setCrop: (
+		value: CropBounds | ((b: CropBounds) => CropBounds),
+		origin?: Vec2,
+	) => void;
+	bounds: Accessor<CropBounds>;
+	animateTo: (real: CropBounds, durationMs?: number) => void;
+};
+
+export function Cropper(
 	props: ParentProps<{
+		onCropChange?: (bounds: CropBounds) => void;
+		onInteraction?: (interacting: boolean) => void;
+		onContextMenu?: (event: PointerEvent) => void;
+		ref?: CropperRef | ((ref: CropperRef) => void);
 		class?: string;
-		onCropChange: (value: Crop) => void;
-		value: Crop;
-		mappedSize?: XY<number>;
-		minSize?: XY<number>;
-		initialSize?: XY<number>;
-		aspectRatio?: number;
-		showGuideLines?: boolean;
+		minSize?: Vec2;
+		maxSize?: Vec2;
+		targetSize?: Vec2;
+		initialCrop?: CropBounds | (() => CropBounds | undefined);
+		aspectRatio?: Ratio;
+		showBounds?: boolean;
+		snapToRatioEnabled?: boolean;
+		useBackdropFilter?: boolean;
+		allowLightMode?: boolean;
 	}>,
 ) {
-	const position = () => props.value.position;
-	const size = () => props.value.size;
-
-	const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
-	const mappedSize = createMemo(() => props.mappedSize || containerSize());
-	const minSize = createMemo(() => {
-		const mapped = mappedSize();
-		return {
-			x: Math.min(100, mapped.x * 0.1),
-			y: Math.min(100, mapped.y * 0.1),
-		};
-	});
-
-	const containerToMappedSizeScale = createMemo(() => {
-		const container = containerSize();
-		const mapped = mappedSize();
-		return {
-			x: container.x / mapped.x,
-			y: container.y / mapped.y,
-		};
-	});
-
-	const displayScaledCrop = createMemo(() => {
-		const mapped = mappedSize();
-		const container = containerSize();
-		return {
-			x: (position().x / mapped.x) * container.x,
-			y: (position().y / mapped.y) * container.y,
-			width: (size().x / mapped.x) * container.x,
-			height: (size().y / mapped.y) * container.y,
-		};
-	});
-
 	let containerRef: HTMLDivElement | undefined;
-	onMount(() => {
-		if (!containerRef) return;
+	let regionRef: HTMLDivElement | undefined;
+	let occTopRef: HTMLDivElement | undefined;
+	let occBottomRef: HTMLDivElement | undefined;
+	let occLeftRef: HTMLDivElement | undefined;
+	let occRightRef: HTMLDivElement | undefined;
 
-		const updateContainerSize = () => {
-			setContainerSize({
-				x: containerRef!.clientWidth,
-				y: containerRef!.clientHeight,
-			});
-		};
+	const resolvedChildren = children(() => props.children);
 
-		updateContainerSize();
-		const resizeObserver = new ResizeObserver(updateContainerSize);
-		resizeObserver.observe(containerRef);
-		onCleanup(() => resizeObserver.disconnect());
+	// raw bounds are in "logical" coordinates (not scaled to targetSize)
+	const [rawBounds, setRawBounds] = createSignal<CropBounds>(CROP_ZERO);
+	const [displayRawBounds, setDisplayRawBounds] =
+		createSignal<CropBounds>(CROP_ZERO);
 
-		const mapped = mappedSize();
-		const initial = props.initialSize || {
-			x: mapped.x / 2,
-			y: mapped.y / 2,
-		};
+	const [isAnimating, setIsAnimating] = createSignal(false);
+	let animationFrameId: number | null = null;
+	const [isReady, setIsReady] = createSignal(false);
 
-		const width = clamp(initial.x, minSize().x, mapped.x);
-		const height = clamp(initial.y, minSize().y, mapped.y);
+	function stopAnimation() {
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		animationFrameId = null;
+		setIsAnimating(false);
+		setDisplayRawBounds(rawBounds());
+	}
 
-		const box = Box.from(
-			{ x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
-			{ x: width, y: height },
-		);
-		box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
+	const boundsTooSmall = createMemo(
+		() => displayRawBounds().width <= 30 || displayRawBounds().height <= 30,
+	);
 
-		setCrop({
-			size: { x: width, y: height },
-			position: {
-				x: (mapped.x - width) / 2,
-				y: (mapped.y - height) / 2,
-			},
-		});
+	const [mouseState, setMouseState] = createStore<
+		(
+			| { drag: null | "region" | "overlay" }
+			| { drag: "handle"; cursor: string }
+		) & { hoveringHandle: HandleSide | null }
+	>({ drag: null, hoveringHandle: null });
+
+	const resizing = () =>
+		mouseState.drag === "handle" || mouseState.drag === "overlay";
+	const cursorStyle = () => {
+		if (mouseState.drag === "region" || mouseState.drag === "overlay")
+			return "grabbing";
+		if (mouseState.drag === "handle") return mouseState.cursor;
+	};
+
+	createEffect(() => props.onInteraction?.(mouseState.drag !== null));
+
+	const [aspectState, setAspectState] = createStore({
+		snapped: null as Ratio | null,
+		value: null as number | null,
+	});
+
+	createEffect(() => {
+		const min = props.minSize;
+		const max = props.maxSize;
+
+		if (min && max) {
+			if (min.x > max.x)
+				throw new Error(
+					`Cropper constraint error: minSize.x (${min.x}px) exceeds maxSize.x (${max.x}px). Please adjust the size constraints.`,
+				);
+			if (min.y > max.y)
+				throw new Error(
+					`Cropper constraint error: minSize.y (${min.y}px) exceeds maxSize.y (${max.y}px). Please adjust the size constraints.`,
+				);
+		}
 	});
 
 	createEffect(
 		on(
 			() => props.aspectRatio,
-			() => {
-				if (!props.aspectRatio) return;
-				const box = Box.from(position(), size());
-				box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
-				box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
-				setCrop(box.toBounds());
+			(v) => {
+				const nextRatio = v ? ratioToValue(v) : null;
+				setAspectState("value", nextRatio);
+
+				if (!isReady() || !nextRatio) return;
+				let targetBounds = rawBounds();
+
+				targetBounds = constrainBoundsToRatio(
+					targetBounds,
+					nextRatio,
+					ORIGIN_CENTER,
+				);
+				setRawBoundsAndAnimate(targetBounds);
 			},
 		),
 	);
 
-	const [snapToRatioEnabled, setSnapToRatioEnabled] = makePersisted(
-		createSignal(true),
-		{ name: "cropSnapsToRatio" },
-	);
-	const [snappedRatio, setSnappedRatio] = createSignal<Ratio | null>(null);
-	const [dragging, setDragging] = createSignal(false);
-	const [gestureState, setGestureState] = createStore<{
-		isTrackpadGesture: boolean;
-		lastTouchCenter: XY<number> | null;
-		initialPinchDistance: number;
-		initialSize: { width: number; height: number };
-	}>({
-		isTrackpadGesture: false,
-		lastTouchCenter: null,
-		initialPinchDistance: 0,
-		initialSize: { width: 0, height: 0 },
+	const [containerSize, setContainerSize] = createSignal<Vec2>({ x: 1, y: 1 });
+	const targetSize = createMemo(() => props.targetSize || containerSize());
+
+	const logicalScale = createMemo<Vec2>(() => {
+		if (props.targetSize) {
+			const target = props.targetSize;
+			const container = containerSize();
+			return { x: target.x / container.x, y: target.y / container.y };
+		}
+		return { x: 1, y: 1 };
 	});
 
-	function handleDragStart(event: MouseEvent) {
-		if (gestureState.isTrackpadGesture) return; // Don't start drag if we're in a trackpad gesture
-		event.stopPropagation();
-		setDragging(true);
-		let lastValidPos = { x: event.clientX, y: event.clientY };
-		const box = Box.from(position(), size());
-		const scaleFactors = containerToMappedSizeScale();
-
-		createRoot((dispose) => {
-			const mapped = mappedSize();
-			createEventListenerMap(window, {
-				mouseup: () => {
-					setDragging(false);
-					dispose();
-				},
-				mousemove: (e) => {
-					requestAnimationFrame(() => {
-						const dx = (e.clientX - lastValidPos.x) / scaleFactors.x;
-						const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
-
-						box.move(
-							clamp(box.x + dx, 0, mapped.x - box.width),
-							clamp(box.y + dy, 0, mapped.y - box.height),
-						);
-
-						const newBox = box;
-						if (newBox.x !== position().x || newBox.y !== position().y) {
-							lastValidPos = { x: e.clientX, y: e.clientY };
-							setCrop(newBox.toBounds());
-						}
-					});
-				},
-			});
-		});
-	}
-
-	function handleWheel(event: WheelEvent) {
-		event.preventDefault();
-		const box = Box.from(position(), size());
-		const mapped = mappedSize();
-
-		if (event.ctrlKey) {
-			setGestureState("isTrackpadGesture", true);
-
-			const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
-			const scale = 1 - event.deltaY * velocity;
-
-			box.resize(
-				clamp(box.width * scale, minSize().x, mapped.x),
-				clamp(box.height * scale, minSize().y, mapped.y),
-				ORIGIN_CENTER,
-			);
-			box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
-			setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
-			setSnappedRatio(null);
-		} else {
-			const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
-			const scaleFactors = containerToMappedSizeScale();
-			const dx = (-event.deltaX * velocity) / scaleFactors.x;
-			const dy = (-event.deltaY * velocity) / scaleFactors.y;
-
-			box.move(
-				clamp(box.x + dx, 0, mapped.x - box.width),
-				clamp(box.y + dy, 0, mapped.y - box.height),
-			);
-		}
-
-		setCrop(box.toBounds());
-	}
-
-	function handleTouchStart(event: TouchEvent) {
-		if (event.touches.length === 2) {
-			// Initialize pinch zoom
-			const distance = distanceOf(event.touches[0], event.touches[1]);
-
-			// Initialize touch center
-			const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
-			const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
-
-			batch(() => {
-				setGestureState("initialPinchDistance", distance);
-				setGestureState("initialSize", {
-					width: size().x,
-					height: size().y,
-				});
-				setGestureState("lastTouchCenter", { x: centerX, y: centerY });
-			});
-		} else if (event.touches.length === 1) {
-			// Handle single touch as drag
-			batch(() => {
-				setDragging(true);
-				setGestureState("lastTouchCenter", {
-					x: event.touches[0].clientX,
-					y: event.touches[0].clientY,
-				});
-			});
-		}
-	}
-
-	function handleTouchMove(event: TouchEvent) {
-		if (event.touches.length === 2) {
-			// Handle pinch zoom
-			const currentDistance = distanceOf(event.touches[0], event.touches[1]);
-			const scale = currentDistance / gestureState.initialPinchDistance;
-
-			const box = Box.from(position(), size());
-			const mapped = mappedSize();
-
-			// Calculate new dimensions while maintaining aspect ratio
-			const currentRatio = size().x / size().y;
-			let newWidth = clamp(
-				gestureState.initialSize.width * scale,
-				minSize().x,
-				mapped.x,
-			);
-			let newHeight = newWidth / currentRatio;
-
-			// Adjust if height exceeds bounds
-			if (newHeight < minSize().y || newHeight > mapped.y) {
-				newHeight = clamp(newHeight, minSize().y, mapped.y);
-				newWidth = newHeight * currentRatio;
-			}
-
-			// Resize from center
-			box.resize(newWidth, newHeight, ORIGIN_CENTER);
-
-			// Handle two-finger pan
-			const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
-			const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
-
-			if (gestureState.lastTouchCenter) {
-				const scaleFactors = containerToMappedSizeScale();
-				const dx = (centerX - gestureState.lastTouchCenter.x) / scaleFactors.x;
-				const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
-
-				box.move(
-					clamp(box.x + dx, 0, mapped.x - box.width),
-					clamp(box.y + dy, 0, mapped.y - box.height),
-				);
-			}
-
-			setGestureState("lastTouchCenter", { x: centerX, y: centerY });
-			setCrop(box.toBounds());
-		} else if (event.touches.length === 1 && dragging()) {
-			// Handle single touch drag
-			const box = Box.from(position(), size());
-			const scaleFactors = containerToMappedSizeScale();
-			const mapped = mappedSize();
-
-			if (gestureState.lastTouchCenter) {
-				const dx =
-					(event.touches[0].clientX - gestureState.lastTouchCenter.x) /
-					scaleFactors.x;
-				const dy =
-					(event.touches[0].clientY - gestureState.lastTouchCenter.y) /
-					scaleFactors.y;
-
-				box.move(
-					clamp(box.x + dx, 0, mapped.x - box.width),
-					clamp(box.y + dy, 0, mapped.y - box.height),
-				);
-			}
-
-			setGestureState("lastTouchCenter", {
-				x: event.touches[0].clientX,
-				y: event.touches[0].clientY,
-			});
-			setCrop(box.toBounds());
-		}
-	}
-
-	function handleTouchEnd(event: TouchEvent) {
-		if (event.touches.length === 0) {
-			setDragging(false);
-			setGestureState("lastTouchCenter", null);
-		} else if (event.touches.length === 1) {
-			setGestureState("lastTouchCenter", {
-				x: event.touches[0].clientX,
-				y: event.touches[0].clientY,
-			});
-		}
-	}
-
-	function handleResizeStartTouch(event: TouchEvent, dir: Direction) {
-		if (event.touches.length !== 1) return;
-		event.stopPropagation();
-		const touch = event.touches[0];
-		handleResizeStart(touch.clientX, touch.clientY, dir);
-	}
-
-	function findClosestRatio(
-		width: number,
-		height: number,
-		threshold = 0.01,
-	): Ratio | null {
-		if (props.aspectRatio) return null;
-		const currentRatio = width / height;
-		for (const ratio of COMMON_RATIOS) {
-			if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
-				return [ratio[0], ratio[1]];
-			}
-			if (Math.abs(currentRatio - ratio[1] / ratio[0]) < threshold) {
-				return [ratio[1], ratio[0]];
-			}
-		}
-		return null;
-	}
-
-	function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
-		const origin: XY<number> = {
-			x: dir.includes("w") ? 1 : 0,
-			y: dir.includes("n") ? 1 : 0,
+	const realBounds = createMemo<CropBounds>(() => {
+		const { x, y, width, height } = rawBounds();
+		const scale = logicalScale();
+		const target = targetSize();
+		const bounds = {
+			x: Math.round(x * scale.x),
+			y: Math.round(y * scale.y),
+			width: Math.round(width * scale.x),
+			height: Math.round(height * scale.y),
 		};
 
-		let lastValidPos = { x: clientX, y: clientY };
-		const box = Box.from(position(), size());
-		const scaleFactors = containerToMappedSizeScale();
-		const mapped = mappedSize();
+		if (bounds.width > target.x) bounds.width = target.x;
+		if (bounds.height > target.y) bounds.height = target.y;
+		if (bounds.x < 0) bounds.x = 0;
+		if (bounds.y < 0) bounds.y = 0;
+		if (bounds.x + bounds.width > target.x) bounds.x = target.x - bounds.width;
+		if (bounds.y + bounds.height > target.y)
+			bounds.y = target.y - bounds.height;
+
+		props.onCropChange?.(bounds);
+		return bounds;
+	});
+
+	function calculateLabelTransform(handle: HandleSide) {
+		const bounds = rawBounds();
+		if (!containerRef) return { x: 0, y: 0 };
+		const containerRect = containerRef.getBoundingClientRect();
+		const labelWidth = 80;
+		const labelHeight = 25;
+		const margin = 25;
+
+		const handleScreenX =
+			containerRect.left +
+			bounds.x +
+			bounds.width * (handle.x === "l" ? 0 : handle.x === "r" ? 1 : 0.5);
+		const handleScreenY =
+			containerRect.top +
+			bounds.y +
+			bounds.height * (handle.y === "t" ? 0 : handle.y === "b" ? 1 : 0.5);
+
+		let idealX = handleScreenX;
+		let idealY = handleScreenY;
+
+		if (handle.x === "l") idealX -= labelWidth + margin;
+		else if (handle.x === "r") idealX += margin;
+		else idealX -= labelWidth / 2;
+
+		if (handle.y === "t") idealY -= labelHeight + margin;
+		else if (handle.y === "b") idealY += margin;
+		else idealY -= labelHeight / 2;
+
+		const finalX = clamp(
+			idealX,
+			margin,
+			window.innerWidth - labelWidth - margin,
+		);
+		const finalY = clamp(
+			idealY,
+			margin,
+			window.innerHeight - labelHeight - margin,
+		);
+
+		return { x: finalX, y: finalY };
+	}
+
+	const labelTransform = createMemo(() =>
+		resizing() && mouseState.hoveringHandle
+			? calculateLabelTransform(mouseState.hoveringHandle)
+			: null,
+	);
+
+	function boundsToRaw(real: CropBounds) {
+		const scale = logicalScale();
+		return {
+			x: Math.max(0, real.x / scale.x),
+			y: Math.max(0, real.y / scale.y),
+			width: Math.max(0, real.width / scale.x),
+			height: Math.max(0, real.height / scale.y),
+		};
+	}
+
+	function animateToRawBounds(target: CropBounds, durationMs = 240) {
+		const start = displayRawBounds();
+		if (
+			target.x === start.x &&
+			target.y === start.y &&
+			target.width === start.width &&
+			target.height === start.height
+		) {
+			return;
+		}
+
+		setIsAnimating(true);
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		const startTime = performance.now();
+
+		const step = () => {
+			const now = performance.now();
+			const t = Math.min(1, (now - startTime) / durationMs);
+			const e = easeInOutCubic(t);
+			setDisplayRawBounds({
+				x: start.x + (target.x - start.x) * e,
+				y: start.y + (target.y - start.y) * e,
+				width: start.width + (target.width - start.width) * e,
+				height: start.height + (target.height - start.height) * e,
+			});
+			if (t < 1) animationFrameId = requestAnimationFrame(step);
+			else {
+				animationFrameId = null;
+				setIsAnimating(false);
+				triggerHaptic();
+			}
+		};
+
+		animationFrameId = requestAnimationFrame(step);
+	}
+
+	function setRawBoundsAndAnimate(
+		bounds: CropBounds,
+		origin?: Vec2,
+		durationMs = 240,
+	) {
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		setIsAnimating(true);
+		setRawBoundsConstraining(bounds, origin);
+		animateToRawBounds(rawBounds(), durationMs);
+	}
+
+	function computeInitialBounds(): CropBounds {
+		const target = targetSize();
+		const initialCrop =
+			typeof props.initialCrop === "function"
+				? props.initialCrop()
+				: props.initialCrop;
+
+		const startBoundsReal = initialCrop ?? {
+			x: 0,
+			y: 0,
+			width: Math.round(target.x / 2),
+			height: Math.round(target.y / 2),
+		};
+
+		let bounds = boundsToRaw(startBoundsReal);
+		const ratioValue = aspectState.value;
+		if (ratioValue)
+			bounds = constrainBoundsToRatio(bounds, ratioValue, ORIGIN_CENTER);
+		const container = containerSize();
+
+		if (bounds.width > container.x)
+			bounds = scaleBounds(bounds, container.x / bounds.width, ORIGIN_CENTER);
+		if (bounds.height > container.y)
+			bounds = scaleBounds(bounds, container.y / bounds.height, ORIGIN_CENTER);
+
+		bounds = slideBoundsIntoContainer(bounds, container.x, container.y);
+
+		if (!initialCrop)
+			bounds = moveBounds(
+				bounds,
+				container.x / 2 - bounds.width / 2,
+				container.y / 2 - bounds.height / 2,
+			);
+		return bounds;
+	}
+
+	function rawSizeConstraint() {
+		const scale = logicalScale();
+		return {
+			min: props.minSize
+				? { x: props.minSize.x / scale.x, y: props.minSize.y / scale.y }
+				: null,
+			max: props.maxSize
+				? { x: props.maxSize.x / scale.x, y: props.maxSize.y / scale.y }
+				: null,
+		};
+	}
+
+	function setRawBoundsConstraining(
+		bounds: CropBounds,
+		origin = ORIGIN_CENTER,
+	) {
+		const ratioValue = aspectState.value;
+		const container = containerSize();
+		const { min, max } = rawSizeConstraint();
+		let newBounds = { ...bounds };
+
+		newBounds = constrainBoundsToSize(newBounds, max, min, origin, ratioValue);
+
+		if (ratioValue)
+			newBounds = constrainBoundsToRatio(newBounds, ratioValue, origin);
+
+		if (newBounds.width > container.x)
+			newBounds = scaleBounds(newBounds, container.x / newBounds.width, origin);
+		if (newBounds.height > container.y)
+			newBounds = scaleBounds(
+				newBounds,
+				container.y / newBounds.height,
+				origin,
+			);
+
+		newBounds = slideBoundsIntoContainer(newBounds, container.x, container.y);
+		setRawBounds(newBounds);
+		if (!isAnimating()) setDisplayRawBounds(newBounds);
+	}
+
+	function fill() {
+		const container = containerSize();
+		const targetRaw = {
+			x: 0,
+			y: 0,
+			width: container.x,
+			height: container.y,
+		};
+		setRawBoundsAndAnimate(targetRaw);
+		setAspectState("snapped", null);
+	}
+
+	onMount(() => {
+		if (!containerRef) return;
+		let initialized = false;
+
+		const updateContainerSize = (width: number, height: number) => {
+			const prevScale = logicalScale();
+			const currentRaw = rawBounds();
+			const preservedReal = {
+				x: Math.round(currentRaw.x * prevScale.x),
+				y: Math.round(currentRaw.y * prevScale.y),
+				width: Math.round(currentRaw.width * prevScale.x),
+				height: Math.round(currentRaw.height * prevScale.y),
+			};
+
+			setContainerSize({ x: width, y: height });
+
+			setRawBoundsConstraining(boundsToRaw(preservedReal));
+
+			if (!initialized && width > 1 && height > 1) {
+				initialized = true;
+				init();
+			}
+		};
+
+		createResizeObserver(containerRef, (e) =>
+			updateContainerSize(e.width, e.height),
+		);
+		updateContainerSize(containerRef.clientWidth, containerRef.clientHeight);
+
+		setDisplayRawBounds(rawBounds());
+
+		function init() {
+			const bounds = computeInitialBounds();
+			setRawBoundsConstraining(bounds);
+			setDisplayRawBounds(bounds);
+			setIsReady(true);
+		}
+
+		if (props.ref) {
+			const cropperRef: CropperRef = {
+				reset: () => {
+					const bounds = computeInitialBounds();
+					setRawBoundsAndAnimate(bounds);
+					setAspectState("snapped", null);
+				},
+				fill,
+				setCropProperty: (field, value) => {
+					setAspectState("snapped", null);
+					setRawBoundsConstraining(
+						boundsToRaw({ ...realBounds(), [field]: value }),
+						{ x: 0, y: 0 },
+					);
+				},
+				setCrop: (value, origin) =>
+					setRawBoundsConstraining(
+						boundsToRaw(
+							typeof value === "function" ? value(rawBounds()) : value,
+						),
+						origin,
+					),
+				get bounds() {
+					return realBounds;
+				},
+				animateTo: (real, durationMs) =>
+					setRawBoundsAndAnimate(boundsToRaw(real), undefined, durationMs),
+			};
+
+			if (typeof props.ref === "function") props.ref(cropperRef);
+			else props.ref = cropperRef;
+		}
+	});
+
+	function onRegionPointerDown(e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+
+		stopAnimation();
+		e.stopPropagation();
+		setMouseState({ drag: "region" });
+		let currentBounds = rawBounds();
+		const containerRect = containerRef.getBoundingClientRect();
+		const startOffset = {
+			x: e.clientX - containerRect.left - currentBounds.x,
+			y: e.clientY - containerRect.top - currentBounds.y,
+		};
+
+		createRoot((dispose) =>
+			createEventListenerMap(window, {
+				pointerup: () => {
+					setMouseState({ drag: null });
+					dispose();
+				},
+				pointermove: (e) => {
+					let newX = e.clientX - containerRect.left - startOffset.x;
+					let newY = e.clientY - containerRect.top - startOffset.y;
+
+					newX = clamp(newX, 0, containerRect.width - currentBounds.width);
+					newY = clamp(newY, 0, containerRect.height - currentBounds.height);
+
+					currentBounds = moveBounds(currentBounds, newX, newY);
+					setRawBounds(currentBounds);
+
+					if (!isAnimating()) setDisplayRawBounds(currentBounds);
+				},
+			}),
+		);
+	}
+
+	// Helper: update handle movable sides when switching between anchor <-> center-origin mode
+	function updateHandleForModeSwitch(
+		handle: HandleSide,
+		currentBounds: CropBounds,
+		pointX: number,
+		pointY: number,
+	) {
+		const center = {
+			x: currentBounds.x + currentBounds.width / 2,
+			y: currentBounds.y + currentBounds.height / 2,
+		};
+		const newMovable = { ...handle.movable };
+		if (handle.movable.left || handle.movable.right) {
+			newMovable.left = pointX < center.x;
+			newMovable.right = pointX >= center.x;
+		}
+		if (handle.movable.top || handle.movable.bottom) {
+			newMovable.top = pointY < center.y;
+			newMovable.bottom = pointY >= center.y;
+		}
+		return { ...handle, movable: newMovable };
+	}
+
+	type ResizeSessionState = {
+		startBounds: CropBounds;
+		isAltMode: boolean;
+		activeHandle: HandleSide;
+		originalHandle: HandleSide;
+		containerRect: DOMRect;
+	};
+
+	function handleResizePointerMove(
+		e: PointerEvent,
+		context: ResizeSessionState,
+	) {
+		const pointX = e.clientX - context.containerRect.left;
+		const pointY = e.clientY - context.containerRect.top;
+
+		if (e.altKey !== context.isAltMode) {
+			context.isAltMode = e.altKey;
+			context.startBounds = rawBounds();
+			if (context.isAltMode) {
+				context.activeHandle = context.originalHandle;
+			} else {
+				context.activeHandle = updateHandleForModeSwitch(
+					context.originalHandle,
+					context.startBounds,
+					pointX,
+					pointY,
+				);
+			}
+		}
+
+		const { min, max } = rawSizeConstraint();
+		const shiftKey = e.shiftKey;
+		const ratioValue = aspectState.value;
+
+		const options: ResizeOptions = {
+			container: containerSize(),
+			min,
+			max,
+			isAltMode: context.isAltMode,
+			shiftKey,
+			ratioValue,
+			snapToRatioEnabled: !!props.snapToRatioEnabled && !boundsTooSmall(),
+		};
+
+		let nextBounds: CropBounds;
+
+		if (ratioValue !== null) {
+			nextBounds =
+				computeAspectRatioResize(
+					pointX,
+					pointY,
+					context.startBounds,
+					context.activeHandle,
+					options,
+				) ?? rawBounds();
+		} else {
+			const { bounds, snappedRatio } = computeFreeResize(
+				pointX,
+				pointY,
+				context.startBounds,
+				context.activeHandle,
+				options,
+			);
+			nextBounds = bounds;
+			if (snappedRatio && !aspectState.snapped) {
+				triggerHaptic();
+			}
+			setAspectState("snapped", snappedRatio);
+		}
+
+		const finalBounds = slideBoundsIntoContainer(
+			nextBounds,
+			containerSize().x,
+			containerSize().y,
+		);
+
+		setRawBounds(finalBounds);
+		if (!isAnimating()) setDisplayRawBounds(finalBounds);
+	}
+
+	function onHandlePointerDown(handle: HandleSide, e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+		e.stopPropagation();
+
+		stopAnimation();
+		setMouseState({ drag: "handle", cursor: handle.cursor });
+
+		const context: ResizeSessionState = {
+			containerRect: containerRef.getBoundingClientRect(),
+			startBounds: rawBounds(),
+			isAltMode: e.altKey,
+			activeHandle: { ...handle },
+			originalHandle: handle,
+		};
+
+		createRoot((dispose) =>
+			createEventListenerMap(window, {
+				pointerup: () => {
+					setMouseState({ drag: null });
+					// Note: may need to be added back
+					// setAspectState("snapped", null);
+					dispose();
+				},
+				pointermove: (e) => handleResizePointerMove(e, context),
+			}),
+		);
+	}
+
+	function onHandleDoubleClick(handle: HandleSide, e: MouseEvent) {
+		e.stopPropagation();
+		const currentBounds = rawBounds();
+		const container = containerSize();
+
+		const newBounds = { ...currentBounds };
+
+		if (handle.movable.top) {
+			newBounds.height = currentBounds.y + currentBounds.height;
+			newBounds.y = 0;
+		}
+		if (handle.movable.bottom) {
+			newBounds.height = container.y - currentBounds.y;
+		}
+		if (handle.movable.left) {
+			newBounds.width = currentBounds.x + currentBounds.width;
+			newBounds.x = 0;
+		}
+		if (handle.movable.right) {
+			newBounds.width = container.x - currentBounds.x;
+		}
+
+		setRawBoundsAndAnimate(newBounds, handle.origin);
+	}
+
+	function onOverlayPointerDown(e: PointerEvent) {
+		if (!containerRef || e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+
+		const initialBounds = { ...rawBounds() };
+		const SE_HANDLE_INDEX = 3; // use bottom-right as the temporary handle
+		const handle = HANDLES[SE_HANDLE_INDEX];
+
+		setMouseState({ drag: "overlay" });
+
+		const containerRect = containerRef.getBoundingClientRect();
+		const startPoint = {
+			x: e.clientX - containerRect.left,
+			y: e.clientY - containerRect.top,
+		};
+
+		const startBounds: CropBounds = {
+			x: startPoint.x,
+			y: startPoint.y,
+			width: 1,
+			height: 1,
+		};
+
+		const context: ResizeSessionState = {
+			containerRect,
+			startBounds,
+			isAltMode: e.altKey,
+			activeHandle: { ...handle },
+			originalHandle: handle,
+		};
 
 		createRoot((dispose) => {
 			createEventListenerMap(window, {
-				mouseup: dispose,
-				touchend: dispose,
-				touchmove: (e) =>
-					requestAnimationFrame(() => {
-						if (e.touches.length !== 1) return;
-						handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
-					}),
-				mousemove: (e) =>
-					requestAnimationFrame(() =>
-						handleResizeMove(e.clientX, e.clientY, e.altKey),
-					),
+				pointerup: () => {
+					setMouseState({ drag: null });
+					const bounds = rawBounds();
+					if (bounds.width < 5 || bounds.height < 5) {
+						setRawBounds(initialBounds);
+						if (!isAnimating()) setDisplayRawBounds(initialBounds);
+					}
+					dispose();
+				},
+				pointermove: (e) => handleResizePointerMove(e, context),
 			});
 		});
+	}
 
-		const [hapticsEnabled, hapticsEnabledOptions] = createResource(
-			async () =>
-				(await generalSettingsStore.get())?.hapticsEnabled &&
-				ostype() === "macos",
-		);
-		generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
+	const KEY_MAPPINGS = new Map([
+		["ArrowRight", "e"],
+		["ArrowDown", "s"],
+		["ArrowLeft", "w"],
+		["ArrowUp", "n"],
+	]);
 
-		function handleResizeMove(
-			moveX: number,
-			moveY: number,
-			centerOrigin = false,
-		) {
-			const dx = (moveX - lastValidPos.x) / scaleFactors.x;
-			const dy = (moveY - lastValidPos.y) / scaleFactors.y;
+	const [keyboardState, setKeyboardState] = createStore({
+		pressedKeys: new Set<string>(),
+		shift: false,
+		alt: false,
+		meta: false, // Cmd or Ctrl
+	});
 
-			const scaleMultiplier = centerOrigin ? 2 : 1;
-			const currentBox = box.toBounds();
+	let keyboardFrameId: number | null = null;
 
-			let newWidth =
-				dir.includes("e") || dir.includes("w")
-					? clamp(
-							dir.includes("w")
-								? currentBox.size.x - dx * scaleMultiplier
-								: currentBox.size.x + dx * scaleMultiplier,
-							minSize().x,
-							mapped.x,
-						)
-					: currentBox.size.x;
+	function keyboardActionLoop() {
+		const currentBounds = rawBounds();
+		const { pressedKeys, shift, alt, meta } = keyboardState;
 
-			let newHeight =
-				dir.includes("n") || dir.includes("s")
-					? clamp(
-							dir.includes("n")
-								? currentBox.size.y - dy * scaleMultiplier
-								: currentBox.size.y + dy * scaleMultiplier,
-							minSize().y,
-							mapped.y,
-						)
-					: currentBox.size.y;
+		const delta = shift ? 10 : 2;
 
-			const closest = findClosestRatio(newWidth, newHeight);
-			if (dir.length === 2 && snapToRatioEnabled() && closest) {
-				const ratio = closest[0] / closest[1];
-				if (dir.includes("n") || dir.includes("s")) {
-					newWidth = newHeight * ratio;
-				} else {
-					newHeight = newWidth / ratio;
-				}
-				if (!snappedRatio() && hapticsEnabled()) {
-					commands.performHapticFeedback("Alignment", "Now");
-				}
-				setSnappedRatio(closest);
-			} else {
-				setSnappedRatio(null);
-			}
+		if (meta) {
+			// Resize
+			const origin = alt ? ORIGIN_CENTER : { x: 0, y: 0 };
+			let newWidth = currentBounds.width;
+			let newHeight = currentBounds.height;
 
-			const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
-			box.resize(newWidth, newHeight, newOrigin);
+			if (pressedKeys.has("ArrowLeft")) newWidth -= delta;
+			if (pressedKeys.has("ArrowRight")) newWidth += delta;
+			if (pressedKeys.has("ArrowUp")) newHeight -= delta;
+			if (pressedKeys.has("ArrowDown")) newHeight += delta;
 
-			if (props.aspectRatio) {
-				box.constrainToRatio(
-					props.aspectRatio,
-					newOrigin,
-					dir.includes("n") || dir.includes("s") ? "width" : "height",
-				);
-			}
-			box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
+			newWidth = Math.max(1, newWidth);
+			newHeight = Math.max(1, newHeight);
 
-			const newBox = box.toBounds();
-			if (
-				newBox.size.x !== size().x ||
-				newBox.size.y !== size().y ||
-				newBox.position.x !== position().x ||
-				newBox.position.y !== position().y
-			) {
-				lastValidPos = { x: moveX, y: moveY };
-				props.onCropChange(newBox);
+			const resized = resizeBounds(currentBounds, newWidth, newHeight, origin);
+
+			setRawBoundsConstraining(resized, origin);
+		} else {
+			// Move
+			let dx = 0;
+			let dy = 0;
+
+			if (pressedKeys.has("ArrowLeft")) dx -= delta;
+			if (pressedKeys.has("ArrowRight")) dx += delta;
+			if (pressedKeys.has("ArrowUp")) dy -= delta;
+			if (pressedKeys.has("ArrowDown")) dy += delta;
+
+			const moved = moveBounds(
+				currentBounds,
+				currentBounds.x + dx,
+				currentBounds.y + dy,
+			);
+
+			setRawBoundsConstraining(moved);
+		}
+
+		keyboardFrameId = requestAnimationFrame(keyboardActionLoop);
+	}
+
+	function handleKeyDown(e: KeyboardEvent) {
+		if (!KEY_MAPPINGS.has(e.key) || mouseState.drag !== null) return;
+
+		e.preventDefault();
+		e.stopPropagation();
+
+		setKeyboardState("pressedKeys", (p) => p.add(e.key));
+		setKeyboardState({
+			shift: e.shiftKey,
+			alt: e.altKey,
+			meta: e.metaKey || e.ctrlKey,
+		});
+
+		if (!keyboardFrameId) {
+			stopAnimation();
+			keyboardActionLoop();
+		}
+	}
+
+	function handleKeyUp(e: KeyboardEvent) {
+		if (
+			!KEY_MAPPINGS.has(e.key) &&
+			!["Shift", "Alt", "Meta", "Control"].includes(e.key)
+		)
+			return;
+
+		e.preventDefault();
+
+		setKeyboardState("pressedKeys", (p) => {
+			p.delete(e.key);
+			return p;
+		});
+
+		setKeyboardState({
+			shift: e.shiftKey,
+			alt: e.altKey,
+			meta: e.metaKey || e.ctrlKey,
+		});
+
+		if (keyboardState.pressedKeys.size === 0) {
+			if (keyboardFrameId) {
+				cancelAnimationFrame(keyboardFrameId);
+				keyboardFrameId = null;
 			}
 		}
 	}
 
-	function setCrop(value: Crop) {
-		props.onCropChange(value);
-	}
-
-	const pressedKeys = new Set<string>([]);
-	let lastKeyHandleFrame: number | null = null;
-	function handleKeyDown(event: KeyboardEvent) {
-		if (dragging()) return;
-		const dir = KEY_MAPPINGS.get(event.key);
-		if (!dir) return;
-		event.preventDefault();
-		pressedKeys.add(event.key);
-
-		if (lastKeyHandleFrame) return;
-		lastKeyHandleFrame = requestAnimationFrame(() => {
-			const box = Box.from(position(), size());
-			const mapped = mappedSize();
-			const scaleFactors = containerToMappedSizeScale();
-
-			const moveDelta = event.shiftKey ? 20 : 5;
-			const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
-
-			for (const key of pressedKeys) {
-				const dir = KEY_MAPPINGS.get(key);
-				if (!dir) continue;
-
-				const isUpKey = dir === "n";
-				const isLeftKey = dir === "w";
-				const isDownKey = dir === "s";
-				const isRightKey = dir === "e";
-
-				if (event.metaKey || event.ctrlKey) {
-					const scaleMultiplier = event.altKey ? 2 : 1;
-					const currentBox = box.toBounds();
-
-					let newWidth = currentBox.size.x;
-					let newHeight = currentBox.size.y;
-
-					if (isLeftKey || isRightKey) {
-						newWidth = clamp(
-							isLeftKey
-								? currentBox.size.x - moveDelta * scaleMultiplier
-								: currentBox.size.x + moveDelta * scaleMultiplier,
-							minSize().x,
-							mapped.x,
-						);
-					}
-
-					if (isUpKey || isDownKey) {
-						newHeight = clamp(
-							isUpKey
-								? currentBox.size.y - moveDelta * scaleMultiplier
-								: currentBox.size.y + moveDelta * scaleMultiplier,
-							minSize().y,
-							mapped.y,
-						);
-					}
-
-					box.resize(newWidth, newHeight, origin);
-				} else {
-					const dx =
-						(isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) /
-						scaleFactors.x;
-					const dy =
-						(isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
-
-					box.move(
-						clamp(box.x + dx, 0, mapped.x - box.width),
-						clamp(box.y + dy, 0, mapped.y - box.height),
-					);
+	// Only update during a frame animation.
+	// Note: Doing this any other way can very likely cause a huge memory usage or even leak until the resizing stops.
+	createEffect(
+		on<CropBounds, number>(displayRawBounds, (b, _prevIn, prevFrameId) => {
+			if (prevFrameId) cancelAnimationFrame(prevFrameId);
+			return requestAnimationFrame(() => {
+				if (regionRef) {
+					regionRef.style.width = `${Math.round(b.width)}px`;
+					regionRef.style.height = `${Math.round(b.height)}px`;
+					regionRef.style.transform = `translate(${Math.round(b.x)}px,${Math.round(b.y)}px)`;
 				}
-			}
+				if (occLeftRef) {
+					occLeftRef.style.width = `${Math.max(0, Math.round(b.x))}px`;
+				}
+				if (occRightRef) {
+					occRightRef.style.left = `${Math.round(b.x + b.width)}px`;
+				}
+				if (occTopRef) {
+					occTopRef.style.left = `${Math.round(b.x)}px`;
+					occTopRef.style.width = `${Math.round(b.width)}px`;
+					occTopRef.style.height = `${Math.max(0, Math.round(b.y))}px`;
+				}
+				if (occBottomRef) {
+					occBottomRef.style.top = `${Math.round(b.y + b.height)}px`;
+					occBottomRef.style.left = `${Math.round(b.x)}px`;
+					occBottomRef.style.width = `${Math.round(b.width)}px`;
+				}
+			});
+		}),
+	);
 
-			if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
-			box.constrainToBoundary(mapped.x, mapped.y, origin);
-			setCrop(box.toBounds());
-
-			pressedKeys.clear();
-			lastKeyHandleFrame = null;
-		});
-	}
+	const altDown = createKeyDownSignal(window, "Alt");
 
 	return (
 		<div
 			ref={containerRef}
-			class={`relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none ${props.class}`}
-			onWheel={handleWheel}
-			onTouchStart={handleTouchStart}
-			onTouchMove={handleTouchMove}
-			onTouchEnd={handleTouchEnd}
+			class="relative w-full h-full select-none overscroll-contain focus:outline-none touch-none"
+			style={{
+				cursor: cursorStyle() ?? (props.aspectRatio ? "default" : "crosshair"),
+			}}
 			onKeyDown={handleKeyDown}
+			onKeyUp={handleKeyUp}
 			tabIndex={0}
-			// onContextMenu={async (e) => {
-			// 	e.preventDefault();
-			// 	const menu = await Menu.new({
-			// 		id: "crop-options",
-			// 		items: [
-			// 			{
-			// 				id: "enableRatioSnap",
-			// 				text: "Snap to aspect ratios",
-			// 				checked: snapToRatioEnabled(),
-			// 				action: () => {
-			// 					setSnapToRatioEnabled((v) => !v);
-			// 				},
-			// 			} satisfies CheckMenuItemOptions,
-			// 		],
-			// 	});
-			// 	menu.popup();
-			// }}
+			onContextMenu={props.onContextMenu}
+			onDblClick={() => fill()}
 		>
-			<CropAreaRenderer
-				bounds={{
-					position: {
-						x: displayScaledCrop().x,
-						y: displayScaledCrop().y,
-					},
-					size: {
-						width: displayScaledCrop().width,
-						height: displayScaledCrop().height,
-					},
-				}}
-				borderRadius={9}
-				guideLines={props.showGuideLines}
-				handles={true}
-				highlighted={snappedRatio() !== null}
+			<Transition
+				appear
+				enterActiveClass="transition-opacity duration-300 ease-in-out"
+				enterClass="opacity-0 blur-sm"
+				enterToClass="opacity-100 blur-none"
+				exitActiveClass="transition-opacity duration-300 ease-in-out"
+				exitClass="opacity-100 blur-none"
+				exitToClass="opacity-0 blur-sm"
 			>
-				{props.children}
-			</CropAreaRenderer>
+				<Show when={props.showBounds && labelTransform()}>
+					{(transform) => (
+						<div
+							class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono scale-50"
+							style={{
+								transform: `translate(${transform().x}px, ${transform().y}px)`,
+							}}
+						>
+							{realBounds().width} x {realBounds().height}
+						</div>
+					)}
+				</Show>
+			</Transition>
+
+			{resolvedChildren()}
+
+			{/* Occluder */}
 			<div
-				class="absolute"
-				style={{
-					top: `${displayScaledCrop().y}px`,
-					left: `${displayScaledCrop().x}px`,
-					width: `${displayScaledCrop().width}px`,
-					height: `${displayScaledCrop().height}px`,
-					cursor: dragging() ? "grabbing" : "grab",
-				}}
-				onMouseDown={handleDragStart}
+				class="absolute inset-0 *:absolute *:bg-black/45 *:pointer-events-none"
+				aria-hidden="true"
 			>
-				<div class="relative w-full">
+				<div ref={occLeftRef} class="top-0 left-0 h-full" />
+				<div ref={occRightRef} class="top-0 right-0 h-full" />
+				<div ref={occTopRef} class="top-0" />
+				<div ref={occBottomRef} class="bottom-0" />
+			</div>
+
+			{/* Crop region container */}
+			<div class="size-full">
+				<div
+					ref={regionRef}
+					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
+					style={{
+						cursor: cursorStyle() ?? "grab",
+					}}
+					onDblClick={(e) => e.stopPropagation()}
+				>
+					<button
+						class="absolute inset-0 z-10 bg-transparent"
+						type="button"
+						tabIndex={-1}
+						style={{ cursor: cursorStyle() ?? "grab" }}
+						onPointerDown={onRegionPointerDown}
+					/>
+
+					<Show when={altDown()}>
+						<div class="absolute opacity-70 pointer-events-none flex items-center justify-center size-full">
+							<IconLucidePlus class="pointer-events-none size-6" />
+						</div>
+					</Show>
+
 					<Transition
-						name="slide"
-						onEnter={(el, done) => {
-							const animation = el.animate(
-								[
-									{ opacity: 0, transform: "translateY(-8px)" },
-									{ opacity: 0.65, transform: "translateY(0)" },
-								],
-								{
-									duration: 100,
-									easing: "ease-out",
-								},
-							);
-							animation.finished.then(done);
-						}}
-						onExit={(el, done) => {
-							const animation = el.animate(
-								[
-									{ opacity: 0.65, transform: "translateY(0)" },
-									{ opacity: 0, transform: "translateY(-8px)" },
-								],
-								{
-									duration: 100,
-									easing: "ease-in",
-								},
-							);
-							animation.finished.then(done);
-						}}
+						appear
+						enterActiveClass="transition-opacity duration-300"
+						enterClass="opacity-0"
+						enterToClass="opacity-100"
+						exitActiveClass="transition-opacity duration-300"
+						exitClass="opacity-100"
+						exitToClass="opacity-0"
 					>
-						<Show when={snappedRatio() !== null}>
-							<div class="absolute left-0 right-0 mx-auto top-2 bg-gray-3 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-9 text-sm border border-blue-9 outline outline-1 outline-[#dedede] dark:outline-[#000]">
-								{snappedRatio()![0]}:{snappedRatio()![1]}
+						<Show when={mouseState.drag !== null}>
+							<div class="pointer-events-none *:absolute *:border-white/40">
+								<div class="left-0 w-full border-t border-b pointer-events-none h-[calc(100%/3)] top-[calc(100%/3)]" />
+								<div class="top-0 h-full border-l border-r pointer-events-none w-[calc(100%/3)] left-[calc(100%/3)]" />
 							</div>
 						</Show>
 					</Transition>
-				</div>
-				<For each={HANDLES}>
-					{(handle) => {
-						const isCorner = handle.x !== "c" && handle.y !== "c";
 
-						return isCorner ? (
-							<div
-								role="slider"
-								class="absolute z-10 flex h-[30px] w-[30px] items-center justify-center"
-								style={{
-									...(handle.x === "l"
-										? { left: "-12px" }
-										: handle.x === "r"
-											? { right: "-12px" }
-											: { left: "50%", transform: "translateX(-50%)" }),
-									...(handle.y === "t"
-										? { top: "-12px" }
-										: handle.y === "b"
-											? { bottom: "-12px" }
-											: { top: "50%", transform: "translateY(-50%)" }),
-									cursor: dragging() ? "grabbing" : `${handle.cursor}-resize`,
-								}}
-								onMouseDown={(e) => {
-									e.stopPropagation();
-									handleResizeStart(e.clientX, e.clientY, handle.direction);
-								}}
-								onTouchStart={(e) =>
-									handleResizeStartTouch(e, handle.direction)
-								}
-							/>
-						) : (
-							<div
-								role="slider"
-								class="absolute"
-								style={{
-									...(handle.x === "l"
-										? {
-												left: "0",
-												width: "16px",
-												transform: "translateX(-50%)",
+					<For each={HANDLES}>
+						{(handle) =>
+							handle.isCorner ? (
+								<button
+									type="button"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-none"
+									tabIndex={-1}
+									classList={{ "opacity-0": mouseState.drag === "overlay" }}
+									style={{
+										cursor:
+											mouseState.drag === "handle" &&
+											mouseState.hoveringHandle?.isCorner
+												? mouseState.hoveringHandle.cursor
+												: (cursorStyle() ?? handle.cursor),
+										...(handle.x === "l"
+											? { left: "-12px" }
+											: { right: "-12px" }),
+										...(handle.y === "t"
+											? { top: "-12px" }
+											: { bottom: "-12px" }),
+									}}
+									onMouseEnter={() =>
+										setMouseState("hoveringHandle", { ...handle })
+									}
+									onDblClick={[onHandleDoubleClick, handle]}
+									onPointerDown={[onHandlePointerDown, handle]}
+									aria-label={`Resize ${handle.direction}`}
+									aria-describedby="cropper-aspect"
+								>
+									<svg
+										aria-hidden="true"
+										class="absolute pointer-events-none drop-shadow-sm shadow-black"
+										classList={{
+											"size-1": boundsTooSmall(),
+											"size-6": !boundsTooSmall(),
+										}}
+										viewBox="0 0 16 16"
+										fill="none"
+										stroke="white"
+										stroke-width="4"
+										stroke-linecap="square"
+										style={{
+											...(handle.x === "l"
+												? { left: "9px" }
+												: { right: "9px" }),
+											...(handle.y === "t"
+												? { top: "9px" }
+												: { bottom: "9px" }),
+											filter: `drop-shadow(${handle.x === "l" ? "-3px" : "3px"} ${handle.y === "t" ? "-3px" : "3px"} 5px rgba(0, 0, 0, 0.3))`,
+										}}
+									>
+										<path
+											d={
+												handle.x === "l" && handle.y === "t"
+													? "M0 0 H12 M0 0 V12"
+													: handle.x === "r" && handle.y === "t"
+														? "M16 0 H4 M16 0 V12"
+														: handle.x === "r" && handle.y === "b"
+															? "M16 16 H4 M16 16 V4"
+															: "M0 16 H12 M0 16 V4"
 											}
-										: handle.x === "r"
+										/>
+									</svg>
+								</button>
+							) : (
+								<button
+									type="button"
+									class="absolute focus:outline-none focus:ring-0 outline-none"
+									tabIndex={-1}
+									style={{
+										visibility:
+											resizing() && mouseState.hoveringHandle?.isCorner
+												? "hidden"
+												: "visible",
+										cursor: cursorStyle() ?? handle.cursor,
+										...(handle.x === "l"
 											? {
-													right: "0",
-													width: "16px",
-													transform: "translateX(50%)",
+													left: "-1px",
+													width: "10px",
+													top: "10px",
+													bottom: "10px",
+													transform: "translateX(-50%)",
 												}
-											: {
-													left: "0",
-													right: "0",
-													transform: "translateY(50%)",
-												}),
-									...(handle.y === "t"
-										? {
-												top: "0",
-												height: "16px",
-												transform: "translateY(-50%)",
-											}
-										: handle.y === "b"
-											? { bottom: "0", height: "16px" }
-											: { top: "0", bottom: "0" }),
-									cursor: `${handle.cursor}-resize`,
-								}}
-								onMouseDown={(e) => {
-									e.stopPropagation();
-									handleResizeStart(e.clientX, e.clientY, handle.direction);
-								}}
-								onTouchStart={(e) =>
-									handleResizeStartTouch(e, handle.direction)
-								}
-							/>
-						);
-					}}
-				</For>
+											: handle.x === "r"
+												? {
+														right: "-1px",
+														width: "10px",
+														top: "10px",
+														bottom: "10px",
+														transform: "translateX(50%)",
+													}
+												: handle.y === "t"
+													? {
+															top: "-1px",
+															height: "10px",
+															left: "10px",
+															right: "10px",
+															transform: "translateY(-50%)",
+														}
+													: {
+															bottom: "-1px",
+															height: "10px",
+															left: "10px",
+															right: "10px",
+															transform: "translateY(50%)",
+														}),
+									}}
+									onMouseEnter={() =>
+										setMouseState("hoveringHandle", { ...handle })
+									}
+									onDblClick={[onHandleDoubleClick, handle]}
+									onPointerDown={[onHandlePointerDown, handle]}
+									aria-label={`Resize ${handle.direction}`}
+									aria-describedby="cropper-aspect"
+								/>
+							)
+						}
+					</For>
+
+					<Show
+						when={
+							!props.aspectRatio && !boundsTooSmall()
+								? aspectState.snapped
+								: null
+						}
+						keyed
+					>
+						{(bounds) => (
+							<div
+								class="w-full h-8 flex items-center justify-center"
+								id="cropper-aspect"
+								aria-live="polite"
+							>
+								<div
+									class="h-[18px] w-11 rounded-full text-center text-xs text-gray-12 border border-white/70 dark:border-white/20 drop-shadow-md outline-1 outline outline-black/80"
+									classList={{
+										"backdrop-blur-sm bg-white/50 dark:bg-black/50 dark:backdrop-brightness-90 backdrop-brightness-200":
+											props.useBackdropFilter,
+										"bg-gray-3 opacity-80": !props.useBackdropFilter,
+									}}
+								>
+									{bounds[0]}:{bounds[1]}
+								</div>
+							</div>
+						)}
+					</Show>
+				</div>
+
+				<button
+					type="button"
+					class="absolute inset-0 z-20 bg-transparent p-0 m-0 border-0"
+					aria-label="Start selection"
+					onPointerDown={onOverlayPointerDown}
+					style={{ cursor: cursorStyle() ?? "crosshair" }}
+				/>
 			</div>
 		</div>
 	);
+}
+
+type ResizeOptions = {
+	container: Vec2;
+	min: Vec2 | null;
+	max: Vec2 | null;
+	isAltMode: boolean;
+	shiftKey: boolean;
+	ratioValue: number | null;
+	snapToRatioEnabled: boolean;
+};
+
+function computeAspectRatioResize(
+	pointX: number,
+	pointY: number,
+	startBounds: CropBounds,
+	handle: HandleSide,
+	options: ResizeOptions,
+): CropBounds | null {
+	const { container, min, max, ratioValue } = options;
+	if (ratioValue === null) return startBounds;
+
+	// Determine the stationary anchor point.
+	const anchorX = startBounds.x + (handle.movable.left ? startBounds.width : 0);
+	const anchorY = startBounds.y + (handle.movable.top ? startBounds.height : 0);
+
+	// Calculate raw dimensions from anchor to the clamped mouse position
+	const mX = clamp(pointX, 0, container.x);
+	const mY = clamp(pointY, 0, container.y);
+	const rawWidth = Math.abs(mX - anchorX);
+	const rawHeight = Math.abs(mY - anchorY);
+
+	// Determine the "ideal" size by respecting the aspect ratio based on the dominant mouse movement
+	let targetW: number;
+	let targetH: number;
+
+	if (handle.isCorner) {
+		// For corners, let the dominant mouse direction drive the aspect ratio
+		if (rawWidth / ratioValue > rawHeight) {
+			targetW = rawWidth;
+			targetH = targetW / ratioValue;
+		} else {
+			targetH = rawHeight;
+			targetW = targetH * ratioValue;
+		}
+	} else if (handle.x !== "c") {
+		targetW = rawWidth;
+		targetH = targetW / ratioValue;
+	} else {
+		targetH = rawHeight;
+		targetW = targetH * ratioValue;
+	}
+
+	const newX = mX < anchorX ? anchorX - targetW : anchorX;
+	const newY = mY < anchorY ? anchorY - targetH : anchorY;
+	let finalBounds = { x: newX, y: newY, width: targetW, height: targetH };
+
+	if (
+		finalBounds.x < 0 ||
+		finalBounds.y < 0 ||
+		finalBounds.x + finalBounds.width > container.x ||
+		finalBounds.y + finalBounds.height > container.y
+	) {
+		return null;
+	}
+
+	const resizeOrigin = { x: mX < anchorX ? 1 : 0, y: mY < anchorY ? 1 : 0 };
+	finalBounds = constrainBoundsToSize(
+		finalBounds,
+		max,
+		min,
+		resizeOrigin,
+		ratioValue,
+	);
+
+	if (finalBounds.width > container.x) {
+		const scale = container.x / finalBounds.width;
+		finalBounds.width = container.x;
+		finalBounds.height *= scale;
+	}
+	if (finalBounds.height > container.y) {
+		const scale = container.y / finalBounds.height;
+		finalBounds.height = container.y;
+		finalBounds.width *= scale;
+	}
+
+	finalBounds = slideBoundsIntoContainer(finalBounds, container.x, container.y);
+
+	return {
+		x: Math.round(finalBounds.x),
+		y: Math.round(finalBounds.y),
+		width: Math.round(Math.max(1, finalBounds.width)),
+		height: Math.round(Math.max(1, finalBounds.height)),
+	};
+}
+
+function computeFreeResize(
+	pointX: number,
+	pointY: number,
+	startBounds: CropBounds,
+	handle: HandleSide,
+	options: ResizeOptions,
+): { bounds: CropBounds; snappedRatio: Ratio | null } {
+	const { container, min, max, isAltMode, shiftKey, snapToRatioEnabled } =
+		options;
+	let snappedRatio: Ratio | null = null;
+
+	let bounds: CropBounds;
+
+	if (isAltMode) {
+		const center = {
+			x: startBounds.x + startBounds.width / 2,
+			y: startBounds.y + startBounds.height / 2,
+		};
+
+		const distW = Math.abs(pointX - center.x);
+		const distH = Math.abs(pointY - center.y);
+
+		const expLeft = Math.min(distW, center.x);
+		const expRight = Math.min(distW, container.x - center.x);
+		const expTop = Math.min(distH, center.y);
+		const expBottom = Math.min(distH, container.y - center.y);
+
+		let newW = expLeft + expRight;
+		let newH = expTop + expBottom;
+
+		if (min) {
+			newW = Math.max(newW, min.x);
+			newH = Math.max(newH, min.y);
+		}
+		if (max) {
+			newW = Math.min(newW, max.x);
+			newH = Math.min(newH, max.y);
+		}
+
+		if (!shiftKey && handle.isCorner && snapToRatioEnabled) {
+			const closest = findClosestRatio(newW, newH);
+			if (closest) {
+				const r = ratioToValue(closest);
+				if (handle.movable.top || handle.movable.bottom) newW = newH * r;
+				else newH = newW / r;
+				snappedRatio = closest;
+			}
+		}
+
+		bounds = {
+			x: Math.round(center.x - newW / 2),
+			y: Math.round(center.y - newH / 2),
+			width: Math.round(newW),
+			height: Math.round(newH),
+		};
+	} else {
+		const anchor = {
+			x: startBounds.x + (handle.movable.left ? startBounds.width : 0),
+			y: startBounds.y + (handle.movable.top ? startBounds.height : 0),
+		};
+		const clampedX = clamp(pointX, 0, container.x);
+		const clampedY = clamp(pointY, 0, container.y);
+
+		let x1 =
+			handle.movable.left || handle.movable.right ? clampedX : startBounds.x;
+		let y1 =
+			handle.movable.top || handle.movable.bottom ? clampedY : startBounds.y;
+		let x2 = anchor.x;
+		let y2 = anchor.y;
+
+		if (!handle.movable.left && !handle.movable.right) {
+			x1 = startBounds.x;
+			x2 = startBounds.x + startBounds.width;
+		}
+		if (!handle.movable.top && !handle.movable.bottom) {
+			y1 = startBounds.y;
+			y2 = startBounds.y + startBounds.height;
+		}
+
+		let newX = Math.min(x1, x2);
+		let newY = Math.min(y1, y2);
+		let newW = Math.abs(x1 - x2);
+		let newH = Math.abs(y1 - y2);
+
+		if (min) {
+			if (newW < min.x) {
+				const diff = min.x - newW;
+				newW = min.x;
+				if (clampedX < anchor.x) newX -= diff;
+			}
+			if (newH < min.y) {
+				const diff = min.y - newH;
+				newH = min.y;
+				if (clampedY < anchor.y) newY -= diff;
+			}
+		}
+		if (max) {
+			if (newW > max.x) {
+				const diff = newW - max.x;
+				newW = max.x;
+				if (clampedX < anchor.x) newX += diff;
+			}
+			if (newH > max.y) {
+				const diff = newH - max.y;
+				newH = max.y;
+				if (clampedY < anchor.y) newY += diff;
+			}
+		}
+
+		if (!shiftKey && handle.isCorner && snapToRatioEnabled) {
+			const closest = findClosestRatio(newW, newH);
+			if (closest) {
+				const r = ratioToValue(closest);
+				if (handle.movable.top || handle.movable.bottom) newW = newH * r;
+				else newH = newW / r;
+				if (clampedX < anchor.x) newX = anchor.x - newW;
+				if (clampedY < anchor.y) newY = anchor.y - newH;
+				snappedRatio = closest;
+			}
+		}
+
+		bounds = {
+			x: Math.round(newX),
+			y: Math.round(newY),
+			width: Math.round(newW),
+			height: Math.round(newH),
+		};
+	}
+	return { bounds, snappedRatio };
+}
+
+export function createCropOptionsMenuItems(options: {
+	aspect: Ratio | null;
+	snapToRatioEnabled: boolean;
+	onAspectSet: (aspect: Ratio | null) => void;
+	onSnapToRatioSet: (enabled: boolean) => void;
+}) {
+	return [
+		{
+			text: "Free",
+			checked: !options.aspect,
+			action: () => options.onAspectSet(null),
+		} satisfies CheckMenuItemOptions,
+		...COMMON_RATIOS.map(
+			(ratio) =>
+				({
+					text: `${ratio[0]}:${ratio[1]}`,
+					checked: options.aspect === ratio,
+					action: () => options.onAspectSet(ratio),
+				}) satisfies CheckMenuItemOptions,
+		),
+		{ item: "Separator" } satisfies PredefinedMenuItemOptions,
+		{
+			text: "Snap to ratios",
+			checked: options.snapToRatioEnabled,
+			action: () => options.onSnapToRatioSet(!options.snapToRatioEnabled),
+		} satisfies CheckMenuItemOptions,
+	];
 }
