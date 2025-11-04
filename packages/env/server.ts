@@ -116,10 +116,10 @@ function createServerEnv() {
 			WORKFLOWS_RPC_SECRET: z.string().optional(),
 		},
 		experimental__runtimeEnv: {
-			NODE_ENV: "production",
 			S3_PUBLIC_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			S3_INTERNAL_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			...process.env,
+			NODE_ENV: process.env.NODE_ENV ?? "production",
 			VERCEL_URL_HOST: process.env.VERCEL_URL,
 			VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL,
 			VERCEL_PROJECT_PRODUCTION_URL_HOST:

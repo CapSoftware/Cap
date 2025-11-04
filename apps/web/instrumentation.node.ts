@@ -42,7 +42,7 @@ export async function register() {
 
 async function createS3Bucket() {
 	const s3Client = new S3Client({
-		endpoint: serverEnv().CAP_AWS_ENDPOINT,
+		endpoint: serverEnv().S3_INTERNAL_ENDPOINT,
 		region: serverEnv().CAP_AWS_REGION,
 		credentials: {
 			accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY ?? "",
