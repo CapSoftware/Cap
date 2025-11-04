@@ -98,10 +98,16 @@ jobs:
     runs-on: macos-latest
     needs: changes
     if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
     permissions:
       contents: read
-    env:
-      target: aarch64-apple-darwin
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -109,12 +115,12 @@ jobs:
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ env.target }}
+          targets: ${{ matrix.settings.target }}
           components: clippy
 
       - uses: ./.github/actions/setup-rust-cache
         with:
-          target: ${{ env.target }}
+          target: ${{ matrix.settings.target }}
 
       - name: Create .env file in root
         run: |
@@ -157,7 +163,7 @@ jobs:
   build-desktop:
     name: Build Desktop
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop == 'true'
+    if: needs.changes.outputs.desktop == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -270,3 +276,9 @@ jobs:
 
       - name: Build release
         run: cargo check --all --release
+
+      - name: Run Clippy
+        if: ${{ matrix.settings.target == 'aarch64-apple-darwin' || matrix.settings.target == 'x86_64-pc-windows-msvc' }}
+        uses: actions-rs-plus/clippy-check@v2
+        with:
+          args: --workspace --all-features --locked
