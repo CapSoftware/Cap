@@ -31,8 +31,20 @@ impl StreamCfgBuilder {
         });
     }
 
+    // Only supported on macOS 13.0+
     pub fn set_captures_audio(&mut self, captures_audio: bool) {
-        self.0.set_captures_audio(captures_audio);
+        if crate::is_system_audio_supported() {
+            unsafe {
+                self.0.set_captures_audio(captures_audio);
+            }
+        }
+    }
+
+    /// Sets the queue depth (number of frames to buffer).
+    /// Higher values provide more tolerance for processing delays but use more memory.
+    /// Apple's default is 3. Maximum is 8.
+    pub fn set_queue_depth(&mut self, depth: isize) {
+        self.0.set_queue_depth(depth.min(8));
     }
 
     /// Logical width of the capture area
@@ -65,6 +77,11 @@ impl StreamCfgBuilder {
 
     pub fn with_fps(mut self, fps: f32) -> Self {
         self.set_fps(fps);
+        self
+    }
+
+    pub fn with_queue_depth(mut self, depth: isize) -> Self {
+        self.set_queue_depth(depth);
         self
     }
 

@@ -128,6 +128,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			and(
 				eq(videos.ownerId, userId),
 				eq(organizations.id, user.activeOrganizationId),
+				isNull(organizations.tombstoneAt),
 			),
 		);
 
@@ -185,6 +186,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				eq(videos.ownerId, userId),
 				eq(videos.orgId, user.activeOrganizationId),
 				isNull(videos.folderId),
+				isNull(organizations.tombstoneAt),
 			),
 		)
 		.groupBy(

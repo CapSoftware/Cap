@@ -1,10 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
-import {
-	createMutation,
-	createQuery,
-	useQueryClient,
-} from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
@@ -12,7 +8,6 @@ import {
 	type ComponentProps,
 	createEffect,
 	createResource,
-	createSignal,
 	ErrorBoundary,
 	onCleanup,
 	onMount,
@@ -29,7 +24,6 @@ import {
 	createCurrentRecordingQuery,
 	createLicenseQuery,
 	createVideoDevicesQuery,
-	getPermissions,
 	listAudioDevices,
 	listScreens,
 	listWindows,
@@ -39,7 +33,6 @@ import {
 	type CaptureDisplay,
 	type CaptureWindow,
 	commands,
-	events,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
@@ -172,10 +165,11 @@ function Page() {
 		cameraID: () =>
 			cameras.find((c) => {
 				const { cameraID } = rawOptions;
-				if (!cameraID) return;
+				if (!cameraID) return null;
 				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
 				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
+				return null;
 			}),
 		micName: () => mics.data?.find((name: any) => name === rawOptions.micName),
 	};
@@ -558,29 +552,9 @@ function Page() {
 	);
 }
 
-function useRequestPermission() {
-	const queryClient = useQueryClient();
-
-	async function requestPermission(type: "camera" | "microphone") {
-		try {
-			if (type === "camera") {
-				await commands.resetCameraPermissions();
-			} else if (type === "microphone") {
-				await commands.resetMicrophonePermissions();
-			}
-			await commands.requestPermission(type);
-			await queryClient.refetchQueries(getPermissions);
-		} catch (error) {
-			console.error(`Failed to get ${type} permission:`, error);
-		}
-	}
-
-	return requestPermission;
-}
-
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import {
 	getCurrentWebviewWindow,
 	WebviewWindow,
@@ -591,10 +565,12 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
-import { createTauriEventListener } from "~/utils/createEventListener";
 import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
+import { CameraSelectBase } from "./new-main/CameraSelect";
+import { MicrophoneSelectBase } from "./new-main/MicrophoneSelect";
+import { SystemAudioToggleRoot } from "./new-main/SystemAudio";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
@@ -761,88 +737,21 @@ function AreaSelectButton(props: {
 	);
 }
 
-const NO_CAMERA = "No Camera";
-
 function CameraSelect(props: {
 	disabled?: boolean;
 	options: CameraInfo[];
 	value: CameraInfo | null;
 	onChange: (cameraInfo: CameraInfo | null) => void;
 }) {
-	const currentRecording = createCurrentRecordingQuery();
-	const permissions = createQuery(() => getPermissions);
-	const requestPermission = useRequestPermission();
-
-	const permissionGranted = () =>
-		permissions?.data?.camera === "granted" ||
-		permissions?.data?.camera === "notNeeded";
-
-	const onChange = (cameraInfo: CameraInfo | null) => {
-		if (!cameraInfo && !permissionGranted()) return requestPermission("camera");
-
-		props.onChange(cameraInfo);
-
-		trackEvent("camera_selected", {
-			camera_name: cameraInfo,
-			enabled: !!cameraInfo,
-		});
-	};
-
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-			<button
-				type="button"
-				disabled={!!currentRecording.data || props.disabled}
-				class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
-				onClick={() => {
-					if (!permissionGranted()) {
-						requestPermission("camera");
-						return;
-					}
-
-					Promise.all([
-						CheckMenuItem.new({
-							text: NO_CAMERA,
-							checked: props.value === null,
-							action: () => onChange(null),
-						}),
-						PredefinedMenuItem.new({ item: "Separator" }),
-						...props.options.map((o) =>
-							CheckMenuItem.new({
-								text: o.display_name,
-								checked: o === props.value,
-								action: () => onChange(o),
-							}),
-						),
-					])
-						.then((items) => Menu.new({ items }))
-						.then((m) => {
-							m.popup();
-						});
-				}}
-			>
-				<IconCapCamera class="text-gray-11 size-[1.25rem]" />
-				<span class="flex-1 text-left truncate">
-					{props.value?.display_name ?? NO_CAMERA}
-				</span>
-				<TargetSelectInfoPill
-					value={props.value}
-					permissionGranted={permissionGranted()}
-					requestPermission={() => requestPermission("camera")}
-					onClick={(e) => {
-						if (!props.options) return;
-						if (props.value !== null) {
-							e.stopPropagation();
-							props.onChange(null);
-						}
-					}}
-				/>
-			</button>
-		</div>
+		<CameraSelectBase
+			{...props}
+			PillComponent={InfoPill}
+			class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
+			iconClass="text-gray-11 size-[1.25rem]"
+		/>
 	);
 }
-
-const NO_MICROPHONE = "No Microphone";
 
 function MicrophoneSelect(props: {
 	disabled?: boolean;
@@ -850,131 +759,28 @@ function MicrophoneSelect(props: {
 	value: string | null;
 	onChange: (micName: string | null) => void;
 }) {
-	const DB_SCALE = 40;
-
-	const permissions = createQuery(() => getPermissions);
-	const currentRecording = createCurrentRecordingQuery();
-
-	const [dbs, setDbs] = createSignal<number | undefined>();
-
-	const requestPermission = useRequestPermission();
-
-	const permissionGranted = () =>
-		permissions?.data?.microphone === "granted" ||
-		permissions?.data?.microphone === "notNeeded";
-
-	type Option = { name: string };
-
-	const handleMicrophoneChange = async (item: Option | null) => {
-		if (!props.options) return;
-
-		props.onChange(item ? item.name : null);
-		if (!item) setDbs();
-
-		trackEvent("microphone_selected", {
-			microphone_name: item?.name ?? null,
-			enabled: !!item,
-		});
-	};
-
-	createTauriEventListener(events.audioInputLevelChange, (dbs) => {
-		if (!props.value) setDbs();
-		else setDbs(dbs);
-	});
-
-	// visual audio level from 0 -> 1
-	const audioLevel = () =>
-		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
-
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
-			<button
-				type="button"
-				disabled={!!currentRecording.data || props.disabled}
-				class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
-				onClick={() => {
-					if (!permissionGranted()) {
-						requestPermission("microphone");
-						return;
-					}
-
-					Promise.all([
-						CheckMenuItem.new({
-							text: NO_MICROPHONE,
-							checked: props.value === null,
-							action: () => handleMicrophoneChange(null),
-						}),
-						PredefinedMenuItem.new({ item: "Separator" }),
-						...(props.options ?? []).map((name) =>
-							CheckMenuItem.new({
-								text: name,
-								checked: name === props.value,
-								action: () => handleMicrophoneChange({ name: name }),
-							}),
-						),
-					])
-						.then((items) => Menu.new({ items }))
-						.then((m) => {
-							m.popup();
-						});
-				}}
-			>
-				<Show when={props.value !== null && dbs()}>
-					{(_) => (
-						<div
-							class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
-							style={{
-								right: `${audioLevel() * 100}%`,
-							}}
-						/>
-					)}
-				</Show>
-				<IconCapMicrophone class="text-gray-11 size-[1.25rem]" />
-				<span class="flex-1 text-left truncate">
-					{props.value ?? NO_MICROPHONE}
-				</span>
-				<TargetSelectInfoPill
-					value={props.value}
-					permissionGranted={permissionGranted()}
-					requestPermission={() => requestPermission("microphone")}
-					onClick={(e) => {
-						if (props.value !== null) {
-							e.stopPropagation();
-							props.onChange(null);
-						}
-					}}
-				/>
-			</button>
-		</div>
+		<MicrophoneSelectBase
+			{...props}
+			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+			levelIndicatorClass="bg-blue-100"
+			iconClass="text-gray-11 size-[1.25rem]"
+			PillComponent={InfoPill}
+		/>
 	);
 }
 
 function SystemAudio() {
-	const { rawOptions, setOptions } = useRecordingOptions();
-	const currentRecording = createCurrentRecordingQuery();
-
 	return (
-		<button
-			type="button"
-			onClick={() => {
-				if (!rawOptions) return;
-				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
-			}}
-			disabled={!!currentRecording.data}
+		<SystemAudioToggleRoot
 			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
-		>
-			<div class="size-[1.25rem] flex items-center justify-center">
-				<IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
-			</div>
-			<span class="flex-1 text-left truncate">
-				{rawOptions.captureSystemAudio
-					? "Record System Audio"
-					: "No System Audio"}
-			</span>
-			<InfoPill variant={rawOptions.captureSystemAudio ? "blue" : "red"}>
-				{rawOptions.captureSystemAudio ? "On" : "Off"}
-			</InfoPill>
-		</button>
+			PillComponent={InfoPill}
+			icon={
+				<div class="size-[1.25rem] flex items-center justify-center">
+					<IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
+				</div>
+			}
+		/>
 	);
 }
 
@@ -1035,39 +841,6 @@ function TargetSelect<T extends { id: string; name: string }>(props: {
 				</>
 			)}
 		</button>
-	);
-}
-
-function TargetSelectInfoPill<T>(props: {
-	value: T | null;
-	permissionGranted: boolean;
-	requestPermission: () => void;
-	onClick: (e: MouseEvent) => void;
-}) {
-	return (
-		<InfoPill
-			variant={props.value !== null && props.permissionGranted ? "blue" : "red"}
-			onPointerDown={(e) => {
-				if (!props.permissionGranted || props.value === null) return;
-
-				e.stopPropagation();
-			}}
-			onClick={(e) => {
-				if (!props.permissionGranted) {
-					props.requestPermission();
-					e.stopPropagation();
-					return;
-				}
-
-				props.onClick(e);
-			}}
-		>
-			{!props.permissionGranted
-				? "Request Permission"
-				: props.value !== null
-					? "On"
-					: "Off"}
-		</InfoPill>
 	);
 }
 
