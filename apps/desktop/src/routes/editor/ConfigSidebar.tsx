@@ -1278,9 +1278,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 		},
 	};
 
-	const generalSettings = generalSettingsStore.createQuery();
-	const hapticsEnabled = () =>
-		generalSettings.data?.hapticsEnabled && ostype() === "macos";
+	const hapticsEnabled = ostype() === "macos";
 
 	return (
 		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
