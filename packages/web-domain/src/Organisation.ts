@@ -34,4 +34,10 @@ export class OrganisationRpcs extends RpcGroup.make(
 		payload: OrganisationUpdate,
 		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
 	}).middleware(RpcAuthMiddleware),
+	Rpc.make("OrganisationSoftDelete", {
+		payload: Schema.Struct({
+			id: OrganisationId,
+		}),
+		error: Schema.Union(InternalError, PolicyDeniedError, NotFoundError),
+	}).middleware(RpcAuthMiddleware),
 ) {}

@@ -1876,6 +1876,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
+            platform::is_system_audio_capture_supported,
             list_fails,
             set_fail,
             update_auth_plan,

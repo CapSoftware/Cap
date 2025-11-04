@@ -109,7 +109,7 @@ const nextConfig = {
 	env: {
 		appVersion: version,
 	},
-	// If the DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
+	// If the NEXT_PUBLIC_DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
 	// webpack: (config) => {

@@ -11,9 +11,9 @@ import {
 import { toast } from "sonner";
 import { manageBilling } from "@/actions/organization/manage-billing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-
 import { BillingCard } from "./components/BillingCard";
 import CapSettingsCard from "./components/CapSettingsCard";
+import DeleteOrg from "./components/DeleteOrg";
 import { InviteDialog } from "./components/InviteDialog";
 import { MembersCard } from "./components/MembersCard";
 import { OrganizationDetailsCard } from "./components/OrganizationDetailsCard";
@@ -90,6 +90,8 @@ export const Organization = () => {
 				showOwnerToast={showOwnerToast}
 				handleManageBilling={() => handleManageBilling(setLoading)}
 			/>
+
+			<DeleteOrg />
 		</form>
 	);
 };

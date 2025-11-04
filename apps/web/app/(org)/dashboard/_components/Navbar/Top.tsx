@@ -326,6 +326,7 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 			<Link
 				className="flex gap-2 items-center w-full"
 				href={href ?? "#"}
+				prefetch={true}
 				onClick={onClick}
 			>
 				<div className="flex-shrink-0 flex items-center justify-center w-3.5 h-3.5">

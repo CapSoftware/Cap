@@ -12,10 +12,13 @@ use std::{
 use tracing::warn;
 
 pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
-    let mut device_types = vec![
-        av::CaptureDeviceType::built_in_wide_angle_camera(),
-        av::CaptureDeviceType::desk_view_camera(),
-    ];
+    let mut device_types = vec![av::CaptureDeviceType::built_in_wide_angle_camera()];
+
+    if api::macos_available("13.0")
+        && let Some(typ) = unsafe { av::CaptureDeviceType::desk_view_camera() }
+    {
+        device_types.push(typ);
+    }
 
     if api::macos_available("14.0") {
         if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {

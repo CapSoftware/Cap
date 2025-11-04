@@ -92,19 +92,9 @@ async function main() {
 							allEnvs.DATABASE_URL ??
 							"mysql://root:@localhost:3306/planetscale",
 					}),
-				DATABASE_MIGRATION_URL: (v) => {
-					if (v.results.DATABASE_URL?.startsWith("http")) {
-						log.info("Planetscale HTTP URL detected");
-						return text({
-							message: "DATABASE_MIGRATION_URL",
-						});
-					}
-				},
 			});
 
 			envs.DATABASE_URL = dbValues.DATABASE_URL;
-			if (dbValues.DATABASE_MIGRATION_URL)
-				envs.DATABASE_MIGRATION_URL = dbValues.DATABASE_MIGRATION_URL;
 
 			log.info("S3 Envs");
 
@@ -138,7 +128,6 @@ async function main() {
 			envs = { ...envs, ...s3Values };
 		} else {
 			envs.DATABASE_URL = DOCKER_DB_ENVS.url;
-			envs.DATABASE_MIGRATION_URL = DOCKER_DB_ENVS.url;
 
 			envs.CAP_AWS_ACCESS_KEY = DOCKER_S3_ENVS.accessKey;
 			envs.CAP_AWS_SECRET_KEY = DOCKER_S3_ENVS.secretKey;
