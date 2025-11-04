@@ -1927,11 +1927,15 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								opacity: 50.0,
 							};
 
-							if (props.scrollRef) {
-								props.scrollRef.scrollTo({
-									top: props.scrollRef.scrollHeight,
-									behavior: "smooth",
-								});
+							if (props.scrollRef && enabled) {
+								setTimeout(
+									() =>
+										props.scrollRef.scrollTo({
+											top: props.scrollRef.scrollHeight,
+											behavior: "smooth",
+										}),
+									100,
+								);
 							}
 
 							setProject("background", "border", {
