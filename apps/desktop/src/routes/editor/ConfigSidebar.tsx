@@ -1582,14 +1582,14 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 																if (
 																	!moveEvent.shiftKey &&
-																	hapticsEnabled() &&
+																	hapticsEnabled &&
 																	project.background.source.type ===
 																		"gradient" &&
 																	project.background.source.angle !== newAngle
 																) {
 																	commands.performHapticFeedback(
-																		"Alignment",
-																		"Now",
+																		"alignment",
+																		"now",
 																	);
 																}
 
