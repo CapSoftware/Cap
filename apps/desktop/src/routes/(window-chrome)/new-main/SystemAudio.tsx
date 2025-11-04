@@ -1,6 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
-import type { ComponentProps, JSX } from "solid-js";
-import type { Component } from "solid-js";
+import type { Component, ComponentProps, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
 import {
@@ -39,7 +38,7 @@ export function SystemAudioToggleRoot(
 	const isDisabled = () =>
 		!!currentRecording.data || systemAudioSupported.data === false;
 	const tooltipMessage = () => {
-		if (systemAudioSupported.data !== false) {
+		if (systemAudioSupported.data === true) {
 			return "System audio capture requires macOS 13.0 or later";
 		}
 		return undefined;
