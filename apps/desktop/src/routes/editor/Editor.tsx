@@ -18,7 +18,8 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import Cropper, {
+import {
+	Cropper,
 	CROP_ZERO,
 	type CropBounds,
 	type CropperRef,

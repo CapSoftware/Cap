@@ -11,7 +11,8 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import Cropper, {
+import {
+	Cropper,
 	CROP_ZERO,
 	type CropBounds,
 	type CropperRef,

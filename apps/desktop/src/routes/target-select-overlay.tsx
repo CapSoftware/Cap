@@ -24,7 +24,8 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import Cropper, {
+import {
+	Cropper,
 	CROP_ZERO,
 	type CropBounds,
 	type CropperRef,

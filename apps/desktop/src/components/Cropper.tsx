@@ -230,7 +230,7 @@ export type CropperRef = {
 	animateTo: (real: CropBounds, durationMs?: number) => void;
 };
 
-export default function Cropper(
+export function Cropper(
 	props: ParentProps<{
 		onCropChange?: (bounds: CropBounds) => void;
 		onInteraction?: (interacting: boolean) => void;
@@ -782,7 +782,7 @@ export default function Cropper(
 		};
 
 		createRoot((dispose) =>
-			createEventListenerMap(containerRef, {
+			createEventListenerMap(window, {
 				pointerup: () => {
 					setState({ cursorStyle: null, resizing: false });
 					// Note: may need to be added back
