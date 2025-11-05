@@ -226,7 +226,13 @@ impl Muxer for WindowsMuxer {
                             .context("run native encoder")
                     }
                     either::Right(mut encoder) => {
-                        while let Ok(Some((frame, time))) = video_rx.recv() {
+                        use scap_ffmpeg::AsFFmpeg;
+
+                        while let Ok(message) = video_rx.recv() {
+                            let Some((frame, time)) = message else {
+                                break;
+                            };
+
                             let Ok(mut output) = output.lock() else {
                                 continue;
                             };
@@ -237,8 +243,6 @@ impl Muxer for WindowsMuxer {
                             //     mp4.resume();
                             // }
 
-                            use scap_ffmpeg::AsFFmpeg;
-
                             frame
                                 .as_ffmpeg()
                                 .context("frame as_ffmpeg")
@@ -248,6 +252,17 @@ impl Muxer for WindowsMuxer {
                                         .context("queue_frame")
                                 })?;
                         }
+
+                        let mut output_guard = output
+                            .lock()
+                            .map_err(|poisoned| {
+                                anyhow!(
+                                    "ScreenSoftwareEncoder: failed to lock output mutex during flush: {}",
+                                    poisoned
+                                )
+                            })?;
+
+                        encoder.flush(&mut output_guard).context("flush_encoder")?;
 
                         Ok(())
                     }
