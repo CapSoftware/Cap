@@ -171,11 +171,11 @@ jobs:
             platform: macos
             arch: arm64
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest-xl
+            runner: windows-latest-xlarge
             platform: windows
             arch: x64
           - target: aarch64-pc-windows-msvc
-            runner: windows-latest-xl
+            runner: windows-latest-xlarge
             platform: windows
             arch: arm64
     env:
