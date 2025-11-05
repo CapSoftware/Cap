@@ -8,6 +8,15 @@ on:
         description: "Discord Interaction ID"
         required: false
         type: string
+      windowsTarget:
+        description: "Windows build target"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - x64
+          - arm64
 
 env:
   CN_APPLICATION: cap/cap
@@ -129,7 +138,13 @@ jobs:
 
   build:
     needs: draft
-    if: ${{ needs.draft.outputs.needs_release == 'true' }}
+    if: ${{
+      needs.draft.outputs.needs_release == 'true' && (
+        matrix.settings.platform != 'windows' ||
+        inputs.windowsTarget == 'all' ||
+        inputs.windowsTarget == matrix.settings.arch
+      )
+    }}
     permissions:
       contents: write
       actions: read
@@ -139,10 +154,20 @@ jobs:
         settings:
           - target: x86_64-apple-darwin
             runner: macos-latest-xlarge
+            platform: macos
+            arch: x64
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
+            platform: macos
+            arch: arm64
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
+            platform: windows
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+            platform: windows
+            arch: arm64
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
