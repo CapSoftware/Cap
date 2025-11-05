@@ -1,10 +1,14 @@
 import * as crypto from "node:crypto";
 import { db } from "@cap/database";
-import { organizations, users } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	users,
+} from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
@@ -191,6 +195,34 @@ app.get("/plan", withAuth, async (c) => {
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
 		intercomHash: intercomHash,
 	});
+});
+
+app.get("/organizations", withAuth, async (c) => {
+	const user = c.get("user");
+
+	const orgs = await db()
+		.select({
+			id: organizations.id,
+			name: organizations.name,
+			ownerId: organizations.ownerId,
+		})
+		.from(organizations)
+		.leftJoin(
+			organizationMembers,
+			eq(organizations.id, organizationMembers.organizationId),
+		)
+		.where(
+			and(
+				isNull(organizations.tombstoneAt),
+				or(
+					eq(organizations.ownerId, user.id),
+					eq(organizationMembers.userId, user.id),
+				),
+			),
+		)
+		.groupBy(organizations.id);
+
+	return c.json(orgs);
 });
 
 app.post(

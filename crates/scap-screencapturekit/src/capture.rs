@@ -193,7 +193,7 @@ impl CapturerBuilder {
 
         let queue = dispatch::Queue::serial_with_ar_pool();
 
-        if self.config.captures_audio() {
+        if crate::is_system_audio_supported() && unsafe { self.config.captures_audio() } {
             stream
                 .add_stream_output(callbacks.as_ref(), sc::OutputType::Audio, Some(&queue))
                 .map_err(|e| e.retained())?;

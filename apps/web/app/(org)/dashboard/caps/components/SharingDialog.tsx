@@ -16,13 +16,14 @@ import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Globe2, Search } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
+import { usePublicEnv } from "@/utils/public-env";
 
 interface SharingDialogProps {
 	isOpen: boolean;
@@ -182,13 +183,9 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		});
 	};
 
-	const handleCopyEmbedCode = async () => {
-		const embedCode = `<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
-			process.env.NODE_ENV === "development"
-				? process.env.NEXT_PUBLIC_WEB_URL
-				: "https://cap.so"
-		}/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`;
+	const embedCode = useEmbedCode(capId);
 
+	const handleCopyEmbedCode = async () => {
 		try {
 			await navigator.clipboard.writeText(embedCode);
 			toast.success("Embed code copied to clipboard");
@@ -325,11 +322,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 						<div className="space-y-4">
 							<div className="p-3 rounded-lg border bg-gray-3 border-gray-4">
 								<code className="font-mono text-xs break-all text-gray-11">
-									{`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${
-										process.env.NODE_ENV === "development"
-											? process.env.NEXT_PUBLIC_WEB_URL
-											: "https://cap.so"
-									}/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`}
+									{embedCode}
 								</code>
 							</div>
 							<Button
@@ -447,3 +440,28 @@ const SpaceCard = ({
 		</Tooltip>
 	);
 };
+
+function useEmbedCode(capId: Video.VideoId) {
+	const publicEnv = usePublicEnv();
+
+	return useMemo(
+		() =>
+			`
+	<div style="position: relative; padding-bottom: 56.25%; height: 0;">
+			<iframe
+			src="${publicEnv.webUrl}/embed/${capId}"
+			frameborder="0"
+			webkitallowfullscreen
+			mozallowfullscreen
+			allowfullscreen
+			style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"
+		></iframe>
+	</div>
+`
+				.trim()
+				.replace(/[\n\t]+/g, " ")
+				.replace(/>\s+</g, "><")
+				.replace(/"\s+>/g, '">'),
+		[publicEnv.webUrl, capId],
+	);
+}

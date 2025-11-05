@@ -422,7 +422,7 @@ const NavItem = ({
 				onMouseLeave={() => {
 					iconRef.current?.stopAnimation();
 				}}
-				prefetch={false}
+				prefetch={true}
 				passHref
 				className={classNames(
 					"relative border border-transparent transition z-3",

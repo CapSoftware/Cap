@@ -14,6 +14,12 @@ export const OrganisationsRpcsLive = Organisation.OrganisationRpcs.toLayer(
 						S3Error: () => new InternalError({ type: "s3" }),
 					}),
 				),
+			OrganisationSoftDelete: (data) =>
+				orgs.softDelete(data.id).pipe(
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+					}),
+				),
 		};
 	}),
 );

@@ -40,8 +40,6 @@ and [MinIO](https://min.io) for storing videos.
 
 Once deployed, login email links will be available in Railway’s Deploy Logs.
 
-<video src="https://cap.so/api/playlist/?videoId=6s8mpx2t4epkwrm" controls />
-
 ### Custom Deployment with Docker
 
 The [Cap Web Docker image](https://github.com/CapSoftware/Cap/pkgs/container/cap-web)
@@ -56,8 +54,6 @@ Copy the URL of your Cap Web deployment, and set the 'Cap Server URL'
 in Cap Desktop's settings page to this URL.
 Uploads from Cap Desktop will now be sent to your Cap Web deployment.
 
-<video src="https://cap.so/api/playlist/?videoId=sh5ch60pbs02eec" controls />
-
 ## Email Login Links
 
 If the `RESEND_API_KEY` and `RESEND_FROM_DOMAIN` environment variables are not set,
@@ -68,7 +64,9 @@ To send login links via email, you'll need to configure [Resend](https://resend.
 2. Connect a domain and set it as `RESEND_FROM_DOMAIN`
 3. Generate an API key and set it as `RESEND_API_KEY`
 
-<video src="https://cap.so/api/playlist/?videoId=xyz74j90rr4br3a" controls />
+## Other Configuration
+
+See [`env/server.ts`](https://github.com/CapSoftware/Cap/blob/main/packages/env/server.ts) for a description of all environment variables you can configure.
 
 ## Support
 

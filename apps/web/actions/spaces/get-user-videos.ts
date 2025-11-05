@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
+	organizations,
 	sharedVideos,
 	spaces,
 	spaceVideos,
@@ -13,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -64,7 +65,10 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					)
 					.leftJoin(folders, eq(sharedVideos.folderId, folders.id))
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
+					.where(
+						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -98,7 +102,10 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					)
 					.leftJoin(folders, eq(spaceVideos.folderId, folders.id))
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
+					.where(
+						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,

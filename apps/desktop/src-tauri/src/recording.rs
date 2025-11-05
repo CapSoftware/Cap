@@ -237,6 +237,8 @@ pub struct StartRecordingInputs {
     #[serde(default)]
     pub capture_system_audio: bool,
     pub mode: RecordingMode,
+    #[serde(default)]
+    pub organization_id: Option<String>,
 }
 
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
@@ -313,6 +315,7 @@ pub async fn start_recording(
                             chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
                         )),
                         None,
+                        inputs.organization_id.clone(),
                     )
                     .await
                     {
@@ -1307,7 +1310,7 @@ fn project_config_from_recording(
         .iter()
         .enumerate()
         .map(|(i, segment)| TimelineSegment {
-            recording_segment: i as u32,
+            recording_clip: i as u32,
             start: 0.0,
             end: segment.duration(),
             timescale: 1.0,
