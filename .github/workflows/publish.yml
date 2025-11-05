@@ -181,10 +181,7 @@ jobs:
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
-      RUN_BUILD: ${{
-        (matrix.settings.platform == 'macos' && inputs.buildMac) ||
-        (matrix.settings.platform == 'windows' && (inputs.windowsTarget == 'all' || inputs.windowsTarget == matrix.settings.arch))
-      }}
+      RUN_BUILD: ${{ (matrix.settings.platform == 'macos' && inputs.buildMac) || (matrix.settings.platform == 'windows' && (inputs.windowsTarget == 'all' || inputs.windowsTarget == matrix.settings.arch)) }}
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
