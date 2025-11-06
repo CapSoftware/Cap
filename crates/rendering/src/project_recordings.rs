@@ -80,8 +80,7 @@ impl Video {
 
                 if last_ts >= 0 {
                     let tb = stream.time_base();
-                    duration = (last_ts as f64 * tb.numerator() as f64)
-                        / tb.denominator() as f64;
+                    duration = (last_ts as f64 * tb.numerator() as f64) / tb.denominator() as f64;
                 }
             }
 
