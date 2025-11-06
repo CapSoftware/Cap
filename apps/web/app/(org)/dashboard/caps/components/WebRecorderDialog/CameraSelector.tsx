@@ -20,6 +20,8 @@ interface CameraSelectorProps {
   availableCameras: MediaDeviceInfo[];
   dialogOpen: boolean;
   disabled?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onCameraChange: (cameraId: string | null) => void;
   onRefreshDevices: () => Promise<void> | void;
 }
@@ -29,6 +31,8 @@ export const CameraSelector = ({
   availableCameras,
   dialogOpen,
   disabled = false,
+  open,
+  onOpenChange,
   onCameraChange,
   onRefreshDevices,
 }: CameraSelectorProps) => {
@@ -52,7 +56,7 @@ export const CameraSelector = ({
   );
 
   const handleStatusPillClick = async (
-    event: MouseEvent<HTMLButtonElement>
+    event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>
   ) => {
     if (!shouldRequestPermission) return;
     event.preventDefault();
@@ -69,6 +73,12 @@ export const CameraSelector = ({
     }
   };
 
+  const handleStatusPillKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      handleStatusPillClick(event);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <SelectRoot
@@ -77,38 +87,47 @@ export const CameraSelector = ({
           onCameraChange(value === NO_CAMERA_VALUE ? null : value);
         }}
         disabled={disabled}
+        open={open}
+        onOpenChange={onOpenChange}
       >
-        <SelectTrigger
-          className={clsx(
-            "relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
-            disabled || shouldRequestPermission ? "cursor-default" : undefined
-          )}
-          onPointerDown={(event) => {
-            if (shouldRequestPermission) {
-              event.preventDefault();
-              event.stopPropagation();
-            }
-          }}
-          onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
-            if (shouldRequestPermission) {
-              const keys = ["Enter", " ", "ArrowDown", "ArrowUp"];
-              if (keys.includes(event.key)) {
+        <div className="relative w-full">
+          <SelectTrigger
+            className={clsx(
+              "relative flex flex-row items-center h-[2rem] pl-[0.375rem] pr-[3.5rem] gap-[0.375rem] border border-gray-3 rounded-lg w-full transition-colors overflow-hidden z-10 font-normal text-[0.875rem] bg-transparent hover:bg-transparent focus:bg-transparent focus:border-gray-3 hover:border-gray-3 text-[--text-primary] disabled:text-gray-11 [&>svg]:hidden",
+              disabled || shouldRequestPermission ? "cursor-default" : undefined
+            )}
+            onPointerDown={(event) => {
+              if (shouldRequestPermission) {
                 event.preventDefault();
                 event.stopPropagation();
               }
-            }
-          }}
-          aria-disabled={disabled || shouldRequestPermission}
-        >
-          <SelectValue
-            placeholder={NO_CAMERA}
-            className="flex-1 flex items-center gap-[0.375rem] truncate"
-          />
+            }}
+            onKeyDown={(event: KeyboardEvent<HTMLButtonElement>) => {
+              if (shouldRequestPermission) {
+                const keys = ["Enter", " ", "ArrowDown", "ArrowUp"];
+                if (keys.includes(event.key)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }
+            }}
+            aria-disabled={disabled || shouldRequestPermission}
+          >
+            <SelectValue
+              placeholder={NO_CAMERA}
+              className="flex-1 flex items-center gap-[0.375rem] truncate"
+            />
+          </SelectTrigger>
           <button
             type="button"
-            className={statusPillClassName}
+            className={clsx(
+              statusPillClassName,
+              "absolute right-[0.375rem] top-1/2 -translate-y-1/2 z-20"
+            )}
             disabled={!shouldRequestPermission}
+            aria-disabled={!shouldRequestPermission}
             onClick={handleStatusPillClick}
+            onKeyDown={handleStatusPillKeyDown}
           >
             {shouldRequestPermission
               ? "Request permission"
@@ -116,7 +135,7 @@ export const CameraSelector = ({
               ? "On"
               : "Off"}
           </button>
-        </SelectTrigger>
+        </div>
         <SelectContent className="z-[502]">
           <SelectItem value={NO_CAMERA_VALUE}>
             <span className="flex items-center gap-2 truncate">

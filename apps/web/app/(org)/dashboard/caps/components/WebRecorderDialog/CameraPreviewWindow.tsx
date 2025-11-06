@@ -1,12 +1,71 @@
 "use client";
 
-import { X, Maximize2, Circle, Square, RectangleHorizontal, FlipHorizontal } from "lucide-react";
+import {
+  X,
+  Maximize2,
+  Circle,
+  Square,
+  RectangleHorizontal,
+  FlipHorizontal,
+  PictureInPicture,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
 
 type CameraPreviewSize = "sm" | "lg";
 type CameraPreviewShape = "round" | "square" | "full";
+type VideoDimensions = {
+  width: number;
+  height: number;
+};
+
+const WINDOW_PADDING = 20;
+const BAR_HEIGHT = 52;
+
+const getPreviewMetrics = (
+  previewSize: CameraPreviewSize,
+  previewShape: CameraPreviewShape,
+  dimensions: VideoDimensions | null
+) => {
+  const base = previewSize === "sm" ? 230 : 400;
+
+  if (!dimensions || dimensions.height === 0) {
+    return {
+      base,
+      width: base,
+      height: base,
+      aspectRatio: 1,
+    };
+  }
+
+  const aspectRatio = dimensions.width / dimensions.height;
+
+  if (previewShape !== "full") {
+    return {
+      base,
+      width: base,
+      height: base,
+      aspectRatio,
+    };
+  }
+
+  if (aspectRatio >= 1) {
+    return {
+      base,
+      width: base * aspectRatio,
+      height: base,
+      aspectRatio,
+    };
+  }
+
+  return {
+    base,
+    width: base,
+    height: base / aspectRatio,
+    aspectRatio,
+  };
+};
 
 interface CameraPreviewWindowProps {
   cameraId: string;
@@ -20,15 +79,18 @@ export const CameraPreviewWindow = ({
   const [size, setSize] = useState<CameraPreviewSize>("sm");
   const [shape, setShape] = useState<CameraPreviewShape>("round");
   const [mirrored, setMirrored] = useState(false);
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+    null
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [videoDimensions, setVideoDimensions] =
+    useState<VideoDimensions | null>(null);
   const [mounted, setMounted] = useState(false);
-  const pipAutoEnteredRef = useRef(false);
+  const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -47,23 +109,10 @@ export const CameraPreviewWindow = ({
         });
 
         streamRef.current = stream;
-        
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
-
-        const calculateInitialPosition = () => {
-          const padding = 20;
-          const base = size === "sm" ? 230 : 400;
-          const barHeight = 52;
-          const windowWidth = base;
-          const windowHeight = base + barHeight;
-          const x = padding;
-          const y = window.innerHeight - windowHeight - padding;
-          setPosition({ x, y });
-        };
-
-        setTimeout(calculateInitialPosition, 100);
       } catch (err) {
         console.error("Failed to start camera", err);
       }
@@ -73,75 +122,73 @@ export const CameraPreviewWindow = ({
 
     return () => {
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current.getTracks().forEach((track) => {
+          track.stop();
+        });
+        streamRef.current = null;
       }
     };
   }, [cameraId]);
 
   useEffect(() => {
-    if (videoRef.current && streamRef.current && !videoRef.current.srcObject) {
-      videoRef.current.srcObject = streamRef.current;
-    }
-  }, [position]);
+    const metrics = getPreviewMetrics(size, shape, videoDimensions);
 
-  useEffect(() => {
-    if (position) {
-      const padding = 20;
-      const base = size === "sm" ? 230 : 400;
-      const barHeight = 52;
-      const windowWidth = base;
-      const windowHeight = base + barHeight;
-      
-      setPosition((prev) => {
-        if (!prev) return { x: padding, y: window.innerHeight - windowHeight - padding };
-        const maxX = window.innerWidth - windowWidth;
-        const maxY = window.innerHeight - windowHeight;
-        return {
-          x: Math.max(0, Math.min(prev.x, maxX)),
-          y: Math.max(0, Math.min(prev.y, maxY)),
-        };
-      });
-    }
-  }, [size]);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('[data-controls]')) {
+    if (typeof window === "undefined") {
       return;
     }
-    e.stopPropagation();
-    e.preventDefault();
-    setIsDragging(true);
-    setDragStart({
-      x: e.clientX - (position?.x || 0),
-      y: e.clientY - (position?.y || 0),
+
+    const totalHeight = metrics.height + BAR_HEIGHT;
+    const maxX = Math.max(0, window.innerWidth - metrics.width);
+    const maxY = Math.max(0, window.innerHeight - totalHeight);
+
+    setPosition((prev) => {
+      const defaultX = WINDOW_PADDING;
+      const defaultY = window.innerHeight - totalHeight - WINDOW_PADDING;
+      const nextX = prev?.x ?? defaultX;
+      const nextY = prev?.y ?? defaultY;
+
+      return {
+        x: Math.max(0, Math.min(nextX, maxX)),
+        y: Math.max(0, Math.min(nextY, maxY)),
+      };
     });
-  }, [position]);
+  }, [size, shape, videoDimensions]);
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDragging) return;
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if ((e.target as HTMLElement).closest("[data-controls]")) {
+        return;
+      }
+      e.stopPropagation();
+      e.preventDefault();
+      setIsDragging(true);
+      setDragStart({
+        x: e.clientX - (position?.x || 0),
+        y: e.clientY - (position?.y || 0),
+      });
+    },
+    [position]
+  );
 
-    const newX = e.clientX - dragStart.x;
-    const newY = e.clientY - dragStart.y;
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!isDragging) return;
 
-    const base = size === "sm" ? 230 : 400;
-    const barHeight = 52;
-    const aspectRatio = videoDimensions
-      ? videoDimensions.width / videoDimensions.height
-      : 1;
-    const windowWidth =
-      shape === "full" ? (aspectRatio >= 1 ? base * aspectRatio : base) : base;
-    const windowHeight =
-      shape === "full" ? (aspectRatio >= 1 ? base : base / aspectRatio) : base;
-    const totalWidth = windowWidth;
-    const totalHeight = windowHeight + barHeight;
-    const maxX = window.innerWidth - totalWidth;
-    const maxY = window.innerHeight - totalHeight;
+      const newX = e.clientX - dragStart.x;
+      const newY = e.clientY - dragStart.y;
 
-    setPosition({
-      x: Math.max(0, Math.min(newX, maxX)),
-      y: Math.max(0, Math.min(newY, maxY)),
-    });
-  }, [isDragging, dragStart, size, shape, videoDimensions]);
+      const metrics = getPreviewMetrics(size, shape, videoDimensions);
+      const totalHeight = metrics.height + BAR_HEIGHT;
+      const maxX = Math.max(0, window.innerWidth - metrics.width);
+      const maxY = Math.max(0, window.innerHeight - totalHeight);
+
+      setPosition({
+        x: Math.max(0, Math.min(newX, maxX)),
+        y: Math.max(0, Math.min(newY, maxY)),
+      });
+    },
+    [isDragging, dragStart, size, shape, videoDimensions]
+  );
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
@@ -159,7 +206,10 @@ export const CameraPreviewWindow = ({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const handleClose = useCallback(async () => {
-    if (videoRef.current && document.pictureInPictureElement === videoRef.current) {
+    if (
+      videoRef.current &&
+      document.pictureInPictureElement === videoRef.current
+    ) {
       try {
         await document.exitPictureInPicture();
       } catch (err) {
@@ -169,72 +219,42 @@ export const CameraPreviewWindow = ({
     onClose();
   }, [onClose]);
 
+  const handleTogglePictureInPicture = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !document.pictureInPictureEnabled) return;
+
+    try {
+      if (document.pictureInPictureElement === video) {
+        await document.exitPictureInPicture();
+      } else {
+        await video.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.error("Failed to toggle Picture-in-Picture", err);
+    }
+  }, []);
+
   useEffect(() => {
     if (!videoRef.current || !videoDimensions) return;
 
     const video = videoRef.current;
 
-    const enterPictureInPicture = async () => {
-      if (!video || !document.pictureInPictureEnabled) return;
-      
-      const isAlreadyInPip = document.pictureInPictureElement === video;
-      if (isAlreadyInPip) return;
-
-      try {
-        await video.requestPictureInPicture();
-        pipAutoEnteredRef.current = true;
-      } catch (err) {
-        console.error("Failed to enter Picture-in-Picture", err);
-      }
-    };
-
-    const exitPictureInPicture = async () => {
-      if (!video || document.pictureInPictureElement !== video) return;
-
-      try {
-        await document.exitPictureInPicture();
-        pipAutoEnteredRef.current = false;
-      } catch (err) {
-        console.error("Failed to exit Picture-in-Picture", err);
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        enterPictureInPicture();
-      } else if (pipAutoEnteredRef.current) {
-        exitPictureInPicture();
-      }
-    };
-
-    const handleWindowBlur = () => {
-      enterPictureInPicture();
-    };
-
-    const handleWindowFocus = () => {
-      if (pipAutoEnteredRef.current) {
-        exitPictureInPicture();
-      }
-    };
-
     const handlePipEnter = () => {
-      pipAutoEnteredRef.current = true;
+      setIsInPictureInPicture(true);
     };
 
     const handlePipLeave = () => {
-      pipAutoEnteredRef.current = false;
+      setIsInPictureInPicture(false);
     };
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleWindowBlur);
-    window.addEventListener("focus", handleWindowFocus);
     video.addEventListener("enterpictureinpicture", handlePipEnter);
     video.addEventListener("leavepictureinpicture", handlePipLeave);
 
+    if (document.pictureInPictureElement === video) {
+      setIsInPictureInPicture(true);
+    }
+
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("blur", handleWindowBlur);
-      window.removeEventListener("focus", handleWindowFocus);
       video.removeEventListener("enterpictureinpicture", handlePipEnter);
       video.removeEventListener("leavepictureinpicture", handlePipLeave);
     };
@@ -244,31 +264,22 @@ export const CameraPreviewWindow = ({
     return null;
   }
 
-  const base = size === "sm" ? 230 : 400;
-  const barHeight = 52;
-  const aspectRatio = videoDimensions
-    ? videoDimensions.width / videoDimensions.height
-    : 1;
-
-  const windowWidth =
-    shape === "full" ? (aspectRatio >= 1 ? base * aspectRatio : base) : base;
-  const windowHeight =
-    shape === "full" ? (aspectRatio >= 1 ? base : base / aspectRatio) : base;
-  const totalHeight = windowHeight + barHeight;
+  const metrics = getPreviewMetrics(size, shape, videoDimensions);
+  const totalHeight = metrics.height + BAR_HEIGHT;
 
   const borderRadius =
     shape === "round" ? "9999px" : size === "sm" ? "3rem" : "4rem";
-
 
   return createPortal(
     <div
       ref={containerRef}
       data-camera-preview
       className="fixed z-[600] group cursor-move pointer-events-auto"
+      role="dialog"
       style={{
         left: `${position.x}px`,
         top: `${position.y}px`,
-        width: `${windowWidth}px`,
+        width: `${metrics.width}px`,
         height: `${totalHeight}px`,
         borderRadius,
       }}
@@ -276,9 +287,6 @@ export const CameraPreviewWindow = ({
         e.stopPropagation();
         e.preventDefault();
         handleMouseDown(e);
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
       }}
     >
       <div
@@ -290,8 +298,16 @@ export const CameraPreviewWindow = ({
             <div
               data-controls
               className="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10 pointer-events-auto"
+              role="toolbar"
+              aria-label="Camera preview controls"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  handleClose();
+                }
+              }}
             >
               <button
                 type="button"
@@ -331,7 +347,9 @@ export const CameraPreviewWindow = ({
               >
                 {shape === "round" && <Circle className="size-5.5" />}
                 {shape === "square" && <Square className="size-5.5" />}
-                {shape === "full" && <RectangleHorizontal className="size-5.5" />}
+                {shape === "full" && (
+                  <RectangleHorizontal className="size-5.5" />
+                )}
               </button>
               <button
                 type="button"
@@ -346,6 +364,21 @@ export const CameraPreviewWindow = ({
               >
                 <FlipHorizontal className="size-5.5" />
               </button>
+              {document.pictureInPictureEnabled && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleTogglePictureInPicture();
+                  }}
+                  className={clsx(
+                    "p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12",
+                    isInPictureInPicture && "bg-gray-3 text-gray-12"
+                  )}
+                >
+                  <PictureInPicture className="size-5.5" />
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -356,8 +389,8 @@ export const CameraPreviewWindow = ({
             shape === "round" ? "rounded-full" : "rounded-3xl"
           )}
           style={{
-            width: shape === "full" ? `${windowWidth}px` : `${base}px`,
-            height: shape === "full" ? `${windowHeight}px` : `${base}px`,
+            width: `${metrics.width}px`,
+            height: `${metrics.height}px`,
           }}
         >
           <video
@@ -369,15 +402,24 @@ export const CameraPreviewWindow = ({
               "absolute inset-0 w-full h-full object-cover pointer-events-none",
               shape === "round" ? "rounded-full" : "rounded-3xl"
             )}
-            style={videoDimensions ? {
-              transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
-            } : { display: "none" }}
+            style={
+              videoDimensions
+                ? {
+                    transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
+                  }
+                : { display: "none" }
+            }
             onLoadedMetadata={() => {
               if (videoRef.current) {
-                setVideoDimensions({
-                  width: videoRef.current.videoWidth,
-                  height: videoRef.current.videoHeight,
-                });
+                const width = videoRef.current.videoWidth;
+                const height = videoRef.current.videoHeight;
+
+                if (width > 0 && height > 0) {
+                  setVideoDimensions({
+                    width,
+                    height,
+                  });
+                }
               }
             }}
           />
@@ -388,7 +430,7 @@ export const CameraPreviewWindow = ({
           )}
         </div>
       </div>
-    </div>
-  , document.body);
+    </div>,
+    document.body
+  );
 };
-

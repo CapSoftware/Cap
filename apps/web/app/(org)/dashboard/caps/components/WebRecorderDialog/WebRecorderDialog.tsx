@@ -32,6 +32,8 @@ export const WebRecorderDialog = () => {
   const [recordingMode, setRecordingMode] =
     useState<RecordingMode>("fullscreen");
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
+  const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
+  const [micSelectOpen, setMicSelectOpen] = useState(false);
   const dialogContentRef = useRef<HTMLDivElement>(null);
 
   const { activeOrganization } = useDashboardContext();
@@ -254,6 +256,13 @@ export const WebRecorderDialog = () => {
                   availableCameras={availableCameras}
                   dialogOpen={open}
                   disabled={isBusy}
+                  open={cameraSelectOpen}
+                  onOpenChange={(isOpen) => {
+                    setCameraSelectOpen(isOpen);
+                    if (isOpen) {
+                      setMicSelectOpen(false);
+                    }
+                  }}
                   onCameraChange={handleCameraChange}
                   onRefreshDevices={refreshCameras}
                 />
@@ -262,6 +271,13 @@ export const WebRecorderDialog = () => {
                   availableMics={availableMics}
                   dialogOpen={open}
                   disabled={isBusy}
+                  open={micSelectOpen}
+                  onOpenChange={(isOpen) => {
+                    setMicSelectOpen(isOpen);
+                    if (isOpen) {
+                      setCameraSelectOpen(false);
+                    }
+                  }}
                   onMicChange={setSelectedMicId}
                   onRefreshDevices={refreshMics}
                 />
