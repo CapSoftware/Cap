@@ -26,6 +26,7 @@ interface UseWebRecorderOptions {
   recordingMode: RecordingMode;
   selectedCameraId: string | null;
   onPhaseChange?: (phase: RecorderPhase) => void;
+  onRecordingSurfaceDetected?: (mode: RecordingMode) => void;
 }
 
 const DISPLAY_MEDIA_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
@@ -49,11 +50,13 @@ const DISPLAY_MODE_PREFERENCES: Record<
     monitorTypeSurfaces: "include",
     selfBrowserSurface: "exclude",
     surfaceSwitching: "exclude",
+    preferCurrentTab: false,
   },
   window: {
     monitorTypeSurfaces: "exclude",
     selfBrowserSurface: "exclude",
     surfaceSwitching: "exclude",
+    preferCurrentTab: false,
   },
   tab: {
     monitorTypeSurfaces: "exclude",
@@ -62,6 +65,79 @@ const DISPLAY_MODE_PREFERENCES: Record<
     preferCurrentTab: true,
   },
 };
+
+type DetectedDisplayRecordingMode = Exclude<RecordingMode, "camera">;
+
+const DISPLAY_SURFACE_TO_RECORDING_MODE: Record<
+  string,
+  DetectedDisplayRecordingMode
+> = {
+  monitor: "fullscreen",
+  screen: "fullscreen",
+  window: "window",
+  application: "window",
+  browser: "tab",
+  tab: "tab",
+};
+
+const RECORDING_MODE_TO_DISPLAY_SURFACE: Record<
+  DetectedDisplayRecordingMode,
+  DisplaySurfacePreference
+> = {
+  fullscreen: "monitor",
+  window: "window",
+  tab: "browser",
+};
+
+type DisplaySurfacePreference =
+  | "monitor"
+  | "window"
+  | "browser"
+  | "application";
+
+const detectRecordingModeFromTrack = (
+  track: MediaStreamTrack | null,
+  settings?: MediaTrackSettings
+): DetectedDisplayRecordingMode | null => {
+  if (!track) return null;
+
+  const trackSettings = settings ?? track.getSettings();
+  const maybeDisplaySurface = (
+    trackSettings as Partial<{ displaySurface?: unknown }>
+  ).displaySurface;
+  const rawSurface =
+    typeof maybeDisplaySurface === "string" ? maybeDisplaySurface : "";
+  const normalizedSurface = rawSurface.toLowerCase();
+
+  if (normalizedSurface) {
+    const mapped = DISPLAY_SURFACE_TO_RECORDING_MODE[normalizedSurface];
+    if (mapped) {
+      return mapped;
+    }
+  }
+
+  const label = track.label?.toLowerCase() ?? "";
+
+  if (
+    label.includes("screen") ||
+    label.includes("display") ||
+    label.includes("monitor")
+  ) {
+    return "fullscreen";
+  }
+
+  if (label.includes("window") || label.includes("application")) {
+    return "window";
+  }
+
+  if (label.includes("tab") || label.includes("browser")) {
+    return "tab";
+  }
+
+  return null;
+};
+
+const detectionRetryDelays = [120, 450, 1000];
 
 const shouldRetryDisplayMediaWithoutPreferences = (error: unknown) => {
   if (error instanceof DOMException) {
@@ -81,6 +157,7 @@ export const useWebRecorder = ({
   recordingMode,
   selectedCameraId,
   onPhaseChange,
+  onRecordingSurfaceDetected,
 }: UseWebRecorderOptions) => {
   const [phase, setPhase] = useState<RecorderPhase>("idle");
   const [durationMs, setDurationMs] = useState(0);
@@ -103,6 +180,9 @@ export const useWebRecorder = ({
     null
   );
   const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
+  const recordingModeRef = useRef(recordingMode);
+  const detectionTimeoutsRef = useRef<number[]>([]);
+  const detectionCleanupRef = useRef<Array<() => void>>([]);
 
   const rpc = useRpcClient();
   const router = useRouter();
@@ -117,7 +197,23 @@ export const useWebRecorder = ({
     [onPhaseChange]
   );
 
+  const clearDetectionTracking = useCallback(() => {
+    detectionTimeoutsRef.current.forEach((timeoutId) => {
+      window.clearTimeout(timeoutId);
+    });
+    detectionTimeoutsRef.current = [];
+    detectionCleanupRef.current.forEach((cleanup) => {
+      try {
+        cleanup();
+      } catch {
+        /* ignore */
+      }
+    });
+    detectionCleanupRef.current = [];
+  }, []);
+
   const cleanupStreams = useCallback(() => {
+    clearDetectionTracking();
     const stopTracks = (stream: MediaStream | null) => {
       stream?.getTracks().forEach((track) => {
         track.stop();
@@ -135,7 +231,7 @@ export const useWebRecorder = ({
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-  }, []);
+  }, [clearDetectionTracking]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -143,6 +239,57 @@ export const useWebRecorder = ({
       timerRef.current = null;
     }
   }, []);
+
+  const notifyDetectedMode = useCallback(
+    (detected: DetectedDisplayRecordingMode | null) => {
+      if (!detected) return;
+      if (detected === recordingModeRef.current) return;
+      recordingModeRef.current = detected;
+      onRecordingSurfaceDetected?.(detected);
+    },
+    [onRecordingSurfaceDetected]
+  );
+
+  const scheduleSurfaceDetection = useCallback(
+    (track: MediaStreamTrack | null, initialSettings?: MediaTrackSettings) => {
+      if (!track || !onRecordingSurfaceDetected) {
+        return;
+      }
+
+      clearDetectionTracking();
+
+      const attemptDetection = (settingsOverride?: MediaTrackSettings) => {
+        notifyDetectedMode(
+          detectRecordingModeFromTrack(track, settingsOverride)
+        );
+      };
+
+      attemptDetection(initialSettings);
+
+      detectionRetryDelays.forEach((delay) => {
+        const timeoutId = window.setTimeout(() => {
+          attemptDetection();
+        }, delay);
+        detectionTimeoutsRef.current.push(timeoutId);
+      });
+
+      const handleTrackReady = () => {
+        attemptDetection();
+      };
+
+      track.addEventListener("unmute", handleTrackReady, { once: true });
+      track.addEventListener("mute", handleTrackReady, { once: true });
+      detectionCleanupRef.current.push(() => {
+        track.removeEventListener("unmute", handleTrackReady);
+        track.removeEventListener("mute", handleTrackReady);
+      });
+    },
+    [
+      clearDetectionTracking,
+      notifyDetectedMode,
+      onRecordingSurfaceDetected,
+    ]
+  );
 
   const resetState = useCallback(() => {
     cleanupStreams();
@@ -155,6 +302,10 @@ export const useWebRecorder = ({
     setHasAudioTrack(false);
     setUploadStatus(undefined);
   }, [cleanupStreams, clearTimer, setUploadStatus, updatePhase]);
+
+  useEffect(() => {
+    recordingModeRef.current = recordingMode;
+  }, [recordingMode]);
 
   useEffect(() => {
     return () => {
@@ -445,9 +596,16 @@ export const useWebRecorder = ({
         cameraStreamRef.current = videoStream;
         firstTrack = videoStream.getVideoTracks()[0] ?? null;
       } else {
-        const baseDisplayRequest: DisplayMediaStreamOptions = {
-          video: { ...DISPLAY_MEDIA_VIDEO_CONSTRAINTS },
+        const desiredSurface =
+          RECORDING_MODE_TO_DISPLAY_SURFACE[recordingMode as DetectedDisplayRecordingMode];
+        const videoConstraints: MediaTrackConstraints & {
+          displaySurface?: DisplaySurfacePreference;
+        } = { ...DISPLAY_MEDIA_VIDEO_CONSTRAINTS, displaySurface: desiredSurface };
+
+        const baseDisplayRequest: ExtendedDisplayMediaStreamOptions = {
+          video: videoConstraints,
           audio: false,
+          preferCurrentTab: recordingMode === "tab",
         };
 
         const preferredOptions = DISPLAY_MODE_PREFERENCES[recordingMode];
@@ -456,6 +614,7 @@ export const useWebRecorder = ({
           const preferredDisplayRequest: DisplayMediaStreamOptions = {
             ...baseDisplayRequest,
             ...preferredOptions,
+            video: videoConstraints,
           };
 
           try {
@@ -487,6 +646,11 @@ export const useWebRecorder = ({
       }
 
       const settings = firstTrack?.getSettings();
+
+      if (recordingMode !== "camera") {
+        scheduleSurfaceDetection(firstTrack, settings);
+      }
+
       dimensionsRef.current = {
         width: settings?.width || undefined,
         height: settings?.height || undefined,
@@ -763,4 +927,3 @@ export const useWebRecorder = ({
     resetState,
   };
 };
-

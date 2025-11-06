@@ -68,6 +68,9 @@ export const WebRecorderDialog = () => {
     micEnabled,
     recordingMode,
     selectedCameraId,
+    onRecordingSurfaceDetected: (mode) => {
+      setRecordingMode(mode);
+    },
   });
 
   const handleOpenChange = (next: boolean) => {
