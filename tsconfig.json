@@ -4,10 +4,6 @@
 		{ "path": "./packages/ui" },
 		{ "path": "./packages/ui-solid" },
 		{ "path": "./packages/utils" },
-		{ "path": "./packages/web-backend" },
-		{ "path": "./packages/web-domain" },
-		{ "path": "./packages/database" },
-		{ "path": "./packages/env" },
 		{ "path": "./apps/desktop" },
 		{ "path": "./apps/web" }
 	],

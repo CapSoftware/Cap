@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
+import { LoadingSpinner } from "@cap/ui";
 
 type CameraPreviewSize = "sm" | "lg";
 type CameraPreviewShape = "round" | "square" | "full";
@@ -91,6 +92,9 @@ export const CameraPreviewWindow = ({
     useState<VideoDimensions | null>(null);
   const [mounted, setMounted] = useState(false);
   const [isInPictureInPicture, setIsInPictureInPicture] = useState(false);
+  const autoPictureInPictureRef = useRef(false);
+  const isPictureInPictureSupported =
+    typeof document !== "undefined" && document.pictureInPictureEnabled;
 
   useEffect(() => {
     setMounted(true);
@@ -211,6 +215,7 @@ export const CameraPreviewWindow = ({
       document.pictureInPictureElement === videoRef.current
     ) {
       try {
+        autoPictureInPictureRef.current = false;
         await document.exitPictureInPicture();
       } catch (err) {
         console.error("Failed to exit Picture-in-Picture", err);
@@ -221,9 +226,10 @@ export const CameraPreviewWindow = ({
 
   const handleTogglePictureInPicture = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || !document.pictureInPictureEnabled) return;
+    if (!video || !isPictureInPictureSupported) return;
 
     try {
+      autoPictureInPictureRef.current = false;
       if (document.pictureInPictureElement === video) {
         await document.exitPictureInPicture();
       } else {
@@ -232,10 +238,11 @@ export const CameraPreviewWindow = ({
     } catch (err) {
       console.error("Failed to toggle Picture-in-Picture", err);
     }
-  }, []);
+  }, [isPictureInPictureSupported]);
 
   useEffect(() => {
-    if (!videoRef.current || !videoDimensions) return;
+    if (!videoRef.current || !videoDimensions || !isPictureInPictureSupported)
+      return;
 
     const video = videoRef.current;
 
@@ -244,6 +251,7 @@ export const CameraPreviewWindow = ({
     };
 
     const handlePipLeave = () => {
+      autoPictureInPictureRef.current = false;
       setIsInPictureInPicture(false);
     };
 
@@ -258,7 +266,97 @@ export const CameraPreviewWindow = ({
       video.removeEventListener("enterpictureinpicture", handlePipEnter);
       video.removeEventListener("leavepictureinpicture", handlePipLeave);
     };
-  }, [videoDimensions]);
+  }, [videoDimensions, isPictureInPictureSupported]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    if (!isPictureInPictureSupported) {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      const video = videoRef.current;
+
+      if (!video || !videoDimensions) {
+        return;
+      }
+
+      const currentElement = document.pictureInPictureElement;
+
+      if (
+        currentElement &&
+        currentElement !== video &&
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+
+      if (document.visibilityState === "hidden") {
+        if (currentElement === video) {
+          return;
+        }
+
+        video
+          .requestPictureInPicture()
+          .then(() => {
+            autoPictureInPictureRef.current = true;
+          })
+          .catch((err) => {
+            autoPictureInPictureRef.current = false;
+            console.error(
+              "Failed to enter Picture-in-Picture on tab change",
+              err
+            );
+          });
+
+        return;
+      }
+
+      if (
+        autoPictureInPictureRef.current &&
+        currentElement === video &&
+        document.visibilityState === "visible"
+      ) {
+        document
+          .exitPictureInPicture()
+          .catch((err) => {
+            console.error(
+              "Failed to exit Picture-in-Picture after returning",
+              err
+            );
+          })
+          .finally(() => {
+            autoPictureInPictureRef.current = false;
+          });
+        return;
+      }
+
+      autoPictureInPictureRef.current = false;
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [videoDimensions, isPictureInPictureSupported]);
+
+  useEffect(() => {
+    return () => {
+      if (
+        typeof document !== "undefined" &&
+        videoRef.current &&
+        document.pictureInPictureElement === videoRef.current
+      ) {
+        document.exitPictureInPicture().catch((err) => {
+          console.error("Failed to exit Picture-in-Picture on cleanup", err);
+        });
+      }
+    };
+  }, []);
 
   if (!mounted || !position) {
     return null;
@@ -364,7 +462,7 @@ export const CameraPreviewWindow = ({
               >
                 <FlipHorizontal className="size-5.5" />
               </button>
-              {document.pictureInPictureEnabled && (
+              {isPictureInPictureSupported && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -424,8 +522,23 @@ export const CameraPreviewWindow = ({
             }}
           />
           {!videoDimensions && (
-            <div className="w-full flex-1 flex items-center justify-center">
-              <div className="text-gray-11">Loading camera...</div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <LoadingSpinner size={32} themeColors />
+            </div>
+          )}
+          {isPictureInPictureSupported && (
+            <div
+              className={clsx(
+                "absolute left-1/2 bottom-4 flex -translate-x-1/2 transform transition-all",
+                isInPictureInPicture
+                  ? "opacity-100 translate-y-0"
+                  : "pointer-events-none opacity-0 translate-y-2"
+              )}
+            >
+              <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-3 py-1.5 text-sm font-medium text-white shadow-lg backdrop-blur-sm">
+                <PictureInPicture className="size-4" />
+                <span>Picture in Picture active</span>
+              </div>
             </div>
           )}
         </div>
