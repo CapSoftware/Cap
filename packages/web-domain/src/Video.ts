@@ -195,11 +195,7 @@ export class VideoRpcs extends RpcGroup.make(
 	Rpc.make("VideoUploadProgressUpdate", {
 		payload: UploadProgressUpdateInput,
 		success: Schema.Boolean,
-		error: Schema.Union(
-			NotFoundError,
-			InternalError,
-			PolicyDeniedError,
-		),
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
 	Rpc.make("VideoGetDownloadInfo", {
 		payload: VideoId,

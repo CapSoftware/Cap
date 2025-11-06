@@ -1,7 +1,7 @@
 import * as Db from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
-import { CurrentUser, Folder, Policy, Video } from "@cap/web-domain";
+import { CurrentUser, type Folder, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Context, Effect, Option, pipe } from "effect";
 import type { Schema } from "effect/Schema";
@@ -9,8 +9,8 @@ import type { Schema } from "effect/Schema";
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
-import { VideosRepo } from "./VideosRepo.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
+import { VideosRepo } from "./VideosRepo.ts";
 
 type UploadProgressUpdateInput = Schema.Type<
 	typeof Video.UploadProgressUpdateInput
@@ -145,19 +145,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				const [record] = yield* db
 					.use((db) =>
-					db
-						.select({
-							video: Db.videos,
-							upload: Db.videoUploads,
-						})
-						.from(Db.videos)
-						.leftJoin(
-							Db.videoUploads,
-							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
-						)
-						.where(
-								Dz.eq(Db.videos.id, videoId),
-						),
+						db
+							.select({
+								video: Db.videos,
+								upload: Db.videoUploads,
+							})
+							.from(Db.videos)
+							.leftJoin(
+								Db.videoUploads,
+								Dz.eq(Db.videos.id, Db.videoUploads.videoId),
+							)
+							.where(Dz.eq(Db.videos.id, videoId)),
 					)
 					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 
@@ -203,7 +201,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 			createInstantRecording: Effect.fn("Videos.createInstantRecording")(
 				function* (input: InstantRecordingCreateInput) {
-				const user = yield* CurrentUser;
+					const user = yield* CurrentUser;
 
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
@@ -222,25 +220,28 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					const duration = Option.fromNullable(input.durationSeconds);
 
 					const now = new Date();
-					const formattedDate = `${now.getDate()} ${now.toLocaleString("default", {
-						month: "long",
-					})} ${now.getFullYear()}`;
+					const formattedDate = `${now.getDate()} ${now.toLocaleString(
+						"default",
+						{
+							month: "long",
+						},
+					)} ${now.getFullYear()}`;
 
-				const createData = {
-					ownerId: user.id,
-					orgId: input.orgId,
-					name: `Cap Recording - ${formattedDate}`,
-					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-					source: { type: "desktopMP4" as const },
-					bucketId,
-					folderId,
-					width,
-					height,
-					duration,
-					metadata: Option.none(),
-					transcriptionStatus: Option.none(),
-				} as unknown as RepoCreateVideoInput;
-				const videoId = yield* repo.create(createData);
+					const createData = {
+						ownerId: user.id,
+						orgId: input.orgId,
+						name: `Cap Recording - ${formattedDate}`,
+						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+						source: { type: "desktopMP4" as const },
+						bucketId,
+						folderId,
+						width,
+						height,
+						duration,
+						metadata: Option.none(),
+						transcriptionStatus: Option.none(),
+					} as unknown as RepoCreateVideoInput;
+					const videoId = yield* repo.create(createData);
 
 					if (input.supportsUploadProgress ?? true)
 						yield* db.use((db) =>
@@ -252,38 +253,32 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const fileKey = `${user.id}/${videoId}/result.mp4`;
 					const [bucket] = yield* s3Buckets.getBucketAccess(bucketId);
-					const presignedPostData = yield* bucket.getPresignedPostUrl(
-						fileKey,
-						{
-							Fields: {
-								"Content-Type": "video/mp4",
-								"x-amz-meta-userid": user.id,
-								"x-amz-meta-duration": input.durationSeconds
-									? input.durationSeconds.toString()
-									: "",
-								"x-amz-meta-resolution": input.resolution ?? "",
-								"x-amz-meta-videocodec": input.videoCodec ?? "",
-								"x-amz-meta-audiocodec": input.audioCodec ?? "",
-							},
-							Expires: 1800,
+					const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
+						Fields: {
+							"Content-Type": "video/mp4",
+							"x-amz-meta-userid": user.id,
+							"x-amz-meta-duration": input.durationSeconds
+								? input.durationSeconds.toString()
+								: "",
+							"x-amz-meta-resolution": input.resolution ?? "",
+							"x-amz-meta-videocodec": input.videoCodec ?? "",
+							"x-amz-meta-audiocodec": input.audioCodec ?? "",
 						},
-					);
+						Expires: 1800,
+					});
 
 					const shareUrl = `${serverEnv().WEB_URL}/s/${videoId}`;
 
 					if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 						yield* Effect.tryPromise(() =>
-							dub()
-								.links.create({
-									url: shareUrl,
-									domain: "cap.link",
-									key: videoId,
-								}),
+							dub().links.create({
+								url: shareUrl,
+								domain: "cap.link",
+								key: videoId,
+							}),
 						).pipe(
 							Effect.catchAll((error) =>
-								Effect.logWarning(
-									`Dub link create failed: ${String(error)}`,
-								),
+								Effect.logWarning(`Dub link create failed: ${String(error)}`),
 							),
 						);
 
