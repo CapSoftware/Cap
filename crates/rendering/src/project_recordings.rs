@@ -63,6 +63,29 @@ impl Video {
             }
 
             if duration <= 0.0 {
+                let mut last_ts: i64 = -1;
+                for (s, packet) in input.packets() {
+                    if s.index() == stream.index() {
+                        if let Some(pts) = packet.pts() {
+                            if pts > last_ts {
+                                last_ts = pts;
+                            }
+                        } else if let Some(dts) = packet.dts() {
+                            if dts > last_ts {
+                                last_ts = dts;
+                            }
+                        }
+                    }
+                }
+
+                if last_ts >= 0 {
+                    let tb = stream.time_base();
+                    duration = (last_ts as f64 * tb.numerator() as f64)
+                        / tb.denominator() as f64;
+                }
+            }
+
+            if duration <= 0.0 {
                 let frames = stream.frames();
                 if frames > 0 && fps > 0.0 {
                     duration = frames as f64 / fps;
