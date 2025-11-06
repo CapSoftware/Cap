@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Card,
@@ -25,7 +26,6 @@ import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/Confirmati
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { calculateSeats } from "@/utils/organization";
-import { buildEnv } from "@cap/env";
 
 interface MembersCardProps {
 	isOwner: boolean;
