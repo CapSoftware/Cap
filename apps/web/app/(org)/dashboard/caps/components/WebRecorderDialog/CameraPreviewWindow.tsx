@@ -28,6 +28,7 @@ export const CameraPreviewWindow = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [mounted, setMounted] = useState(false);
+  const pipAutoEnteredRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -157,6 +158,88 @@ export const CameraPreviewWindow = ({
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  const handleClose = useCallback(async () => {
+    if (videoRef.current && document.pictureInPictureElement === videoRef.current) {
+      try {
+        await document.exitPictureInPicture();
+      } catch (err) {
+        console.error("Failed to exit Picture-in-Picture", err);
+      }
+    }
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!videoRef.current || !videoDimensions) return;
+
+    const video = videoRef.current;
+
+    const enterPictureInPicture = async () => {
+      if (!video || !document.pictureInPictureEnabled) return;
+      
+      const isAlreadyInPip = document.pictureInPictureElement === video;
+      if (isAlreadyInPip) return;
+
+      try {
+        await video.requestPictureInPicture();
+        pipAutoEnteredRef.current = true;
+      } catch (err) {
+        console.error("Failed to enter Picture-in-Picture", err);
+      }
+    };
+
+    const exitPictureInPicture = async () => {
+      if (!video || document.pictureInPictureElement !== video) return;
+
+      try {
+        await document.exitPictureInPicture();
+        pipAutoEnteredRef.current = false;
+      } catch (err) {
+        console.error("Failed to exit Picture-in-Picture", err);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        enterPictureInPicture();
+      } else if (pipAutoEnteredRef.current) {
+        exitPictureInPicture();
+      }
+    };
+
+    const handleWindowBlur = () => {
+      enterPictureInPicture();
+    };
+
+    const handleWindowFocus = () => {
+      if (pipAutoEnteredRef.current) {
+        exitPictureInPicture();
+      }
+    };
+
+    const handlePipEnter = () => {
+      pipAutoEnteredRef.current = true;
+    };
+
+    const handlePipLeave = () => {
+      pipAutoEnteredRef.current = false;
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
+    video.addEventListener("enterpictureinpicture", handlePipEnter);
+    video.addEventListener("leavepictureinpicture", handlePipLeave);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
+      video.removeEventListener("enterpictureinpicture", handlePipEnter);
+      video.removeEventListener("leavepictureinpicture", handlePipLeave);
+    };
+  }, [videoDimensions]);
+
   if (!mounted || !position) {
     return null;
   }
@@ -214,7 +297,7 @@ export const CameraPreviewWindow = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onClose();
+                  handleClose();
                 }}
                 className="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12 hover:bg-gray-3 hover:text-gray-12"
               >
