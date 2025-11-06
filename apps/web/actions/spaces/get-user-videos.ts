@@ -38,12 +38,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 			ownerName: users.name,
 			folderName: folders.name,
 			folderColor: folders.color,
-			effectiveDate: sql<string>`
-          COALESCE(
-            JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-            ${videos.createdAt}
-          )
-        `,
+			effectiveDate: videos.effectiveCreatedAt,
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),
@@ -81,12 +76,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.spaceId,
 						videos.folderId,
 					)
-					.orderBy(
-						desc(sql`COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )`),
-					)
+					.orderBy(desc(videos.effectiveCreatedAt))
 			: await db()
 					.select(selectFields)
 					.from(videos)
@@ -118,12 +108,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.spaceId,
 						videos.folderId,
 					)
-					.orderBy(
-						desc(sql`COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )`),
-					);
+					.orderBy(desc(videos.effectiveCreatedAt));
 
 		const processedVideoData = videoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =
