@@ -1,5 +1,6 @@
 "use client";
 
+import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Card,
@@ -146,22 +147,24 @@ export const MembersCard = ({
 						<CardDescription>Manage your organization members.</CardDescription>
 					</CardHeader>
 					<div className="flex flex-wrap gap-3">
-						<Tooltip
-							position="top"
-							content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
-						>
-							<Button
-								type="button"
-								size="sm"
-								variant="primary"
-								className="px-6 min-w-auto"
-								spinner={loading}
-								disabled={!isOwner || loading}
-								onClick={handleManageBilling}
+						{buildEnv.NEXT_PUBLIC_IS_CAP && (
+							<Tooltip
+								position="top"
+								content="Once inside the Stripe dashboard, click 'Manage Plan', then increase quantity of subscriptions to purchase more seats"
 							>
-								{loading ? "Loading..." : "+ Purchase more seats"}
-							</Button>
-						</Tooltip>
+								<Button
+									type="button"
+									size="sm"
+									variant="primary"
+									className="px-6 min-w-auto"
+									spinner={loading}
+									disabled={!isOwner || loading}
+									onClick={handleManageBilling}
+								>
+									{loading ? "Loading..." : "+ Purchase more seats"}
+								</Button>
+							</Tooltip>
+						)}
 						<Button
 							type="button"
 							size="sm"
