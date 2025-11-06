@@ -46,31 +46,46 @@ export const CameraSelector = ({
   const shouldRequestPermission =
     permissionSupported && permissionState !== "granted";
 
+  const statusPillDisabled = !shouldRequestPermission && !cameraEnabled;
+
   const statusPillClassName = clsx(
-    "px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none",
+    "px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)]",
+    statusPillDisabled ? "cursor-default" : "cursor-pointer",
     shouldRequestPermission
       ? "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]"
       : cameraEnabled
-      ? "bg-[var(--blue-3)] text-[var(--blue-11)] dark:bg-[var(--blue-4)] dark:text-[var(--blue-12)]"
+      ? "bg-[var(--blue-3)] text-[var(--blue-11)] dark:bg-[var(--blue-4)] dark:text-[var(--blue-12)] hover:bg-[var(--blue-4)] dark:hover:bg-[var(--blue-5)]"
       : "bg-[var(--red-3)] text-[var(--red-11)] dark:bg-[var(--red-4)] dark:text-[var(--red-12)]"
   );
 
   const handleStatusPillClick = async (
     event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>
   ) => {
-    if (!shouldRequestPermission) return;
+    if (shouldRequestPermission) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      try {
+        const granted = await requestPermission();
+        if (granted) {
+          await Promise.resolve(onRefreshDevices());
+        }
+      } catch (error) {
+        console.error("Camera permission request failed", error);
+        toast.error("Unable to access your camera. Check browser permissions.");
+      }
+
+      return;
+    }
+
+    if (!cameraEnabled) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 
-    try {
-      const granted = await requestPermission();
-      if (granted) {
-        await Promise.resolve(onRefreshDevices());
-      }
-    } catch (error) {
-      console.error("Camera permission request failed", error);
-      toast.error("Unable to access your camera. Check browser permissions.");
-    }
+    onCameraChange(null);
   };
 
   const handleStatusPillKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -124,8 +139,8 @@ export const CameraSelector = ({
               statusPillClassName,
               "absolute right-[0.375rem] top-1/2 -translate-y-1/2 z-20"
             )}
-            disabled={!shouldRequestPermission}
-            aria-disabled={!shouldRequestPermission}
+            disabled={statusPillDisabled}
+            aria-disabled={statusPillDisabled}
             onClick={handleStatusPillClick}
             onKeyDown={handleStatusPillKeyDown}
           >
