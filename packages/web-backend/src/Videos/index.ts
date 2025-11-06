@@ -3,13 +3,14 @@ import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { CurrentUser, Folder, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Effect, Option, pipe } from "effect";
+import { Array, Context, Effect, Option, pipe } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import { VideosRepo } from "./VideosRepo.ts";
+import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 
 type UploadProgressUpdateInput = Schema.Type<
 	typeof Video.UploadProgressUpdateInput
@@ -45,11 +46,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 * Delete a video. Will fail if the user does not have access.
 			 */
 			delete: Effect.fn("Videos.delete")(function* (videoId: Video.VideoId) {
-				const [video] = yield* repo
-					.getById(videoId)
-					.pipe(
-						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
-					);
+				const maybeVideo = yield* repo.getById(videoId);
+				if (Option.isNone(maybeVideo))
+					return yield* Effect.fail(new Video.NotFoundError());
+				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
@@ -59,9 +59,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 				yield* Effect.log(`Deleted video ${video.id}`);
 
-				const user = yield* CurrentUser;
-
-				const prefix = `${user.id}/${video.id}/`;
+				const prefix = `${video.ownerId}/${video.id}/`;
 
 				const listedObjects = yield* bucket.listObjects({ prefix });
 
@@ -81,12 +79,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			duplicate: Effect.fn("Videos.duplicate")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* repo
+				const maybeVideo = yield* repo
 					.getById(videoId)
-					.pipe(
-						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
-						Policy.withPolicy(policy.isOwner(videoId)),
-					);
+					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+				if (Option.isNone(maybeVideo))
+					return yield* Effect.fail(new Video.NotFoundError());
+				const [video] = maybeVideo.value;
 
 				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
@@ -133,24 +131,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					)
 					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
 
-				return pipe(
-					result,
-					Option.fromNullable,
-					Option.map((r) => new Video.UploadProgress(r)),
-				);
+				if (result == null) return Option.none();
+				return Option.some(new Video.UploadProgress(result));
 			}),
 
 			updateUploadProgress: Effect.fn("Videos.updateUploadProgress")(function* (
 				input: UploadProgressUpdateInput,
 			) {
-				const user = yield* CurrentUser;
-
 				const uploaded = Math.min(input.uploaded, input.total);
 				const total = input.total;
 				const updatedAt = input.updatedAt;
 				const videoId = input.videoId;
 
-				const [record] = yield* db.use((db) =>
+				const [record] = yield* db
+					.use((db) =>
 					db
 						.select({
 							video: Db.videos,
@@ -162,14 +156,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							Dz.eq(Db.videos.id, Db.videoUploads.videoId),
 						)
 						.where(
-							Dz.and(
 								Dz.eq(Db.videos.id, videoId),
-								Dz.eq(Db.videos.ownerId, user.id),
-							),
 						),
-				);
+					)
+					.pipe(Policy.withPolicy(policy.isOwner(videoId)));
 
-				if (!record) return yield* new Video.NotFoundError();
+				if (!record) return yield* Effect.fail(new Video.NotFoundError());
 
 				yield* db.use((db) =>
 					db.transaction(async (tx) => {
@@ -211,10 +203,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 			createInstantRecording: Effect.fn("Videos.createInstantRecording")(
 				function* (input: InstantRecordingCreateInput) {
-					const user = yield* CurrentUser;
+				const user = yield* CurrentUser;
 
 					if (user.activeOrganizationId !== input.orgId)
-						return yield* new Policy.PolicyDeniedError();
+						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
 					const [customBucket] = yield* db.use((db) =>
 						db
@@ -234,20 +226,21 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						month: "long",
 					})} ${now.getFullYear()}`;
 
-					const videoId = yield* repo.create({
-						ownerId: user.id,
-						orgId: input.orgId,
-						name: `Cap Recording - ${formattedDate}`,
-						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-						source: { type: "desktopMP4" as const },
-						bucketId,
-						folderId,
-						width,
-						height,
-						duration,
-						metadata: Option.none(),
-						transcriptionStatus: Option.none(),
-					});
+				const createData = {
+					ownerId: user.id,
+					orgId: input.orgId,
+					name: `Cap Recording - ${formattedDate}`,
+					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+					source: { type: "desktopMP4" as const },
+					bucketId,
+					folderId,
+					width,
+					height,
+					duration,
+					metadata: Option.none(),
+					transcriptionStatus: Option.none(),
+				} as unknown as RepoCreateVideoInput;
+				const videoId = yield* repo.create(createData);
 
 					if (input.supportsUploadProgress ?? true)
 						yield* db.use((db) =>
@@ -310,76 +303,54 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* repo
+				const maybeVideo = yield* repo
 					.getById(videoId)
-					.pipe(
-						Effect.flatMap(
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new Video.NotFoundError(),
-							),
-						),
-						Policy.withPublicPolicy(policy.canView(videoId)),
-					);
+					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				if (Option.isNone(maybeVideo))
+					return yield* Effect.fail(new Video.NotFoundError());
+				const [video] = maybeVideo.value;
 
-				const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
-				return yield* Option.fromNullable(Video.Video.getSource(video)).pipe(
-					Option.filter((v) => v._tag === "Mp4Source"),
-					Option.map((v) =>
-						bucket.getSignedObjectUrl(v.getFileKey()).pipe(
-							Effect.map((downloadUrl) => ({
-								fileName: `${video.name}.mp4`,
-								downloadUrl,
-							})),
-						),
-					),
-					Effect.transposeOption,
-				);
+				const src = Video.Video.getSource(video);
+				if (!src) return Option.none();
+				if (!(src instanceof Video.Mp4Source)) return Option.none();
+
+				const downloadUrl = yield* bucket.getSignedObjectUrl(src.getFileKey());
+				return Option.some({ fileName: `${video.name}.mp4`, downloadUrl });
 			}),
 
 			getThumbnailURL: Effect.fn("Videos.getThumbnailURL")(function* (
 				videoId: Video.VideoId,
 			) {
-				const videoOpt = yield* repo
+				const maybeVideo = yield* repo
 					.getById(videoId)
 					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				if (Option.isNone(maybeVideo)) return Option.none();
+				const [video] = maybeVideo.value;
 
-				return yield* videoOpt.pipe(
-					Effect.transposeMapOption(
-						Effect.fn(function* ([video]) {
-							const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
-
-							const listResponse = yield* bucket.listObjects({
-								prefix: `${video.ownerId}/${video.id}/`,
-							});
-							const contents = listResponse.Contents || [];
-
-							const thumbnailKey = contents.find((item) =>
-								item.Key?.endsWith("screen-capture.jpg"),
-							)?.Key;
-
-							if (!thumbnailKey) return Option.none();
-
-							return Option.some(
-								yield* bucket.getSignedObjectUrl(thumbnailKey),
-							);
-						}),
-					),
-					Effect.map(Option.flatten),
-				);
+				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const listResponse = yield* bucket.listObjects({
+					prefix: `${video.ownerId}/${video.id}/`,
+				});
+				const contents = listResponse.Contents || [];
+				const thumbnailKey = contents.find((item) =>
+					item.Key?.endsWith("screen-capture.jpg"),
+				)?.Key;
+				if (!thumbnailKey) return Option.none();
+				const url = yield* bucket.getSignedObjectUrl(thumbnailKey);
+				return Option.some(url);
 			}),
 
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* getByIdForViewing(videoId).pipe(
-					Effect.flatten,
-					Effect.catchTag(
-						"NoSuchElementException",
-						() => new Video.NotFoundError(),
-					),
-				);
+				const maybeVideo = yield* repo
+					.getById(videoId)
+					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+				if (Option.isNone(maybeVideo))
+					return yield* Effect.fail(new Video.NotFoundError());
+				const [video] = maybeVideo.value;
 
 				const response = yield* Effect.tryPromise(() =>
 					dub().analytics.retrieve({
