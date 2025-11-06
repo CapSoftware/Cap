@@ -492,7 +492,7 @@ export const useWebRecorder = ({
     async (
       blob: Blob,
       upload: PresignedPost,
-      currentVideoId: string,
+      currentVideoId: VideoId,
       thumbnailPreviewUrl: string | undefined
     ) =>
       new Promise<void>((resolve, reject) => {
