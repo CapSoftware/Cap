@@ -200,6 +200,18 @@ impl H264EncoderBuilder {
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
 
+        unsafe {
+            let s = output_stream.as_mut_ptr();
+            (*s).avg_frame_rate = ffmpeg::ffi::AVRational {
+                num: input_config.frame_rate.0,
+                den: input_config.frame_rate.1,
+            };
+            (*s).r_frame_rate = ffmpeg::ffi::AVRational {
+                num: input_config.frame_rate.0,
+                den: input_config.frame_rate.1,
+            };
+        }
+
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
             encoder,
