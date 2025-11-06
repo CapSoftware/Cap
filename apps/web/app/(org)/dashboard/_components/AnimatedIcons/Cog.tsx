@@ -51,7 +51,8 @@ const CogIcon = forwardRef<CogIconHandle, CogIconProps>(
 		);
 		return (
 			<div
-				className={cn(className)}
+				className={cn("inline-flex items-center justify-center", className)}
+				style={{ width: size, height: size }}
 				onMouseEnter={handleMouseEnter}
 				onMouseLeave={handleMouseLeave}
 				{...props}

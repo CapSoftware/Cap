@@ -15,7 +15,7 @@ export const WebRecorderDialogHeader = ({
   const { user, setUpgradeModalOpen } = useDashboardContext();
   const planLabel = user.isPro ? "Pro" : "Free";
   const planClassName = clsx(
-    "ml-2 inline-flex items-center rounded-md px-1.5 py-0.5 text-[0.7rem] font-medium transition-colors",
+    "ml-2 inline-flex items-center rounded-full px-2 text-[0.7rem] font-medium transition-colors",
     user.isPro
       ? "bg-blue-9 text-gray-1"
       : "cursor-pointer bg-gray-3 text-gray-12 hover:bg-gray-4"

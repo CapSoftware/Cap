@@ -9,7 +9,14 @@ import {
   Switch,
 } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeftIcon, CircleHelpIcon, MonitorIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  CircleHelpIcon,
+  CloudUploadIcon,
+  LinkIcon,
+  MonitorIcon,
+  PictureInPictureIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import CogIcon from "@/app/(org)/dashboard/_components/AnimatedIcons/Cog";
@@ -31,6 +38,29 @@ import { useWebRecorder } from "./useWebRecorder";
 const REMEMBER_DEVICES_KEY = "cap-web-recorder-remember-devices";
 const PREFERRED_CAMERA_KEY = "cap-web-recorder-preferred-camera";
 const PREFERRED_MICROPHONE_KEY = "cap-web-recorder-preferred-microphone";
+const HOW_IT_WORKS_ITEMS = [
+  {
+    title: "Uploads while you record",
+    description:
+      "On compatible browsers, your capture uploads in the background while you record. Otherwise, it records first and uploads right after you stop.",
+    Icon: CloudUploadIcon,
+    accent: "bg-blue-3 text-blue-11 dark:bg-blue-4 dark:text-blue-10",
+  },
+  {
+    title: "Instant shareable link",
+    description:
+      "Stopping the recording finalizes the upload immediately so you can copy your link right away.",
+    Icon: LinkIcon,
+    accent: "bg-green-3 text-green-11 dark:bg-green-4 dark:text-green-10",
+  },
+  {
+    title: "Keep your webcam visible",
+    description:
+      "On compatible browsers, selecting a camera opens a picture‑in‑picture window that’s captured when you record fullscreen. We recommend fullscreen to keep it on top. If PiP capture isn’t supported, your camera is limited to the Cap recorder page.",
+    Icon: PictureInPictureIcon,
+    accent: "bg-purple-3 text-purple-11 dark:bg-purple-4 dark:text-purple-10",
+  },
+] as const;
 
 export const WebRecorderDialog = () => {
   const [open, setOpen] = useState(false);
@@ -203,7 +233,10 @@ export const WebRecorderDialog = () => {
     }
 
     try {
-      window.localStorage.setItem(REMEMBER_DEVICES_KEY, next ? "true" : "false");
+      window.localStorage.setItem(
+        REMEMBER_DEVICES_KEY,
+        next ? "true" : "false"
+      );
 
       if (next) {
         if (selectedCameraId) {
@@ -366,7 +399,7 @@ export const WebRecorderDialog = () => {
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="relative flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] text-[--text-primary] bg-gray-2 rounded-lg min-h-[340px]"
+                className="relative flex justify-center flex-col p-[1rem] pt-[2rem] gap-[0.75rem] text-[0.875rem] font-[400] text-[--text-primary] bg-gray-2 rounded-lg min-h-[350px]"
               >
                 {!settingsOpen && (
                   <Button
@@ -374,7 +407,7 @@ export const WebRecorderDialog = () => {
                     variant="outline"
                     size="icon"
                     aria-label="Open recorder settings"
-                    className="absolute right-3 top-3 z-10"
+                    className="absolute right-3 top-3 z-10 !p-0"
                     onClick={() => {
                       setSettingsOpen(true);
                       setHowItWorksOpen(false);
@@ -411,10 +444,11 @@ export const WebRecorderDialog = () => {
                         <div className="flex gap-4 justify-between items-start p-4 text-left rounded-xl border border-gray-3 bg-gray-1 dark:bg-gray-3">
                           <div className="flex flex-col gap-1 text-left">
                             <p className="text-sm font-medium text-gray-12">
-                              Remember selected webcam/microphone
+                              Automatically select your last webcam/microphone
                             </p>
                             <p className="text-xs text-gray-10">
-                              Automatically pick your last camera and mic when available.
+                              If available, the last used camera and mic will be
+                              automatically selected.
                             </p>
                           </div>
                           <Switch
@@ -435,36 +469,49 @@ export const WebRecorderDialog = () => {
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -12 }}
                       transition={{ duration: 0.2, ease: "easeOut" }}
-                      className="absolute inset-0 z-40 flex flex-col gap-4 p-4 border border-gray-3 rounded-lg bg-gray-1 shadow-lg dark:bg-gray-2"
+                      className="absolute inset-0 z-40 flex flex-col gap-5 rounded-lg border border-gray-3 bg-gray-1 p-5 shadow-lg dark:bg-gray-2"
                     >
                       <div className="flex items-center justify-between">
                         <button
                           type="button"
                           onClick={() => setHowItWorksOpen(false)}
-                          className="flex items-center gap-1 text-sm font-medium text-gray-11 transition-colors hover:text-gray-12"
+                          className="flex items-center gap-1.5 text-sm font-medium text-gray-11 transition-colors hover:text-gray-12"
                         >
                           <ArrowLeftIcon className="size-4" />
                           Back
                         </button>
-                        <h2 className="text-sm font-semibold text-gray-12">
+                        <h2 className="text-base font-semibold text-gray-12">
                           How it works
                         </h2>
-                        <span className="w-9 h-9" aria-hidden />
+                        <span className="h-9 w-9" aria-hidden />
                       </div>
-                      <div className="flex flex-col gap-3 text-sm text-gray-11">
-                        <p>
-                          If you&apos;re on a compatible browser, we upload your recording
-                          in the background while you capture.
-                        </p>
-                        <p>
-                          When you stop, we finish processing instantly so you can grab a
-                          shareable link right away.
-                        </p>
-                        <p>
-                          Selecting a camera enables picture-in-picture so your webcam
-                          stays visible during the recording. For the best experience with
-                          picture-in-picture, record in fullscreen.
-                        </p>
+                      <div className="flex-1 min-h-0 overflow-y-auto pr-1 pb-1">
+                        <div className="space-y-4">
+                          {HOW_IT_WORKS_ITEMS.map(
+                            ({ title, description, Icon, accent }) => (
+                              <div
+                                key={title}
+                                className="rounded-xl border border-gray-4 bg-gray-2 p-4 transition-colors hover:border-gray-5 dark:bg-gray-3"
+                              >
+                                <div className="flex items-start gap-4">
+                                  <div
+                                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${accent}`}
+                                  >
+                                    <Icon className="size-5" aria-hidden />
+                                  </div>
+                                  <div className="flex-1 space-y-1.5">
+                                    <h3 className="text-sm font-semibold text-gray-12">
+                                      {title}
+                                    </h3>
+                                    <p className="text-xs leading-relaxed text-gray-11">
+                                      {description}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          )}
+                        </div>
                       </div>
                     </motion.div>
                   )}
@@ -520,10 +567,10 @@ export const WebRecorderDialog = () => {
                     setHowItWorksOpen(true);
                     setSettingsOpen(false);
                   }}
-                  className="flex items-center justify-center gap-1 text-xs font-medium text-blue-11 transition-colors hover:text-blue-12"
+                  className="flex items-center justify-center gap-1 text-xs font-medium transition-colors hover:text-blue-12"
                 >
                   <CircleHelpIcon className="size-3.5" aria-hidden />
-                  How does it work?
+                  How it works (tips)
                 </button>
               </motion.div>
             )}

@@ -146,7 +146,7 @@ export const CameraPreviewWindow = ({
     const maxY = Math.max(0, window.innerHeight - totalHeight);
 
     setPosition((prev) => {
-      const defaultX = WINDOW_PADDING;
+      const defaultX = window.innerWidth - metrics.width - WINDOW_PADDING;
       const defaultY = window.innerHeight - totalHeight - WINDOW_PADDING;
       const nextX = prev?.x ?? defaultX;
       const nextY = prev?.y ?? defaultY;
@@ -496,12 +496,14 @@ export const CameraPreviewWindow = ({
             autoPlay
             playsInline
             muted
+            disablePictureInPicture={false}
+            controlsList="nodownload nofullscreen noremoteplayback"
             className={clsx(
               "absolute inset-0 w-full h-full object-cover pointer-events-none",
               shape === "round" ? "rounded-full" : "rounded-3xl"
             )}
             style={
-              videoDimensions
+              videoDimensions && !isInPictureInPicture
                 ? {
                     transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
                   }
@@ -526,18 +528,21 @@ export const CameraPreviewWindow = ({
               <LoadingSpinner size={32} themeColors />
             </div>
           )}
-          {isPictureInPictureSupported && (
-            <div
-              className={clsx(
-                "absolute left-1/2 bottom-4 flex -translate-x-1/2 transform transition-all",
-                isInPictureInPicture
-                  ? "opacity-100 translate-y-0"
-                  : "pointer-events-none opacity-0 translate-y-2"
-              )}
-            >
-              <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/70 px-3 py-1.5 text-sm font-medium text-white shadow-lg backdrop-blur-sm">
-                <PictureInPicture className="size-4" />
+          {isPictureInPictureSupported && isInPictureInPicture && (
+            <div className="absolute inset-0 flex items-center justify-center z-10">
+              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/60 px-3 py-2 text-xs font-medium text-white/90 shadow-sm backdrop-blur-md whitespace-nowrap transition-all duration-300 ease-out">
                 <span>Picture in Picture active</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleTogglePictureInPicture();
+                  }}
+                  className="flex items-center justify-center size-4 rounded-full hover:bg-white/20 transition-colors"
+                  aria-label="Exit Picture in Picture"
+                >
+                  <X className="size-3" />
+                </button>
               </div>
             </div>
           )}
