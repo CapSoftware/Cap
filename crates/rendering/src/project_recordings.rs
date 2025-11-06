@@ -33,11 +33,18 @@ impl Video {
                 .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
             let rate = stream.avg_frame_rate();
-            let fps = if rate.denominator() != 0 {
+            let mut fps = if rate.denominator() != 0 && rate.numerator() != 0 {
                 rate.numerator() as f64 / rate.denominator() as f64
             } else {
                 0.0
             };
+
+            if fps <= 0.0 {
+                let r_rate = stream.rate();
+                if r_rate.denominator() != 0 && r_rate.numerator() != 0 {
+                    fps = r_rate.numerator() as f64 / r_rate.denominator() as f64;
+                }
+            }
 
             let container_duration = input.duration();
             let mut duration = if container_duration > 0 && container_duration != i64::MIN {
