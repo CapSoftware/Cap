@@ -103,7 +103,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 							)}
 						>
 							<div
-								tabIndex={-1}
 								className={clsx(
 									"flex flex-col items-center cursor-pointer",
 									sidebarCollapsed ? "justify-center" : "justify-between",
@@ -284,7 +283,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 											},
 										}}
 										layoutId="navlinks"
-										id={`navlinks-${item.name}`}
+										id="navlinks"
 										className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
 									/>
 								)}
@@ -412,7 +411,7 @@ const NavItem = ({
 				onMouseLeave={() => {
 					iconRef.current?.stopAnimation();
 				}}
-				prefetch={false}
+				prefetch={true}
 				passHref
 				className={classNames(
 					"relative border border-transparent transition z-3",

@@ -173,7 +173,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 				<Link
 					passHref
 					onClick={() => toggleMobileNav?.()}
-					prefetch={false}
+					prefetch={true}
 					onMouseEnter={() => layersIconRef.current?.startAnimation()}
 					onMouseLeave={() => layersIconRef.current?.stopAnimation()}
 					href="/dashboard/spaces/browse"

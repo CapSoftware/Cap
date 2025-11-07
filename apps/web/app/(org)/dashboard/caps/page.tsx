@@ -128,6 +128,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			and(
 				eq(videos.ownerId, userId),
 				eq(organizations.id, user.activeOrganizationId),
+				isNull(organizations.tombstoneAt),
 			),
 		);
 
@@ -163,12 +164,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
         )
       `,
 			ownerName: users.name,
-			effectiveDate: sql<string>`
-        COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )
-      `,
+			effectiveDate: videos.effectiveCreatedAt,
 			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
@@ -185,6 +181,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 				eq(videos.ownerId, userId),
 				eq(videos.orgId, user.activeOrganizationId),
 				isNull(videos.folderId),
+				isNull(organizations.tombstoneAt),
 			),
 		)
 		.groupBy(
@@ -196,12 +193,7 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.orgId,
 			users.name,
 		)
-		.orderBy(
-			desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-      ${videos.createdAt}
-    )`),
-		)
+		.orderBy(desc(videos.effectiveCreatedAt))
 		.limit(limit)
 		.offset(offset);
 
