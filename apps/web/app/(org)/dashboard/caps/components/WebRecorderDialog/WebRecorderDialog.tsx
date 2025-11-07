@@ -16,6 +16,7 @@ import { CameraPreviewWindow } from "./CameraPreviewWindow";
 import { CameraSelector } from "./CameraSelector";
 import { HowItWorksButton } from "./HowItWorksButton";
 import { HowItWorksPanel } from "./HowItWorksPanel";
+import { InProgressRecordingBar } from "./InProgressRecordingBar";
 import { MicrophoneSelector } from "./MicrophoneSelector";
 import { RecordingButton } from "./RecordingButton";
 import {
@@ -76,6 +77,9 @@ export const WebRecorderDialog = () => {
   }, [recordingMode, selectedCameraId, availableCameras, setSelectedCameraId]);
 
   const {
+    phase,
+    durationMs,
+    hasAudioTrack,
     isRecording,
     isBusy,
     canStartRecording,
@@ -140,6 +144,8 @@ export const WebRecorderDialog = () => {
     setHowItWorksOpen(true);
     setSettingsOpen(false);
   };
+
+  const showInProgressBar = isRecording || isBusy;
 
   return (
     <>
@@ -232,6 +238,14 @@ export const WebRecorderDialog = () => {
           </AnimatePresence>
         </DialogContent>
       </Dialog>
+      {showInProgressBar && (
+        <InProgressRecordingBar
+          phase={phase}
+          durationMs={durationMs}
+          hasAudioTrack={hasAudioTrack}
+          onStop={handleStopClick}
+        />
+      )}
       {selectedCameraId && (
         <CameraPreviewWindow
           cameraId={selectedCameraId}
