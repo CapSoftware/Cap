@@ -83,6 +83,11 @@ export const WebRecorderDialog = () => {
     isRecording,
     isBusy,
     canStartRecording,
+    isBrowserSupported,
+    unsupportedReason,
+    supportsDisplayRecording,
+    supportCheckCompleted,
+    screenCaptureWarning,
     startRecording,
     stopRecording,
     resetState,
@@ -96,6 +101,23 @@ export const WebRecorderDialog = () => {
       setRecordingMode(mode);
     },
   });
+
+  useEffect(() => {
+    if (
+      !supportCheckCompleted ||
+      supportsDisplayRecording ||
+      recordingMode === "camera"
+    ) {
+      return;
+    }
+
+    setRecordingMode("camera");
+  }, [
+    supportCheckCompleted,
+    supportsDisplayRecording,
+    recordingMode,
+    setRecordingMode,
+  ]);
 
   const {
     handlePointerDownOutside,
@@ -196,6 +218,11 @@ export const WebRecorderDialog = () => {
                   disabled={isBusy}
                   onModeChange={setRecordingMode}
                 />
+                {screenCaptureWarning && (
+                  <div className="rounded-md border border-amber-6 bg-amber-3/60 px-3 py-2 text-xs leading-snug text-amber-12">
+                    {screenCaptureWarning}
+                  </div>
+                )}
                 <CameraSelector
                   selectedCameraId={selectedCameraId}
                   availableCameras={availableCameras}
@@ -232,6 +259,11 @@ export const WebRecorderDialog = () => {
                   onStart={startRecording}
                   onStop={handleStopClick}
                 />
+                {!isBrowserSupported && unsupportedReason && (
+                  <div className="rounded-md border border-red-6 bg-red-3/70 px-3 py-2 text-xs leading-snug text-red-12">
+                    {unsupportedReason}
+                  </div>
+                )}
                 <HowItWorksButton onClick={handleHowItWorksOpen} />
               </motion.div>
             )}

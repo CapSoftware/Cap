@@ -163,6 +163,33 @@ const WEBM_MIME_TYPES = [
 	"video/webm",
 ];
 
+type RecorderCapabilities = {
+	assessed: boolean;
+	hasMediaRecorder: boolean;
+	hasUserMedia: boolean;
+	hasDisplayMedia: boolean;
+};
+
+const detectCapabilities = (): RecorderCapabilities => {
+	if (typeof window === "undefined" || typeof navigator === "undefined") {
+		return {
+			assessed: false,
+			hasMediaRecorder: false,
+			hasUserMedia: false,
+			hasDisplayMedia: false,
+		};
+	}
+
+	const mediaDevices = navigator.mediaDevices;
+
+	return {
+		assessed: true,
+		hasMediaRecorder: typeof MediaRecorder !== "undefined",
+		hasUserMedia: typeof mediaDevices?.getUserMedia === "function",
+		hasDisplayMedia: typeof mediaDevices?.getDisplayMedia === "function",
+	};
+};
+
 export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
@@ -177,6 +204,40 @@ export const useWebRecorder = ({
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
+	const [capabilities, setCapabilities] = useState<RecorderCapabilities>(() =>
+		detectCapabilities(),
+	);
+
+	const supportCheckCompleted = capabilities.assessed;
+	const rawCanRecordCamera =
+		capabilities.hasMediaRecorder && capabilities.hasUserMedia;
+	const rawCanRecordDisplay =
+		rawCanRecordCamera && capabilities.hasDisplayMedia;
+	const supportsCameraRecording = supportCheckCompleted
+		? rawCanRecordCamera
+		: true;
+	const supportsDisplayRecording = supportCheckCompleted
+		? rawCanRecordDisplay
+		: true;
+	const requiresDisplayMedia = recordingMode !== "camera";
+	const isBrowserSupported = requiresDisplayMedia
+		? supportsDisplayRecording
+		: supportsCameraRecording;
+	const screenCaptureWarning =
+		supportCheckCompleted &&
+		rawCanRecordCamera &&
+		!capabilities.hasDisplayMedia
+			? "Screen sharing isn't supported in this browser. We'll switch to camera-only recording. Try Chrome, Edge, or our desktop app for screen capture."
+			: null;
+	const unsupportedReason = supportCheckCompleted
+		? !capabilities.hasMediaRecorder
+			? "This browser doesn't support in-browser recording. Try the latest Chrome, Edge, or Safari, or use the desktop app."
+			: !capabilities.hasUserMedia
+			? "Camera and microphone access are unavailable in this browser. Check permissions or switch browsers."
+			: requiresDisplayMedia && !capabilities.hasDisplayMedia
+			? "Screen capture isn't supported in this browser. Switch to Camera only or use Chrome, Edge, or Safari."
+			: null
+		: null;
 
 	const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 	const recordedChunksRef = useRef<Blob[]>([]);
@@ -335,6 +396,10 @@ export const useWebRecorder = ({
 		setHasAudioTrack(false);
 		setUploadStatus(undefined);
 	}, [cleanupStreams, clearTimer, rpc, setUploadStatus, updatePhase]);
+
+	useEffect(() => {
+		setCapabilities(detectCapabilities());
+	}, []);
 
 	useEffect(() => {
 		recordingModeRef.current = recordingMode;
@@ -607,6 +672,14 @@ export const useWebRecorder = ({
 
 		if (recordingMode === "camera" && !selectedCameraId) {
 			toast.error("Select a camera before recording.");
+			return;
+		}
+
+		if (!isBrowserSupported) {
+			const fallbackMessage =
+				unsupportedReason ??
+				"Recording isn't supported in this browser. Try another browser or use the desktop app.";
+			toast.error(fallbackMessage);
 			return;
 		}
 
@@ -1061,6 +1134,9 @@ export const useWebRecorder = ({
 		stopRecordingRef.current = stopRecording;
 	}, [stopRecording]);
 
+	const canStartRecording =
+		Boolean(organisationId) && !isSettingUp && isBrowserSupported;
+
 	return {
 		phase,
 		durationMs,
@@ -1073,9 +1149,14 @@ export const useWebRecorder = ({
 			phase === "creating" ||
 			phase === "converting" ||
 			phase === "uploading",
-		canStartRecording: Boolean(organisationId) && !isSettingUp,
+		canStartRecording,
 		startRecording,
 		stopRecording,
 		resetState,
+		isBrowserSupported,
+		unsupportedReason,
+		supportsDisplayRecording,
+		supportCheckCompleted,
+		screenCaptureWarning,
 	};
 };
