@@ -285,6 +285,9 @@ export const CameraPreviewWindow = ({
 			}
 
 			const currentElement = document.pictureInPictureElement;
+			const hasActiveUserGesture =
+				typeof navigator !== "undefined" &&
+				navigator.userActivation?.isActive;
 
 			if (
 				currentElement &&
@@ -296,6 +299,11 @@ export const CameraPreviewWindow = ({
 
 			if (document.visibilityState === "hidden") {
 				if (currentElement === video) {
+					return;
+				}
+
+				if (!hasActiveUserGesture) {
+					// Browsers reject PiP requests without a direct user gesture, so skip instead of spamming errors.
 					return;
 				}
 
