@@ -20,11 +20,11 @@ swift-rs = { version = "1.0.6", features = ["build"] }
 
 [dependencies]
 tauri = { workspace = true, features = [
-	"macos-private-api",
-	"protocol-asset",
-	"tray-icon",
-	"image-png",
-	"devtools",
+    "macos-private-api",
+    "protocol-asset",
+    "tray-icon",
+    "image-png",
+    "devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
@@ -60,6 +60,7 @@ tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
+regex = "1.10.4"
 rodio = "0.19.0"
 png = "0.17.13"
 device_query = "4.0.1"
@@ -106,22 +107,24 @@ tauri-plugin-sentry = "0.5.0"
 thiserror.workspace = true
 bytes = "1.10.1"
 async-stream = "0.3.6"
+sanitize-filename = "0.6.0"
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
+aho-corasick.workspace = true
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 objc2-app-kit = { version = "0.3.0", features = [
-	"NSWindow",
-	"NSResponder",
-	"NSHapticFeedback",
+    "NSWindow",
+    "NSResponder",
+    "NSHapticFeedback",
 ] }
 cocoa = "0.26.0"
 objc = "0.2.7"
@@ -131,10 +134,10 @@ cidre = { workspace = true }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
-	"Win32_Foundation",
-	"Win32_System",
-	"Win32_UI_WindowsAndMessaging",
-	"Win32_Graphics_Gdi",
+    "Win32_Foundation",
+    "Win32_System",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 windows-sys = { workspace = true }
 
