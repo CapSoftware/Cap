@@ -28,6 +28,8 @@ interface UseWebRecorderOptions {
 	selectedCameraId: string | null;
 	onPhaseChange?: (phase: RecorderPhase) => void;
 	onRecordingSurfaceDetected?: (mode: RecordingMode) => void;
+	onRecordingStart?: () => void;
+	onRecordingStop?: () => void;
 }
 
 const DISPLAY_MEDIA_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
@@ -198,6 +200,8 @@ export const useWebRecorder = ({
 	selectedCameraId,
 	onPhaseChange,
 	onRecordingSurfaceDetected,
+	onRecordingStart,
+	onRecordingStop,
 }: UseWebRecorderOptions) => {
 	const [phase, setPhase] = useState<RecorderPhase>("idle");
 	const [durationMs, setDurationMs] = useState(0);
@@ -248,6 +252,8 @@ export const useWebRecorder = ({
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const timerRef = useRef<number | null>(null);
 	const startTimeRef = useRef<number | null>(null);
+	const pauseStartRef = useRef<number | null>(null);
+	const pausedDurationRef = useRef(0);
 	const dimensionsRef = useRef<{ width?: number; height?: number }>({});
 	const stopPromiseResolverRef = useRef<((blob: Blob) => void) | null>(null);
 	const stopPromiseRejectRef = useRef<((reason?: unknown) => void) | null>(
@@ -322,6 +328,33 @@ export const useWebRecorder = ({
 		}
 	}, []);
 
+	const commitPausedDuration = useCallback((timestamp?: number) => {
+		if (pauseStartRef.current === null) return;
+		const now = timestamp ?? performance.now();
+		pausedDurationRef.current += now - pauseStartRef.current;
+		pauseStartRef.current = null;
+	}, []);
+
+	const syncDurationFromClock = useCallback(
+		(timestamp?: number) => {
+			const startTime = startTimeRef.current;
+			if (startTime === null) {
+				setDurationMs(0);
+				return 0;
+			}
+
+			const now = timestamp ?? performance.now();
+			const pausedPending =
+				pauseStartRef.current !== null ? now - pauseStartRef.current : 0;
+			const totalPaused = pausedDurationRef.current + pausedPending;
+			const elapsed = Math.max(0, now - startTime - totalPaused);
+
+			setDurationMs(elapsed);
+			return elapsed;
+		},
+		[setDurationMs],
+	);
+
 	const notifyDetectedMode = useCallback(
 		(detected: DetectedDisplayRecordingMode | null) => {
 			if (!detected) return;
@@ -395,6 +428,9 @@ export const useWebRecorder = ({
 		setVideoId(null);
 		setHasAudioTrack(false);
 		setUploadStatus(undefined);
+		startTimeRef.current = null;
+		pauseStartRef.current = null;
+		pausedDurationRef.current = 0;
 	}, [cleanupStreams, clearTimer, rpc, setUploadStatus, updatePhase]);
 
 	useEffect(() => {
@@ -423,6 +459,9 @@ export const useWebRecorder = ({
 		recorder.stop();
 		cleanupStreams();
 		clearTimer();
+		pauseStartRef.current = null;
+		pausedDurationRef.current = 0;
+		startTimeRef.current = null;
 
 		return stopPromise;
 	}, [cleanupStreams, clearTimer]);
@@ -884,14 +923,19 @@ export const useWebRecorder = ({
 
 			mediaRecorderRef.current = recorder;
 			recorder.start(useInstantMp4 ? 1000 : 200);
+			onRecordingStart?.();
 
-			startTimeRef.current = performance.now();
+			const now = performance.now();
+			startTimeRef.current = now;
+			pauseStartRef.current = null;
+			pausedDurationRef.current = 0;
 			setDurationMs(0);
 			updatePhase("recording");
 
 			timerRef.current = window.setInterval(() => {
-				if (startTimeRef.current !== null)
-					setDurationMs(performance.now() - startTimeRef.current);
+				if (startTimeRef.current !== null) {
+					syncDurationFromClock();
+				}
 			}, 250);
 		} catch (err) {
 			const orphanVideoId =
@@ -918,14 +962,52 @@ export const useWebRecorder = ({
 		}
 	};
 
-	const stopRecording = useCallback(async () => {
+	const pauseRecording = useCallback(() => {
 		if (phase !== "recording") return;
+		const recorder = mediaRecorderRef.current;
+		if (!recorder || recorder.state !== "recording") return;
+
+		try {
+			const timestamp = performance.now();
+			recorder.pause();
+			pauseStartRef.current = timestamp;
+			syncDurationFromClock(timestamp);
+			updatePhase("paused");
+		} catch (error) {
+			console.error("Failed to pause recording", error);
+			toast.error("Could not pause recording.");
+		}
+	}, [phase, syncDurationFromClock, updatePhase]);
+
+	const resumeRecording = useCallback(() => {
+		if (phase !== "paused") return;
+		const recorder = mediaRecorderRef.current;
+		if (!recorder || recorder.state !== "paused") return;
+
+		try {
+			const timestamp = performance.now();
+			commitPausedDuration(timestamp);
+			recorder.resume();
+			syncDurationFromClock(timestamp);
+			updatePhase("recording");
+		} catch (error) {
+			console.error("Failed to resume recording", error);
+			toast.error("Could not resume recording.");
+		}
+	}, [commitPausedDuration, phase, syncDurationFromClock, updatePhase]);
+
+	const stopRecording = useCallback(async () => {
+		if (phase !== "recording" && phase !== "paused") return;
 
 		const orgId = organisationId;
 		if (!orgId) {
 			updatePhase("error");
 			return;
 		}
+
+		const timestamp = performance.now();
+		commitPausedDuration(timestamp);
+		const recordedDurationMs = syncDurationFromClock(timestamp);
 
 		const brandedOrgId = Organisation.OrganisationId.make(orgId);
 		let thumbnailBlob: Blob | null = null;
@@ -935,12 +1017,16 @@ export const useWebRecorder = ({
 		const useInstantMp4 = Boolean(instantUploader);
 
 		try {
+			onRecordingStop?.();
 			updatePhase("creating");
 
 			const blob = await stopRecordingInternal();
 			if (!blob) throw new Error("No recording available");
 
-			const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
+			const durationSeconds = Math.max(
+				1,
+				Math.round(recordedDurationMs / 1000),
+			);
 			const width = dimensionsRef.current.width;
 			const height = dimensionsRef.current.height;
 			const resolution = width && height ? `${width}x${height}` : undefined;
@@ -1116,7 +1202,6 @@ export const useWebRecorder = ({
 	}, [
 		phase,
 		organisationId,
-		durationMs,
 		hasAudioTrack,
 		videoId,
 		updatePhase,
@@ -1128,6 +1213,9 @@ export const useWebRecorder = ({
 		stopRecordingInternal,
 		captureThumbnail,
 		queryClient,
+		onRecordingStop,
+		commitPausedDuration,
+		syncDurationFromClock,
 	]);
 
 	useEffect(() => {
@@ -1136,6 +1224,14 @@ export const useWebRecorder = ({
 
 	const canStartRecording =
 		Boolean(organisationId) && !isSettingUp && isBrowserSupported;
+	const isPaused = phase === "paused";
+	const isRecordingActive = phase === "recording" || isPaused;
+	const isBusyPhase =
+		phase === "recording" ||
+		phase === "paused" ||
+		phase === "creating" ||
+		phase === "converting" ||
+		phase === "uploading";
 
 	return {
 		phase,
@@ -1143,14 +1239,13 @@ export const useWebRecorder = ({
 		videoId,
 		hasAudioTrack,
 		isSettingUp,
-		isRecording: phase === "recording",
-		isBusy:
-			phase === "recording" ||
-			phase === "creating" ||
-			phase === "converting" ||
-			phase === "uploading",
+		isRecording: isRecordingActive,
+		isPaused,
+		isBusy: isBusyPhase,
 		canStartRecording,
 		startRecording,
+		pauseRecording,
+		resumeRecording,
 		stopRecording,
 		resetState,
 		isBrowserSupported,

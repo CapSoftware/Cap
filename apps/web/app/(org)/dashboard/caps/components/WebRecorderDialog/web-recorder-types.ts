@@ -1,6 +1,7 @@
 export type RecorderPhase =
 	| "idle"
 	| "recording"
+	| "paused"
 	| "creating"
 	| "converting"
 	| "uploading"

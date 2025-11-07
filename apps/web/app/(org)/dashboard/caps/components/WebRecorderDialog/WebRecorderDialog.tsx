@@ -9,7 +9,7 @@ import {
 } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import { MonitorIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
 import { CameraPreviewWindow } from "./CameraPreviewWindow";
@@ -42,6 +42,47 @@ export const WebRecorderDialog = () => {
   const [cameraSelectOpen, setCameraSelectOpen] = useState(false);
   const [micSelectOpen, setMicSelectOpen] = useState(false);
   const dialogContentRef = useRef<HTMLDivElement>(null);
+  const startSoundRef = useRef<HTMLAudioElement | null>(null);
+  const stopSoundRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const startSound = new Audio("/sounds/start-recording.ogg");
+    startSound.preload = "auto";
+    const stopSound = new Audio("/sounds/stop-recording.ogg");
+    stopSound.preload = "auto";
+
+    startSoundRef.current = startSound;
+    stopSoundRef.current = stopSound;
+
+    return () => {
+      startSound.pause();
+      stopSound.pause();
+      startSoundRef.current = null;
+      stopSoundRef.current = null;
+    };
+  }, []);
+
+  const playAudio = useCallback((audio: HTMLAudioElement | null) => {
+    if (!audio) {
+      return;
+    }
+    audio.currentTime = 0;
+    void audio.play().catch(() => {
+      /* ignore */
+    });
+  }, []);
+
+  const handleRecordingStartSound = useCallback(() => {
+    playAudio(startSoundRef.current);
+  }, [playAudio]);
+
+  const handleRecordingStopSound = useCallback(() => {
+    playAudio(stopSoundRef.current);
+  }, [playAudio]);
 
   const { activeOrganization } = useDashboardContext();
   const organisationId = activeOrganization?.organization.id;
@@ -89,6 +130,8 @@ export const WebRecorderDialog = () => {
     supportCheckCompleted,
     screenCaptureWarning,
     startRecording,
+    pauseRecording,
+    resumeRecording,
     stopRecording,
     resetState,
   } = useWebRecorder({
@@ -100,6 +143,8 @@ export const WebRecorderDialog = () => {
     onRecordingSurfaceDetected: (mode) => {
       setRecordingMode(mode);
     },
+    onRecordingStart: handleRecordingStartSound,
+    onRecordingStop: handleRecordingStopSound,
   });
 
   useEffect(() => {
@@ -276,6 +321,8 @@ export const WebRecorderDialog = () => {
           durationMs={durationMs}
           hasAudioTrack={hasAudioTrack}
           onStop={handleStopClick}
+          onPause={pauseRecording}
+          onResume={resumeRecording}
         />
       )}
       {selectedCameraId && (

@@ -6,6 +6,7 @@ import {
   MicOff,
   MoreVertical,
   PauseCircle,
+  PlayCircle,
   RotateCcw,
   StopCircle,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import type { RecorderPhase } from "./web-recorder-types";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
   recording: "Recording",
+  paused: "Paused",
   creating: "Finishing up",
   converting: "Converting",
   uploading: "Uploading",
@@ -45,6 +47,8 @@ interface InProgressRecordingBarProps {
   durationMs: number;
   hasAudioTrack: boolean;
   onStop: () => void | Promise<void>;
+  onPause?: () => void | Promise<void>;
+  onResume?: () => void | Promise<void>;
 }
 
 const DRAG_PADDING = 12;
@@ -54,6 +58,8 @@ export const InProgressRecordingBar = ({
   durationMs,
   hasAudioTrack,
   onStop,
+  onPause,
+  onResume,
 }: InProgressRecordingBarProps) => {
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 24 });
@@ -163,22 +169,36 @@ export const InProgressRecordingBar = ({
     return null;
   }
 
-  const statusText =
-    phase === "recording"
-      ? formatDuration(durationMs)
-      : phaseMessages[phase] ?? "Processing";
+  const isPaused = phase === "paused";
+  const canStop = phase === "recording" || isPaused;
+  const showTimer = phase === "recording" || isPaused;
+  const statusText = showTimer
+    ? formatDuration(durationMs)
+    : phaseMessages[phase] ?? "Processing";
 
   const handleStop = () => {
     onStop();
   };
 
-  const handlePause = () => {
-    console.log("Pause recording clicked (not implemented yet)");
+  const handlePauseToggle = () => {
+    if (isPaused) {
+      if (!onResume) return;
+      void onResume();
+      return;
+    }
+
+    if (phase === "recording" && onPause) {
+      void onPause();
+    }
   };
 
   const handleRestart = () => {
     console.log("Restart recording clicked (not implemented yet)");
   };
+
+  const canTogglePause =
+    (phase === "recording" && Boolean(onPause)) ||
+    (isPaused && Boolean(onResume));
 
   return createPortal(
     <div
@@ -198,7 +218,7 @@ export const InProgressRecordingBar = ({
             type="button"
             data-no-drag
             onClick={handleStop}
-            disabled={phase !== "recording"}
+            disabled={!canStop}
             className="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.35rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
           >
             <StopCircle className="size-5" />
@@ -228,8 +248,17 @@ export const InProgressRecordingBar = ({
               )}
             </div>
 
-            <ActionButton data-no-drag onClick={handlePause}>
-              <PauseCircle className="size-5" />
+            <ActionButton
+              data-no-drag
+              onClick={handlePauseToggle}
+              disabled={!canTogglePause}
+              aria-label={isPaused ? "Resume recording" : "Pause recording"}
+            >
+              {isPaused ? (
+                <PlayCircle className="size-5" />
+              ) : (
+                <PauseCircle className="size-5" />
+              )}
             </ActionButton>
             <ActionButton data-no-drag onClick={handleRestart}>
               <RotateCcw className="size-5" />
