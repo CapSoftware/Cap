@@ -12,6 +12,7 @@ import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
 import type { RecordingMode } from "./RecordingModeSelector";
+import { InstantMp4Uploader, initiateMultipartUpload } from "./instant-mp4-uploader";
 import type {
 	PresignedPost,
 	RecorderErrorEvent,
@@ -150,6 +151,18 @@ const shouldRetryDisplayMediaWithoutPreferences = (error: unknown) => {
 	return error instanceof TypeError;
 };
 
+const MP4_MIME_TYPES = [
+	"video/mp4;codecs=\"avc1.42E01E,mp4a.40.2\"",
+	"video/mp4;codecs=\"avc1.4d401e,mp4a.40.2\"",
+	"video/mp4",
+];
+
+const WEBM_MIME_TYPES = [
+	"video/webm;codecs=vp9,opus",
+	"video/webm;codecs=vp8,opus",
+	"video/webm",
+];
+
 export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
@@ -183,6 +196,14 @@ export const useWebRecorder = ({
 	const recordingModeRef = useRef(recordingMode);
 	const detectionTimeoutsRef = useRef<number[]>([]);
 	const detectionCleanupRef = useRef<Array<() => void>>([]);
+	const instantUploaderRef = useRef<InstantMp4Uploader | null>(null);
+	const videoCreationRef = useRef<
+		{ id: VideoId; upload: PresignedPost; shareUrl: string }
+		| null
+	>(null);
+	const totalRecordedBytesRef = useRef(0);
+	const instantMp4ActiveRef = useRef(false);
+	const pendingInstantVideoIdRef = useRef<VideoId | null>(null);
 
 	const rpc = useRpcClient();
 	const router = useRouter();
@@ -292,12 +313,28 @@ export const useWebRecorder = ({
 		clearTimer();
 		mediaRecorderRef.current = null;
 		recordedChunksRef.current = [];
+		totalRecordedBytesRef.current = 0;
+		instantMp4ActiveRef.current = false;
+		if (instantUploaderRef.current) {
+			void instantUploaderRef.current.cancel();
+		}
+		instantUploaderRef.current = null;
+		videoCreationRef.current = null;
+		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
+		pendingInstantVideoIdRef.current = null;
+		if (pendingInstantVideoId) {
+			EffectRuntime.runPromise(rpc.VideoDelete(pendingInstantVideoId)).catch(
+				() => {
+					/* ignore */
+				},
+			);
+		}
 		setDurationMs(0);
 		updatePhase("idle");
 		setVideoId(null);
 		setHasAudioTrack(false);
 		setUploadStatus(undefined);
-	}, [cleanupStreams, clearTimer, setUploadStatus, updatePhase]);
+	}, [cleanupStreams, clearTimer, rpc, setUploadStatus, updatePhase]);
 
 	useEffect(() => {
 		recordingModeRef.current = recordingMode;
@@ -328,6 +365,11 @@ export const useWebRecorder = ({
 	const onRecorderDataAvailable = useCallback((event: BlobEvent) => {
 		if (event.data && event.data.size > 0) {
 			recordedChunksRef.current.push(event.data);
+			totalRecordedBytesRef.current += event.data.size;
+			instantUploaderRef.current?.handleChunk(
+				event.data,
+				totalRecordedBytesRef.current,
+			);
 		}
 	}, []);
 
@@ -682,18 +724,74 @@ export const useWebRecorder = ({
 			]);
 
 			mixedStreamRef.current = mixedStream;
-			setHasAudioTrack(mixedStream.getAudioTracks().length > 0);
+			const hasAudio = mixedStream.getAudioTracks().length > 0;
+			setHasAudioTrack(hasAudio);
 
 			recordedChunksRef.current = [];
+			totalRecordedBytesRef.current = 0;
+			instantUploaderRef.current = null;
+			instantMp4ActiveRef.current = false;
 
-			const mimeTypeCandidates = [
-				"video/webm;codecs=vp9,opus",
-				"video/webm;codecs=vp8,opus",
-				"video/webm",
-			];
-			const mimeType = mimeTypeCandidates.find((candidate) =>
+			const supportedMp4MimeType = MP4_MIME_TYPES.find((candidate) =>
 				MediaRecorder.isTypeSupported(candidate),
 			);
+			const fallbackMimeType = WEBM_MIME_TYPES.find((candidate) =>
+				MediaRecorder.isTypeSupported(candidate),
+			);
+			const mimeType = supportedMp4MimeType ?? fallbackMimeType;
+			const useInstantMp4 = Boolean(supportedMp4MimeType);
+			instantMp4ActiveRef.current = useInstantMp4;
+
+			if (useInstantMp4) {
+				const width = dimensionsRef.current.width;
+				const height = dimensionsRef.current.height;
+				const resolution =
+					width && height ? `${width}x${height}` : undefined;
+				const creation = await EffectRuntime.runPromise(
+					rpc.VideoInstantCreate({
+						orgId: Organisation.OrganisationId.make(organisationId),
+						folderId: Option.none(),
+						resolution,
+						width,
+						height,
+						videoCodec: "h264",
+						audioCodec: hasAudio ? "aac" : undefined,
+						supportsUploadProgress: true,
+					}),
+				);
+				videoCreationRef.current = {
+					id: creation.id,
+					upload: creation.upload,
+					shareUrl: creation.shareUrl,
+				};
+				setVideoId(creation.id);
+				pendingInstantVideoIdRef.current = creation.id;
+
+				let uploadId: string | null = null;
+				try {
+					uploadId = await initiateMultipartUpload(creation.id);
+				} catch (initError) {
+					await EffectRuntime.runPromise(
+						rpc.VideoDelete(creation.id),
+					).catch(() => {
+						/* ignore */
+					});
+					pendingInstantVideoIdRef.current = null;
+					throw initError;
+				}
+
+				instantUploaderRef.current = new InstantMp4Uploader({
+					videoId: creation.id,
+					uploadId,
+					mimeType: supportedMp4MimeType ?? "",
+					setUploadStatus,
+					sendProgressUpdate: (uploaded, total) =>
+						sendProgressUpdate(creation.id, uploaded, total),
+				});
+			} else {
+				videoCreationRef.current = null;
+				pendingInstantVideoIdRef.current = null;
+			}
 
 			const recorder = new MediaRecorder(
 				mixedStream,
@@ -712,7 +810,7 @@ export const useWebRecorder = ({
 			firstTrack?.addEventListener("ended", handleVideoEnded, { once: true });
 
 			mediaRecorderRef.current = recorder;
-			recorder.start(200);
+			recorder.start(useInstantMp4 ? 1000 : 200);
 
 			startTimeRef.current = performance.now();
 			setDurationMs(0);
@@ -723,6 +821,22 @@ export const useWebRecorder = ({
 					setDurationMs(performance.now() - startTimeRef.current);
 			}, 250);
 		} catch (err) {
+			const orphanVideoId =
+				instantMp4ActiveRef.current && videoCreationRef.current?.id
+					? videoCreationRef.current.id
+					: null;
+			if (orphanVideoId) {
+				instantUploaderRef.current = null;
+				instantMp4ActiveRef.current = false;
+				videoCreationRef.current = null;
+				pendingInstantVideoIdRef.current = null;
+				await EffectRuntime.runPromise(rpc.VideoDelete(orphanVideoId)).catch(
+					() => {
+						/* ignore */
+					},
+				);
+			}
+
 			console.error("Failed to start recording", err);
 			toast.error("Could not start recording.");
 			resetState();
@@ -734,7 +848,6 @@ export const useWebRecorder = ({
 	const stopRecording = useCallback(async () => {
 		if (phase !== "recording") return;
 
-		let createdVideoId: VideoId | null = null;
 		const orgId = organisationId;
 		if (!orgId) {
 			updatePhase("error");
@@ -742,17 +855,17 @@ export const useWebRecorder = ({
 		}
 
 		const brandedOrgId = Organisation.OrganisationId.make(orgId);
-
 		let thumbnailBlob: Blob | null = null;
 		let thumbnailPreviewUrl: string | undefined;
+		let createdVideoId: VideoId | null = videoCreationRef.current?.id ?? null;
+		const instantUploader = instantUploaderRef.current;
+		const useInstantMp4 = Boolean(instantUploader);
 
 		try {
 			updatePhase("creating");
 
 			const blob = await stopRecordingInternal();
-			if (!blob) {
-				throw new Error("No recording available");
-			}
+			if (!blob) throw new Error("No recording available");
 
 			const durationSeconds = Math.max(1, Math.round(durationMs / 1000));
 			const width = dimensionsRef.current.width;
@@ -761,24 +874,41 @@ export const useWebRecorder = ({
 
 			setUploadStatus({ status: "creating" });
 
-			const result = await EffectRuntime.runPromise(
-				rpc.VideoInstantCreate({
-					orgId: brandedOrgId,
-					folderId: Option.none(),
-					resolution,
-					durationSeconds,
-					width,
-					height,
-					videoCodec: "h264",
-					audioCodec: hasAudioTrack ? "aac" : undefined,
-					supportsUploadProgress: true,
-				}),
-			);
+			let creationResult = videoCreationRef.current;
+			if (!creationResult) {
+				const result = await EffectRuntime.runPromise(
+					rpc.VideoInstantCreate({
+						orgId: brandedOrgId,
+						folderId: Option.none(),
+						resolution,
+						durationSeconds,
+						width,
+						height,
+						videoCodec: "h264",
+						audioCodec: hasAudioTrack ? "aac" : undefined,
+						supportsUploadProgress: true,
+					}),
+				);
+				creationResult = {
+					id: result.id,
+					upload: result.upload,
+					shareUrl: result.shareUrl,
+				};
+				videoCreationRef.current = creationResult;
+				setVideoId(result.id);
+			}
 
-			createdVideoId = result.id;
-			setVideoId(result.id);
+			createdVideoId = creationResult.id;
 
-			const mp4Blob = await convertToMp4(blob, hasAudioTrack, result.id);
+			let mp4Blob: Blob;
+			if (useInstantMp4) {
+				mp4Blob =
+					blob.type === "video/mp4"
+						? blob
+						: new File([blob], "result.mp4", { type: "video/mp4" });
+			} else {
+				mp4Blob = await convertToMp4(blob, hasAudioTrack, creationResult.id);
+			}
 
 			thumbnailBlob = await captureThumbnail(mp4Blob);
 			thumbnailPreviewUrl = thumbnailBlob
@@ -788,22 +918,37 @@ export const useWebRecorder = ({
 			updatePhase("uploading");
 			setUploadStatus({
 				status: "uploadingVideo",
-				capId: result.id,
+				capId: creationResult.id,
 				progress: 0,
 				thumbnailUrl: thumbnailPreviewUrl,
 			});
 
-			await uploadRecording(
-				mp4Blob,
-				result.upload,
-				result.id,
-				thumbnailPreviewUrl,
-			);
+			if (useInstantMp4 && instantUploader) {
+				instantUploader.setThumbnailUrl(thumbnailPreviewUrl);
+				await instantUploader.finalize({
+					finalBlob: mp4Blob,
+					durationSeconds,
+					width,
+					height,
+					thumbnailUrl: thumbnailPreviewUrl,
+				});
+				instantUploaderRef.current = null;
+				instantMp4ActiveRef.current = false;
+			} else {
+				await uploadRecording(
+					mp4Blob,
+					creationResult.upload,
+					creationResult.id,
+					thumbnailPreviewUrl,
+				);
+			}
+
+			pendingInstantVideoIdRef.current = null;
 
 			if (thumbnailBlob) {
 				try {
 					const screenshotData = await createVideoAndGetUploadUrl({
-						videoId: result.id,
+						videoId: creationResult.id,
 						isScreenshot: true,
 						orgId: brandedOrgId,
 					});
@@ -822,7 +967,7 @@ export const useWebRecorder = ({
 
 					setUploadStatus({
 						status: "uploadingThumbnail",
-						capId: result.id,
+						capId: creationResult.id,
 						progress: 90,
 					});
 
@@ -835,7 +980,7 @@ export const useWebRecorder = ({
 								const percent = 90 + (event.loaded / event.total) * 10;
 								setUploadStatus({
 									status: "uploadingThumbnail",
-									capId: result.id,
+									capId: creationResult.id,
 									progress: percent,
 								});
 							}
@@ -861,7 +1006,7 @@ export const useWebRecorder = ({
 					});
 
 					queryClient.refetchQueries({
-						queryKey: ThumbnailRequest.queryKey(result.id),
+						queryKey: ThumbnailRequest.queryKey(creationResult.id),
 					});
 				} catch (thumbnailError) {
 					console.error("Failed to upload thumbnail", thumbnailError);
@@ -872,6 +1017,9 @@ export const useWebRecorder = ({
 			setUploadStatus(undefined);
 			updatePhase("completed");
 			toast.success("Recording uploaded");
+			if (creationResult.shareUrl) {
+				window.open(creationResult.shareUrl, "_blank", "noopener,noreferrer");
+			}
 			router.refresh();
 		} catch (err) {
 			console.error("Failed to process recording", err);
@@ -883,6 +1031,9 @@ export const useWebRecorder = ({
 				EffectRuntime.runPromise(rpc.VideoDelete(idToDelete)).catch(() => {
 					/* ignore */
 				});
+				if (pendingInstantVideoIdRef.current === idToDelete) {
+					pendingInstantVideoIdRef.current = null;
+				}
 			}
 		} finally {
 			if (thumbnailPreviewUrl) {
