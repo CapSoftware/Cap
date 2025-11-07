@@ -26,7 +26,7 @@ pub struct EditorInstance {
         watch::Receiver<ProjectConfiguration>,
     ),
     // ws_shutdown_token: CancellationToken,
-    pub segments: Arc<Vec<Segment>>,
+    pub segment_medias: Arc<Vec<SegmentMedia>>,
     meta: RecordingMeta,
 }
 
@@ -81,7 +81,7 @@ impl EditorInstance {
             on_state_change: Box::new(on_state_change),
             preview_tx,
             project_config: watch::channel(project),
-            segments: Arc::new(segments),
+            segment_medias: Arc::new(segments),
             meta: recording_meta,
         });
 
@@ -146,7 +146,7 @@ impl EditorInstance {
             let start_frame_number = state.playhead_position;
 
             let playback_handle = match (playback::Playback {
-                segments: self.segments.clone(),
+                segment_medias: self.segment_medias.clone(),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 start_frame_number,
@@ -207,17 +207,20 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
-                let Some((segment_time, segment_i)) =
+                let Some((segment_time, segment)) =
                     project.get_segment_time(frame_number as f64 / fps as f64)
                 else {
                     continue;
                 };
 
-                let segment = &self.segments[segment_i as usize];
-                let clip_config = project.clips.iter().find(|v| v.index == segment_i);
+                let segment_medias = &self.segment_medias[segment.recording_clip as usize];
+                let clip_config = project
+                    .clips
+                    .iter()
+                    .find(|v| v.index == segment.recording_clip);
                 let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
 
-                if let Some(segment_frames) = segment
+                if let Some(segment_frames) = segment_medias
                     .decoders
                     .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
                     .await
@@ -228,11 +231,11 @@ impl EditorInstance {
                         frame_number,
                         fps,
                         resolution_base,
-                        &segment.cursor,
+                        &segment_medias.cursor,
                         &segment_frames,
                     );
                     self.renderer
-                        .render_frame(segment_frames, uniforms, segment.cursor.clone())
+                        .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
                         .await;
                 }
             }
@@ -278,7 +281,7 @@ pub struct EditorState {
     pub preview_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub struct Segment {
+pub struct SegmentMedia {
     pub audio: Option<Arc<AudioData>>,
     pub system_audio: Option<Arc<AudioData>>,
     pub cursor: Arc<CursorEvents>,
@@ -288,7 +291,7 @@ pub struct Segment {
 pub async fn create_segments(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
-) -> Result<Vec<Segment>, String> {
+) -> Result<Vec<SegmentMedia>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
             let audio = s
@@ -313,7 +316,7 @@ pub async fn create_segments(
             .await
             .map_err(|e| format!("SingleSegment / {e}"))?;
 
-            Ok(vec![Segment {
+            Ok(vec![SegmentMedia {
                 audio,
                 system_audio: None,
                 cursor: Default::default(),
@@ -358,7 +361,7 @@ pub async fn create_segments(
                 .await
                 .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
 
-                segments.push(Segment {
+                segments.push(SegmentMedia {
                     audio,
                     system_audio,
                     cursor,
