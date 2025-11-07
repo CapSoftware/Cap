@@ -25,7 +25,6 @@ const ACTION_TEXT = {
 	startInstantRecording: "Start instant recording",
 	restartRecording: "Restart recording",
 	stopRecording: "Stop recording",
-	// takeScreenshot: "Take Screenshot",
 	openRecordingPicker: "Open recording picker",
 	openRecordingPickerDisplay: "Record display",
 	openRecordingPickerWindow: "Record window",

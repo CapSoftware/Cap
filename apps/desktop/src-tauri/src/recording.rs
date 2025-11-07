@@ -1310,7 +1310,7 @@ fn project_config_from_recording(
         .iter()
         .enumerate()
         .map(|(i, segment)| TimelineSegment {
-            recording_segment: i as u32,
+            recording_clip: i as u32,
             start: 0.0,
             end: segment.duration(),
             timescale: 1.0,

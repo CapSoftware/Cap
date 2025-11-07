@@ -11,6 +11,7 @@ pub use macos::*;
 use tracing::instrument;
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(isize)]
 pub enum HapticPattern {
     Alignment = 0,
@@ -20,6 +21,7 @@ pub enum HapticPattern {
 }
 
 #[derive(Debug, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 #[repr(usize)]
 pub enum HapticPerformanceTime {
     Default = 0,
@@ -51,4 +53,24 @@ pub fn perform_haptic_feedback(
 
     #[cfg(not(target_os = "macos"))]
     Err("Haptics are only supported on macOS.".into())
+}
+
+/// Check if system audio capture is supported on the current platform and OS version.
+/// On macOS, system audio capture requires macOS 13.0 or later.
+/// On Windows/Linux, this may have different requirements.
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub fn is_system_audio_capture_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        scap_screencapturekit::is_system_audio_supported()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // On Windows/Linux, we assume system audio capture is available
+        // This can be refined later based on platform-specific requirements
+        true
+    }
 }

@@ -224,14 +224,13 @@ export function ClipTrack(
 
 					const relativeSegment = createMemo(() => {
 						const ds = startHandleDrag();
-						const offset = ds ? ds.offset / segment.timescale : 0;
+						const offset = ds?.offset ?? 0;
 
 						return {
 							start: Math.max(prevDuration() + offset, 0),
 							end:
 								prevDuration() +
-								offset +
-								(segment.end - segment.start) / segment.timescale,
+								(offset + (segment.end - segment.start)) / segment.timescale,
 							timescale: segment.timescale,
 							recordingSegment: segment.recordingSegment,
 						};
@@ -296,9 +295,7 @@ export function ClipTrack(
 									<div
 										class="absolute w-0 z-10 h-full *:absolute"
 										style={{
-											transform: `translateX(${
-												i() === 0 ? segmentX() : segmentX()
-											}px)`,
+											transform: `translateX(${segmentX()}px)`,
 										}}
 									>
 										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
@@ -479,12 +476,14 @@ export function ClipTrack(
 									}
 								}}
 							>
-								<WaveformCanvas
-									micWaveform={micWaveform()}
-									systemWaveform={systemAudioWaveform()}
-									segment={segment}
-									secsPerPixel={secsPerPixel()}
-								/>
+								{segment.timescale === 1 && (
+									<WaveformCanvas
+										micWaveform={micWaveform()}
+										systemWaveform={systemAudioWaveform()}
+										segment={segment}
+										secsPerPixel={secsPerPixel()}
+									/>
+								)}
 
 								<Markings segment={segment} prevDuration={prevDuration()} />
 
@@ -594,6 +593,11 @@ export function ClipTrack(
 													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
 														<IconLucideClock class="size-3.5" />{" "}
 														{formatTime(segment.end - segment.start)}
+														<Show when={segment.timescale !== 1}>
+															<div class="w-0.5" />
+															<IconLucideFastForward class="size-3" />
+															{segment.timescale}x
+														</Show>
 													</div>
 												</div>
 											</Show>
@@ -698,9 +702,7 @@ export function ClipTrack(
 										<div
 											class="absolute w-0 z-10 h-full *:absolute"
 											style={{
-												transform: `translateX(${
-													segmentX() + segmentWidth()
-												}px)`,
+												transform: `translateX(${segmentX() + segmentWidth()}px)`,
 											}}
 										>
 											<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />

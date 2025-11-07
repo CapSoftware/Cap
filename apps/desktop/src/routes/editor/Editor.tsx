@@ -1,10 +1,12 @@
 import { Button } from "@cap/ui-solid";
+import { NumberField } from "@kobalte/core/number-field";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { cx } from "cva";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Menu } from "@tauri-apps/api/menu";
 import {
 	createEffect,
 	createMemo,
@@ -15,12 +17,19 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-
-import Cropper, { cropToFloor } from "~/components/Cropper";
+import { Transition } from "solid-transition-group";
+import {
+	CROP_ZERO,
+	type CropBounds,
+	Cropper,
+	type CropperRef,
+	createCropOptionsMenuItems,
+	type Ratio,
+} from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
-import Tooltip from "~/components/Tooltip";
+import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { type Crop, events } from "~/utils/tauri";
+import { events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -114,7 +123,7 @@ function Inner() {
 		<>
 			<Header />
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 min-h-0 gap-2 pb-4 w-full leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
@@ -293,20 +302,72 @@ function Dialogs() {
 							{(dialog) => {
 								const { setProject: setState, editorInstance } =
 									useEditorContext();
-								const [crop, setCrop] = createStore<Crop>({
-									position: dialog().position,
-									size: dialog().size,
-								});
-								const [cropOptions, setCropOptions] = makePersisted(
-									createStore({
-										showGrid: false,
-									}),
-									{ name: "cropOptionsState" },
-								);
-
 								const display = editorInstance.recordings.segments[0].display;
 
-								const adjustedCrop = createMemo(() => cropToFloor(crop));
+								let cropperRef: CropperRef | undefined;
+								const [crop, setCrop] = createSignal(CROP_ZERO);
+								const [aspect, setAspect] = createSignal<Ratio | null>(null);
+
+								const initialBounds = {
+									x: dialog().position.x,
+									y: dialog().position.y,
+									width: dialog().size.x,
+									height: dialog().size.y,
+								};
+
+								const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
+									createSignal(true),
+									{ name: "editorCropSnapToRatio" },
+								);
+
+								async function showCropOptionsMenu(
+									e: UIEvent,
+									positionAtCursor = false,
+								) {
+									e.preventDefault();
+									const items = createCropOptionsMenuItems({
+										aspect: aspect(),
+										snapToRatioEnabled: snapToRatio(),
+										onAspectSet: setAspect,
+										onSnapToRatioSet: setSnapToRatioEnabled,
+									});
+									const menu = await Menu.new({ items });
+									let pos: LogicalPosition | undefined;
+									if (!positionAtCursor) {
+										const rect = (
+											e.target as HTMLDivElement
+										).getBoundingClientRect();
+										pos = new LogicalPosition(rect.x, rect.y + 40);
+									}
+									await menu.popup(pos);
+									await menu.close();
+								}
+
+								function BoundInput(props: {
+									field: keyof CropBounds;
+									min?: number;
+									max?: number;
+								}) {
+									return (
+										<NumberField
+											value={crop()[props.field]}
+											minValue={props.min}
+											maxValue={props.max}
+											onRawValueChange={(v) => {
+												cropperRef?.setCropProperty(props.field, v);
+											}}
+											changeOnWheel={true}
+											format={false}
+										>
+											<NumberField.Input
+												class="rounded-[0.5rem] bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-[0.5rem] w-full text-[0.875rem] outline-none text-gray-12"
+												onKeyDown={composeEventHandlers<HTMLInputElement>([
+													(e) => e.stopPropagation(),
+												])}
+											/>
+										</NumberField>
+									);
+								}
 
 								return (
 									<>
@@ -315,109 +376,78 @@ function Dialogs() {
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
 													<span>Size</span>
 													<div class="w-[3.25rem]">
-														<Input
-															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().size.x}
-															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	size: {
-																		...c.size,
-																		x: Number(e.currentTarget.value),
-																	},
-																}))
-															}
-														/>
+														<BoundInput field="width" max={display.width} />
 													</div>
-													<span>x</span>
+													<span>×</span>
 													<div class="w-[3.25rem]">
-														<Input
-															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().size.y}
-															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	size: {
-																		...c.size,
-																		y: Number(e.currentTarget.value),
-																	},
-																}))
-															}
-														/>
+														<BoundInput field="height" max={display.height} />
 													</div>
 												</div>
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
 													<span>Position</span>
 													<div class="w-[3.25rem]">
-														<Input
-															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().position.x}
-															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	position: {
-																		...c.position,
-																		x: Number(e.currentTarget.value),
-																	},
-																}))
-															}
-														/>
+														<BoundInput field="x" />
 													</div>
-													<span>x</span>
+													<span>×</span>
 													<div class="w-[3.25rem]">
-														<Input
-															class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().position.y}
-															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	position: {
-																		...c.position,
-																		y: Number(e.currentTarget.value),
-																	},
-																}))
-															}
-														/>
+														<BoundInput field="y" />
 													</div>
 												</div>
 											</div>
 											<div class="flex flex-row gap-3 justify-end items-center w-full">
-												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
-													<Tooltip content="Rule of Thirds">
-														<Button
-															variant="gray"
-															size="xs"
-															class={cx(
-																"flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",
-																cropOptions.showGrid
-																	? "border-blue-9"
-																	: "border-transparent",
-															)}
-															onClick={() =>
-																setCropOptions("showGrid", (s) => !s)
-															}
+												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11"></div>
+
+												<Button
+													variant="white"
+													size="xs"
+													class="flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border focus:border-blue-9"
+													onMouseDown={showCropOptionsMenu}
+													onClick={showCropOptionsMenu}
+												>
+													<div class="relative pointer-events-none size-4">
+														<Show when={!aspect()}>
+															<IconLucideRatio class="group-active:scale-90 transition-transform size-4 pointer-events-none *:pointer-events-none" />
+														</Show>
+														<Transition
+															enterClass="scale-50 opacity-0 blur-md"
+															enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+															enterToClass="scale-100 opacity-100 blur-0"
+															exitClass="opacity-0"
+															exitActiveClass="duration-0"
+															exitToClass="opacity-0"
 														>
-															<IconCapPadding
-																class={cx(
-																	"w-4",
-																	cropOptions.showGrid
-																		? "text-blue-9"
-																		: "text-gray-12",
+															<Show when={aspect()} keyed>
+																{(ratio) => (
+																	<span class="flex absolute inset-0 justify-center items-center text-xs font-medium tracking-tight leading-none pointer-events-none text text-blue-10">
+																		{ratio[0]}:{ratio[1]}
+																	</span>
 																)}
-															/>
-														</Button>
-													</Tooltip>
-												</div>
+															</Show>
+														</Transition>
+													</div>
+												</Button>
+
+												<EditorButton
+													leftIcon={<IconLucideMaximize />}
+													onClick={() => cropperRef?.fill()}
+													disabled={
+														crop().width === display.width &&
+														crop().height === display.height
+													}
+												>
+													Full
+												</EditorButton>
 												<EditorButton
 													leftIcon={<IconCapCircleX />}
-													onClick={() =>
-														setCrop({
-															position: { x: 0, y: 0 },
-															size: {
-																x: display.width,
-																y: display.height,
-															},
-														})
+													onClick={() => {
+														cropperRef?.reset();
+														setAspect(null);
+													}}
+													disabled={
+														crop().x === dialog().position.x &&
+														crop().y === dialog().position.y &&
+														crop().width === dialog().size.x &&
+														crop().height === dialog().size.y
 													}
 												>
 													Reset
@@ -426,15 +456,17 @@ function Dialogs() {
 										</Dialog.Header>
 										<Dialog.Content>
 											<div class="flex flex-row justify-center">
-												<div class="overflow-hidden rounded divide-black-transparent-10">
+												<div class="rounded divide-black-transparent-10">
 													<Cropper
-														value={crop}
+														ref={cropperRef}
 														onCropChange={setCrop}
-														mappedSize={{
-															x: display.width,
-															y: display.height,
-														}}
-														showGuideLines={cropOptions.showGrid}
+														aspectRatio={aspect() ?? undefined}
+														targetSize={{ x: display.width, y: display.height }}
+														initialCrop={initialBounds}
+														snapToRatioEnabled={snapToRatio()}
+														useBackdropFilter={true}
+														allowLightMode={true}
+														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
 														<img
 															class="shadow pointer-events-none max-h-[70vh]"
@@ -450,7 +482,17 @@ function Dialogs() {
 										<Dialog.Footer>
 											<Button
 												onClick={() => {
-													setState("background", "crop", adjustedCrop());
+													const bounds = crop();
+													setState("background", "crop", {
+														position: {
+															x: bounds.x,
+															y: bounds.y,
+														},
+														size: {
+															x: bounds.width,
+															y: bounds.height,
+														},
+													});
 													setDialog((d) => ({ ...d, open: false }));
 												}}
 											>
