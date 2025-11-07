@@ -29,7 +29,12 @@ import {
 	type ExtendedDisplayMediaStreamOptions,
 	WEBM_MIME_TYPES,
 } from "./web-recorder-constants";
-import type { PresignedPost, RecorderPhase, VideoId } from "./web-recorder-types";
+import type {
+	ChunkUploadState,
+	PresignedPost,
+	RecorderPhase,
+	VideoId,
+} from "./web-recorder-types";
 import {
 	detectCapabilities,
 	pickSupportedMimeType,
@@ -49,6 +54,11 @@ interface UseWebRecorderOptions {
 	onRecordingStop?: () => void;
 }
 
+const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
+const INSTANT_CHUNK_GUARD_DELAY_MS = INSTANT_UPLOAD_REQUEST_INTERVAL_MS * 3;
+
+type InstantChunkingMode = "manual" | "timeslice";
+
 export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
@@ -64,6 +74,7 @@ export const useWebRecorder = ({
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
+	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
 	const [capabilities, setCapabilities] = useState<RecorderCapabilities>(() =>
 		detectCapabilities(),
 	);
@@ -148,11 +159,72 @@ export const useWebRecorder = ({
 	>(null);
 	const instantMp4ActiveRef = useRef(false);
 	const pendingInstantVideoIdRef = useRef<VideoId | null>(null);
+	const dataRequestIntervalRef = useRef<number | null>(null);
+	const instantChunkModeRef = useRef<InstantChunkingMode | null>(null);
+	const chunkStartGuardTimeoutRef = useRef<number | null>(null);
+	const lastInstantChunkAtRef = useRef<number | null>(null);
+	const requestInstantRecorderData = useCallback(() => {
+		if (instantChunkModeRef.current !== "manual") return;
+		const recorder = mediaRecorderRef.current;
+		if (!recorder || recorder.state !== "recording") return;
+		try {
+			recorder.requestData();
+		} catch (error) {
+			console.warn("Failed to request recorder data", error);
+		}
+	}, [mediaRecorderRef]);
 
 	const rpc = useRpcClient();
 	const router = useRouter();
 	const { setUploadStatus } = useUploadingContext();
 	const queryClient = useQueryClient();
+
+	const stopInstantChunkInterval = useCallback(() => {
+		if (!dataRequestIntervalRef.current) return;
+		clearInterval(dataRequestIntervalRef.current);
+		dataRequestIntervalRef.current = null;
+	}, []);
+
+	const startInstantChunkInterval = useCallback(() => {
+		if (instantChunkModeRef.current !== "manual") return;
+		if (typeof window === "undefined") return;
+		requestInstantRecorderData();
+		if (dataRequestIntervalRef.current) return;
+		dataRequestIntervalRef.current = window.setInterval(
+			requestInstantRecorderData,
+			INSTANT_UPLOAD_REQUEST_INTERVAL_MS,
+		);
+	}, [requestInstantRecorderData]);
+
+	const clearInstantChunkGuard = useCallback(() => {
+		if (!chunkStartGuardTimeoutRef.current) return;
+		if (typeof window !== "undefined") {
+			window.clearTimeout(chunkStartGuardTimeoutRef.current);
+		} else {
+			clearTimeout(chunkStartGuardTimeoutRef.current);
+		}
+		chunkStartGuardTimeoutRef.current = null;
+	}, []);
+
+	const beginManualInstantChunking = useCallback(() => {
+		instantChunkModeRef.current = "manual";
+		lastInstantChunkAtRef.current = null;
+		clearInstantChunkGuard();
+		startInstantChunkInterval();
+	}, [clearInstantChunkGuard, startInstantChunkInterval]);
+
+	const scheduleInstantChunkGuard = useCallback(() => {
+		clearInstantChunkGuard();
+		if (typeof window === "undefined") return;
+		chunkStartGuardTimeoutRef.current = window.setTimeout(() => {
+			if (instantChunkModeRef.current !== "timeslice") return;
+			if (lastInstantChunkAtRef.current !== null) return;
+			console.warn(
+				"Instant recorder did not emit data after start; falling back to manual chunk requests",
+			);
+			beginManualInstantChunking();
+		}, INSTANT_CHUNK_GUARD_DELAY_MS);
+	}, [beginManualInstantChunking, clearInstantChunkGuard]);
 
 	const updatePhase = useCallback(
 		(newPhase: RecorderPhase) => {
@@ -167,6 +239,10 @@ export const useWebRecorder = ({
 		clearTimer();
 		resetRecorder();
 		resetTimer();
+		stopInstantChunkInterval();
+		clearInstantChunkGuard();
+		instantChunkModeRef.current = null;
+		lastInstantChunkAtRef.current = null;
 		instantMp4ActiveRef.current = false;
 		if (instantUploaderRef.current) {
 			void instantUploaderRef.current.cancel();
@@ -186,13 +262,17 @@ export const useWebRecorder = ({
 		setVideoId(null);
 		setHasAudioTrack(false);
 		setUploadStatus(undefined);
+		setChunkUploads([]);
 	}, [
 		cleanupStreams,
 		clearTimer,
 		resetRecorder,
 		resetTimer,
+		stopInstantChunkInterval,
+		clearInstantChunkGuard,
 		rpc,
 		setUploadStatus,
+		setChunkUploads,
 		updatePhase,
 	]);
 
@@ -210,10 +290,17 @@ export const useWebRecorder = ({
 	const handleRecorderDataAvailable = useCallback(
 		(event: BlobEvent) => {
 			onRecorderDataAvailable(event, (chunk: Blob, totalBytes: number) => {
+				if (instantMp4ActiveRef.current && chunk.size > 0) {
+					lastInstantChunkAtRef.current =
+						typeof performance !== "undefined" ? performance.now() : Date.now();
+					if (instantChunkModeRef.current === "timeslice") {
+						clearInstantChunkGuard();
+					}
+				}
 				instantUploaderRef.current?.handleChunk(chunk, totalBytes);
 			});
 		},
-		[onRecorderDataAvailable],
+		[onRecorderDataAvailable, clearInstantChunkGuard],
 	);
 
 	const stopRecordingInternalWrapper = useCallback(async () => {
@@ -240,6 +327,7 @@ export const useWebRecorder = ({
 			return;
 		}
 
+		setChunkUploads([]);
 		setIsSettingUp(true);
 
 		try {
@@ -431,6 +519,7 @@ export const useWebRecorder = ({
 					setUploadStatus,
 					sendProgressUpdate: (uploaded, total) =>
 						sendProgressUpdate(creation.id, uploaded, total),
+					onChunkStateChange: setChunkUploads,
 				});
 			} else {
 				videoCreationRef.current = null;
@@ -453,8 +542,33 @@ export const useWebRecorder = ({
 
 			firstTrack?.addEventListener("ended", handleVideoEnded, { once: true });
 
-			mediaRecorderRef.current = recorder;
-			recorder.start(useInstantMp4 ? 1000 : 200);
+				mediaRecorderRef.current = recorder;
+			instantChunkModeRef.current = null;
+			lastInstantChunkAtRef.current = null;
+			clearInstantChunkGuard();
+			stopInstantChunkInterval();
+			if (useInstantMp4) {
+				let startedWithTimeslice = false;
+				try {
+					recorder.start(INSTANT_UPLOAD_REQUEST_INTERVAL_MS);
+					instantChunkModeRef.current = "timeslice";
+					startedWithTimeslice = true;
+				} catch (startError) {
+					console.warn(
+						"Failed to start recorder with timeslice chunks, falling back to manual flush",
+						startError,
+					);
+				}
+
+				if (startedWithTimeslice) {
+					scheduleInstantChunkGuard();
+				} else {
+					recorder.start();
+					beginManualInstantChunking();
+				}
+			} else {
+				recorder.start(200);
+			}
 			onRecordingStart?.();
 
 			startTimer();
@@ -509,14 +623,27 @@ export const useWebRecorder = ({
 			const timestamp = performance.now();
 			resumeTimer(timestamp);
 			recorder.resume();
+			if (instantMp4ActiveRef.current) {
+				startInstantChunkInterval();
+			}
 			updatePhase("recording");
 		} catch (error) {
 			console.error("Failed to resume recording", error);
 			toast.error("Could not resume recording.");
 		}
-	}, [phase, resumeTimer, updatePhase, mediaRecorderRef]);
+	}, [
+		phase,
+		resumeTimer,
+		updatePhase,
+		mediaRecorderRef,
+		startInstantChunkInterval,
+	]);
 
 	const stopRecording = useCallback(async () => {
+		stopInstantChunkInterval();
+		clearInstantChunkGuard();
+		instantChunkModeRef.current = null;
+		lastInstantChunkAtRef.current = null;
 		if (phase !== "recording" && phase !== "paused") return;
 
 		const orgId = organisationId;
@@ -727,6 +854,7 @@ export const useWebRecorder = ({
 			}
 		}
 	}, [
+		stopInstantChunkInterval,
 		phase,
 		organisationId,
 		hasAudioTrack,
@@ -762,6 +890,7 @@ export const useWebRecorder = ({
 		durationMs,
 		videoId,
 		hasAudioTrack,
+		chunkUploads,
 		isSettingUp,
 		isRecording: isRecordingActive,
 		isPaused,

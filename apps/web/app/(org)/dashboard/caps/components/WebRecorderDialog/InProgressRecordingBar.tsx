@@ -1,5 +1,4 @@
 "use client";
-
 import clsx from "clsx";
 import {
   Mic,
@@ -19,7 +18,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import type { RecorderPhase } from "./web-recorder-types";
+import type { ChunkUploadState, RecorderPhase } from "./web-recorder-types";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
   recording: "Recording",
@@ -46,6 +45,7 @@ interface InProgressRecordingBarProps {
   phase: RecorderPhase;
   durationMs: number;
   hasAudioTrack: boolean;
+  chunkUploads: ChunkUploadState[];
   onStop: () => void | Promise<void>;
   onPause?: () => void | Promise<void>;
   onResume?: () => void | Promise<void>;
@@ -57,6 +57,7 @@ export const InProgressRecordingBar = ({
   phase,
   durationMs,
   hasAudioTrack,
+  chunkUploads,
   onStop,
   onPause,
   onResume,
@@ -227,7 +228,8 @@ export const InProgressRecordingBar = ({
             </span>
           </button>
 
-          <div className="flex gap-1 items-center" data-no-drag>
+          <div className="flex gap-3 items-center" data-no-drag>
+            <InlineChunkProgress chunkUploads={chunkUploads} />
             <div className="flex relative justify-center items-center w-8 h-8">
               {hasAudioTrack ? (
                 <>
@@ -291,3 +293,80 @@ const ActionButton = ({ className, ...props }: ComponentProps<"button">) => (
     )}
   />
 );
+
+const InlineChunkProgress = ({ chunkUploads }: { chunkUploads: ChunkUploadState[] }) => {
+  if (chunkUploads.length === 0) return null;
+
+  const completedCount = chunkUploads.filter((chunk) => chunk.status === "complete").length;
+  const failed = chunkUploads.some((chunk) => chunk.status === "error");
+  const uploadingCount = chunkUploads.filter((chunk) => chunk.status === "uploading").length;
+  const queuedCount = chunkUploads.filter((chunk) => chunk.status === "queued").length;
+  const totalBytes = chunkUploads.reduce((total, chunk) => total + chunk.sizeBytes, 0);
+  const uploadedBytes = chunkUploads.reduce((total, chunk) => total + chunk.uploadedBytes, 0);
+  const progressRatio = Math.max(
+    0,
+    Math.min(1, totalBytes > 0 ? uploadedBytes / totalBytes : completedCount / chunkUploads.length),
+  );
+  const circumference = 2 * Math.PI * 15.9155;
+  const strokeDashoffset = circumference * (1 - progressRatio);
+  const colorClass = failed
+    ? "text-red-9"
+    : completedCount === chunkUploads.length
+      ? "text-green-9"
+      : "text-blue-9";
+
+  const tooltipLines = [
+    `${completedCount}/${chunkUploads.length} complete` + (failed ? " (check failed parts)" : ""),
+    uploadingCount ? `${uploadingCount} uploading` : null,
+    queuedCount ? `${queuedCount} queued` : null,
+    totalBytes ? `Uploaded ${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes)}` : null,
+  ].filter(Boolean);
+
+  const tooltip = tooltipLines.join("\n");
+
+  return (
+    <div className="flex items-center gap-2 text-[12px]" data-no-drag title={tooltip || undefined}>
+      <div className="relative h-8 w-8" role="img" aria-label="Upload progress">
+        <svg className="h-8 w-8 -rotate-90" viewBox="0 0 36 36">
+          <circle
+            className="fill-none stroke-gray-4"
+            strokeWidth={3}
+            cx="18"
+            cy="18"
+            r="15.9155"
+          />
+          <circle
+            className={clsx(
+              "fill-none stroke-current transition-[stroke-dashoffset] duration-300 ease-out",
+              colorClass,
+            )}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            cx="18"
+            cy="18"
+            r="15.9155"
+          />
+        </svg>
+      </div>
+      <span
+        className={clsx(
+          "font-semibold tabular-nums text-gray-12 leading-none",
+          failed && "text-red-11",
+        )}
+      >
+        {completedCount}/{chunkUploads.length}
+      </span>
+    </div>
+  );
+};
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const exponent = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const value = bytes / 1024 ** exponent;
+  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(decimals)} ${units[exponent]}`;
+};

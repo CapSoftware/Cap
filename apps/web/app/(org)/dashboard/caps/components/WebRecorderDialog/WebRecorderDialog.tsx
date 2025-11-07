@@ -121,6 +121,7 @@ export const WebRecorderDialog = () => {
     phase,
     durationMs,
     hasAudioTrack,
+    chunkUploads,
     isRecording,
     isBusy,
     canStartRecording,
@@ -320,6 +321,7 @@ export const WebRecorderDialog = () => {
           phase={phase}
           durationMs={durationMs}
           hasAudioTrack={hasAudioTrack}
+          chunkUploads={chunkUploads}
           onStop={handleStopClick}
           onPause={pauseRecording}
           onResume={resumeRecording}
