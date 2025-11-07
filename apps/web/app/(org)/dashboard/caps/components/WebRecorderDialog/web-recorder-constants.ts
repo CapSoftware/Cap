@@ -29,3 +29,98 @@ export const dialogVariants = {
 		},
 	},
 };
+
+export const DISPLAY_MEDIA_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+	frameRate: { ideal: 30 },
+	width: { ideal: 1920 },
+	height: { ideal: 1080 },
+};
+
+export type ExtendedDisplayMediaStreamOptions = DisplayMediaStreamOptions & {
+	monitorTypeSurfaces?: "include" | "exclude";
+	surfaceSwitching?: "include" | "exclude";
+	selfBrowserSurface?: "include" | "exclude";
+	preferCurrentTab?: boolean;
+};
+
+export type DetectedDisplayRecordingMode = Exclude<
+	import("./RecordingModeSelector").RecordingMode,
+	"camera"
+>;
+
+export type DisplaySurfacePreference =
+	| "monitor"
+	| "window"
+	| "browser"
+	| "application";
+
+export const DISPLAY_MODE_PREFERENCES: Record<
+	DetectedDisplayRecordingMode,
+	Partial<ExtendedDisplayMediaStreamOptions>
+> = {
+	fullscreen: {
+		monitorTypeSurfaces: "include",
+		selfBrowserSurface: "exclude",
+		surfaceSwitching: "exclude",
+		preferCurrentTab: false,
+	},
+	window: {
+		monitorTypeSurfaces: "exclude",
+		selfBrowserSurface: "exclude",
+		surfaceSwitching: "exclude",
+		preferCurrentTab: false,
+	},
+	tab: {
+		monitorTypeSurfaces: "exclude",
+		selfBrowserSurface: "include",
+		surfaceSwitching: "exclude",
+		preferCurrentTab: true,
+	},
+};
+
+export const DISPLAY_SURFACE_TO_RECORDING_MODE: Record<
+	string,
+	DetectedDisplayRecordingMode
+> = {
+	monitor: "fullscreen",
+	screen: "fullscreen",
+	window: "window",
+	application: "window",
+	browser: "tab",
+	tab: "tab",
+};
+
+export const RECORDING_MODE_TO_DISPLAY_SURFACE: Record<
+	DetectedDisplayRecordingMode,
+	DisplaySurfacePreference
+> = {
+	fullscreen: "monitor",
+	window: "window",
+	tab: "browser",
+};
+
+export const MP4_MIME_TYPES = {
+	withAudio: [
+		'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+		'video/mp4;codecs="avc1.4d401e,mp4a.40.2"',
+	],
+	videoOnly: [
+		'video/mp4;codecs="avc1.42E01E"',
+		'video/mp4;codecs="avc1.4d401e"',
+		"video/mp4",
+	],
+} as const;
+
+export const WEBM_MIME_TYPES = {
+	withAudio: [
+		"video/webm;codecs=vp9,opus",
+		"video/webm;codecs=vp8,opus",
+	],
+	videoOnly: [
+		"video/webm;codecs=vp9",
+		"video/webm;codecs=vp8",
+		"video/webm",
+	],
+} as const;
+
+export const DETECTION_RETRY_DELAYS = [120, 450, 1000];

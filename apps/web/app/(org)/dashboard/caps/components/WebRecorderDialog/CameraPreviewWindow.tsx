@@ -11,7 +11,7 @@ import {
 	Square,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 type CameraPreviewSize = "sm" | "lg";
@@ -19,6 +19,12 @@ type CameraPreviewShape = "round" | "square" | "full";
 type VideoDimensions = {
 	width: number;
 	height: number;
+};
+type AutoPictureInPictureDocument = Document & {
+	autoPictureInPictureEnabled?: boolean;
+};
+type AutoPictureInPictureVideo = HTMLVideoElement & {
+	autoPictureInPicture?: boolean;
 };
 
 const WINDOW_PADDING = 20;
@@ -95,6 +101,59 @@ export const CameraPreviewWindow = ({
 	const autoPictureInPictureRef = useRef(false);
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
+	const canUseAutoPiPAttribute = useMemo(() => {
+		if (typeof document === "undefined" || typeof HTMLVideoElement === "undefined") {
+			return false;
+		}
+
+		const doc = document as AutoPictureInPictureDocument;
+		const autoPiPAllowed =
+			typeof doc.autoPictureInPictureEnabled === "boolean"
+				? doc.autoPictureInPictureEnabled
+				: true;
+
+		if (!doc.pictureInPictureEnabled || !autoPiPAllowed) {
+			return false;
+		}
+
+		return "autoPictureInPicture" in
+			(HTMLVideoElement.prototype as Record<string, unknown>);
+	}, []);
+
+	useEffect(() => {
+		if (!canUseAutoPiPAttribute) {
+			return;
+		}
+
+		let rafId: number | null = null;
+		let pipVideo: AutoPictureInPictureVideo | null = null;
+		let disposed = false;
+
+		const attachAttribute = () => {
+			if (disposed) return;
+
+			const maybeVideo = videoRef.current as AutoPictureInPictureVideo | null;
+			if (!maybeVideo) {
+				rafId = requestAnimationFrame(attachAttribute);
+				return;
+			}
+
+			pipVideo = maybeVideo;
+			pipVideo.autoPictureInPicture = true;
+		};
+
+		attachAttribute();
+
+		return () => {
+			disposed = true;
+			if (rafId !== null) {
+				cancelAnimationFrame(rafId);
+			}
+			if (pipVideo) {
+				pipVideo.autoPictureInPicture = false;
+			}
+		};
+	}, [canUseAutoPiPAttribute]);
 
 	useEffect(() => {
 		setMounted(true);
@@ -273,7 +332,7 @@ export const CameraPreviewWindow = ({
 			return;
 		}
 
-		if (!isPictureInPictureSupported) {
+		if (!isPictureInPictureSupported || canUseAutoPiPAttribute) {
 			return;
 		}
 
@@ -372,6 +431,13 @@ export const CameraPreviewWindow = ({
 
 	const metrics = getPreviewMetrics(size, shape, videoDimensions);
 	const totalHeight = metrics.height + BAR_HEIGHT;
+	const videoStyle = videoDimensions
+		? {
+				transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
+				opacity: isInPictureInPicture ? 0 : 1,
+			}
+		: { opacity: 0 };
+	// Keep the video node rendered even in PiP mode so the track keeps producing frames.
 
 	const borderRadius =
 		shape === "round" ? "9999px" : size === "sm" ? "3rem" : "4rem";
@@ -514,13 +580,7 @@ export const CameraPreviewWindow = ({
 							"absolute inset-0 w-full h-full object-cover pointer-events-none",
 							shape === "round" ? "rounded-full" : "rounded-3xl",
 						)}
-						style={
-							videoDimensions && !isInPictureInPicture
-								? {
-										transform: mirrored ? "scaleX(-1)" : "scaleX(1)",
-									}
-								: { display: "none" }
-						}
+						style={videoStyle}
 						onLoadedMetadata={() => {
 							if (videoRef.current) {
 								const width = videoRef.current.videoWidth;
