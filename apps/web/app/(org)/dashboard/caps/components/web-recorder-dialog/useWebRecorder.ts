@@ -314,15 +314,21 @@ export const useWebRecorder = ({
 		updatePhase("idle");
 	}, [cleanupRecordingState, updatePhase]);
 
+	const resetStateRef = useRef(resetState);
+
+	useEffect(() => {
+		resetStateRef.current = resetState;
+	}, [resetState]);
+
 	useEffect(() => {
 		setCapabilities(detectCapabilities());
 	}, []);
 
 	useEffect(() => {
 		return () => {
-			resetState();
+			resetStateRef.current();
 		};
-	}, [resetState]);
+	}, []);
 
 	const handleRecorderDataAvailable = useCallback(
 		(event: BlobEvent) => {
