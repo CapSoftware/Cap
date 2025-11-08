@@ -299,15 +299,23 @@ export async function deleteVideoResultFile({
 	try {
 		await db().transaction(async (tx) => {
 			await tx.delete(videoUploads).where(eq(videoUploads.videoId, videoId));
-
-			await deleteResultObjectWithRetry({
-				bucketIdOption,
-				fileKey,
-				logContext,
-			});
 		});
 	} catch (error) {
 		console.error("video.result.delete.transaction_failure", {
+			...logContext,
+			error: serializeError(error),
+		});
+		throw error;
+	}
+
+	try {
+		await deleteResultObjectWithRetry({
+			bucketIdOption,
+			fileKey,
+			logContext,
+		});
+	} catch (error) {
+		console.error("video.result.delete.s3_failure", {
 			...logContext,
 			error: serializeError(error),
 		});
