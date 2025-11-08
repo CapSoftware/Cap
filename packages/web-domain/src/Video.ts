@@ -53,10 +53,7 @@ export class Video extends Schema.Class<Video>("Video")({
 				subpath: "combined-source/stream.m3u8",
 			});
 
-		if (
-			self.source.type === "desktopMP4" ||
-			self.source.type === "webMP4"
-		)
+		if (self.source.type === "desktopMP4" || self.source.type === "webMP4")
 			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
 	}
 }
