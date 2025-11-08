@@ -18,6 +18,11 @@ import {
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
 import type { ChunkUploadState, RecorderPhase } from "./web-recorder-types";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
@@ -360,6 +365,27 @@ const InlineChunkProgress = ({
 			: "text-blue-9";
 
 	const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+	const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const clearHoverTimeout = useCallback(() => {
+		if (!hoverTimeoutRef.current) return;
+		clearTimeout(hoverTimeoutRef.current);
+		hoverTimeoutRef.current = null;
+	}, []);
+
+	const openPopover = useCallback(() => {
+		clearHoverTimeout();
+		setIsPopoverOpen(true);
+	}, [clearHoverTimeout]);
+
+	const closePopover = useCallback(() => {
+		clearHoverTimeout();
+		hoverTimeoutRef.current = setTimeout(() => {
+			setIsPopoverOpen(false);
+		}, 180);
+	}, [clearHoverTimeout]);
+
+	useEffect(() => () => clearHoverTimeout(), [clearHoverTimeout]);
 
 	const statusSummary = [
 		{ label: "Uploading", count: uploadingCount, color: "text-blue-11" },
@@ -386,112 +412,129 @@ const InlineChunkProgress = ({
 		error: "text-red-11",
 	};
 
-	const handleOpen = () => setIsPopoverOpen(true);
-	const handleClose = () => setIsPopoverOpen(false);
-
 	return (
-		<div
-			className="relative flex items-center gap-2 text-[12px]"
-			data-no-drag
-			onMouseEnter={handleOpen}
-			onMouseLeave={handleClose}
-			onFocus={handleOpen}
-			onBlur={handleClose}
-			tabIndex={0}
+		<Popover
+			open={isPopoverOpen}
+			onOpenChange={(next) => {
+				if (!next) {
+					clearHoverTimeout();
+				}
+				setIsPopoverOpen(next);
+			}}
 		>
-			<div className="relative h-5 w-5" role="img" aria-label="Upload progress">
-				<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
-					<circle
-						className="fill-none stroke-gray-4"
-						strokeWidth={4}
-						cx="18"
-						cy="18"
-						r="15.9155"
-					/>
-					<circle
-						className={clsx(
-							"fill-none stroke-current transition-[stroke-dashoffset] duration-300 ease-out",
-							colorClass,
-						)}
-						strokeWidth={4}
-						strokeLinecap="round"
-						strokeDasharray={circumference}
-						strokeDashoffset={strokeDashoffset}
-						cx="18"
-						cy="18"
-						r={radius}
-					/>
-				</svg>
-			</div>
-			<span
-				className={clsx(
-					"font-semibold tabular-nums text-gray-12 leading-none",
-					failed && "text-red-11",
-				)}
+			<PopoverTrigger
+				asChild
+				onMouseEnter={openPopover}
+				onMouseLeave={closePopover}
 			>
-				{completedCount}/{chunkUploads.length}
-			</span>
-
-			{isPopoverOpen && (
-				<div className="absolute bottom-[calc(100%+0.5rem)] left-1/2 z-[1000] w-64 -translate-x-1/2">
-					<div className="rounded-xl border border-gray-5 bg-gray-1 p-3 text-xs text-gray-12 shadow-xl">
-						<div className="text-[11px] text-gray-11">
-							Uploaded {formatBytes(uploadedBytes)} of {formatBytes(totalBytes)}
-						</div>
-						<div className="mt-2 flex flex-wrap gap-2">
-							{statusSummary.length === 0 ? (
-								<span className="text-[11px] text-gray-11">
-									Preparing chunks…
+				<button
+					type="button"
+					data-no-drag
+					className="inline-flex items-center gap-2 rounded-lg px-1.5 py-1 text-[12px] text-gray-12 transition-colors hover:bg-gray-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
+					aria-label="Show upload segments"
+					aria-expanded={isPopoverOpen}
+				>
+					<div
+						className="relative h-5 w-5"
+						role="img"
+						aria-label="Upload progress"
+					>
+						<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
+							<circle
+								className="fill-none stroke-gray-4"
+								strokeWidth={4}
+								cx="18"
+								cy="18"
+								r="15.9155"
+							/>
+							<circle
+								className={clsx(
+									"fill-none stroke-current transition-[stroke-dashoffset] duration-300 ease-out",
+									colorClass,
+								)}
+								strokeWidth={4}
+								strokeLinecap="round"
+								strokeDasharray={circumference}
+								strokeDashoffset={strokeDashoffset}
+								cx="18"
+								cy="18"
+								r={radius}
+							/>
+						</svg>
+					</div>
+					<span
+						className={clsx(
+							"font-semibold tabular-nums leading-none",
+							failed ? "text-red-11" : "text-gray-12",
+						)}
+					>
+						{completedCount}/{chunkUploads.length}
+					</span>
+				</button>
+			</PopoverTrigger>
+			<PopoverContent
+				align="center"
+				className="z-[700] w-72 max-h-[22rem] overflow-hidden border border-gray-5 bg-gray-1 p-4 text-[12px] text-gray-12 shadow-2xl"
+				onMouseEnter={openPopover}
+				onMouseLeave={closePopover}
+			>
+				<div className="space-y-3">
+					<div className="text-[11px] text-gray-11">
+						Uploaded {formatBytes(uploadedBytes)} of {formatBytes(totalBytes)}
+					</div>
+					<div className="flex flex-wrap gap-2">
+						{statusSummary.length === 0 ? (
+							<span className="text-[11px] text-gray-11">
+								Preparing chunks…
+							</span>
+						) : (
+							statusSummary.map((item) => (
+								<span
+									key={item.label}
+									className={clsx(
+										"rounded-full border border-gray-4 bg-gray-2 px-2 py-0.5 text-[10px] font-medium",
+										item.color,
+									)}
+								>
+									{item.label}: {item.count}
 								</span>
-							) : (
-								statusSummary.map((item) => (
+							))
+						)}
+					</div>
+					<div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+						{chunkUploads.map((chunk) => (
+							<div
+								key={chunk.partNumber}
+								className="flex flex-col rounded-lg border border-gray-4 bg-gray-2 px-2 py-1"
+							>
+								<div className="flex items-center justify-between text-[11px]">
+									<span className="font-medium text-gray-12">
+										Part {chunk.partNumber}
+									</span>
 									<span
-										key={item.label}
 										className={clsx(
-											"rounded-full border border-gray-4 bg-gray-2 px-2 py-0.5 text-[10px] font-medium",
-											item.color,
+											"text-[11px] font-semibold",
+											statusAccent[chunk.status],
 										)}
 									>
-										{item.label}: {item.count}
+										{statusLabels[chunk.status]}
 									</span>
-								))
-							)}
-						</div>
-						<div className="mt-3 max-h-40 overflow-y-auto space-y-1">
-							{chunkUploads.map((chunk) => (
-								<div
-									key={chunk.partNumber}
-									className="flex flex-col rounded-lg border border-gray-4 bg-gray-2 px-2 py-1"
-								>
-									<div className="flex items-center justify-between text-[11px]">
-										<span className="font-medium text-gray-12">
-											Part {chunk.partNumber}
-										</span>
-										<span
-											className={clsx(
-												"text-[11px] font-semibold",
-												statusAccent[chunk.status],
-											)}
-										>
-											{statusLabels[chunk.status]}
-										</span>
-									</div>
-									<div className="text-[10px] text-gray-11">
-										{chunk.status === "uploading"
-											? `${Math.round(chunk.progress * 100)}% of ${formatBytes(chunk.sizeBytes)}`
-											: chunk.status === "complete"
-												? `Uploaded ${formatBytes(chunk.sizeBytes)}`
-												: chunk.status === "queued"
-													? `Waiting • ${formatBytes(chunk.sizeBytes)}`
-													: `Needs attention • ${formatBytes(chunk.sizeBytes)}`}
-									</div>
 								</div>
-							))}
-						</div>
+								<div className="text-[10px] text-gray-11">
+									{chunk.status === "uploading"
+										? `${Math.round(chunk.progress * 100)}% of ${formatBytes(chunk.sizeBytes)}`
+										: chunk.status === "complete"
+											? `Uploaded ${formatBytes(chunk.sizeBytes)}`
+											: chunk.status === "queued"
+												? `Waiting • ${formatBytes(chunk.sizeBytes)}`
+												: `Needs attention • ${formatBytes(chunk.sizeBytes)}`}
+								</div>
+							</div>
+						))}
 					</div>
 				</div>
-			)}
-		</div>
+			</PopoverContent>
+		</Popover>
 	);
 };
 
