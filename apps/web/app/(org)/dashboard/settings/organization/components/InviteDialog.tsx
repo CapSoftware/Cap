@@ -115,10 +115,6 @@ export const InviteDialog = ({
 		},
 	});
 
-	const handleSendInvites = () => {
-		sendInvites.mutate();
-	};
-
 	return (
 		<Dialog open={isOpen} onOpenChange={setIsOpen}>
 			<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
@@ -214,7 +210,7 @@ export const InviteDialog = ({
 							inviteEmails.length === 0 ||
 							remainingSeats === 0
 						}
-						onClick={handleSendInvites}
+						onClick={() => sendInvites.mutate()}
 					>
 						Send Invites
 					</Button>

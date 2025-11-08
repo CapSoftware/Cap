@@ -197,12 +197,7 @@ export const getVideosByFolderId = Effect.fn(function* (
       `,
 
 				ownerName: users.name,
-				effectiveDate: sql<string>`
-        COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )
-      `,
+				effectiveDate: videos.effectiveCreatedAt,
 				hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 					Boolean,
@@ -240,12 +235,7 @@ export const getVideosByFolderId = Effect.fn(function* (
 				videos.metadata,
 				users.name,
 			)
-			.orderBy(
-				desc(sql`COALESCE(
-      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-      ${videos.createdAt}
-    )`),
-			),
+			.orderBy(desc(videos.effectiveCreatedAt)),
 	);
 
 	// Fetch shared spaces data for all videos

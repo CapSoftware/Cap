@@ -182,6 +182,14 @@ async writeClipboardString(text: string) : Promise<null> {
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });
 },
+/**
+ * Check if system audio capture is supported on the current platform and OS version.
+ * On macOS, system audio capture requires macOS 13.0 or later.
+ * On Windows/Linux, this may have different requirements.
+ */
+async isSystemAudioCaptureSupported() : Promise<boolean> {
+    return await TAURI_INVOKE("is_system_audio_capture_supported");
+},
 async listFails() : Promise<{ [key in string]: boolean }> {
     return await TAURI_INVOKE("list_fails");
 },
@@ -301,11 +309,11 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
-requestNewScreenshot: RequestNewScreenshot,
 requestOpenRecordingPicker: RequestOpenRecordingPicker,
 requestOpenSettings: RequestOpenSettings,
 requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestStartRecording: RequestStartRecording,
+setCaptureAreaPending: SetCaptureAreaPending,
 targetUnderCursor: TargetUnderCursor,
 uploadProgressEvent: UploadProgressEvent
 }>({
@@ -323,11 +331,11 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
-requestNewScreenshot: "request-new-screenshot",
 requestOpenRecordingPicker: "request-open-recording-picker",
 requestOpenSettings: "request-open-settings",
 requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestStartRecording: "request-start-recording",
+setCaptureAreaPending: "set-capture-area-pending",
 targetUnderCursor: "target-under-cursor",
 uploadProgressEvent: "upload-progress-event"
 })
@@ -343,7 +351,7 @@ export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number; start_time: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean; micVolumeDb?: number; micStereoMode?: StereoMode; systemVolumeDb?: number }
 export type AudioInputLevelChange = number
-export type AudioMeta = { path: string;
+export type AudioMeta = { path: string; 
 /**
  * unix time of the first frame
  */
@@ -393,19 +401,19 @@ export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
-export type GifQuality = {
+export type GifQuality = { 
 /**
  * Encoding quality from 1-100 (default: 90)
  */
-quality: number | null;
+quality: number | null; 
 /**
  * Whether to prioritize speed over quality (default: false)
  */
 fast: boolean | null }
-export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
-export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
+export type HapticPattern = "alignment" | "levelChange" | "generic"
+export type HapticPerformanceTime = "default" | "now" | "drawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startStudioRecording" | "startInstantRecording" | "stopRecording" | "restartRecording" | "openRecordingPicker" | "openRecordingPickerDisplay" | "openRecordingPickerWindow" | "openRecordingPickerArea" | "other"
 export type HotkeysConfiguration = { show: boolean }
@@ -449,7 +457,6 @@ export type RecordingStarted = null
 export type RecordingStopped = null
 export type RecordingTargetMode = "display" | "window" | "area"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
-export type RequestNewScreenshot = null
 export type RequestOpenRecordingPicker = { target_mode: RecordingTargetMode | null }
 export type RequestOpenSettings = { page: string }
 export type RequestScreenCapturePrewarm = { force?: boolean }
@@ -460,6 +467,7 @@ export type SceneSegment = { start: number; end: number; mode?: SceneMode }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
+export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = "Setup" | { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId } } | { CaptureArea: { screen_id: DisplayId } } | "Camera" | { InProgressRecording: { countdown: number | null } } | "Upgrade" | "ModeSelect"
@@ -477,7 +485,7 @@ export type UploadProgress = { progress: number }
 export type UploadProgressEvent = { video_id: string; uploaded: string; total: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
-export type VideoMeta = { path: string; fps?: number;
+export type VideoMeta = { path: string; fps?: number; 
 /**
  * unix time of the first frame
  */

@@ -17,6 +17,7 @@ import {
 	SelectedCapsBar,
 	UploadCapButton,
 	UploadPlaceholderCard,
+	WebRecorderDialog,
 } from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
@@ -240,6 +241,7 @@ export const Caps = ({
 					New Folder
 				</Button>
 				<UploadCapButton size="sm" />
+				<WebRecorderDialog />
 			</div>
 			{folders.length > 0 && (
 				<>

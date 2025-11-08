@@ -12,7 +12,7 @@ mod macos {
     use std::{sync::mpsc::Sender, time::Duration};
 
     use cidre::{
-        cm, define_obj_type, ns, objc,
+        api, cm, define_obj_type, ns, objc,
         sc::{
             self,
             stream::{Output, OutputImpl},
@@ -63,8 +63,13 @@ mod macos {
 
     pub async fn main() {
         let mut cfg = sc::StreamCfg::new();
-        cfg.set_captures_audio(true);
-        cfg.set_excludes_current_process_audio(false);
+
+        if api::macos_available("13.0") {
+            unsafe {
+                cfg.set_captures_audio(true);
+                cfg.set_excludes_current_process_audio(false);
+            }
+        }
 
         let content = sc::ShareableContent::current().await.expect("content");
         let display = &content.displays().get(0).unwrap();
