@@ -124,6 +124,7 @@ export const WebRecorderDialog = () => {
     chunkUploads,
     isRecording,
     isBusy,
+    isRestarting,
     canStartRecording,
     isBrowserSupported,
     unsupportedReason,
@@ -134,6 +135,7 @@ export const WebRecorderDialog = () => {
     pauseRecording,
     resumeRecording,
     stopRecording,
+    restartRecording,
     resetState,
   } = useWebRecorder({
     organisationId,
@@ -325,6 +327,8 @@ export const WebRecorderDialog = () => {
           onStop={handleStopClick}
           onPause={pauseRecording}
           onResume={resumeRecording}
+          onRestart={restartRecording}
+          isRestarting={isRestarting}
         />
       )}
       {selectedCameraId && (

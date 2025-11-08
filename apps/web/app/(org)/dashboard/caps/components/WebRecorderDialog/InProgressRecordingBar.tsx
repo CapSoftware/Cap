@@ -49,6 +49,8 @@ interface InProgressRecordingBarProps {
   onStop: () => void | Promise<void>;
   onPause?: () => void | Promise<void>;
   onResume?: () => void | Promise<void>;
+  onRestart?: () => void | Promise<void>;
+  isRestarting?: boolean;
 }
 
 const DRAG_PADDING = 12;
@@ -61,6 +63,8 @@ export const InProgressRecordingBar = ({
   onStop,
   onPause,
   onResume,
+  onRestart,
+  isRestarting = false,
 }: InProgressRecordingBarProps) => {
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 24 });
@@ -193,13 +197,21 @@ export const InProgressRecordingBar = ({
     }
   };
 
-  const handleRestart = () => {
-    console.log("Restart recording clicked (not implemented yet)");
-  };
-
   const canTogglePause =
     (phase === "recording" && Boolean(onPause)) ||
     (isPaused && Boolean(onResume));
+  const canRestart =
+    Boolean(onRestart) && !isRestarting && (phase === "recording" || isPaused);
+
+  const handleRestart = () => {
+    if (!onRestart || !canRestart) return;
+    const result = onRestart();
+    if (result instanceof Promise) {
+      void result.catch(() => {
+        /* ignore */
+      });
+    }
+  };
 
   return createPortal(
     <div
@@ -262,8 +274,14 @@ export const InProgressRecordingBar = ({
                 <PauseCircle className="size-5" />
               )}
             </ActionButton>
-            <ActionButton data-no-drag onClick={handleRestart}>
-              <RotateCcw className="size-5" />
+            <ActionButton
+              data-no-drag
+              onClick={handleRestart}
+              disabled={!canRestart}
+              aria-label="Restart recording"
+              aria-busy={isRestarting}
+            >
+              <RotateCcw className={clsx("size-5", isRestarting && "animate-spin")} />
             </ActionButton>
           </div>
         </div>
@@ -307,7 +325,8 @@ const InlineChunkProgress = ({ chunkUploads }: { chunkUploads: ChunkUploadState[
     0,
     Math.min(1, totalBytes > 0 ? uploadedBytes / totalBytes : completedCount / chunkUploads.length),
   );
-  const circumference = 2 * Math.PI * 15.9155;
+  const radius = 15.9155;
+  const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference * (1 - progressRatio);
   const colorClass = failed
     ? "text-red-9"
@@ -315,22 +334,47 @@ const InlineChunkProgress = ({ chunkUploads }: { chunkUploads: ChunkUploadState[
       ? "text-green-9"
       : "text-blue-9";
 
-  const tooltipLines = [
-    `${completedCount}/${chunkUploads.length} complete` + (failed ? " (check failed parts)" : ""),
-    uploadingCount ? `${uploadingCount} uploading` : null,
-    queuedCount ? `${queuedCount} queued` : null,
-    totalBytes ? `Uploaded ${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes)}` : null,
-  ].filter(Boolean);
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
 
-  const tooltip = tooltipLines.join("\n");
+  const statusSummary = [
+    { label: "Uploading", count: uploadingCount, color: "text-blue-11" },
+    { label: "Pending", count: queuedCount, color: "text-amber-11" },
+    { label: "Completed", count: completedCount, color: "text-green-11" },
+    { label: "Failed", count: chunkUploads.filter((chunk) => chunk.status === "error").length, color: "text-red-11" },
+  ].filter((item) => item.count > 0);
+
+  const statusLabels: Record<ChunkUploadState["status"], string> = {
+    uploading: "Uploading",
+    queued: "Pending",
+    complete: "Completed",
+    error: "Failed",
+  };
+
+  const statusAccent: Record<ChunkUploadState["status"], string> = {
+    uploading: "text-blue-11",
+    queued: "text-amber-11",
+    complete: "text-green-11",
+    error: "text-red-11",
+  };
+
+  const handleOpen = () => setIsPopoverOpen(true);
+  const handleClose = () => setIsPopoverOpen(false);
 
   return (
-    <div className="flex items-center gap-2 text-[12px]" data-no-drag title={tooltip || undefined}>
-      <div className="relative h-8 w-8" role="img" aria-label="Upload progress">
-        <svg className="h-8 w-8 -rotate-90" viewBox="0 0 36 36">
+    <div
+      className="relative flex items-center gap-2 text-[12px]"
+      data-no-drag
+      onMouseEnter={handleOpen}
+      onMouseLeave={handleClose}
+      onFocus={handleOpen}
+      onBlur={handleClose}
+      tabIndex={0}
+    >
+      <div className="relative h-5 w-5" role="img" aria-label="Upload progress">
+        <svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
           <circle
             className="fill-none stroke-gray-4"
-            strokeWidth={3}
+            strokeWidth={4}
             cx="18"
             cy="18"
             r="15.9155"
@@ -340,13 +384,13 @@ const InlineChunkProgress = ({ chunkUploads }: { chunkUploads: ChunkUploadState[
               "fill-none stroke-current transition-[stroke-dashoffset] duration-300 ease-out",
               colorClass,
             )}
-            strokeWidth={3}
+            strokeWidth={4}
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={strokeDashoffset}
             cx="18"
             cy="18"
-            r="15.9155"
+            r={radius}
           />
         </svg>
       </div>
@@ -358,6 +402,57 @@ const InlineChunkProgress = ({ chunkUploads }: { chunkUploads: ChunkUploadState[
       >
         {completedCount}/{chunkUploads.length}
       </span>
+
+      {isPopoverOpen && (
+        <div className="absolute bottom-[calc(100%+0.5rem)] left-1/2 z-[1000] w-64 -translate-x-1/2">
+          <div className="rounded-xl border border-gray-5 bg-gray-1 p-3 text-xs text-gray-12 shadow-xl">
+            <div className="text-[11px] text-gray-11">
+              Uploaded {formatBytes(uploadedBytes)} of {formatBytes(totalBytes)}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {statusSummary.length === 0 ? (
+                <span className="text-[11px] text-gray-11">Preparing chunks…</span>
+              ) : (
+                statusSummary.map((item) => (
+                  <span
+                    key={item.label}
+                    className={clsx(
+                      "rounded-full border border-gray-4 bg-gray-2 px-2 py-0.5 text-[10px] font-medium",
+                      item.color,
+                    )}
+                  >
+                    {item.label}: {item.count}
+                  </span>
+                ))
+              )}
+            </div>
+            <div className="mt-3 max-h-40 overflow-y-auto space-y-1">
+              {chunkUploads.map((chunk) => (
+                <div
+                  key={chunk.partNumber}
+                  className="flex flex-col rounded-lg border border-gray-4 bg-gray-2 px-2 py-1"
+                >
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-medium text-gray-12">Part {chunk.partNumber}</span>
+                    <span className={clsx("text-[11px] font-semibold", statusAccent[chunk.status])}>
+                      {statusLabels[chunk.status]}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-gray-11">
+                    {chunk.status === "uploading"
+                      ? `${Math.round(chunk.progress * 100)}% of ${formatBytes(chunk.sizeBytes)}`
+                      : chunk.status === "complete"
+                        ? `Uploaded ${formatBytes(chunk.sizeBytes)}`
+                        : chunk.status === "queued"
+                          ? `Waiting • ${formatBytes(chunk.sizeBytes)}`
+                          : `Needs attention • ${formatBytes(chunk.sizeBytes)}`}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

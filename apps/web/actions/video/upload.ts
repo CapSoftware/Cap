@@ -255,3 +255,39 @@ export async function createVideoAndGetUploadUrl({
 		);
 	}
 }
+
+export async function deleteVideoResultFile({
+	videoId,
+}: {
+	videoId: Video.VideoId;
+}) {
+	const user = await getCurrentUser();
+
+	if (!user) throw new Error("Unauthorized");
+
+	const [video] = await db()
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			bucketId: videos.bucket,
+		})
+		.from(videos)
+		.where(eq(videos.id, videoId));
+
+	if (!video) throw new Error("Video not found");
+	if (video.ownerId !== user.id) throw new Error("Forbidden");
+
+	const bucketId = Option.fromNullable(video.bucketId);
+	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
+
+	await Effect.gen(function* () {
+		const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
+		yield* bucket.deleteObject(fileKey);
+	}).pipe(runPromise);
+
+	await db()
+		.delete(videoUploads)
+		.where(eq(videoUploads.videoId, videoId));
+
+	return { success: true };
+}

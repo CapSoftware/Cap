@@ -6,7 +6,10 @@ import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
+import {
+	createVideoAndGetUploadUrl,
+	deleteVideoResultFile,
+} from "@/actions/video/upload";
 import { EffectRuntime, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { useUploadingContext } from "../../UploadingContext";
@@ -74,6 +77,7 @@ export const useWebRecorder = ({
 	const [videoId, setVideoId] = useState<VideoId | null>(null);
 	const [hasAudioTrack, setHasAudioTrack] = useState(false);
 	const [isSettingUp, setIsSettingUp] = useState(false);
+	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
 	const [capabilities, setCapabilities] = useState<RecorderCapabilities>(() =>
 		detectCapabilities(),
@@ -234,47 +238,58 @@ export const useWebRecorder = ({
 		[onPhaseChange],
 	);
 
+	const cleanupRecordingState = useCallback(
+		(options?: { preserveInstantVideo?: boolean }) => {
+			cleanupStreams();
+			clearTimer();
+			resetRecorder();
+			resetTimer();
+			stopInstantChunkInterval();
+			clearInstantChunkGuard();
+			instantChunkModeRef.current = null;
+			lastInstantChunkAtRef.current = null;
+			instantMp4ActiveRef.current = false;
+			if (instantUploaderRef.current) {
+				void instantUploaderRef.current.cancel();
+			}
+			instantUploaderRef.current = null;
+			setUploadStatus(undefined);
+			setChunkUploads([]);
+			setHasAudioTrack(false);
+
+			if (!options?.preserveInstantVideo) {
+				const pendingInstantVideoId = pendingInstantVideoIdRef.current;
+				pendingInstantVideoIdRef.current = null;
+				videoCreationRef.current = null;
+				setVideoId(null);
+				if (pendingInstantVideoId) {
+					EffectRuntime.runPromise(
+						rpc.VideoDelete(pendingInstantVideoId),
+					).catch(() => {
+						/* ignore */
+					});
+				}
+			}
+		},
+		[
+			cleanupStreams,
+			clearTimer,
+			resetRecorder,
+			resetTimer,
+			stopInstantChunkInterval,
+			clearInstantChunkGuard,
+			rpc,
+			setUploadStatus,
+			setChunkUploads,
+			setHasAudioTrack,
+			setVideoId,
+		],
+	);
+
 	const resetState = useCallback(() => {
-		cleanupStreams();
-		clearTimer();
-		resetRecorder();
-		resetTimer();
-		stopInstantChunkInterval();
-		clearInstantChunkGuard();
-		instantChunkModeRef.current = null;
-		lastInstantChunkAtRef.current = null;
-		instantMp4ActiveRef.current = false;
-		if (instantUploaderRef.current) {
-			void instantUploaderRef.current.cancel();
-		}
-		instantUploaderRef.current = null;
-		videoCreationRef.current = null;
-		const pendingInstantVideoId = pendingInstantVideoIdRef.current;
-		pendingInstantVideoIdRef.current = null;
-		if (pendingInstantVideoId) {
-			EffectRuntime.runPromise(rpc.VideoDelete(pendingInstantVideoId)).catch(
-				() => {
-					/* ignore */
-				},
-			);
-		}
+		cleanupRecordingState();
 		updatePhase("idle");
-		setVideoId(null);
-		setHasAudioTrack(false);
-		setUploadStatus(undefined);
-		setChunkUploads([]);
-	}, [
-		cleanupStreams,
-		clearTimer,
-		resetRecorder,
-		resetTimer,
-		stopInstantChunkInterval,
-		clearInstantChunkGuard,
-		rpc,
-		setUploadStatus,
-		setChunkUploads,
-		updatePhase,
-	]);
+	}, [cleanupRecordingState, updatePhase]);
 
 	useEffect(() => {
 		setCapabilities(detectCapabilities());
@@ -308,7 +323,9 @@ export const useWebRecorder = ({
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
 
-	const startRecording = async () => {
+	const startRecording = async (
+		options?: { reuseInstantVideo?: boolean },
+	) => {
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
 			return;
@@ -473,57 +490,76 @@ export const useWebRecorder = ({
 			const mimeType = supportedMp4MimeType ?? fallbackMimeType;
 			const useInstantMp4 = Boolean(supportedMp4MimeType);
 			instantMp4ActiveRef.current = useInstantMp4;
+			const shouldReuseInstantVideo = Boolean(
+				options?.reuseInstantVideo && videoCreationRef.current,
+			);
 
 			if (useInstantMp4) {
+				let creationResult = videoCreationRef.current;
 				const width = dimensionsRef.current.width;
 				const height = dimensionsRef.current.height;
 				const resolution =
 					width && height ? `${width}x${height}` : undefined;
-				const creation = await EffectRuntime.runPromise(
-					rpc.VideoInstantCreate({
-						orgId: Organisation.OrganisationId.make(organisationId),
-						folderId: Option.none(),
-						resolution,
-						width,
-						height,
-						videoCodec: "h264",
-						audioCodec: hasAudio ? "aac" : undefined,
-						supportsUploadProgress: true,
-					}),
-				);
-				videoCreationRef.current = {
-					id: creation.id,
-					upload: creation.upload,
-					shareUrl: creation.shareUrl,
-				};
-				setVideoId(creation.id);
-				pendingInstantVideoIdRef.current = creation.id;
+				if (!shouldReuseInstantVideo || !creationResult) {
+					const creation = await EffectRuntime.runPromise(
+						rpc.VideoInstantCreate({
+							orgId: Organisation.OrganisationId.make(organisationId),
+							folderId: Option.none(),
+							resolution,
+							width,
+							height,
+							videoCodec: "h264",
+							audioCodec: hasAudio ? "aac" : undefined,
+							supportsUploadProgress: true,
+						}),
+					);
+					creationResult = {
+						id: creation.id,
+						upload: creation.upload,
+						shareUrl: creation.shareUrl,
+					};
+					videoCreationRef.current = creationResult;
+				}
+				if (creationResult) {
+					setVideoId(creationResult.id);
+					pendingInstantVideoIdRef.current = creationResult.id;
+				}
 
 				let uploadId: string | null = null;
 				try {
-					uploadId = await initiateMultipartUpload(creation.id);
+					if (!creationResult) throw new Error("Missing instant recording context");
+					uploadId = await initiateMultipartUpload(creationResult.id);
 				} catch (initError) {
-					await EffectRuntime.runPromise(
-						rpc.VideoDelete(creation.id),
-					).catch(() => {
-						/* ignore */
-					});
+					const orphanId = creationResult?.id;
+					if (orphanId) {
+						await EffectRuntime.runPromise(
+							rpc.VideoDelete(orphanId),
+						).catch(() => {
+							/* ignore */
+						});
+					}
 					pendingInstantVideoIdRef.current = null;
+					videoCreationRef.current = null;
 					throw initError;
 				}
 
+				if (!creationResult) {
+					throw new Error("Instant recording metadata missing");
+				}
 				instantUploaderRef.current = new InstantMp4Uploader({
-					videoId: creation.id,
+					videoId: creationResult.id,
 					uploadId,
 					mimeType: supportedMp4MimeType ?? "",
 					setUploadStatus,
 					sendProgressUpdate: (uploaded, total) =>
-						sendProgressUpdate(creation.id, uploaded, total),
+						sendProgressUpdate(creationResult.id, uploaded, total),
 					onChunkStateChange: setChunkUploads,
 				});
 			} else {
-				videoCreationRef.current = null;
-				pendingInstantVideoIdRef.current = null;
+				if (!shouldReuseInstantVideo) {
+					videoCreationRef.current = null;
+					pendingInstantVideoIdRef.current = null;
+				}
 			}
 
 			const recorder = new MediaRecorder(
@@ -874,8 +910,51 @@ export const useWebRecorder = ({
 		stopRecordingRef.current = stopRecording;
 	}, [stopRecording]);
 
+	const restartRecording = useCallback(async () => {
+		if (isRestarting) return;
+		if (phase !== "recording" && phase !== "paused") return;
+
+		const creationToReuse = videoCreationRef.current;
+		const shouldReuseInstantVideo = Boolean(creationToReuse);
+		setIsRestarting(true);
+
+		try {
+			try {
+				await stopRecordingInternalWrapper();
+			} catch (error) {
+				console.warn("Failed to stop recorder before restart", error);
+			}
+
+			cleanupRecordingState({ preserveInstantVideo: shouldReuseInstantVideo });
+			updatePhase("idle");
+
+			if (shouldReuseInstantVideo && creationToReuse) {
+				await deleteVideoResultFile({ videoId: creationToReuse.id });
+			}
+
+			await startRecording({ reuseInstantVideo: shouldReuseInstantVideo });
+		} catch (error) {
+			console.error("Failed to restart recording", error);
+			toast.error("Could not restart recording. Please try again.");
+			cleanupRecordingState();
+			updatePhase("idle");
+		} finally {
+			setIsRestarting(false);
+		}
+	}, [
+		cleanupRecordingState,
+		isRestarting,
+		phase,
+		startRecording,
+		stopRecordingInternalWrapper,
+		updatePhase,
+	]);
+
 	const canStartRecording =
-		Boolean(organisationId) && !isSettingUp && isBrowserSupported;
+		Boolean(organisationId) &&
+		!isSettingUp &&
+		!isRestarting &&
+		isBrowserSupported;
 	const isPaused = phase === "paused";
 	const isRecordingActive = phase === "recording" || isPaused;
 	const isBusyPhase =
@@ -884,6 +963,7 @@ export const useWebRecorder = ({
 		phase === "creating" ||
 		phase === "converting" ||
 		phase === "uploading";
+	const isBusyState = isBusyPhase || isRestarting;
 
 	return {
 		phase,
@@ -894,13 +974,15 @@ export const useWebRecorder = ({
 		isSettingUp,
 		isRecording: isRecordingActive,
 		isPaused,
-		isBusy: isBusyPhase,
+		isBusy: isBusyState,
 		canStartRecording,
 		startRecording,
 		pauseRecording,
 		resumeRecording,
 		stopRecording,
+		restartRecording,
 		resetState,
+		isRestarting,
 		isBrowserSupported,
 		unsupportedReason,
 		supportsDisplayRecording,
