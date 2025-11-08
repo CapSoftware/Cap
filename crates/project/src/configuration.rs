@@ -414,6 +414,12 @@ pub struct CursorConfiguration {
     pub motion_blur: f32,
     #[serde(default = "yes")]
     pub use_svg: bool,
+    #[serde(default = "CursorConfiguration::default_shadow_size")]
+    pub shadow_size: f32,
+    #[serde(default = "CursorConfiguration::default_shadow_blur")]
+    pub shadow_blur: f32,
+    #[serde(default = "CursorConfiguration::default_shadow_opacity")]
+    pub shadow_strength: f32,
 }
 
 fn yes() -> bool {
@@ -435,6 +441,9 @@ impl Default for CursorConfiguration {
             raw: false,
             motion_blur: 0.5,
             use_svg: true,
+            shadow_size: Self::default_shadow_size(),
+            shadow_blur: Self::default_shadow_blur(),
+            shadow_strength: Self::default_shadow_opacity(),
         }
     }
 }
@@ -445,6 +454,18 @@ impl CursorConfiguration {
 
     fn default_hide_when_idle_delay() -> f32 {
         2.0
+    }
+
+    fn default_shadow_size() -> f32 {
+        1.0
+    }
+
+    fn default_shadow_blur() -> f32 {
+        0.8
+    }
+
+    fn default_shadow_opacity() -> f32 {
+        0.25
     }
 }
 

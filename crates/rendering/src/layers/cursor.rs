@@ -16,6 +16,13 @@ const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
+const FALLBACK_FRAME_DELTA_S: f32 = 1.0 / 60.0; // seconds: first-frame default before we observe real timing (matches legacy 60 fps assumption).
+const SPEED_REFERENCE: f32 = 900.0; // pixels/s: velocity where blur reaches full strength, tuned for a pronounced trail without overwhelming low-speed motion.
+const SPEED_ACTIVATION: f32 = 120.0; // pixels/s: minimum speed before blur activates so gentle moves stay crisp.
+const ACCELERATION_REFERENCE: f32 = 18000.0; // pixels/s^2: acceleration required for full response, balancing snap flicks and stability.
+const ACCELERATION_ACTIVATION: f32 = 4000.0; // pixels/s^2: threshold to start blur from acceleration spikes, avoiding constant trails on micro-movements.
+const MIN_BLUR_THRESHOLD: f32 = 0.04; // unitless [0-1]: minimum combined factor before blur applies to reduce shimmer artifacts.
+const BLUR_INTENSITY_MULTIPLIER: f32 = 6.5; // unitless multiplier: scales blur intensity curve for a stronger yet controlled trail.
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -25,6 +32,14 @@ pub struct CursorLayer {
     bind_group: Option<BindGroup>,
     cursors: HashMap<String, CursorTexture>,
     prev_is_svg_assets_enabled: Option<bool>,
+    last_motion_sample: Option<MotionSample>,
+    last_frame_time: Option<f64>,
+}
+
+struct MotionSample {
+    time: f64,
+    velocity_per_second: [f32; 2],
+    cursor_id: String,
 }
 
 struct Statics {
@@ -182,6 +197,8 @@ impl CursorLayer {
             bind_group: None,
             cursors: Default::default(),
             prev_is_svg_assets_enabled: None,
+            last_motion_sample: None,
+            last_frame_time: None,
         }
     }
 
@@ -196,23 +213,120 @@ impl CursorLayer {
     ) {
         if uniforms.project.cursor.hide {
             self.bind_group = None;
+            self.last_motion_sample = None;
+            self.last_frame_time = None;
             return;
         }
 
         let time_s = segment_frames.recording_time;
+        let time_s_f64 = time_s as f64;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
+            self.last_motion_sample = None;
+            self.last_frame_time = Some(time_s_f64);
             return;
         };
 
-        let velocity: [f32; 2] = [0.0, 0.0];
-        // let velocity: [f32; 2] = [
-        //     interpolated_cursor.velocity.x * 75.0,
-        //     interpolated_cursor.velocity.y * 75.0,
-        // ];
+        let frame_delta_seconds = if let Some(prev_time) = self.last_frame_time {
+            let raw_delta = time_s_f64 - prev_time;
+            if raw_delta.is_finite() && raw_delta > 0.0 {
+                raw_delta.max(1e-3)
+            } else {
+                f64::from(FALLBACK_FRAME_DELTA_S)
+            }
+        } else {
+            f64::from(FALLBACK_FRAME_DELTA_S)
+        };
+        let frame_delta = frame_delta_seconds as f32;
 
-        let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
+        let mut velocity_per_second = [0.0f32; 2];
+        let mut velocity_per_frame = [0.0f32; 2];
+        let mut speed_per_second = 0.0f32;
+
+        if interpolated_cursor.velocity.x.abs() > f32::EPSILON
+            || interpolated_cursor.velocity.y.abs() > f32::EPSILON
+        {
+            let screen_size = constants.options.screen_size.map(|v| v as f32);
+            let raw_velocity = XY::new(
+                interpolated_cursor.velocity.x * screen_size.x,
+                interpolated_cursor.velocity.y * screen_size.y,
+            );
+
+            let crop = ProjectUniforms::get_crop(&constants.options, &uniforms.project);
+            let crop_size = XY::new(crop.size.x as f32, crop.size.y as f32);
+            let display_size = ProjectUniforms::display_size(
+                &constants.options,
+                &uniforms.project,
+                uniforms.resolution_base,
+            )
+            .coord
+            .map(|v| v as f32);
+
+            if crop_size.x > f32::EPSILON && crop_size.y > f32::EPSILON {
+                let frame_velocity = XY::new(
+                    raw_velocity.x * (display_size.x / crop_size.x),
+                    raw_velocity.y * (display_size.y / crop_size.y),
+                );
+
+                let zoom_ratio = uniforms.zoom.bounds.bottom_right - uniforms.zoom.bounds.top_left;
+                let zoom_ratio = XY::new(zoom_ratio.x as f32, zoom_ratio.y as f32);
+
+                let zoomed_per_second = XY::new(
+                    frame_velocity.x * zoom_ratio.x,
+                    frame_velocity.y * zoom_ratio.y,
+                );
+
+                velocity_per_second = [zoomed_per_second.x, zoomed_per_second.y];
+                speed_per_second = (zoomed_per_second.x * zoomed_per_second.x
+                    + zoomed_per_second.y * zoomed_per_second.y)
+                    .sqrt();
+
+                velocity_per_frame = [
+                    zoomed_per_second.x * frame_delta,
+                    zoomed_per_second.y * frame_delta,
+                ];
+            }
+        }
+
+        let prev_sample = self
+            .last_motion_sample
+            .as_ref()
+            .filter(|sample| sample.cursor_id == interpolated_cursor.cursor_id);
+
+        let acceleration_mag = prev_sample.map_or(0.0, |sample| {
+            let dt = (time_s_f64 - sample.time).max(1e-3) as f32;
+            let dv_x = velocity_per_second[0] - sample.velocity_per_second[0];
+            let dv_y = velocity_per_second[1] - sample.velocity_per_second[1];
+            ((dv_x * dv_x + dv_y * dv_y).sqrt()) / dt
+        });
+
+        let motion_blur_setting = uniforms.project.cursor.motion_blur.clamp(0.0, 1.0);
+        let mut motion_blur_amount = 0.0f32;
+
+        if motion_blur_setting > 0.0 {
+            let speed_factor = if speed_per_second <= SPEED_ACTIVATION {
+                0.0
+            } else {
+                ((speed_per_second - SPEED_ACTIVATION)
+                    / (SPEED_REFERENCE - SPEED_ACTIVATION).max(f32::EPSILON))
+                .clamp(0.0, 1.0)
+            };
+
+            let acceleration_factor = if acceleration_mag <= ACCELERATION_ACTIVATION {
+                0.0
+            } else {
+                ((acceleration_mag - ACCELERATION_ACTIVATION)
+                    / (ACCELERATION_REFERENCE - ACCELERATION_ACTIVATION).max(f32::EPSILON))
+                .clamp(0.0, 1.0)
+            };
+
+            let combined = (0.6 * acceleration_factor + 0.4 * speed_factor).clamp(0.0, 1.0);
+
+            if combined > MIN_BLUR_THRESHOLD {
+                motion_blur_amount =
+                    (motion_blur_setting * combined * BLUR_INTENSITY_MULTIPLIER).clamp(0.0, 1.0);
+            }
+        }
 
         let mut cursor_opacity = 1.0f32;
         if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {
@@ -296,6 +410,8 @@ impl CursorLayer {
         }
         let Some(cursor_texture) = self.cursors.get(&interpolated_cursor.cursor_id) else {
             error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
+            self.last_motion_sample = None;
+            self.last_frame_time = Some(time_s_f64);
             return;
         };
 
@@ -356,6 +472,24 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
+        let shadow_size = uniforms
+            .project
+            .cursor
+            .shadow_size
+            .clamp(0.0, 5.0);
+
+        let shadow_blur = uniforms
+            .project
+            .cursor
+            .shadow_blur
+            .clamp(0.0, 1.0);
+
+        let shadow_opacity = uniforms
+            .project
+            .cursor
+            .shadow_strength
+            .clamp(0.0, 1.0);
+
         let cursor_uniforms = CursorUniforms {
             position_size: [
                 zoomed_position.x as f32,
@@ -370,7 +504,13 @@ impl CursorLayer {
                 0.0,
             ],
             screen_bounds: uniforms.display.target_bounds,
-            velocity_blur_opacity: [velocity[0], velocity[1], motion_blur_amount, cursor_opacity],
+            velocity_blur_opacity: [
+                velocity_per_frame[0],
+                velocity_per_frame[1],
+                motion_blur_amount,
+                cursor_opacity,
+            ],
+            shadow_params: [shadow_size, shadow_blur, shadow_opacity, 0.0],
         };
 
         constants.queue.write_buffer(
@@ -378,6 +518,13 @@ impl CursorLayer {
             0,
             bytemuck::cast_slice(&[cursor_uniforms]),
         );
+
+        self.last_frame_time = Some(time_s_f64);
+        self.last_motion_sample = Some(MotionSample {
+            time: time_s_f64,
+            velocity_per_second,
+            cursor_id: interpolated_cursor.cursor_id.clone(),
+        });
 
         self.bind_group = Some(
             self.statics
@@ -401,6 +548,7 @@ pub struct CursorUniforms {
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
     velocity_blur_opacity: [f32; 4],
+    shadow_params: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(

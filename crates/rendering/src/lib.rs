@@ -381,7 +381,7 @@ const CAMERA_PADDING: f32 = 50.0;
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
-    fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
+    pub fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
         project.background.crop.as_ref().cloned().unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {

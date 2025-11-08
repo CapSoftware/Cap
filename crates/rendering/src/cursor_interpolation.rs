@@ -54,24 +54,89 @@ pub fn interpolate_cursor(
         let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
-        let (pos, cursor_id) = cursor.moves.windows(2).find_map(|chunk| {
-            if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
-                let c = &chunk[0];
-                Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))
-            } else {
-                None
-            }
-        })?;
+        interpolate_spline(&cursor.moves, time_ms)
+    }
+}
 
-        Some(InterpolatedCursorPosition {
+fn interpolate_spline(
+    moves: &[CursorMoveEvent],
+    time_ms: f64,
+) -> Option<InterpolatedCursorPosition> {
+    let (segment_index, next) = moves
+        .iter()
+        .enumerate()
+        .find(|(_, event)| event.time_ms >= time_ms)?;
+
+    if segment_index == 0 {
+        return Some(InterpolatedCursorPosition {
             position: Coord::new(XY {
-                x: pos.x as f64,
-                y: pos.y as f64,
+                x: next.x,
+                y: next.y,
             }),
             velocity: XY::new(0.0, 0.0),
-            cursor_id,
-        })
+            cursor_id: next.cursor_id.clone(),
+        });
     }
+
+    let prev_index = segment_index - 1;
+    let prev = &moves[prev_index];
+
+    let span_ms = (next.time_ms - prev.time_ms).max(f64::EPSILON);
+    let t = ((time_ms - prev.time_ms) / span_ms).clamp(0.0, 1.0);
+
+    if moves.len() < 4 {
+        let lerp = |a: f64, b: f64| a + (b - a) * t;
+        let position = Coord::new(XY {
+            x: lerp(prev.x, next.x),
+            y: lerp(prev.y, next.y),
+        });
+        let velocity = XY::new(
+            ((next.x - prev.x) / span_ms) as f32 * 1000.0,
+            ((next.y - prev.y) / span_ms) as f32 * 1000.0,
+        );
+
+        return Some(InterpolatedCursorPosition {
+            position,
+            velocity,
+            cursor_id: prev.cursor_id.clone(),
+        });
+    }
+
+    let p0 = moves.get(prev_index.saturating_sub(1)).unwrap_or(prev);
+    let p3 = moves.get(segment_index + 1).unwrap_or(next);
+
+    let (x, dx_dt) = catmull_rom(p0.x, prev.x, next.x, p3.x, t);
+    let (y, dy_dt) = catmull_rom(p0.y, prev.y, next.y, p3.y, t);
+
+    let mut position = Coord::new(XY { x, y });
+    position.coord.x = position.coord.x.clamp(0.0, 1.0);
+    position.coord.y = position.coord.y.clamp(0.0, 1.0);
+
+    let velocity = XY::new(
+        ((dx_dt / span_ms) * 1000.0) as f32,
+        ((dy_dt / span_ms) * 1000.0) as f32,
+    );
+
+    Some(InterpolatedCursorPosition {
+        position,
+        velocity,
+        cursor_id: prev.cursor_id.clone(),
+    })
+}
+
+fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> (f64, f64) {
+    let t2 = t * t;
+    let t3 = t2 * t;
+
+    let a = 2.0 * p1;
+    let b = -p0 + p2;
+    let c = 2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3;
+    let d = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
+
+    let position = 0.5 * (a + b * t + c * t2 + d * t3);
+    let derivative = 0.5 * (b + 2.0 * c * t + 3.0 * d * t2);
+
+    (position, derivative)
 }
 
 fn get_smoothed_cursor_events(
@@ -168,4 +233,54 @@ struct SmoothedCursorEvent {
     position: XY<f32>,
     velocity: XY<f32>,
     cursor_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn move_event(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "pointer".into(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn linear_fallback_blends_positions() {
+        let moves = vec![move_event(0.0, 0.0, 0.0), move_event(10.0, 1.0, 1.0)];
+
+        let interpolated = interpolate_spline(&moves, 5.0).expect("interpolated cursor");
+
+        assert!((interpolated.position.x - 0.5).abs() < 1e-6);
+        assert!((interpolated.position.y - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn linear_fallback_computes_velocity() {
+        let moves = vec![move_event(0.0, 0.0, 0.0), move_event(20.0, 1.0, -1.0)];
+
+        let interpolated = interpolate_spline(&moves, 10.0).expect("interpolated cursor");
+
+        assert!((interpolated.velocity.x - 50.0).abs() < 1e-3);
+        assert!((interpolated.velocity.y + 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn spline_uses_neighbors_for_smoothing() {
+        let moves = vec![
+            move_event(0.0, 0.0, 0.0),
+            move_event(10.0, 0.5, 0.5),
+            move_event(20.0, 1.0, 1.0),
+            move_event(30.0, 1.5, 1.5),
+        ];
+
+        let interpolated = interpolate_spline(&moves, 15.0).expect("interpolated cursor");
+
+        assert!(interpolated.position.x > 0.5);
+        assert!(interpolated.position.x < 1.0);
+    }
 }

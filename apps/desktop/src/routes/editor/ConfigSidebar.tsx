@@ -52,6 +52,7 @@ import {
 	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideMousePointerClick from "~icons/lucide/mouse-pointer-click";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import { CaptionsTab } from "./CaptionsTab";
@@ -224,6 +225,12 @@ const TAB_IDS = {
 	hotkeys: "hotkeys",
 } as const;
 
+const DEFAULT_CURSOR_SHADOW = {
+	size: 1,
+	blur: 0.8,
+	opacity: 0.25,
+} as const;
+
 export function ConfigSidebar() {
 	const {
 		project,
@@ -241,6 +248,33 @@ export function ConfigSidebar() {
 
 	const clampIdleDelay = (value: number) =>
 		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
+
+	const clampShadowSize = (value: number) =>
+		Math.round(Math.min(3, Math.max(0, value)) * 100) / 100;
+
+	const clampShadowBlur = (value: number) =>
+		Math.round(Math.min(1, Math.max(0, value)) * 100) / 100;
+
+	const clampShadowOpacity = (value: number) =>
+		Math.min(1, Math.max(0, value));
+
+	const cursorShadowSize = () =>
+		clampShadowSize(
+			((project.cursor as { shadowSize?: number }).shadowSize ??
+				DEFAULT_CURSOR_SHADOW.size) as number,
+		);
+
+	const cursorShadowBlur = () =>
+		clampShadowBlur(
+			((project.cursor as { shadowBlur?: number }).shadowBlur ??
+				DEFAULT_CURSOR_SHADOW.blur) as number,
+		);
+
+	const cursorShadowOpacity = () =>
+		clampShadowOpacity(
+			((project.cursor as { shadowStrength?: number }).shadowStrength ??
+				DEFAULT_CURSOR_SHADOW.opacity) as number,
+		);
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -465,16 +499,82 @@ export function ConfigSidebar() {
 							/>
 						}
 					/>
-					<Show when={!project.cursor.hide}>
-						<Field name="Size" icon={<IconCapEnlarge />}>
+				<Show when={!project.cursor.hide}>
+					<Field name="Size" icon={<IconCapEnlarge />}>
+						<Slider
+							value={[project.cursor.size]}
+							onChange={(v) => setProject("cursor", "size", v[0])}
+							minValue={20}
+							maxValue={300}
+							step={1}
+						/>
+					</Field>
+					<Field name="Shadow Size" icon={<IconLucideMousePointerClick class="size-4" />}>
+						<div class="flex items-center gap-3">
 							<Slider
-								value={[project.cursor.size]}
-								onChange={(v) => setProject("cursor", "size", v[0])}
-								minValue={20}
-								maxValue={300}
-								step={1}
+								class="flex-1"
+								value={[cursorShadowSize()]}
+								onChange={(v) =>
+									setProject(
+										"cursor",
+										"shadowSize" as any,
+										clampShadowSize(v[0]),
+									)
+								}
+								minValue={0}
+								maxValue={3}
+								step={0.01}
+								formatTooltip={(value) => `${value.toFixed(2)}×`}
 							/>
-						</Field>
+							<span class="w-16 text-xs text-right text-gray-11">
+								{cursorShadowSize().toFixed(2)}×
+							</span>
+						</div>
+					</Field>
+					<Field name="Shadow Blur" icon={<IconLucideMousePointerClick class="size-4" />}>
+						<div class="flex items-center gap-3">
+							<Slider
+								class="flex-1"
+								value={[cursorShadowBlur()]}
+								onChange={(v) =>
+									setProject(
+										"cursor",
+										"shadowBlur" as any,
+										clampShadowBlur(v[0]),
+									)
+								}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+							<span class="w-12 text-xs text-right text-gray-11">
+								{Math.round(cursorShadowBlur() * 100)}%
+							</span>
+						</div>
+					</Field>
+					<Field name="Shadow Opacity" icon={<IconLucideMousePointerClick class="size-4" />}>
+						<div class="flex items-center gap-3">
+							<Slider
+								class="flex-1"
+								value={[cursorShadowOpacity()]}
+								onChange={(v) =>
+									setProject(
+										"cursor",
+										"shadowStrength" as any,
+										clampShadowOpacity(v[0]),
+									)
+								}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+							<span class="w-12 text-xs text-right text-gray-11">
+								{Math.round(cursorShadowOpacity() * 100)}%
+							</span>
+						</div>
+					</Field>
 						<Field
 							name="Hide When Idle"
 							icon={<IconLucideTimer class="size-4" />}
@@ -568,15 +668,21 @@ export function ConfigSidebar() {
 						/>
 					</Show>
 
-					{/* <Field name="Motion Blur">
-                <Slider
-                  value={[project.cursor.motionBlur]}
-                  onChange={(v) => setProject("cursor", "motionBlur", v[0])}
-                  minValue={0}
-                  maxValue={1}
-                  step={0.001}
-                />
-              </Field> */}
+					<Field name="Motion Blur">
+						<Slider
+							value={[project.cursor.motionBlur ?? 0]}
+							onChange={(v) =>
+								setProject(
+									"cursor",
+									"motionBlur",
+									Math.min(1, Math.max(0, v[0])),
+								)
+							}
+							minValue={0}
+							maxValue={1}
+							step={0.01}
+						/>
+					</Field>
 					{/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
