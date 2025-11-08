@@ -189,24 +189,39 @@ export const InProgressRecordingBar = ({
 		: (phaseMessages[phase] ?? "Processing");
 
 	const handleStop = () => {
-		Promise.resolve(onStop()).catch((error) => {
+		try {
+			const result = onStop();
+			Promise.resolve(result).catch((error) => {
+				console.error("Failed to stop recording", error);
+			});
+		} catch (error) {
 			console.error("Failed to stop recording", error);
-		});
+		}
 	};
 
 	const handlePauseToggle = () => {
 		if (isPaused) {
 			if (!onResume) return;
-			Promise.resolve(onResume()).catch((error) => {
+			try {
+				const result = onResume();
+				Promise.resolve(result).catch((error) => {
+					console.error("Failed to resume recording", error);
+				});
+			} catch (error) {
 				console.error("Failed to resume recording", error);
-			});
+			}
 			return;
 		}
 
 		if (phase === "recording" && onPause) {
-			Promise.resolve(onPause()).catch((error) => {
+			try {
+				const result = onPause();
+				Promise.resolve(result).catch((error) => {
+					console.error("Failed to pause recording", error);
+				});
+			} catch (error) {
 				console.error("Failed to pause recording", error);
-			});
+			}
 		}
 	};
 
@@ -218,11 +233,15 @@ export const InProgressRecordingBar = ({
 
 	const handleRestart = () => {
 		if (!onRestart || !canRestart) return;
-		const result = onRestart();
-		if (result instanceof Promise) {
-			void result.catch(() => {
-				/* ignore */
-			});
+		try {
+			const result = onRestart();
+			if (result instanceof Promise) {
+				void result.catch(() => {
+					/* ignore */
+				});
+			}
+		} catch {
+			/* ignore */
 		}
 	};
 

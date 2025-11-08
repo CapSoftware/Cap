@@ -919,7 +919,7 @@ export const useWebRecorder = ({
 			!freePlanAutoStopTriggeredRef.current
 		) {
 			freePlanAutoStopTriggeredRef.current = true;
-			oast.info(
+			toast.info(
 				"Free plan recordings are limited to 5 minutes. Recording stopped automatically.",
 			);
 			stopRecording().catch((error) => {
