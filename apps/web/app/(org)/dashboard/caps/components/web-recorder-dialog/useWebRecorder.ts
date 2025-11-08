@@ -2,7 +2,7 @@
 
 import { Organisation } from "@cap/web-domain";
 import { useQueryClient } from "@tanstack/react-query";
-import { Option } from "effect";
+import { Cause, Exit, Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -10,11 +10,7 @@ import {
 	createVideoAndGetUploadUrl,
 	deleteVideoResultFile,
 } from "@/actions/video/upload";
-import {
-	EffectRuntime,
-	useEffectMutation,
-	useRpcClient,
-} from "@/lib/EffectRuntime";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
@@ -70,6 +66,14 @@ const INSTANT_UPLOAD_REQUEST_INTERVAL_MS = 1000;
 const INSTANT_CHUNK_GUARD_DELAY_MS = INSTANT_UPLOAD_REQUEST_INTERVAL_MS * 3;
 
 type InstantChunkingMode = "manual" | "timeslice";
+
+const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
+	if (Exit.isFailure(exit)) {
+		throw Cause.squash(exit.cause);
+	}
+
+	return exit.value;
+};
 
 export const useWebRecorder = ({
 	organisationId,
@@ -189,11 +193,19 @@ export const useWebRecorder = ({
 	}, [mediaRecorderRef]);
 
 	const rpc = useRpcClient();
+	type RpcClient = typeof rpc;
+	type VideoInstantCreateVariables = Parameters<
+		RpcClient["VideoInstantCreate"]
+	>[0];
 	const router = useRouter();
 	const { setUploadStatus } = useUploadingContext();
 	const queryClient = useQueryClient();
 	const deleteVideo = useEffectMutation({
 		mutationFn: (id: VideoId) => rpc.VideoDelete(id),
+	});
+	const videoInstantCreate = useEffectMutation({
+		mutationFn: (variables: VideoInstantCreateVariables) =>
+			rpc.VideoInstantCreate(variables),
 	});
 
 	const isFreePlan = !isProUser;
@@ -495,8 +507,8 @@ export const useWebRecorder = ({
 				const height = dimensionsRef.current.height;
 				const resolution = width && height ? `${width}x${height}` : undefined;
 				if (!shouldReuseInstantVideo || !creationResult) {
-					const creation = await EffectRuntime.runPromise(
-						rpc.VideoInstantCreate({
+					const creation = unwrapExitOrThrow(
+						await videoInstantCreate.mutateAsync({
 							orgId: Organisation.OrganisationId.make(organisationId),
 							folderId: Option.none(),
 							resolution,
@@ -705,8 +717,8 @@ export const useWebRecorder = ({
 
 			let creationResult = videoCreationRef.current;
 			if (!creationResult) {
-				const result = await EffectRuntime.runPromise(
-					rpc.VideoInstantCreate({
+				const result = unwrapExitOrThrow(
+					await videoInstantCreate.mutateAsync({
 						orgId: brandedOrgId,
 						folderId: Option.none(),
 						resolution,
@@ -883,6 +895,7 @@ export const useWebRecorder = ({
 		updatePhase,
 		setUploadStatus,
 		deleteVideo,
+		videoInstantCreate,
 		router,
 		stopRecordingInternalWrapper,
 		queryClient,

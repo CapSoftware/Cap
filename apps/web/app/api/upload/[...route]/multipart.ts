@@ -20,7 +20,7 @@ import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
-import { Hono } from "hono";
+import { type MiddlewareHandler, Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { runPromise } from "@/lib/server";
@@ -28,6 +28,34 @@ import { stringOrNumberOptional } from "@/utils/zod";
 import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
+
+const runPromiseAnyEnv = runPromise as <A, E>(
+	effect: Effect.Effect<A, E, any>,
+) => Promise<A>;
+
+const abortRequestSchema = z
+	.object({
+		uploadId: z.string(),
+	})
+	.and(
+		z.union([
+			z.object({ videoId: z.string() }),
+			// deprecated
+			z.object({ fileKey: z.string() }),
+		]),
+	);
+
+type AbortRequestInput = z.input<typeof abortRequestSchema>;
+
+type AbortValidatorInput = {
+	in: { json: AbortRequestInput };
+	out: { json: z.output<typeof abortRequestSchema> };
+};
+
+const abortRequestValidator = zValidator(
+	"json",
+	abortRequestSchema,
+) as MiddlewareHandler<any, "/abort", AbortValidatorInput>;
 
 app.post(
 	"/initiate",
@@ -82,7 +110,7 @@ app.post(
 				);
 			}),
 			Effect.provide(makeCurrentUserLayer(user)),
-			runPromise,
+			runPromiseAnyEnv,
 		);
 		if (resp) return resp;
 
@@ -117,7 +145,7 @@ app.post(
 					);
 
 					return UploadId;
-				}).pipe(runPromise);
+				}).pipe(runPromiseAnyEnv);
 
 				return c.json({ uploadId: uploadId });
 			} catch (s3Error) {
@@ -187,7 +215,7 @@ app.post(
 						);
 
 					return presignedUrl;
-				}).pipe(runPromise);
+				}).pipe(runPromiseAnyEnv);
 
 				return c.json({ presignedUrl });
 			} catch (s3Error) {
@@ -479,27 +507,12 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
+		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromiseAnyEnv);
 	},
 );
 
-app.post(
-	"/abort",
-	zValidator(
-		"json",
-		z
-			.object({
-				uploadId: z.string(),
-			})
-			.and(
-				z.union([
-					z.object({ videoId: z.string() }),
-					// deprecated
-					z.object({ fileKey: z.string() }),
-				]),
-			),
-	),
-	(c) => {
+
+app.post("/abort", abortRequestValidator, (c) => {
 		const { uploadId, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
@@ -528,9 +541,15 @@ app.post(
 			const [video] = maybeVideo.value;
 
 			const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+			type MultipartWithAbort = typeof bucket.multipart & {
+				abort: (
+					...args: Parameters<typeof bucket.multipart.complete>
+				) => ReturnType<typeof bucket.multipart.complete>;
+			};
+			const multipart = bucket.multipart as MultipartWithAbort;
 
 			console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
-			yield* bucket.multipart.abort(fileKey, uploadId);
+			yield* multipart.abort(fileKey, uploadId);
 
 			yield* db.use((db) =>
 				db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
@@ -552,7 +571,7 @@ app.post(
 				);
 			}),
 			Effect.provide(makeCurrentUserLayer(user)),
-			runPromise,
+			runPromiseAnyEnv,
 		);
 	},
 );
