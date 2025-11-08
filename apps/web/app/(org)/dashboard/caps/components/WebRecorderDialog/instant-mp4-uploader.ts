@@ -85,6 +85,13 @@ const completeMultipartUpload = async (
 	});
 };
 
+const abortMultipartUpload = async (videoId: VideoId, uploadId: string) => {
+	await postJson<{ success: boolean }>("/api/upload/multipart/abort", {
+		videoId,
+		uploadId,
+	});
+};
+
 interface FinalizeOptions extends MultipartCompletePayload {
 	finalBlob: Blob;
 	thumbnailUrl?: string;
@@ -367,13 +374,18 @@ export class InstantMp4Uploader {
 
 	async cancel() {
 		if (this.finished) return;
+		this.finished = true;
 		this.bufferedChunks = [];
 		this.bufferedBytes = 0;
 		this.clearChunkStates();
-		try {
-			await this.uploadPromise;
-		} catch {
+		const pendingUpload = this.uploadPromise.catch(() => {
 			// Swallow errors during cancellation cleanup.
+		});
+		try {
+			await abortMultipartUpload(this.videoId, this.uploadId);
+		} catch (error) {
+			console.error("Failed to abort multipart upload", error);
 		}
+		await pendingUpload;
 	}
 }

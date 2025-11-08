@@ -482,3 +482,77 @@ app.post(
 		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);
 	},
 );
+
+app.post(
+	"/abort",
+	zValidator(
+		"json",
+		z
+			.object({
+				uploadId: z.string(),
+			})
+			.and(
+				z.union([
+					z.object({ videoId: z.string() }),
+					// deprecated
+					z.object({ fileKey: z.string() }),
+				]),
+			),
+	),
+	(c) => {
+		const { uploadId, ...body } = c.req.valid("json");
+		const user = c.get("user");
+
+		const fileKey = parseVideoIdOrFileKey(user.id, {
+			...body,
+			subpath: "result.mp4",
+		});
+
+		const videoIdFromFileKey = fileKey.split("/")[1];
+		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+		if (!videoIdRaw) return c.text("Video id not found", 400);
+		const videoId = Video.VideoId.make(videoIdRaw);
+
+		return Effect.gen(function* () {
+			const repo = yield* VideosRepo;
+			const policy = yield* VideosPolicy;
+			const db = yield* Database;
+
+			const maybeVideo = yield* repo
+				.getById(videoId)
+				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+			if (Option.isNone(maybeVideo)) {
+				c.status(404);
+				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
+			}
+			const [video] = maybeVideo.value;
+
+			const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+
+			console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
+			yield* bucket.multipart.abort(fileKey, uploadId);
+
+			yield* db.use((db) =>
+				db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
+			);
+
+			return c.json({ success: true, fileKey, uploadId });
+		}).pipe(
+			Effect.catchAll((error) => {
+				console.error("Failed to abort multipart upload:", error);
+
+				return Effect.succeed(
+					c.json(
+						{
+							error: "Failed to abort multipart upload",
+							details: error instanceof Error ? error.message : String(error),
+						},
+						500,
+					),
+				);
+			}),
+			Effect.provide(makeCurrentUserLayer(user)),
+			runPromise,
+		);
+	},
+);
