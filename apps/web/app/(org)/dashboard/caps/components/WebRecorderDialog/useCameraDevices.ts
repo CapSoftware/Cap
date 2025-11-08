@@ -20,9 +20,12 @@ export const useCameraDevices = (open: boolean) => {
 
 		try {
 			const devices = await navigator.mediaDevices.enumerateDevices();
-			const videoInputs = devices.filter(
-				(device) => device.kind === "videoinput",
-			);
+			const videoInputs = devices.filter((device) => {
+				if (device.kind !== "videoinput") {
+					return false;
+				}
+				return device.deviceId.trim().length > 0;
+			});
 			if (isMountedRef.current) {
 				setAvailableCameras(videoInputs);
 			}

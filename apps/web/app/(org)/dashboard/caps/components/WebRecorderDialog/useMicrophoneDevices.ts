@@ -18,9 +18,12 @@ export const useMicrophoneDevices = (open: boolean) => {
 
 		try {
 			const devices = await navigator.mediaDevices.enumerateDevices();
-			const audioInputs = devices.filter(
-				(device) => device.kind === "audioinput",
-			);
+			const audioInputs = devices.filter((device) => {
+				if (device.kind !== "audioinput") {
+					return false;
+				}
+				return device.deviceId.trim().length > 0;
+			});
 			if (isMountedRef.current) {
 				setAvailableMics(audioInputs);
 			}
