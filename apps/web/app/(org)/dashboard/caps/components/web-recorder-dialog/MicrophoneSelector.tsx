@@ -45,7 +45,8 @@ export const MicrophoneSelector = ({
 	const shouldRequestPermission =
 		permissionSupported && permissionState !== "granted";
 
-	const statusPillDisabled = !shouldRequestPermission && !micEnabled;
+	const statusPillDisabled =
+		disabled || (!shouldRequestPermission && !micEnabled);
 
 	const statusPillClassName = clsx(
 		"px-[0.375rem] h-[1.25rem] min-w-[2.5rem] rounded-full text-[0.75rem] leading-[1.25rem] flex items-center justify-center font-normal transition-colors duration-200 disabled:opacity-100 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:ring-[var(--blue-8)]",
@@ -60,6 +61,12 @@ export const MicrophoneSelector = ({
 	const handleStatusPillClick = async (
 		event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>,
 	) => {
+		if (disabled) {
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+
 		if (shouldRequestPermission) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -90,6 +97,14 @@ export const MicrophoneSelector = ({
 	};
 
 	const handleStatusPillKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+		if (disabled) {
+			if (event.key === "Enter" || event.key === " ") {
+				event.preventDefault();
+				event.stopPropagation();
+			}
+			return;
+		}
+
 		if (event.key === "Enter" || event.key === " ") {
 			handleStatusPillClick(event);
 		}
