@@ -17,6 +17,9 @@ import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
 
+const MAX_S3_DELETE_ATTEMPTS = 3;
+const S3_DELETE_RETRY_BACKOFF_MS = 250;
+
 async function getVideoUploadPresignedUrl({
 	fileKey,
 	duration,
@@ -277,15 +280,94 @@ export async function deleteVideoResultFile({
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Forbidden");
 
-	const bucketId = Option.fromNullable(video.bucketId);
+	const bucketIdOption = Option.fromNullable(video.bucketId);
 	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
+	const logContext = {
+		videoId: video.id,
+		ownerId: video.ownerId,
+		bucketId: video.bucketId ?? null,
+		fileKey,
+	};
 
-	await Effect.gen(function* () {
-		const [bucket] = yield* S3Buckets.getBucketAccess(bucketId);
-		yield* bucket.deleteObject(fileKey);
-	}).pipe(runPromise);
+	try {
+		await db().transaction(async (tx) => {
+			await tx.delete(videoUploads).where(eq(videoUploads.videoId, videoId));
 
-	await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+			await deleteResultObjectWithRetry({
+				bucketIdOption,
+				fileKey,
+				logContext,
+			});
+		});
+	} catch (error) {
+		console.error("video.result.delete.transaction_failure", {
+			...logContext,
+			error: serializeError(error),
+		});
+		throw error;
+	}
 
 	return { success: true };
+}
+
+async function deleteResultObjectWithRetry({
+	bucketIdOption,
+	fileKey,
+	logContext,
+}: {
+	bucketIdOption: Option.Option<string>;
+	fileKey: string;
+	logContext: {
+		videoId: Video.VideoId;
+		ownerId: string;
+		bucketId: string | null;
+		fileKey: string;
+	};
+}) {
+	let attempt = 0;
+	let lastError: unknown;
+	while (attempt < MAX_S3_DELETE_ATTEMPTS) {
+		attempt += 1;
+		try {
+			await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
+				yield* bucket.deleteObject(fileKey);
+			}).pipe(runPromise);
+			return;
+		} catch (error) {
+			lastError = error;
+			console.error("video.result.delete.s3_failure", {
+				...logContext,
+				attempt,
+				maxAttempts: MAX_S3_DELETE_ATTEMPTS,
+				error: serializeError(error),
+			});
+
+			if (attempt < MAX_S3_DELETE_ATTEMPTS) {
+				await sleep(S3_DELETE_RETRY_BACKOFF_MS * attempt);
+			}
+		}
+	}
+
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Failed to delete video result from S3");
+}
+
+function serializeError(error: unknown) {
+	if (error instanceof Error) {
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+		};
+	}
+
+	return { name: "UnknownError", message: String(error) };
+}
+
+function sleep(durationMs: number) {
+	return new Promise<void>((resolve) => {
+		setTimeout(resolve, durationMs);
+	});
 }
