@@ -125,6 +125,7 @@ export const WebRecorderDialog = () => {
 		durationMs,
 		hasAudioTrack,
 		chunkUploads,
+		errorDownload,
 		isRecording,
 		isBusy,
 		isRestarting,
@@ -164,12 +165,7 @@ export const WebRecorderDialog = () => {
 		}
 
 		setRecordingMode("camera");
-	}, [
-		supportCheckCompleted,
-		supportsDisplayRecording,
-		recordingMode,
-		setRecordingMode,
-	]);
+	}, [supportCheckCompleted, supportsDisplayRecording, recordingMode]);
 
 	const {
 		handlePointerDownOutside,
@@ -226,7 +222,7 @@ export const WebRecorderDialog = () => {
 		setSettingsOpen(false);
 	};
 
-	const showInProgressBar = isRecording || isBusy;
+	const showInProgressBar = isRecording || isBusy || phase === "error";
 	const recordingTimerDisplayMs = user.isPro
 		? durationMs
 		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
@@ -338,6 +334,7 @@ export const WebRecorderDialog = () => {
 					durationMs={recordingTimerDisplayMs}
 					hasAudioTrack={hasAudioTrack}
 					chunkUploads={chunkUploads}
+					errorDownload={errorDownload}
 					onStop={handleStopClick}
 					onPause={pauseRecording}
 					onResume={resumeRecording}

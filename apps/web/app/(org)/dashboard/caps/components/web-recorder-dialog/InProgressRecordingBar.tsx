@@ -23,7 +23,11 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@/components/ui/popover";
-import type { ChunkUploadState, RecorderPhase } from "./web-recorder-types";
+import type {
+	ChunkUploadState,
+	RecorderPhase,
+	RecordingFailureDownload,
+} from "./web-recorder-types";
 
 const phaseMessages: Partial<Record<RecorderPhase, string>> = {
 	recording: "Recording",
@@ -56,6 +60,7 @@ interface InProgressRecordingBarProps {
 	onResume?: () => void | Promise<void>;
 	onRestart?: () => void | Promise<void>;
 	isRestarting?: boolean;
+	errorDownload?: RecordingFailureDownload | null;
 }
 
 const DRAG_PADDING = 12;
@@ -70,6 +75,7 @@ export const InProgressRecordingBar = ({
 	onResume,
 	onRestart,
 	isRestarting = false,
+	errorDownload,
 }: InProgressRecordingBarProps) => {
 	const [mounted, setMounted] = useState(false);
 	const [position, setPosition] = useState({ x: 0, y: 24 });
@@ -182,8 +188,9 @@ export const InProgressRecordingBar = ({
 	}
 
 	const isPaused = phase === "paused";
-	const canStop = phase === "recording" || isPaused;
-	const showTimer = phase === "recording" || isPaused;
+	const isErrorState = phase === "error";
+	const canStop = (phase === "recording" || isPaused) && !isErrorState;
+	const showTimer = (phase === "recording" || isPaused) && !isErrorState;
 	const statusText = showTimer
 		? formatDuration(durationMs)
 		: (phaseMessages[phase] ?? "Processing");
@@ -246,6 +253,7 @@ export const InProgressRecordingBar = ({
 	};
 
 	return createPortal(
+		// biome-ignore lint/a11y/noStaticElementInteractions: The floating recorder bar must capture pointer events for drag without extra key handlers.
 		<div
 			ref={containerRef}
 			className={clsx(
@@ -254,71 +262,111 @@ export const InProgressRecordingBar = ({
 			)}
 			style={{ left: `${position.x}px`, top: `${position.y}px` }}
 			onMouseDown={handlePointerDown}
-			role="status"
+			role="presentation"
+			tabIndex={-1}
 			aria-live="polite"
 		>
 			<div className="flex flex-row items-stretch rounded-[0.9rem] border border-gray-5 bg-gray-1 text-gray-12 shadow-[0_16px_60px_rgba(0,0,0,0.35)] min-w-[360px]">
-				<div className="flex flex-row justify-between flex-1 gap-3 p-[0.25rem]">
-					<button
-						type="button"
+				{isErrorState ? (
+					<div
+						className="flex flex-1 items-center justify-between gap-3 p-3"
 						data-no-drag
-						onClick={handleStop}
-						disabled={!canStop}
-						className="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.35rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
 					>
-						<StopCircle className="size-5" />
-						<span className="font-[500] text-[0.875rem] tabular-nums">
-							{statusText}
-						</span>
-					</button>
-
-					<div className="flex gap-3 items-center" data-no-drag>
-						<InlineChunkProgress chunkUploads={chunkUploads} />
-						<div className="flex relative justify-center items-center w-8 h-8">
-							{hasAudioTrack ? (
-								<>
-									<Mic className="size-5 text-gray-12" />
-									<div className="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
-										<div
-											className="absolute inset-0 bg-blue-9 transition-transform duration-200"
-											style={{
-												transform: hasAudioTrack
-													? "translateX(0%)"
-													: "translateX(-100%)",
-											}}
-										/>
-									</div>
-								</>
+						<div className="flex flex-col text-left">
+							<span className="text-[0.95rem] font-semibold text-red-11">
+								Recording failed.
+							</span>
+							{errorDownload ? (
+								<a
+									href={errorDownload.url}
+									download={errorDownload.fileName}
+									className="text-[0.85rem] font-medium text-blue-11 underline underline-offset-2 hover:text-blue-12 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-9"
+								>
+									Download here.
+								</a>
 							) : (
-								<MicOff className="text-gray-7 size-5" />
+								<span className="text-[0.8rem] text-gray-11">
+									Download unavailable.
+								</span>
 							)}
 						</div>
-
-						<ActionButton
-							data-no-drag
-							onClick={handlePauseToggle}
-							disabled={!canTogglePause}
-							aria-label={isPaused ? "Resume recording" : "Pause recording"}
-						>
-							{isPaused ? (
-								<PlayCircle className="size-5" />
-							) : (
-								<PauseCircle className="size-5" />
-							)}
-						</ActionButton>
-						<ActionButton
-							data-no-drag
-							onClick={handleRestart}
-							disabled={!canRestart}
-							aria-label="Restart recording"
-							aria-busy={isRestarting}
-						>
-							<RotateCcw
-								className={clsx("size-5", isRestarting && "animate-spin")}
-							/>
-						</ActionButton>
+						{Boolean(onRestart) && (canRestart || phase === "error") && (
+							<ActionButton
+								data-no-drag
+								onClick={handleRestart}
+								disabled={!(canRestart || phase === "error")}
+								aria-label="Restart recording"
+								aria-busy={isRestarting}
+							>
+								<RotateCcw
+									className={clsx("size-5", isRestarting && "animate-spin")}
+								/>
+							</ActionButton>
+						)}
 					</div>
-				</div>
+				) : (
+					<div className="flex flex-row justify-between flex-1 gap-3 p-[0.25rem]">
+						<button
+							type="button"
+							data-no-drag
+							onClick={handleStop}
+							disabled={!canStop}
+							className="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.35rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
+						>
+							<StopCircle className="size-5" />
+							<span className="font-[500] text-[0.875rem] tabular-nums">
+								{statusText}
+							</span>
+						</button>
+
+						<div className="flex gap-3 items-center" data-no-drag>
+							<InlineChunkProgress chunkUploads={chunkUploads} />
+							<div className="flex relative justify-center items-center w-8 h-8">
+								{hasAudioTrack ? (
+									<>
+										<Mic className="size-5 text-gray-12" />
+										<div className="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
+											<div
+												className="absolute inset-0 bg-blue-9 transition-transform duration-200"
+												style={{
+													transform: hasAudioTrack
+														? "translateX(0%)"
+														: "translateX(-100%)",
+												}}
+											/>
+										</div>
+									</>
+								) : (
+									<MicOff className="text-gray-7 size-5" />
+								)}
+							</div>
+
+							<ActionButton
+								data-no-drag
+								onClick={handlePauseToggle}
+								disabled={!canTogglePause}
+								aria-label={isPaused ? "Resume recording" : "Pause recording"}
+							>
+								{isPaused ? (
+									<PlayCircle className="size-5" />
+								) : (
+									<PauseCircle className="size-5" />
+								)}
+							</ActionButton>
+							<ActionButton
+								data-no-drag
+								onClick={handleRestart}
+								disabled={!canRestart}
+								aria-label="Restart recording"
+								aria-busy={isRestarting}
+							>
+								<RotateCcw
+									className={clsx("size-5", isRestarting && "animate-spin")}
+								/>
+							</ActionButton>
+						</div>
+					</div>
+				)}
 				<div
 					className="cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 text-gray-9"
 					aria-hidden
@@ -351,8 +399,7 @@ const InlineChunkProgress = ({
 }: {
 	chunkUploads: ChunkUploadState[];
 }) => {
-	if (chunkUploads.length === 0) return null;
-
+	const hasChunks = chunkUploads.length > 0;
 	const completedCount = chunkUploads.filter(
 		(chunk) => chunk.status === "complete",
 	).length;
@@ -437,6 +484,10 @@ const InlineChunkProgress = ({
 		error: "text-red-11",
 	};
 
+	if (!hasChunks) {
+		return null;
+	}
+
 	return (
 		<Popover
 			open={isPopoverOpen}
@@ -465,6 +516,7 @@ const InlineChunkProgress = ({
 						aria-label="Upload progress"
 					>
 						<svg className="h-5 w-5 -rotate-90" viewBox="0 0 36 36">
+							<title>Upload progress</title>
 							<circle
 								className="fill-none stroke-gray-4"
 								strokeWidth={4}
