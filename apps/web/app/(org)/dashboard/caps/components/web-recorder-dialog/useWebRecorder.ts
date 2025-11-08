@@ -10,7 +10,11 @@ import {
 	createVideoAndGetUploadUrl,
 	deleteVideoResultFile,
 } from "@/actions/video/upload";
-import { EffectRuntime, useRpcClient } from "@/lib/EffectRuntime";
+import {
+	EffectRuntime,
+	useEffectMutation,
+	useRpcClient,
+} from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
@@ -188,6 +192,9 @@ export const useWebRecorder = ({
 	const router = useRouter();
 	const { setUploadStatus } = useUploadingContext();
 	const queryClient = useQueryClient();
+	const deleteVideo = useEffectMutation({
+		mutationFn: (id: VideoId) => rpc.VideoDelete(id),
+	});
 
 	const isFreePlan = !isProUser;
 
@@ -271,11 +278,7 @@ export const useWebRecorder = ({
 				videoCreationRef.current = null;
 				setVideoId(null);
 				if (pendingInstantVideoId) {
-					EffectRuntime.runPromise(
-						rpc.VideoDelete(pendingInstantVideoId),
-					).catch(() => {
-						/* ignore */
-					});
+					void deleteVideo.mutateAsync(pendingInstantVideoId);
 				}
 			}
 		},
@@ -286,7 +289,7 @@ export const useWebRecorder = ({
 			resetTimer,
 			stopInstantChunkInterval,
 			clearInstantChunkGuard,
-			rpc,
+			deleteVideo,
 			setUploadStatus,
 			setChunkUploads,
 			setHasAudioTrack,
@@ -524,11 +527,7 @@ export const useWebRecorder = ({
 				} catch (initError) {
 					const orphanId = creationResult?.id;
 					if (orphanId) {
-						await EffectRuntime.runPromise(rpc.VideoDelete(orphanId)).catch(
-							() => {
-								/* ignore */
-							},
-						);
+						await deleteVideo.mutateAsync(orphanId);
 					}
 					pendingInstantVideoIdRef.current = null;
 					videoCreationRef.current = null;
@@ -611,11 +610,7 @@ export const useWebRecorder = ({
 				instantMp4ActiveRef.current = false;
 				videoCreationRef.current = null;
 				pendingInstantVideoIdRef.current = null;
-				await EffectRuntime.runPromise(rpc.VideoDelete(orphanVideoId)).catch(
-					() => {
-						/* ignore */
-					},
-				);
+				await deleteVideo.mutateAsync(orphanVideoId);
 			}
 
 			console.error("Failed to start recording", err);
@@ -869,9 +864,7 @@ export const useWebRecorder = ({
 
 			const idToDelete = createdVideoId ?? videoId;
 			if (idToDelete) {
-				EffectRuntime.runPromise(rpc.VideoDelete(idToDelete)).catch(() => {
-					/* ignore */
-				});
+				await deleteVideo.mutateAsync(idToDelete);
 				if (pendingInstantVideoIdRef.current === idToDelete) {
 					pendingInstantVideoIdRef.current = null;
 				}
@@ -889,7 +882,7 @@ export const useWebRecorder = ({
 		videoId,
 		updatePhase,
 		setUploadStatus,
-		rpc,
+		deleteVideo,
 		router,
 		stopRecordingInternalWrapper,
 		queryClient,
