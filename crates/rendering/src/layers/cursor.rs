@@ -16,6 +16,8 @@ const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
+const MAX_CURSOR_VELOCITY_PX_PER_FRAME: f32 = 220.0;
+const MOTION_BLUR_SPEED_BASE: f32 = 22.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -205,14 +207,30 @@ impl CursorLayer {
             return;
         };
 
-        let velocity: [f32; 2] = [0.0, 0.0];
-        // let velocity: [f32; 2] = [
-        //     interpolated_cursor.velocity.x * 75.0,
-        //     interpolated_cursor.velocity.y * 75.0,
-        // ];
+        let fps = uniforms.frame_rate.max(1) as f32;
+        let screen_size = constants.options.screen_size;
+        let mut velocity = [
+            (interpolated_cursor.velocity.x * screen_size.x as f32) / fps,
+            (interpolated_cursor.velocity.y * screen_size.y as f32) / fps,
+        ];
+        velocity[0] = velocity[0].clamp(
+            -MAX_CURSOR_VELOCITY_PX_PER_FRAME,
+            MAX_CURSOR_VELOCITY_PX_PER_FRAME,
+        );
+        velocity[1] = velocity[1].clamp(
+            -MAX_CURSOR_VELOCITY_PX_PER_FRAME,
+            MAX_CURSOR_VELOCITY_PX_PER_FRAME,
+        );
 
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
+        let user_motion_blur = uniforms.project.cursor.motion_blur.clamp(0.0, 1.0);
+        let intensity_multiplier = (user_motion_blur / 0.35).max(0.0);
+        let motion_blur_amount = if user_motion_blur <= f32::EPSILON {
+            0.0
+        } else {
+            let dynamic = (speed / MOTION_BLUR_SPEED_BASE).clamp(0.0, 1.0);
+            (dynamic.powf(0.75) * intensity_multiplier).min(2.5)
+        };
 
         let mut cursor_opacity = 1.0f32;
         if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {

@@ -45,6 +45,7 @@ import {
 	type BackgroundSource,
 	type CameraShape,
 	type ClipOffsets,
+	type CursorAnimationStyle,
 	commands,
 	type SceneSegment,
 	type StereoMode,
@@ -54,6 +55,8 @@ import {
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
+import IconLucideRabbit from "~icons/lucide/rabbit";
+import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
 import {
@@ -215,6 +218,59 @@ const BACKGROUND_THEMES = {
 	orange: "Orange",
 };
 
+type CursorPresetValues = {
+	tension: number;
+	mass: number;
+	friction: number;
+};
+
+const CURSOR_ANIMATION_STYLE_OPTIONS = [
+	{
+		value: "slow",
+		label: "Slow",
+		description: "Relaxed easing with a gentle follow and higher inertia.",
+		preset: { tension: 65, mass: 1.8, friction: 16 },
+	},
+	{
+		value: "mellow",
+		label: "Mellow",
+		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
+		preset: { tension: 120, mass: 1.1, friction: 18 },
+	},
+	{
+		value: "custom",
+		label: "Custom",
+		description: "Tune tension, friction, and mass manually for full control.",
+	},
+] satisfies Array<{
+	value: CursorAnimationStyle;
+	label: string;
+	description: string;
+	preset?: CursorPresetValues;
+}>;
+
+const CURSOR_PRESET_TOLERANCE = {
+	tension: 1,
+	mass: 0.05,
+	friction: 0.2,
+} as const;
+
+const findCursorPreset = (
+	values: CursorPresetValues,
+): CursorAnimationStyle | null => {
+	const preset = CURSOR_ANIMATION_STYLE_OPTIONS.find(
+		(option) =>
+			option.preset &&
+			Math.abs(option.preset.tension - values.tension) <=
+				CURSOR_PRESET_TOLERANCE.tension &&
+			Math.abs(option.preset.mass - values.mass) <= CURSOR_PRESET_TOLERANCE.mass &&
+			Math.abs(option.preset.friction - values.friction) <=
+				CURSOR_PRESET_TOLERANCE.friction,
+	);
+
+	return preset?.value ?? null;
+};
+
 const TAB_IDS = {
 	background: "background",
 	camera: "camera",
@@ -241,6 +297,40 @@ export function ConfigSidebar() {
 
 	const clampIdleDelay = (value: number) =>
 		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
+
+	type CursorPhysicsKey = "tension" | "mass" | "friction";
+
+	const setCursorPhysics = (key: CursorPhysicsKey, value: number) => {
+		const nextValues: CursorPresetValues = {
+			tension: key === "tension" ? value : project.cursor.tension,
+			mass: key === "mass" ? value : project.cursor.mass,
+			friction: key === "friction" ? value : project.cursor.friction,
+		};
+		const matched = findCursorPreset(nextValues);
+		const nextStyle = (matched ?? "custom") as CursorAnimationStyle;
+
+		batch(() => {
+			setProject("cursor", key, value);
+			if (project.cursor.animationStyle !== nextStyle) {
+				setProject("cursor", "animationStyle", nextStyle);
+			}
+		});
+	};
+
+	const applyCursorStylePreset = (style: CursorAnimationStyle) => {
+		const option = CURSOR_ANIMATION_STYLE_OPTIONS.find(
+			(item) => item.value === style,
+		);
+
+		batch(() => {
+			setProject("cursor", "animationStyle", style);
+			if (option?.preset) {
+				setProject("cursor", "tension", option.preset.tension);
+				setProject("cursor", "mass", option.preset.mass);
+				setProject("cursor", "friction", option.preset.friction);
+			}
+		});
+	};
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -517,6 +607,38 @@ export function ConfigSidebar() {
 								</div>
 							</Subfield>
 						</Show>
+						<Field
+							name="Cursor Movement Style"
+							icon={<IconLucideRabbit class="size-4" />}
+						>
+							<RadioGroup
+								class="flex flex-col gap-2"
+								value={project.cursor.animationStyle}
+								onChange={(value) =>
+									applyCursorStylePreset(value as CursorAnimationStyle)
+								}
+							>
+									{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
+										<RadioGroup.Item
+											value={option.value}
+											class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+										>
+											<RadioGroup.ItemInput class="sr-only" />
+											<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+												<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+												<div class="flex flex-col text-left">
+													<span class="text-sm font-medium text-gray-12">
+														{option.label}
+													</span>
+													<span class="text-xs text-gray-11">
+														{option.description}
+													</span>
+												</div>
+											</RadioGroup.ItemLabel>
+										</RadioGroup.Item>
+									))}
+								</RadioGroup>
+							</Field>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
@@ -536,7 +658,7 @@ export function ConfigSidebar() {
 									<Field name="Tension">
 										<Slider
 											value={[project.cursor.tension]}
-											onChange={(v) => setProject("cursor", "tension", v[0])}
+											onChange={(v) => setCursorPhysics("tension", v[0])}
 											minValue={1}
 											maxValue={500}
 											step={1}
@@ -545,7 +667,7 @@ export function ConfigSidebar() {
 									<Field name="Friction">
 										<Slider
 											value={[project.cursor.friction]}
-											onChange={(v) => setProject("cursor", "friction", v[0])}
+											onChange={(v) => setCursorPhysics("friction", v[0])}
 											minValue={0}
 											maxValue={50}
 											step={0.1}
@@ -554,7 +676,7 @@ export function ConfigSidebar() {
 									<Field name="Mass">
 										<Slider
 											value={[project.cursor.mass]}
-											onChange={(v) => setProject("cursor", "mass", v[0])}
+											onChange={(v) => setCursorPhysics("mass", v[0])}
 											minValue={0.1}
 											maxValue={10}
 											step={0.01}
@@ -575,6 +697,18 @@ export function ConfigSidebar() {
 								/>
 							}
 						/>
+						<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
+							<Slider
+								value={[project.cursor.motionBlur ?? 0]}
+								onChange={(v) =>
+									setProject("cursor", "motionBlur" as any, v[0])
+								}
+								minValue={0}
+								maxValue={1}
+								step={0.01}
+								formatTooltip={(value) => `${Math.round(value * 100)}%`}
+							/>
+						</Field>
 					</Show>
 
 					{/* <Field name="Motion Blur">

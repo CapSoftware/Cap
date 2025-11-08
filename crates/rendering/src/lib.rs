@@ -363,6 +363,7 @@ impl RenderVideoConstants {
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
     pub cursor_size: f32,
+    pub frame_rate: u32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     camera_only: Option<CompositeVideoFrameUniforms>,
@@ -979,6 +980,7 @@ impl ProjectUniforms {
             zoom,
             scene,
             interpolated_cursor,
+            frame_rate: fps,
         }
     }
 }

@@ -102,7 +102,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    final_color *= vec4<f32>(1.0, 1.0, 1.0, 1.0 - motion_blur_amount * 0.2);
+    // Preserve opacity regardless of blur intensity so the cursor stays fully visible.
     final_color *= opacity;
 
     return final_color;
