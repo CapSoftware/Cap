@@ -11,7 +11,12 @@ import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
-import { type Folder, type Organisation, Video, S3Bucket } from "@cap/web-domain";
+import {
+	type Folder,
+	type Organisation,
+	S3Bucket,
+	Video,
+} from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -322,7 +327,7 @@ async function deleteResultObjectWithRetry({
 	fileKey,
 	logContext,
 }: {
-		bucketIdOption: Option.Option<S3Bucket.S3BucketId>;
+	bucketIdOption: Option.Option<S3Bucket.S3BucketId>;
 	fileKey: string;
 	logContext: {
 		videoId: Video.VideoId;

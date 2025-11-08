@@ -18,6 +18,11 @@ type UploadProgressUpdateInput = Schema.Type<
 type InstantRecordingCreateInput = Schema.Type<
 	typeof Video.InstantRecordingCreateInput
 >;
+type OptionValue<T> = T extends Option.Option<infer Value> ? Value : never;
+type RepoMetadataValue = OptionValue<RepoCreateVideoInput["metadata"]>;
+type RepoTranscriptionStatusValue = OptionValue<
+	RepoCreateVideoInput["transcriptionStatus"]
+>;
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
@@ -213,11 +218,18 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							.where(Dz.eq(Db.s3Buckets.ownerId, user.id)),
 					);
 
-					const bucketId = Option.fromNullable(customBucket?.id);
-					const folderId = input.folderId ?? Option.none<Folder.FolderId>();
-					const width = Option.fromNullable(input.width);
-					const height = Option.fromNullable(input.height);
-					const duration = Option.fromNullable(input.durationSeconds);
+					const bucketId: RepoCreateVideoInput["bucketId"] =
+						Option.fromNullable(customBucket?.id);
+					const folderId: RepoCreateVideoInput["folderId"] =
+						input.folderId ?? Option.none<Folder.FolderId>();
+					const width: RepoCreateVideoInput["width"] = Option.fromNullable(
+						input.width,
+					);
+					const height: RepoCreateVideoInput["height"] = Option.fromNullable(
+						input.height,
+					);
+					const duration: RepoCreateVideoInput["duration"] =
+						Option.fromNullable(input.durationSeconds);
 
 					const now = new Date();
 					const formattedDate = `${now.getDate()} ${now.toLocaleString(
@@ -227,20 +239,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						},
 					)} ${now.getFullYear()}`;
 
-					const createData = {
+					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-						source: { type: "webMP4" as const },
+						source: { type: "webMP4" },
 						bucketId,
 						folderId,
 						width,
 						height,
 						duration,
-						metadata: Option.none(),
-						transcriptionStatus: Option.none(),
-					} as unknown as RepoCreateVideoInput;
+						metadata: Option.none<RepoMetadataValue>(),
+						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
+					};
 					const videoId = yield* repo.create(createData);
 
 					if (input.supportsUploadProgress ?? true)
