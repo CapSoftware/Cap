@@ -182,6 +182,13 @@ export const WebRecorderDialog = () => {
 	});
 
 	const handleOpenChange = (next: boolean) => {
+		if (next && supportCheckCompleted && !isBrowserSupported) {
+			toast.error(
+				"This browser isn't compatible with Cap's web recorder. We recommend Google Chrome or other Chromium-based browsers.",
+			);
+			return;
+		}
+
 		if (!next && isBusy) {
 			toast.info("Keep this dialog open while your upload finishes.");
 			return;
