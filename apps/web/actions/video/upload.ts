@@ -307,6 +307,11 @@ export async function deleteVideoResultFile({
 		throw error;
 	}
 
+	revalidatePath(`/s/${videoId}`);
+	revalidatePath("/dashboard/caps");
+	revalidatePath("/dashboard/folder");
+	revalidatePath("/dashboard/spaces");
+
 	return { success: true };
 }
 
