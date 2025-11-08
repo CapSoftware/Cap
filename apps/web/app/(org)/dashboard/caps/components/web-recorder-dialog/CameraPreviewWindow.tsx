@@ -414,7 +414,7 @@ export const CameraPreviewWindow = ({
 		return () => {
 			document.removeEventListener("visibilitychange", handleVisibilityChange);
 		};
-	}, [videoDimensions, isPictureInPictureSupported]);
+	}, [videoDimensions, isPictureInPictureSupported, canUseAutoPiPAttribute]);
 
 	useEffect(() => {
 		return () => {
