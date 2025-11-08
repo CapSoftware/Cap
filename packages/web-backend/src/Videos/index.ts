@@ -232,7 +232,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-						source: { type: "desktopMP4" as const },
+						source: { type: "webMP4" as const },
 						bucketId,
 						folderId,
 						width,

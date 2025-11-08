@@ -203,7 +203,7 @@ export async function createVideoAndGetUploadUrl({
 			} - ${formattedDate}`,
 			ownerId: user.id,
 			orgId,
-			source: { type: "desktopMP4" as const },
+			source: { type: "webMP4" as const },
 			isScreenshot,
 			bucket: customBucket?.id,
 			public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,

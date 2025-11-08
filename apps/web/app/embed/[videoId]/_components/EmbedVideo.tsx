@@ -148,12 +148,14 @@ export const EmbedVideo = forwardRef<
 			}
 		}, [chapters]);
 
+		const isMp4Source =
+			data.source.type === "desktopMP4" || data.source.type === "webMP4";
 		let videoSrc: string;
 		let enableCrossOrigin = false;
 
-		if (data.source.type === "desktopMP4") {
+		if (isMp4Source) {
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-			// Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
+			// Start with CORS enabled for MP4 sources, CapVideoPlayer will disable if needed
 			enableCrossOrigin = true;
 		} else if (
 			NODE_ENV === "development" ||
@@ -195,7 +197,7 @@ export const EmbedVideo = forwardRef<
 		return (
 			<>
 				<div className="relative w-screen h-screen rounded-xl">
-					{data.source.type === "desktopMP4" ? (
+					{isMp4Source ? (
 						<CapVideoPlayer
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"

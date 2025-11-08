@@ -20,7 +20,7 @@ export class Video extends Schema.Class<Video>("Video")({
 	name: Schema.String,
 	public: Schema.Boolean,
 	source: Schema.Struct({
-		type: Schema.Literal("MediaConvert", "local", "desktopMP4"),
+		type: Schema.Literal("MediaConvert", "local", "desktopMP4", "webMP4"),
 	}),
 	metadata: Schema.OptionFromNullOr(
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
@@ -53,7 +53,10 @@ export class Video extends Schema.Class<Video>("Video")({
 				subpath: "combined-source/stream.m3u8",
 			});
 
-		if (self.source.type === "desktopMP4")
+		if (
+			self.source.type === "desktopMP4" ||
+			self.source.type === "webMP4"
+		)
 			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
 	}
 }
