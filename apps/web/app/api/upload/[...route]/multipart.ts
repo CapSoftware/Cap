@@ -20,7 +20,7 @@ import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
-import { type MiddlewareHandler, Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { runPromise } from "@/lib/server";
@@ -511,67 +511,65 @@ app.post(
 	},
 );
 
-
 app.post("/abort", abortRequestValidator, (c) => {
-		const { uploadId, ...body } = c.req.valid("json");
-		const user = c.get("user");
+	const { uploadId, ...body } = c.req.valid("json");
+	const user = c.get("user");
 
-		const fileKey = parseVideoIdOrFileKey(user.id, {
-			...body,
-			subpath: "result.mp4",
-		});
+	const fileKey = parseVideoIdOrFileKey(user.id, {
+		...body,
+		subpath: "result.mp4",
+	});
 
-		const videoIdFromFileKey = fileKey.split("/")[1];
-		const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
-		if (!videoIdRaw) return c.text("Video id not found", 400);
-		const videoId = Video.VideoId.make(videoIdRaw);
+	const videoIdFromFileKey = fileKey.split("/")[1];
+	const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
+	if (!videoIdRaw) return c.text("Video id not found", 400);
+	const videoId = Video.VideoId.make(videoIdRaw);
 
-		return Effect.gen(function* () {
-			const repo = yield* VideosRepo;
-			const policy = yield* VideosPolicy;
-			const db = yield* Database;
+	return Effect.gen(function* () {
+		const repo = yield* VideosRepo;
+		const policy = yield* VideosPolicy;
+		const db = yield* Database;
 
-			const maybeVideo = yield* repo
-				.getById(videoId)
-				.pipe(Policy.withPolicy(policy.isOwner(videoId)));
-			if (Option.isNone(maybeVideo)) {
-				c.status(404);
-				return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
-			}
-			const [video] = maybeVideo.value;
+		const maybeVideo = yield* repo
+			.getById(videoId)
+			.pipe(Policy.withPolicy(policy.isOwner(videoId)));
+		if (Option.isNone(maybeVideo)) {
+			c.status(404);
+			return c.text(`Video '${encodeURIComponent(videoId)}' not found`);
+		}
+		const [video] = maybeVideo.value;
 
-			const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
-			type MultipartWithAbort = typeof bucket.multipart & {
-				abort: (
-					...args: Parameters<typeof bucket.multipart.complete>
-				) => ReturnType<typeof bucket.multipart.complete>;
-			};
-			const multipart = bucket.multipart as MultipartWithAbort;
+		const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		type MultipartWithAbort = typeof bucket.multipart & {
+			abort: (
+				...args: Parameters<typeof bucket.multipart.complete>
+			) => ReturnType<typeof bucket.multipart.complete>;
+		};
+		const multipart = bucket.multipart as MultipartWithAbort;
 
-			console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
-			yield* multipart.abort(fileKey, uploadId);
+		console.log(`Aborting multipart upload ${uploadId} for key: ${fileKey}`);
+		yield* multipart.abort(fileKey, uploadId);
 
-			yield* db.use((db) =>
-				db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
-			);
-
-			return c.json({ success: true, fileKey, uploadId });
-		}).pipe(
-			Effect.catchAll((error) => {
-				console.error("Failed to abort multipart upload:", error);
-
-				return Effect.succeed(
-					c.json(
-						{
-							error: "Failed to abort multipart upload",
-							details: error instanceof Error ? error.message : String(error),
-						},
-						500,
-					),
-				);
-			}),
-			Effect.provide(makeCurrentUserLayer(user)),
-			runPromiseAnyEnv,
+		yield* db.use((db) =>
+			db.delete(Db.videoUploads).where(eq(Db.videoUploads.videoId, videoId)),
 		);
-	},
-);
+
+		return c.json({ success: true, fileKey, uploadId });
+	}).pipe(
+		Effect.catchAll((error) => {
+			console.error("Failed to abort multipart upload:", error);
+
+			return Effect.succeed(
+				c.json(
+					{
+						error: "Failed to abort multipart upload",
+						details: error instanceof Error ? error.message : String(error),
+					},
+					500,
+				),
+			);
+		}),
+		Effect.provide(makeCurrentUserLayer(user)),
+		runPromiseAnyEnv,
+	);
+});
