@@ -21,3 +21,8 @@ export type ChunkUploadState = {
 	progress: number; // 0-1 ratio for the chunk itself
 	status: "queued" | "uploading" | "complete" | "error";
 };
+
+export type RecordingFailureDownload = {
+	url: string;
+	fileName: string;
+};

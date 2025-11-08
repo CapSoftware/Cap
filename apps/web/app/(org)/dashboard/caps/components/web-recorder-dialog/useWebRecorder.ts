@@ -40,6 +40,7 @@ import type {
 	ChunkUploadState,
 	PresignedPost,
 	RecorderPhase,
+	RecordingFailureDownload,
 	VideoId,
 } from "./web-recorder-types";
 import {
@@ -93,6 +94,8 @@ export const useWebRecorder = ({
 	const [isSettingUp, setIsSettingUp] = useState(false);
 	const [isRestarting, setIsRestarting] = useState(false);
 	const [chunkUploads, setChunkUploads] = useState<ChunkUploadState[]>([]);
+	const [errorDownload, setErrorDownload] =
+		useState<RecordingFailureDownload | null>(null);
 	const [capabilities, setCapabilities] = useState<RecorderCapabilities>(() =>
 		detectCapabilities(),
 	);
@@ -102,10 +105,8 @@ export const useWebRecorder = ({
 		cameraStreamRef,
 		micStreamRef,
 		mixedStreamRef,
-		videoRef,
 		detectionTimeoutsRef,
 		detectionCleanupRef,
-		clearDetectionTracking,
 		cleanupStreams,
 	} = useStreamManagement();
 
@@ -168,6 +169,9 @@ export const useWebRecorder = ({
 
 	const dimensionsRef = useRef<{ width?: number; height?: number }>({});
 	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
+	const startRecordingRef = useRef<
+		((options?: { reuseInstantVideo?: boolean }) => Promise<void>) | null
+	>(null);
 	const instantUploaderRef = useRef<InstantMp4Uploader | null>(null);
 	const videoCreationRef = useRef<{
 		id: VideoId;
@@ -181,6 +185,8 @@ export const useWebRecorder = ({
 	const chunkStartGuardTimeoutRef = useRef<number | null>(null);
 	const lastInstantChunkAtRef = useRef<number | null>(null);
 	const freePlanAutoStopTriggeredRef = useRef(false);
+	const shareUrlOpenedRef = useRef(false);
+	const errorDownloadUrlRef = useRef<string | null>(null);
 	const requestInstantRecorderData = useCallback(() => {
 		if (instantChunkModeRef.current !== "manual") return;
 		const recorder = mediaRecorderRef.current;
@@ -199,6 +205,42 @@ export const useWebRecorder = ({
 	>[0];
 	const router = useRouter();
 	const { setUploadStatus } = useUploadingContext();
+
+	const replaceErrorDownload = useCallback((blob: Blob | null) => {
+		if (errorDownloadUrlRef.current) {
+			URL.revokeObjectURL(errorDownloadUrlRef.current);
+			errorDownloadUrlRef.current = null;
+		}
+
+		if (!blob || typeof window === "undefined") {
+			setErrorDownload(null);
+			return;
+		}
+
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const url = URL.createObjectURL(blob);
+		errorDownloadUrlRef.current = url;
+		setErrorDownload({
+			url,
+			fileName: `cap-recording-${timestamp}.mp4`,
+		});
+	}, []);
+
+	useEffect(() => {
+		return () => {
+			if (errorDownloadUrlRef.current) {
+				URL.revokeObjectURL(errorDownloadUrlRef.current);
+				errorDownloadUrlRef.current = null;
+			}
+		};
+	}, []);
+
+	const openShareUrl = useCallback((shareUrl?: string | null) => {
+		if (!shareUrl || shareUrlOpenedRef.current) return;
+		if (typeof window === "undefined") return;
+		shareUrlOpenedRef.current = true;
+		window.open(shareUrl, "_blank", "noopener,noreferrer");
+	}, []);
 	const queryClient = useQueryClient();
 	const deleteVideo = useEffectMutation({
 		mutationFn: (id: VideoId) => rpc.VideoDelete(id),
@@ -283,6 +325,8 @@ export const useWebRecorder = ({
 			setUploadStatus(undefined);
 			setChunkUploads([]);
 			setHasAudioTrack(false);
+			replaceErrorDownload(null);
+			shareUrlOpenedRef.current = false;
 
 			if (!options?.preserveInstantVideo) {
 				const pendingInstantVideoId = pendingInstantVideoIdRef.current;
@@ -303,9 +347,7 @@ export const useWebRecorder = ({
 			clearInstantChunkGuard,
 			deleteVideo,
 			setUploadStatus,
-			setChunkUploads,
-			setHasAudioTrack,
-			setVideoId,
+			replaceErrorDownload,
 		],
 	);
 
@@ -368,6 +410,9 @@ export const useWebRecorder = ({
 			toast.error(fallbackMessage);
 			return;
 		}
+
+		replaceErrorDownload(null);
+		shareUrlOpenedRef.current = false;
 
 		setChunkUploads([]);
 		setIsSettingUp(true);
@@ -639,6 +684,8 @@ export const useWebRecorder = ({
 		}
 	};
 
+	startRecordingRef.current = startRecording;
+
 	const pauseRecording = useCallback(() => {
 		if (phase !== "recording") return;
 		const recorder = mediaRecorderRef.current;
@@ -685,6 +732,7 @@ export const useWebRecorder = ({
 		clearInstantChunkGuard();
 		instantChunkModeRef.current = null;
 		lastInstantChunkAtRef.current = null;
+		replaceErrorDownload(null);
 		if (phase !== "recording" && phase !== "paused") return;
 
 		const orgId = organisationId;
@@ -701,6 +749,8 @@ export const useWebRecorder = ({
 		let thumbnailBlob: Blob | null = null;
 		let thumbnailPreviewUrl: string | undefined;
 		let createdVideoId: VideoId | null = videoCreationRef.current?.id ?? null;
+		let rawRecordingBlob: Blob | null = null;
+		let processedRecordingBlob: Blob | null = null;
 		const instantUploader = instantUploaderRef.current;
 		const useInstantMp4 = Boolean(instantUploader);
 
@@ -708,8 +758,8 @@ export const useWebRecorder = ({
 			onRecordingStop?.();
 			updatePhase("creating");
 
-			const blob = await stopRecordingInternalWrapper();
-			if (!blob) throw new Error("No recording available");
+			rawRecordingBlob = await stopRecordingInternalWrapper();
+			if (!rawRecordingBlob) throw new Error("No recording available");
 
 			const durationSeconds = Math.max(
 				1,
@@ -747,15 +797,20 @@ export const useWebRecorder = ({
 
 			createdVideoId = creationResult.id;
 
-			let mp4Blob: Blob;
+			if (creationResult.shareUrl) {
+				openShareUrl(creationResult.shareUrl);
+			}
+
 			if (useInstantMp4) {
-				mp4Blob =
-					blob.type === "video/mp4"
-						? blob
-						: new File([blob], "result.mp4", { type: "video/mp4" });
+				processedRecordingBlob =
+					rawRecordingBlob.type === "video/mp4"
+						? rawRecordingBlob
+						: new File([rawRecordingBlob], "result.mp4", {
+								type: "video/mp4",
+							});
 			} else {
-				mp4Blob = await convertToMp4(
-					blob,
+				processedRecordingBlob = await convertToMp4(
+					rawRecordingBlob,
 					hasAudioTrack,
 					creationResult.id,
 					setUploadStatus,
@@ -763,7 +818,14 @@ export const useWebRecorder = ({
 				);
 			}
 
-			thumbnailBlob = await captureThumbnail(mp4Blob, dimensionsRef.current);
+			if (!processedRecordingBlob) {
+				throw new Error("Failed to prepare recording for upload");
+			}
+
+			thumbnailBlob = await captureThumbnail(
+				processedRecordingBlob,
+				dimensionsRef.current,
+			);
 			thumbnailPreviewUrl = thumbnailBlob
 				? URL.createObjectURL(thumbnailBlob)
 				: undefined;
@@ -779,7 +841,7 @@ export const useWebRecorder = ({
 			if (useInstantMp4 && instantUploader) {
 				instantUploader.setThumbnailUrl(thumbnailPreviewUrl);
 				await instantUploader.finalize({
-					finalBlob: mp4Blob,
+					finalBlob: processedRecordingBlob,
 					durationSeconds,
 					width,
 					height,
@@ -789,7 +851,7 @@ export const useWebRecorder = ({
 				instantMp4ActiveRef.current = false;
 			} else {
 				await uploadRecording(
-					mp4Blob,
+					processedRecordingBlob,
 					creationResult.upload,
 					creationResult.id,
 					thumbnailPreviewUrl,
@@ -871,14 +933,13 @@ export const useWebRecorder = ({
 			setUploadStatus(undefined);
 			updatePhase("completed");
 			toast.success("Recording uploaded");
-			if (creationResult.shareUrl) {
-				window.open(creationResult.shareUrl, "_blank", "noopener,noreferrer");
-			}
+			openShareUrl(creationResult.shareUrl);
 			router.refresh();
 		} catch (err) {
 			console.error("Failed to process recording", err);
 			setUploadStatus(undefined);
 			updatePhase("error");
+			replaceErrorDownload(processedRecordingBlob ?? rawRecordingBlob);
 
 			const idToDelete = createdVideoId ?? videoId;
 			if (idToDelete) {
@@ -908,6 +969,9 @@ export const useWebRecorder = ({
 		onRecordingStop,
 		commitPausedDuration,
 		syncDurationFromClock,
+		openShareUrl,
+		replaceErrorDownload,
+		clearInstantChunkGuard,
 	]);
 
 	useEffect(() => {
@@ -962,7 +1026,13 @@ export const useWebRecorder = ({
 				await deleteVideoResultFile({ videoId: creationToReuse.id });
 			}
 
-			await startRecording({ reuseInstantVideo: shouldReuseInstantVideo });
+			const latestStartRecording = startRecordingRef.current;
+			if (!latestStartRecording) {
+				throw new Error("Recorder not ready to start");
+			}
+			await latestStartRecording({
+				reuseInstantVideo: shouldReuseInstantVideo,
+			});
 		} catch (error) {
 			console.error("Failed to restart recording", error);
 			toast.error("Could not restart recording. Please try again.");
@@ -975,7 +1045,6 @@ export const useWebRecorder = ({
 		cleanupRecordingState,
 		isRestarting,
 		phase,
-		startRecording,
 		stopRecordingInternalWrapper,
 		updatePhase,
 	]);
@@ -1001,6 +1070,7 @@ export const useWebRecorder = ({
 		videoId,
 		hasAudioTrack,
 		chunkUploads,
+		errorDownload,
 		isSettingUp,
 		isRecording: isRecordingActive,
 		isPaused,
