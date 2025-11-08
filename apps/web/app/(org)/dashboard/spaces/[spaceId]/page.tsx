@@ -4,6 +4,7 @@ import {
 	comments,
 	folders,
 	organizationMembers,
+	organizations,
 	sharedVideos,
 	spaceMembers,
 	spaceVideos,
@@ -191,7 +192,7 @@ export default async function SharedCapsPage(props: {
 						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
-						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
+						effectiveDate: videos.effectiveCreatedAt,
 						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 							Boolean,
 						),
@@ -201,8 +202,13 @@ export default async function SharedCapsPage(props: {
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							isNull(organizations.tombstoneAt),
+						),
 					)
 					.groupBy(
 						videos.id,
@@ -212,11 +218,7 @@ export default async function SharedCapsPage(props: {
 						videos.metadata,
 						users.name,
 					)
-					.orderBy(
-						desc(
-							sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						),
-					)
+					.orderBy(desc(videos.effectiveCreatedAt))
 					.limit(limit)
 					.offset(offset),
 				db()
@@ -286,7 +288,7 @@ export default async function SharedCapsPage(props: {
 						totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
-						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
+						effectiveDate: videos.effectiveCreatedAt,
 						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 							Boolean,
 						),
@@ -311,11 +313,7 @@ export default async function SharedCapsPage(props: {
 						users.name,
 						videos.duration,
 					)
-					.orderBy(
-						desc(
-							sql`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						),
-					)
+					.orderBy(desc(videos.effectiveCreatedAt))
 					.limit(limit)
 					.offset(offset),
 				db()
