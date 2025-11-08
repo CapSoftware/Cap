@@ -20,14 +20,6 @@ export const uploadRecording = (
 				? blob
 				: new File([blob], "result.mp4", { type: "video/mp4" });
 
-		console.log("Uploading file:", {
-			size: fileBlob.size,
-			type: fileBlob.type,
-			name: fileBlob.name,
-			uploadUrl: upload.url,
-			uploadFields: upload.fields,
-		});
-
 		const formData = new FormData();
 		Object.entries(upload.fields).forEach(([key, value]) => {
 			formData.append(key, value);
