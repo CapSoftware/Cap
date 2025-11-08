@@ -290,11 +290,11 @@ export const InProgressRecordingBar = ({
 								</span>
 							)}
 						</div>
-						{Boolean(onRestart) && canRestart && (
+						{Boolean(onRestart) && (canRestart || phase === "error") && (
 							<ActionButton
 								data-no-drag
 								onClick={handleRestart}
-								disabled={!canRestart}
+								disabled={!(canRestart || phase === "error")}
 								aria-label="Restart recording"
 								aria-busy={isRestarting}
 							>

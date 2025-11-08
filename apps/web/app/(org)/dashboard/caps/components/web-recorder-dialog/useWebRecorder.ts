@@ -76,6 +76,17 @@ const unwrapExitOrThrow = <T, E>(exit: Exit.Exit<T, E>) => {
 	return exit.value;
 };
 
+const getFileExtensionFromMime = (mime?: string | null) => {
+	if (!mime) return "mp4";
+	const [, subtypeWithParams] = mime.split("/");
+	if (!subtypeWithParams) return "mp4";
+	const [subtypeWithSuffix] = subtypeWithParams.split(";");
+	if (!subtypeWithSuffix) return "mp4";
+	const [subtype] = subtypeWithSuffix.split("+");
+	const normalized = subtype.trim().toLowerCase();
+	return normalized || "mp4";
+};
+
 export const useWebRecorder = ({
 	organisationId,
 	selectedMicId,
@@ -218,11 +229,12 @@ export const useWebRecorder = ({
 		}
 
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const extension = getFileExtensionFromMime(blob.type);
 		const url = URL.createObjectURL(blob);
 		errorDownloadUrlRef.current = url;
 		setErrorDownload({
 			url,
-			fileName: `cap-recording-${timestamp}.mp4`,
+			fileName: `cap-recording-${timestamp}.${extension}`,
 		});
 	}, []);
 
