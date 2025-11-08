@@ -110,6 +110,7 @@ app.post(
 				);
 			}),
 			Effect.provide(makeCurrentUserLayer(user)),
+			provideOptionalAuth,
 			runPromiseAnyEnv,
 		);
 		if (resp) return resp;
@@ -145,7 +146,7 @@ app.post(
 					);
 
 					return UploadId;
-				}).pipe(runPromiseAnyEnv);
+				}).pipe(provideOptionalAuth, runPromiseAnyEnv);
 
 				return c.json({ uploadId: uploadId });
 			} catch (s3Error) {
@@ -215,7 +216,7 @@ app.post(
 						);
 
 					return presignedUrl;
-				}).pipe(runPromiseAnyEnv);
+				}).pipe(provideOptionalAuth, runPromiseAnyEnv);
 
 				return c.json({ presignedUrl });
 			} catch (s3Error) {
@@ -507,7 +508,11 @@ app.post(
 					);
 				}),
 			);
-		}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromiseAnyEnv);
+		}).pipe(
+			Effect.provide(makeCurrentUserLayer(user)),
+			provideOptionalAuth,
+			runPromiseAnyEnv,
+		);
 	},
 );
 
@@ -570,6 +575,7 @@ app.post("/abort", abortRequestValidator, (c) => {
 			);
 		}),
 		Effect.provide(makeCurrentUserLayer(user)),
+		provideOptionalAuth,
 		runPromiseAnyEnv,
 	);
 });
