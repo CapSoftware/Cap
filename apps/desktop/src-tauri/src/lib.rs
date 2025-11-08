@@ -1900,7 +1900,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            format_project_name,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2638,6 +2639,24 @@ async fn write_clipboard_string(
     writer
         .set_text(text)
         .map_err(|e| format!("Failed to write text to clipboard: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn format_project_name(
+    template: Option<String>,
+    target_name: String,
+    target_kind: String,
+    recording_mode: RecordingMode,
+    datetime: chrono::DateTime<chrono::Local>,
+) -> String {
+    recording::format_project_name(
+        template.as_deref(),
+        target_name.as_str(),
+        target_kind.as_str(),
+        recording_mode,
+        datetime,
+    )
 }
 
 trait EventExt: tauri_specta::Event {

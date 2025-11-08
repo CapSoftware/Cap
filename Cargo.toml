@@ -27,6 +27,7 @@ specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
     "uuid",
+    "chrono"
 ] }
 serde = { version = "1", features = ["derive"] }
 
