@@ -4,6 +4,8 @@ import {
 	DISPLAY_SURFACE_TO_RECORDING_MODE,
 } from "./web-recorder-constants";
 
+export type { DetectedDisplayRecordingMode } from "./web-recorder-constants";
+
 export type RecorderCapabilities = {
 	assessed: boolean;
 	hasMediaRecorder: boolean;

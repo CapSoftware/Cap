@@ -31,7 +31,10 @@ import { useDialogInteractions } from "./useDialogInteractions";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
 import { useWebRecorder } from "./useWebRecorder";
 import { WebRecorderDialogHeader } from "./WebRecorderDialogHeader";
-import { dialogVariants, FREE_PLAN_MAX_RECORDING_MS } from "./web-recorder-constants";
+import {
+	dialogVariants,
+	FREE_PLAN_MAX_RECORDING_MS,
+} from "./web-recorder-constants";
 
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);

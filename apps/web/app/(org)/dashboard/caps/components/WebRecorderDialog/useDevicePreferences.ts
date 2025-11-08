@@ -61,14 +61,8 @@ export const useDevicePreferences = ({
 		} catch (error) {
 			console.error("Failed to restore recorder device selection", error);
 		}
-	}, [
-		open,
-		rememberDevices,
-		availableCameras,
-		availableMics,
-		selectedCameraId,
-		selectedMicId,
-	]);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- effect restores saved device IDs and intentionally updates them
+	}, [open, rememberDevices, availableCameras, availableMics]);
 
 	const handleCameraChange = (cameraId: string | null) => {
 		setSelectedCameraId(cameraId);

@@ -189,18 +189,24 @@ export const InProgressRecordingBar = ({
 		: (phaseMessages[phase] ?? "Processing");
 
 	const handleStop = () => {
-		onStop();
+		Promise.resolve(onStop()).catch((error) => {
+			console.error("Failed to stop recording", error);
+		});
 	};
 
 	const handlePauseToggle = () => {
 		if (isPaused) {
 			if (!onResume) return;
-			void onResume();
+			Promise.resolve(onResume()).catch((error) => {
+				console.error("Failed to resume recording", error);
+			});
 			return;
 		}
 
 		if (phase === "recording" && onPause) {
-			void onPause();
+			Promise.resolve(onPause()).catch((error) => {
+				console.error("Failed to pause recording", error);
+			});
 		}
 	};
 

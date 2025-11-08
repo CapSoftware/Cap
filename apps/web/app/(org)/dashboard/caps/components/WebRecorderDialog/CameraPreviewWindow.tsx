@@ -119,10 +119,11 @@ export const CameraPreviewWindow = ({
 			return false;
 		}
 
-		return (
-			"autoPictureInPicture" in
-			(HTMLVideoElement.prototype as Record<string, unknown>)
-		);
+		const proto = HTMLVideoElement.prototype as unknown as {
+			autoPictureInPicture?: boolean;
+		};
+
+		return "autoPictureInPicture" in proto;
 	}, []);
 
 	useEffect(() => {

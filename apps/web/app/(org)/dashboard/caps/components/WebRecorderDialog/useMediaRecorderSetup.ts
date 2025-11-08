@@ -9,6 +9,7 @@ export const useMediaRecorderSetup = () => {
 	const stopPromiseRejectRef = useRef<((reason?: unknown) => void) | null>(
 		null,
 	);
+	const isStoppingRef = useRef(false);
 
 	const onRecorderDataAvailable = useCallback(
 		(event: BlobEvent, onChunk?: (chunk: Blob, totalBytes: number) => void) => {
@@ -23,9 +24,11 @@ export const useMediaRecorderSetup = () => {
 
 	const onRecorderStop = useCallback(() => {
 		if (recordedChunksRef.current.length === 0) {
-			stopPromiseRejectRef.current?.(new Error("No recorded data"));
+			const rejecter = stopPromiseRejectRef.current;
 			stopPromiseResolverRef.current = null;
 			stopPromiseRejectRef.current = null;
+			isStoppingRef.current = false;
+			rejecter?.(new Error("No recorded data"));
 			return;
 		}
 
@@ -33,22 +36,29 @@ export const useMediaRecorderSetup = () => {
 			type: recordedChunksRef.current[0]?.type ?? "video/webm;codecs=vp8,opus",
 		});
 		recordedChunksRef.current = [];
-		stopPromiseResolverRef.current?.(blob);
+		const resolver = stopPromiseResolverRef.current;
 		stopPromiseResolverRef.current = null;
 		stopPromiseRejectRef.current = null;
+		isStoppingRef.current = false;
+		resolver?.(blob);
 	}, []);
 
 	const onRecorderError = useCallback((event: RecorderErrorEvent) => {
 		const error = event.error ?? new DOMException("Recording error");
-		stopPromiseRejectRef.current?.(error);
+		const rejecter = stopPromiseRejectRef.current;
 		stopPromiseResolverRef.current = null;
 		stopPromiseRejectRef.current = null;
+		isStoppingRef.current = false;
+		rejecter?.(error);
 	}, []);
 
 	const stopRecordingInternal = useCallback(
 		async (cleanupStreams: () => void, clearTimer: () => void) => {
 			const recorder = mediaRecorderRef.current;
 			if (!recorder || recorder.state === "inactive") return null;
+			if (isStoppingRef.current) return null;
+
+			isStoppingRef.current = true;
 
 			const stopPromise = new Promise<Blob>((resolve, reject) => {
 				stopPromiseResolverRef.current = resolve;
