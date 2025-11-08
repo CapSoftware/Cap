@@ -82,7 +82,7 @@ const getFileExtensionFromMime = (mime?: string | null) => {
 	if (!subtypeWithParams) return "mp4";
 	const [subtypeWithSuffix] = subtypeWithParams.split(";");
 	if (!subtypeWithSuffix) return "mp4";
-	const [subtype] = subtypeWithSuffix.split("+");
+	const [subtype = ""] = subtypeWithSuffix.split("+");
 	const normalized = subtype.trim().toLowerCase();
 	return normalized || "mp4";
 };
