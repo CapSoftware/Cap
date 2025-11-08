@@ -3,6 +3,16 @@
 import type * as DialogPrimitive from "@radix-ui/react-dialog";
 import type { RefObject } from "react";
 
+type PointerDownOutsideEvent = Parameters<
+	NonNullable<DialogPrimitive.DialogContentProps["onPointerDownOutside"]>
+>[0];
+type FocusOutsideEvent = Parameters<
+	NonNullable<DialogPrimitive.DialogContentProps["onFocusOutside"]>
+>[0];
+type InteractOutsideEvent = Parameters<
+	NonNullable<DialogPrimitive.DialogContentProps["onInteractOutside"]>
+>[0];
+
 const isInsideDialog = (el: Element, dialogContent: HTMLElement | null) => {
 	if (!dialogContent) return false;
 	return dialogContent.contains(el);
@@ -44,11 +54,7 @@ export const useDialogInteractions = ({
 	isRecording,
 	isBusy,
 }: UseDialogInteractionsOptions) => {
-	const handlePointerDownOutside = (
-		event: DialogPrimitive.DialogContentProps["onPointerDownOutside"],
-	) => {
-		if (!event) return;
-
+	const handlePointerDownOutside = (event: PointerDownOutsideEvent) => {
 		const originalEvent = event.detail.originalEvent;
 		const target = originalEvent?.target as Element | null | undefined;
 
@@ -67,11 +73,7 @@ export const useDialogInteractions = ({
 		}
 	};
 
-	const handleFocusOutside = (
-		event: DialogPrimitive.DialogContentProps["onFocusOutside"],
-	) => {
-		if (!event) return;
-
+	const handleFocusOutside = (event: FocusOutsideEvent) => {
 		const target = event.target as Element | null | undefined;
 
 		if (!target) return;
@@ -90,11 +92,7 @@ export const useDialogInteractions = ({
 		}
 	};
 
-	const handleInteractOutside = (
-		event: DialogPrimitive.DialogContentProps["onInteractOutside"],
-	) => {
-		if (!event) return;
-
+	const handleInteractOutside = (event: InteractOutsideEvent) => {
 		const originalEvent = event.detail.originalEvent;
 		const target = originalEvent?.target as Element | null | undefined;
 
