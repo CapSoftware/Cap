@@ -117,3 +117,5 @@ export const WEBM_MIME_TYPES = {
 } as const;
 
 export const DETECTION_RETRY_DELAYS = [120, 450, 1000];
+
+export const FREE_PLAN_MAX_RECORDING_MS = 5 * 60 * 1000;

@@ -31,7 +31,7 @@ import { useDialogInteractions } from "./useDialogInteractions";
 import { useMicrophoneDevices } from "./useMicrophoneDevices";
 import { useWebRecorder } from "./useWebRecorder";
 import { WebRecorderDialogHeader } from "./WebRecorderDialogHeader";
-import { dialogVariants } from "./web-recorder-constants";
+import { dialogVariants, FREE_PLAN_MAX_RECORDING_MS } from "./web-recorder-constants";
 
 export const WebRecorderDialog = () => {
 	const [open, setOpen] = useState(false);
@@ -84,7 +84,7 @@ export const WebRecorderDialog = () => {
 		playAudio(stopSoundRef.current);
 	}, [playAudio]);
 
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, user } = useDashboardContext();
 	const organisationId = activeOrganization?.organization.id;
 	const { devices: availableMics, refresh: refreshMics } =
 		useMicrophoneDevices(open);
@@ -143,6 +143,7 @@ export const WebRecorderDialog = () => {
 		micEnabled,
 		recordingMode,
 		selectedCameraId,
+		isProUser: user.isPro,
 		onRecordingSurfaceDetected: (mode) => {
 			setRecordingMode(mode);
 		},
@@ -216,6 +217,9 @@ export const WebRecorderDialog = () => {
 	};
 
 	const showInProgressBar = isRecording || isBusy;
+	const recordingTimerDisplayMs = user.isPro
+		? durationMs
+		: Math.max(0, FREE_PLAN_MAX_RECORDING_MS - durationMs);
 
 	return (
 		<>
@@ -321,7 +325,7 @@ export const WebRecorderDialog = () => {
 			{showInProgressBar && (
 				<InProgressRecordingBar
 					phase={phase}
-					durationMs={durationMs}
+					durationMs={recordingTimerDisplayMs}
 					hasAudioTrack={hasAudioTrack}
 					chunkUploads={chunkUploads}
 					onStop={handleStopClick}
