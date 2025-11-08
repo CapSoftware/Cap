@@ -11,7 +11,7 @@ import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub, userIsPro } from "@cap/utils";
 import { AwsCredentials, S3Buckets } from "@cap/web-backend";
-import { type Folder, type Organisation, Video } from "@cap/web-domain";
+import { type Folder, type Organisation, Video, S3Bucket } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -280,7 +280,9 @@ export async function deleteVideoResultFile({
 	if (!video) throw new Error("Video not found");
 	if (video.ownerId !== user.id) throw new Error("Forbidden");
 
-	const bucketIdOption = Option.fromNullable(video.bucketId);
+	const bucketIdOption = Option.fromNullable(video.bucketId).pipe(
+		Option.map((id) => S3Bucket.S3BucketId.make(id)),
+	);
 	const fileKey = `${video.ownerId}/${video.id}/result.mp4`;
 	const logContext = {
 		videoId: video.id,
@@ -320,7 +322,7 @@ async function deleteResultObjectWithRetry({
 	fileKey,
 	logContext,
 }: {
-	bucketIdOption: Option.Option<string>;
+		bucketIdOption: Option.Option<S3Bucket.S3BucketId>;
 	fileKey: string;
 	logContext: {
 		videoId: Video.VideoId;
