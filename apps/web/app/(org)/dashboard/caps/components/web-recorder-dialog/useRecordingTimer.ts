@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export const useRecordingTimer = () => {
 	const [durationMs, setDurationMs] = useState(0);
@@ -13,6 +13,12 @@ export const useRecordingTimer = () => {
 			timerRef.current = null;
 		}
 	}, []);
+
+	useEffect(() => {
+		return () => {
+			clearTimer();
+		};
+	}, [clearTimer]);
 
 	const commitPausedDuration = useCallback((timestamp?: number) => {
 		if (pauseStartRef.current === null) return;
