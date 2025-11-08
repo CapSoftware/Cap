@@ -14,8 +14,11 @@ import { EffectRuntime, useRpcClient } from "@/lib/EffectRuntime";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
 import { useUploadingContext } from "../../UploadingContext";
 import { sendProgressUpdate } from "../sendProgressUpdate";
+import {
+	InstantMp4Uploader,
+	initiateMultipartUpload,
+} from "./instant-mp4-uploader";
 import type { RecordingMode } from "./RecordingModeSelector";
-import { InstantMp4Uploader, initiateMultipartUpload } from "./instant-mp4-uploader";
 import { captureThumbnail, convertToMp4 } from "./recording-conversion";
 import { uploadRecording } from "./recording-upload";
 import { useMediaRecorderSetup } from "./useMediaRecorderSetup";
@@ -23,13 +26,13 @@ import { useRecordingTimer } from "./useRecordingTimer";
 import { useStreamManagement } from "./useStreamManagement";
 import { useSurfaceDetection } from "./useSurfaceDetection";
 import {
+	type DetectedDisplayRecordingMode,
 	DISPLAY_MEDIA_VIDEO_CONSTRAINTS,
 	DISPLAY_MODE_PREFERENCES,
-	MP4_MIME_TYPES,
-	RECORDING_MODE_TO_DISPLAY_SURFACE,
-	type DetectedDisplayRecordingMode,
 	type DisplaySurfacePreference,
 	type ExtendedDisplayMediaStreamOptions,
+	MP4_MIME_TYPES,
+	RECORDING_MODE_TO_DISPLAY_SURFACE,
 	WEBM_MIME_TYPES,
 } from "./web-recorder-constants";
 import type {
@@ -41,8 +44,8 @@ import type {
 import {
 	detectCapabilities,
 	pickSupportedMimeType,
-	shouldRetryDisplayMediaWithoutPreferences,
 	type RecorderCapabilities,
+	shouldRetryDisplayMediaWithoutPreferences,
 } from "./web-recorder-utils";
 
 interface UseWebRecorderOptions {
@@ -139,28 +142,27 @@ export const useWebRecorder = ({
 		? supportsDisplayRecording
 		: supportsCameraRecording;
 	const screenCaptureWarning =
-		supportCheckCompleted &&
-		rawCanRecordCamera &&
-		!capabilities.hasDisplayMedia
+		supportCheckCompleted && rawCanRecordCamera && !capabilities.hasDisplayMedia
 			? "Screen sharing isn't supported in this browser. We'll switch to camera-only recording. Try Chrome, Edge, or our desktop app for screen capture."
 			: null;
 	const unsupportedReason = supportCheckCompleted
 		? !capabilities.hasMediaRecorder
 			? "This browser doesn't support in-browser recording. Try the latest Chrome, Edge, or Safari, or use the desktop app."
 			: !capabilities.hasUserMedia
-			? "Camera and microphone access are unavailable in this browser. Check permissions or switch browsers."
-			: requiresDisplayMedia && !capabilities.hasDisplayMedia
-			? "Screen capture isn't supported in this browser. Switch to Camera only or use Chrome, Edge, or Safari."
-			: null
+				? "Camera and microphone access are unavailable in this browser. Check permissions or switch browsers."
+				: requiresDisplayMedia && !capabilities.hasDisplayMedia
+					? "Screen capture isn't supported in this browser. Switch to Camera only or use Chrome, Edge, or Safari."
+					: null
 		: null;
 
 	const dimensionsRef = useRef<{ width?: number; height?: number }>({});
 	const stopRecordingRef = useRef<(() => Promise<void>) | null>(null);
 	const instantUploaderRef = useRef<InstantMp4Uploader | null>(null);
-	const videoCreationRef = useRef<
-		{ id: VideoId; upload: PresignedPost; shareUrl: string }
-		| null
-	>(null);
+	const videoCreationRef = useRef<{
+		id: VideoId;
+		upload: PresignedPost;
+		shareUrl: string;
+	} | null>(null);
 	const instantMp4ActiveRef = useRef(false);
 	const pendingInstantVideoIdRef = useRef<VideoId | null>(null);
 	const dataRequestIntervalRef = useRef<number | null>(null);
@@ -295,7 +297,6 @@ export const useWebRecorder = ({
 		setCapabilities(detectCapabilities());
 	}, []);
 
-
 	useEffect(() => {
 		return () => {
 			resetState();
@@ -322,10 +323,7 @@ export const useWebRecorder = ({
 		return stopRecordingInternal(cleanupStreams, clearTimer);
 	}, [stopRecordingInternal, cleanupStreams, clearTimer]);
 
-
-	const startRecording = async (
-		options?: { reuseInstantVideo?: boolean },
-	) => {
+	const startRecording = async (options?: { reuseInstantVideo?: boolean }) => {
 		if (!organisationId) {
 			toast.error("Select an organization before recording.");
 			return;
@@ -468,24 +466,12 @@ export const useWebRecorder = ({
 			instantMp4ActiveRef.current = false;
 
 			const mp4Candidates = hasAudio
-				? [
-					...MP4_MIME_TYPES.withAudio,
-					...MP4_MIME_TYPES.videoOnly,
-				]
-				: [
-					...MP4_MIME_TYPES.videoOnly,
-					...MP4_MIME_TYPES.withAudio,
-				];
+				? [...MP4_MIME_TYPES.withAudio, ...MP4_MIME_TYPES.videoOnly]
+				: [...MP4_MIME_TYPES.videoOnly, ...MP4_MIME_TYPES.withAudio];
 			const supportedMp4MimeType = pickSupportedMimeType(mp4Candidates);
 			const webmCandidates = hasAudio
-				? [
-					...WEBM_MIME_TYPES.withAudio,
-					...WEBM_MIME_TYPES.videoOnly,
-				]
-				: [
-					...WEBM_MIME_TYPES.videoOnly,
-					...WEBM_MIME_TYPES.withAudio,
-				];
+				? [...WEBM_MIME_TYPES.withAudio, ...WEBM_MIME_TYPES.videoOnly]
+				: [...WEBM_MIME_TYPES.videoOnly, ...WEBM_MIME_TYPES.withAudio];
 			const fallbackMimeType = pickSupportedMimeType(webmCandidates);
 			const mimeType = supportedMp4MimeType ?? fallbackMimeType;
 			const useInstantMp4 = Boolean(supportedMp4MimeType);
@@ -498,8 +484,7 @@ export const useWebRecorder = ({
 				let creationResult = videoCreationRef.current;
 				const width = dimensionsRef.current.width;
 				const height = dimensionsRef.current.height;
-				const resolution =
-					width && height ? `${width}x${height}` : undefined;
+				const resolution = width && height ? `${width}x${height}` : undefined;
 				if (!shouldReuseInstantVideo || !creationResult) {
 					const creation = await EffectRuntime.runPromise(
 						rpc.VideoInstantCreate({
@@ -527,16 +512,17 @@ export const useWebRecorder = ({
 
 				let uploadId: string | null = null;
 				try {
-					if (!creationResult) throw new Error("Missing instant recording context");
+					if (!creationResult)
+						throw new Error("Missing instant recording context");
 					uploadId = await initiateMultipartUpload(creationResult.id);
 				} catch (initError) {
 					const orphanId = creationResult?.id;
 					if (orphanId) {
-						await EffectRuntime.runPromise(
-							rpc.VideoDelete(orphanId),
-						).catch(() => {
-							/* ignore */
-						});
+						await EffectRuntime.runPromise(rpc.VideoDelete(orphanId)).catch(
+							() => {
+								/* ignore */
+							},
+						);
 					}
 					pendingInstantVideoIdRef.current = null;
 					videoCreationRef.current = null;
@@ -578,7 +564,7 @@ export const useWebRecorder = ({
 
 			firstTrack?.addEventListener("ended", handleVideoEnded, { once: true });
 
-				mediaRecorderRef.current = recorder;
+			mediaRecorderRef.current = recorder;
 			instantChunkModeRef.current = null;
 			lastInstantChunkAtRef.current = null;
 			clearInstantChunkGuard();

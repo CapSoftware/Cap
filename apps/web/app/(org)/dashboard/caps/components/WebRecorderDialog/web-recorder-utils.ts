@@ -1,7 +1,7 @@
 import type { RecordingMode } from "./RecordingModeSelector";
 import {
-	DISPLAY_SURFACE_TO_RECORDING_MODE,
 	type DetectedDisplayRecordingMode,
+	DISPLAY_SURFACE_TO_RECORDING_MODE,
 } from "./web-recorder-constants";
 
 export type RecorderCapabilities = {
@@ -75,7 +75,9 @@ export const detectRecordingModeFromTrack = (
 
 export const pickSupportedMimeType = (candidates: readonly string[]) => {
 	if (typeof MediaRecorder === "undefined") return undefined;
-	return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+	return candidates.find((candidate) =>
+		MediaRecorder.isTypeSupported(candidate),
+	);
 };
 
 export const shouldRetryDisplayMediaWithoutPreferences = (error: unknown) => {
@@ -88,4 +90,3 @@ export const shouldRetryDisplayMediaWithoutPreferences = (error: unknown) => {
 
 	return error instanceof TypeError;
 };
-

@@ -21,25 +21,22 @@ export const useRecordingTimer = () => {
 		pauseStartRef.current = null;
 	}, []);
 
-	const syncDurationFromClock = useCallback(
-		(timestamp?: number) => {
-			const startTime = startTimeRef.current;
-			if (startTime === null) {
-				setDurationMs(0);
-				return 0;
-			}
+	const syncDurationFromClock = useCallback((timestamp?: number) => {
+		const startTime = startTimeRef.current;
+		if (startTime === null) {
+			setDurationMs(0);
+			return 0;
+		}
 
-			const now = timestamp ?? performance.now();
-			const pausedPending =
-				pauseStartRef.current !== null ? now - pauseStartRef.current : 0;
-			const totalPaused = pausedDurationRef.current + pausedPending;
-			const elapsed = Math.max(0, now - startTime - totalPaused);
+		const now = timestamp ?? performance.now();
+		const pausedPending =
+			pauseStartRef.current !== null ? now - pauseStartRef.current : 0;
+		const totalPaused = pausedDurationRef.current + pausedPending;
+		const elapsed = Math.max(0, now - startTime - totalPaused);
 
-			setDurationMs(elapsed);
-			return elapsed;
-		},
-		[],
-	);
+		setDurationMs(elapsed);
+		return elapsed;
+	}, []);
 
 	const startTimer = useCallback(() => {
 		const now = performance.now();
@@ -63,17 +60,23 @@ export const useRecordingTimer = () => {
 		setDurationMs(0);
 	}, [clearTimer]);
 
-	const pauseTimer = useCallback((timestamp?: number) => {
-		const now = timestamp ?? performance.now();
-		pauseStartRef.current = now;
-		syncDurationFromClock(now);
-	}, [syncDurationFromClock]);
+	const pauseTimer = useCallback(
+		(timestamp?: number) => {
+			const now = timestamp ?? performance.now();
+			pauseStartRef.current = now;
+			syncDurationFromClock(now);
+		},
+		[syncDurationFromClock],
+	);
 
-	const resumeTimer = useCallback((timestamp?: number) => {
-		const now = timestamp ?? performance.now();
-		commitPausedDuration(now);
-		syncDurationFromClock(now);
-	}, [commitPausedDuration, syncDurationFromClock]);
+	const resumeTimer = useCallback(
+		(timestamp?: number) => {
+			const now = timestamp ?? performance.now();
+			commitPausedDuration(now);
+			syncDurationFromClock(now);
+		},
+		[commitPausedDuration, syncDurationFromClock],
+	);
 
 	return {
 		durationMs,
@@ -86,4 +89,3 @@ export const useRecordingTimer = () => {
 		syncDurationFromClock,
 	};
 };
-

@@ -151,4 +151,3 @@ export const useDevicePreferences = ({
 		handleRememberDevicesChange,
 	};
 };
-

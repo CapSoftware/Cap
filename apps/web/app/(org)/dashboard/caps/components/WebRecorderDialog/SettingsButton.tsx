@@ -24,4 +24,3 @@ export const SettingsButton = ({ visible, onClick }: SettingsButtonProps) => {
 		</Button>
 	);
 };
-

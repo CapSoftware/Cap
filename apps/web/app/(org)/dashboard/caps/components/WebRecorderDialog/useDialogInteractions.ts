@@ -1,7 +1,7 @@
 "use client";
 
 import type * as DialogPrimitive from "@radix-ui/react-dialog";
-import { type RefObject } from "react";
+import type { RefObject } from "react";
 
 const isInsideDialog = (el: Element, dialogContent: HTMLElement | null) => {
 	if (!dialogContent) return false;
@@ -27,7 +27,9 @@ const shouldPreventDefault = (
 
 	return (
 		isWhitelisted(target, dialogContent) ||
-		path.some((t) => t instanceof Element && isWhitelisted(t as Element, dialogContent))
+		path.some(
+			(t) => t instanceof Element && isWhitelisted(t as Element, dialogContent),
+		)
 	);
 };
 
@@ -117,4 +119,3 @@ export const useDialogInteractions = ({
 		handleInteractOutside,
 	};
 };
-

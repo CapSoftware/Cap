@@ -1,6 +1,6 @@
 import type { UploadStatus } from "../../UploadingContext";
-import type { PresignedPost, VideoId } from "./web-recorder-types";
 import { sendProgressUpdate } from "../sendProgressUpdate";
+import type { PresignedPost, VideoId } from "./web-recorder-types";
 
 export const uploadRecording = (
 	blob: Blob,
@@ -55,17 +55,14 @@ export const uploadRecording = (
 				await sendProgressUpdate(currentVideoId, blob.size, blob.size);
 				resolve();
 			} else {
-				const errorText =
-					xhr.responseText || xhr.statusText || "Unknown error";
+				const errorText = xhr.responseText || xhr.statusText || "Unknown error";
 				console.error("Upload failed:", {
 					status: xhr.status,
 					statusText: xhr.statusText,
 					responseText: errorText,
 				});
 				reject(
-					new Error(
-						`Upload failed with status ${xhr.status}: ${errorText}`,
-					),
+					new Error(`Upload failed with status ${xhr.status}: ${errorText}`),
 				);
 			}
 		};
@@ -76,4 +73,3 @@ export const uploadRecording = (
 
 		xhr.send(formData);
 	});
-

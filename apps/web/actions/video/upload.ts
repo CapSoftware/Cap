@@ -285,9 +285,7 @@ export async function deleteVideoResultFile({
 		yield* bucket.deleteObject(fileKey);
 	}).pipe(runPromise);
 
-	await db()
-		.delete(videoUploads)
-		.where(eq(videoUploads.videoId, videoId));
+	await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
 
 	return { success: true };
 }

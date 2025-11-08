@@ -45,9 +45,7 @@ export const captureThumbnail = (
 			"loadedmetadata",
 			() => {
 				try {
-					const duration = Number.isFinite(video.duration)
-						? video.duration
-						: 0;
+					const duration = Number.isFinite(video.duration) ? video.duration : 0;
 					const targetTime = duration > 0 ? Math.min(1, duration / 4) : 0;
 					video.currentTime = targetTime;
 				} catch {

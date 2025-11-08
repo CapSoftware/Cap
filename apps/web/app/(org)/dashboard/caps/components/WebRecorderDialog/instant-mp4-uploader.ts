@@ -45,7 +45,8 @@ export const initiateMultipartUpload = async (videoId: VideoId) => {
 		{ videoId, contentType: "video/mp4" },
 	);
 
-	if (!result.uploadId) throw new Error("Multipart initiate response missing uploadId");
+	if (!result.uploadId)
+		throw new Error("Multipart initiate response missing uploadId");
 
 	return result.uploadId;
 };
@@ -265,9 +266,7 @@ export class InstantMp4Uploader {
 				const uploaded = event.lengthComputable
 					? event.loaded
 					: Math.min(part.size, event.loaded);
-				const total = event.lengthComputable
-					? event.total
-					: part.size;
+				const total = event.lengthComputable ? event.total : part.size;
 				const ratio = total > 0 ? Math.min(1, uploaded / total) : 0;
 				this.updateChunkState(partNumber, {
 					status: "uploading",
@@ -312,8 +311,13 @@ export class InstantMp4Uploader {
 	}
 
 	private emitProgress() {
-		const totalBytes = this.finalTotalBytes ?? Math.max(this.totalRecordedBytes, this.uploadedBytes);
-		const progress = totalBytes > 0 ? Math.min(100, (this.uploadedBytes / totalBytes) * 100) : 0;
+		const totalBytes =
+			this.finalTotalBytes ??
+			Math.max(this.totalRecordedBytes, this.uploadedBytes);
+		const progress =
+			totalBytes > 0
+				? Math.min(100, (this.uploadedBytes / totalBytes) * 100)
+				: 0;
 
 		this.setUploadStatus({
 			status: "uploadingVideo",
@@ -343,17 +347,12 @@ export class InstantMp4Uploader {
 			await this.uploadPromise;
 		}
 
-		await completeMultipartUpload(
-			this.videoId,
-			this.uploadId,
-			this.parts,
-			{
-				durationSeconds: options.durationSeconds,
-				width: options.width,
-				height: options.height,
-				fps: options.fps,
-			},
-		);
+		await completeMultipartUpload(this.videoId, this.uploadId, this.parts, {
+			durationSeconds: options.durationSeconds,
+			width: options.width,
+			height: options.height,
+			fps: options.fps,
+		});
 
 		this.finished = true;
 		this.uploadedBytes = this.finalTotalBytes ?? this.uploadedBytes;
@@ -363,10 +362,7 @@ export class InstantMp4Uploader {
 			progress: 100,
 			thumbnailUrl: this.thumbnailUrl,
 		});
-		await this.sendProgressUpdate(
-			this.uploadedBytes,
-			this.uploadedBytes,
-		);
+		await this.sendProgressUpdate(this.uploadedBytes, this.uploadedBytes);
 	}
 
 	async cancel() {

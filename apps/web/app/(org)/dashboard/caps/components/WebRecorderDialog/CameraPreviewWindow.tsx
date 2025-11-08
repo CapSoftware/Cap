@@ -102,7 +102,10 @@ export const CameraPreviewWindow = ({
 	const isPictureInPictureSupported =
 		typeof document !== "undefined" && document.pictureInPictureEnabled;
 	const canUseAutoPiPAttribute = useMemo(() => {
-		if (typeof document === "undefined" || typeof HTMLVideoElement === "undefined") {
+		if (
+			typeof document === "undefined" ||
+			typeof HTMLVideoElement === "undefined"
+		) {
 			return false;
 		}
 
@@ -116,8 +119,10 @@ export const CameraPreviewWindow = ({
 			return false;
 		}
 
-		return "autoPictureInPicture" in
-			(HTMLVideoElement.prototype as Record<string, unknown>);
+		return (
+			"autoPictureInPicture" in
+			(HTMLVideoElement.prototype as Record<string, unknown>)
+		);
 	}, []);
 
 	useEffect(() => {
@@ -345,8 +350,7 @@ export const CameraPreviewWindow = ({
 
 			const currentElement = document.pictureInPictureElement;
 			const hasActiveUserGesture =
-				typeof navigator !== "undefined" &&
-				navigator.userActivation?.isActive;
+				typeof navigator !== "undefined" && navigator.userActivation?.isActive;
 
 			if (
 				currentElement &&

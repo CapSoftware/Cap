@@ -112,15 +112,8 @@ export const MP4_MIME_TYPES = {
 } as const;
 
 export const WEBM_MIME_TYPES = {
-	withAudio: [
-		"video/webm;codecs=vp9,opus",
-		"video/webm;codecs=vp8,opus",
-	],
-	videoOnly: [
-		"video/webm;codecs=vp9",
-		"video/webm;codecs=vp8",
-		"video/webm",
-	],
+	withAudio: ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus"],
+	videoOnly: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"],
 } as const;
 
 export const DETECTION_RETRY_DELAYS = [120, 450, 1000];

@@ -2,8 +2,8 @@ import { useCallback, useRef } from "react";
 import type { RecordingMode } from "./RecordingModeSelector";
 import { DETECTION_RETRY_DELAYS } from "./web-recorder-constants";
 import {
-	detectRecordingModeFromTrack,
 	type DetectedDisplayRecordingMode,
+	detectRecordingModeFromTrack,
 } from "./web-recorder-utils";
 
 export const useSurfaceDetection = (
@@ -95,4 +95,3 @@ export const useSurfaceDetection = (
 		clearDetectionTracking,
 	};
 };
-
