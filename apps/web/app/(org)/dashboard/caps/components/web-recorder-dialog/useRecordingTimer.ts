@@ -51,6 +51,11 @@ export const useRecordingTimer = () => {
 		pausedDurationRef.current = 0;
 		setDurationMs(0);
 
+		if (timerRef.current !== null) {
+			window.clearInterval(timerRef.current);
+			timerRef.current = null;
+		}
+
 		timerRef.current = window.setInterval(() => {
 			if (startTimeRef.current !== null) {
 				syncDurationFromClock();
