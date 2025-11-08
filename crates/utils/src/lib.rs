@@ -1,4 +1,4 @@
-use std::{borrow::Cow, future::Future, path::PathBuf, sync::OnceLock};
+use std::{borrow::Cow, future::Future, path::PathBuf, sync::LazyLock};
 
 use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
@@ -97,7 +97,7 @@ pub fn ensure_unique_filename(
     }
 }
 
-/// Converts user-friendly template format strings to chrono format strings.
+/// Converts user-friendly moment template format strings to chrono format strings.
 ///
 /// This function translates common template format patterns to chrono format specifiers,
 /// allowing users to write intuitive date/time formats that get converted to chrono's format.
@@ -171,21 +171,18 @@ pub fn ensure_unique_filename(
 /// Pattern matching is case-sensitive and processes longer patterns first to avoid
 /// conflicts (e.g., `MMMM` is matched before `MM`).
 pub fn moment_format_to_chrono(template_format: &str) -> Cow<'_, str> {
-    static AC: OnceLock<aho_corasick::AhoCorasick> = OnceLock::new();
-
-    let ac = AC.get_or_init(|| {
-        // Order still matters (longer first helps readability), but using LeftmostLongest
-        // ensures overlapping shorter patterns won't also match.
+    static AC: LazyLock<aho_corasick::AhoCorasick> = LazyLock::new(|| {
         AhoCorasickBuilder::new()
+            // Use LeftmostLongest patterns to ensure overlapping shorter patterns won't also match.
             .match_kind(MatchKind::LeftmostLongest)
-            .build(&[
+            .build([
                 "MMMM", "MMM", "MM", "M", "DDDD", "DDD", "DD", "D", "YYYY", "YY", "HH", "H", "hh",
                 "h", "mm", "m", "ss", "s", "A", "a",
             ])
             .expect("Failed to build AhoCorasick automaton")
     });
 
-    if !ac.is_match(template_format) {
+    if !AC.is_match(template_format) {
         return Cow::Borrowed(template_format);
     }
 
@@ -200,7 +197,7 @@ pub fn moment_format_to_chrono(template_format: &str) -> Cow<'_, str> {
         "%p", "%P", // AM/PM
     ];
 
-    let replaced = ac
+    let replaced = AC
         .try_replace_all(template_format, &replacements)
         .expect("AhoCorasick replace should never fail with default configuration");
 

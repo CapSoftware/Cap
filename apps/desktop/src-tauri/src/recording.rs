@@ -7,7 +7,6 @@ use cap_project::{
     TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
     cursor::CursorEvents,
 };
-use cap_recording::RecordingOptionCaptureTarget;
 use cap_recording::feeds::camera::CameraFeedLock;
 use cap_recording::{
     RecordingMode,
@@ -26,8 +25,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::borrow::Cow;
-use std::sync::OnceLock;
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -284,7 +281,6 @@ pub const DEFAULT_FILENAME_TEMPLATE: &str = "{target} {datetime}";
 /// ## Target Variables
 /// - `{target_kind}` - The type of capture target: "Display", "Window", or "Area"
 /// - `{target_name}` - The specific name of the target (e.g., "Built-in Retina Display", "Chrome", etc.)
-/// - `{target}` - Combined target information (e.g., "Display (Built-in Retina Display)")
 ///
 /// ## Date/Time Variables
 /// - `{date}` - Current date in YYYY-MM-DD format (e.g., "2025-09-11")
@@ -326,7 +322,17 @@ pub fn format_project_name<'a>(
     recording_mode: RecordingMode,
     datetime: chrono::DateTime<chrono::Local>,
 ) -> String {
-    static AC: OnceLock<aho_corasick::AhoCorasick> = OnceLock::new();
+    lazy_static! {
+        static ref AC: aho_corasick::AhoCorasick = {
+            aho_corasick::AhoCorasick::new(&[
+                "{recording_mode}",
+                "{mode}",
+                "{target_kind}",
+                "{target_name}",
+            ])
+            .expect("Failed to build AhoCorasick automaton")
+        };
+    }
     let template = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
 
     // Get recording mode information
@@ -335,29 +341,8 @@ pub fn format_project_name<'a>(
         RecordingMode::Instant => ("Instant", "instant"),
     };
 
-    let ac = AC.get_or_init(|| {
-        aho_corasick::AhoCorasick::new(&[
-            "{recording_mode}",
-            "{mode}",
-            "{target_kind}",
-            "{target_name}",
-            "{target}",
-        ])
-        .expect("Failed to build AhoCorasick automaton")
-    });
-
-    let target_combined = format!("{target_kind} ({target_name})");
-    let result = ac
-        .try_replace_all(
-            &template,
-            &[
-                recording_mode,
-                mode,
-                target_kind,
-                target_name,
-                &target_combined,
-            ],
-        )
+    let result = AC
+        .try_replace_all(&template, &[recording_mode, mode, target_kind, target_name])
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
@@ -416,8 +401,9 @@ pub async fn start_recording(
         chrono::Local::now(),
     );
 
+    let filename = project_name.replace(":", ".");
     let filename = sanitize_filename::sanitize_with_options(
-        &project_name,
+        &filename,
         sanitize_filename::Options {
             replacement: "-",
             ..Default::default()
@@ -438,16 +424,6 @@ pub async fn start_recording(
         .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
         .await?;
 
-    let target_name = {
-        let title = inputs.capture_target.title();
-
-        match inputs.capture_target.clone() {
-            ScreenCaptureTarget::Area { .. } => title.unwrap_or_else(|| "Area".to_string()),
-            ScreenCaptureTarget::Window { .. } => title.unwrap_or_else(|| "Window".to_string()),
-            ScreenCaptureTarget::Display { .. } => title.unwrap_or_else(|| "Screen".to_string()),
-        }
-    };
-
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
     }
@@ -461,10 +437,7 @@ pub async fn start_recording(
                         &app,
                         false,
                         None,
-                        Some(format!(
-                            "{target_name} {}",
-                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                        )),
+                        Some(project_name.clone()),
                         None,
                         inputs.organization_id.clone(),
                     )
@@ -505,7 +478,7 @@ pub async fn start_recording(
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
-        pretty_name: project_name,
+        pretty_name: project_name.clone(),
         inner: match inputs.mode {
             RecordingMode::Studio => {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
@@ -619,7 +592,7 @@ pub async fn start_recording(
                     .ok_or_else(|| "GetShareableContent/NotAvailable".to_string())?;
 
                 let common = InProgressRecordingCommon {
-                    target_name,
+                    target_name: project_name.clone(),
                     inputs: inputs.clone(),
                     recording_dir: recording_dir.clone(),
                 };
