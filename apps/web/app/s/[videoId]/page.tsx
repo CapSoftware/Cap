@@ -261,13 +261,13 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 
 		const [video] = yield* Effect.promise(() =>
 			db()
-					.select({
-						id: videos.id,
-						name: videos.name,
-						orgId: videos.orgId,
-						createdAt: videos.createdAt,
-						updatedAt: videos.updatedAt,
-						effectiveCreatedAt: videos.effectiveCreatedAt,
+				.select({
+					id: videos.id,
+					name: videos.name,
+					orgId: videos.orgId,
+					createdAt: videos.createdAt,
+					updatedAt: videos.updatedAt,
+					effectiveCreatedAt: videos.effectiveCreatedAt,
 					bucket: videos.bucket,
 					metadata: videos.metadata,
 					public: videos.public,
@@ -453,13 +453,13 @@ async function AuthorizedContent({
 		console.log("[ShareVideoPage] Starting transcription for video:", videoId);
 		await transcribeVideo(videoId, video.owner.id, aiGenerationEnabled);
 
-			const updatedVideoQuery = await db()
-				.select({
-					id: videos.id,
-					name: videos.name,
-					createdAt: videos.createdAt,
-					updatedAt: videos.updatedAt,
-					effectiveCreatedAt: videos.effectiveCreatedAt,
+		const updatedVideoQuery = await db()
+			.select({
+				id: videos.id,
+				name: videos.name,
+				createdAt: videos.createdAt,
+				updatedAt: videos.updatedAt,
+				effectiveCreatedAt: videos.effectiveCreatedAt,
 				bucket: videos.bucket,
 				metadata: videos.metadata,
 				public: videos.public,
