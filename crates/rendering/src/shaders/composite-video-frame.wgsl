@@ -8,6 +8,7 @@ struct Uniforms {
     motion_blur_params: vec4<f32>,
     target_size: vec2<f32>,
     rounding_px: f32,
+    rounding_type: f32,
     mirror_x: f32,
     shadow: f32,
     shadow_size: f32,
@@ -44,9 +45,26 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return out;
 }
 
-fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+fn superellipse_norm(p: vec2<f32>, power: f32) -> f32 {
+    let x = pow(abs(p.x), power);
+    let y = pow(abs(p.y), power);
+    return pow(x + y, 1.0 / power);
+}
+
+fn rounded_corner_norm(p: vec2<f32>, rounding_type: f32) -> f32 {
+    if rounding_type < 0.5 {
+        return length(p);
+    }
+
+    let power = 4.0;
+    return superellipse_norm(p, power);
+}
+
+fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    let outside = max(q, vec2<f32>(0.0));
+    let outside_norm = rounded_corner_norm(outside, rounding_type);
+    return outside_norm + min(max(q.x, q.y), 0.0) - r;
 }
 
 @fragment
@@ -55,7 +73,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let center = (uniforms.target_bounds.xy + uniforms.target_bounds.zw) * 0.5;
     let size = (uniforms.target_bounds.zw - uniforms.target_bounds.xy) * 0.5;
     
-    let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
+    let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
 
     let min_frame_size = min(size.x, size.y);
     let shadow_enabled = uniforms.shadow > 0.0;
@@ -82,7 +100,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         shadow_enabled
     );
 
-    let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
+    let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
 
     // Apply blur and size to shadow
     let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
@@ -98,9 +116,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let border_outer_dist = sdf_rounded_rect(
             p - center,
             size + vec2<f32>(uniforms.border_width),
-            uniforms.rounding_px + uniforms.border_width
+            uniforms.rounding_px + uniforms.border_width,
+            uniforms.rounding_type
         );
-        let border_inner_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
+        let border_inner_dist =
+            sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
 
         if (border_outer_dist <= 0.0 && border_inner_dist > 0.0) {
             let inner_alpha = smoothstep(-0.5, 0.5, border_inner_dist);
@@ -247,13 +267,16 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
     let rounding_point = uniforms.target_size / 2.0 - uniforms.rounding_px;
     let target_rounding_coord = target_coord - rounding_point;
 
-    let distance = abs(length(target_rounding_coord)) - uniforms.rounding_px;
-
     let distance_blur = 1.0;
 
-    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 && distance >= -distance_blur/2.0 {
-    		return vec4<f32>(0.0);
-        // return mix(current_color, vec4<f32>(0.0), min(distance / distance_blur + 0.5, 1.0));
+    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 {
+        let local_coord = max(target_rounding_coord, vec2<f32>(0.0));
+        let corner_norm = rounded_corner_norm(local_coord, uniforms.rounding_type);
+        let distance = corner_norm - uniforms.rounding_px;
+
+        if distance >= -distance_blur / 2.0 {
+		    return vec4<f32>(0.0);
+        }
     }
 
     return current_color;

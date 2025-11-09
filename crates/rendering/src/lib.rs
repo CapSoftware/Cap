@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, Crop, CursorEvents,
-    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
+    CursorEvents, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -40,6 +40,13 @@ use scene::*;
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
+
+fn rounding_type_value(style: CornerStyle) -> f32 {
+    match style {
+        CornerStyle::Rounded => 0.0,
+        CornerStyle::Squircle => 1.0,
+    }
+}
 
 #[derive(Debug, Clone, Copy, Type)]
 pub struct RenderOptions {
@@ -1112,6 +1119,7 @@ impl ProjectUniforms {
                     target_size: [target_size.x as f32, target_size.y as f32],
                     rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
                         as f32,
+                    rounding_type: rounding_type_value(project.background.rounding_type),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
                     motion_blur_zoom_center: descriptor.zoom_center_uv,
@@ -1285,6 +1293,7 @@ impl ProjectUniforms {
                         target_bounds[3] - target_bounds[1],
                     ],
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
+                    rounding_type: rounding_type_value(project.camera.rounding_type),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_descriptor.movement_vector_uv,
                     motion_blur_zoom_center: camera_descriptor.zoom_center_uv,
@@ -1383,6 +1392,7 @@ impl ProjectUniforms {
                         target_bounds[3] - target_bounds[1],
                     ],
                     rounding_px: 0.0,
+                    rounding_type: rounding_type_value(project.camera.rounding_type),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_only_descriptor.movement_vector_uv,
                     motion_blur_zoom_center: camera_only_descriptor.zoom_center_uv,

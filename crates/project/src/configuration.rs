@@ -180,6 +180,14 @@ impl<T> From<(T, T)> for XY<T> {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CornerStyle {
+    #[default]
+    Squircle,
+    Rounded,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -216,6 +224,8 @@ pub struct BackgroundConfiguration {
     pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
+    #[serde(default)]
+    pub rounding_type: CornerStyle,
     pub inset: u32,
     pub crop: Option<Crop>,
     #[serde(default)]
@@ -244,6 +254,7 @@ impl Default for BackgroundConfiguration {
             blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
+            rounding_type: CornerStyle::default(),
             inset: 0,
             crop: None,
             shadow: 73.6,
@@ -292,6 +303,8 @@ pub struct Camera {
     pub advanced_shadow: Option<ShadowConfiguration>,
     #[serde(default)]
     pub shape: CameraShape,
+    #[serde(default)]
+    pub rounding_type: CornerStyle,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -328,6 +341,7 @@ impl Default for Camera {
                 blur: 10.5,
             }),
             shape: CameraShape::Square,
+            rounding_type: CornerStyle::default(),
         }
     }
 }

@@ -7,7 +7,12 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
-import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
+import {
+	FPS,
+	OUTPUT_SIZE,
+	serializeProjectConfiguration,
+	useEditorContext,
+} from "./context";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
@@ -68,7 +73,9 @@ export function Player() {
 					setProject(updatedProject);
 
 					// Save the updated project configuration
-					await commands.setProjectConfig(updatedProject);
+					await commands.setProjectConfig(
+						serializeProjectConfiguration(updatedProject),
+					);
 				}
 			}
 		}

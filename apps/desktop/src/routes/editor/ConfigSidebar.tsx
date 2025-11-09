@@ -53,12 +53,12 @@ import {
 	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
-import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import { useEditorContext } from "./context";
+import { type CornerRoundingType, useEditorContext } from "./context";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -210,6 +210,11 @@ const CAMERA_SHAPES = [
 	},
 ] satisfies Array<{ name: string; value: CameraShape }>;
 
+const CORNER_STYLE_OPTIONS = [
+	{ name: "Squircle", value: "squircle" },
+	{ name: "Rounded", value: "rounded" },
+] satisfies Array<{ name: string; value: CornerRoundingType }>;
+
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
@@ -263,7 +268,8 @@ const findCursorPreset = (
 			option.preset &&
 			Math.abs(option.preset.tension - values.tension) <=
 				CURSOR_PRESET_TOLERANCE.tension &&
-			Math.abs(option.preset.mass - values.mass) <= CURSOR_PRESET_TOLERANCE.mass &&
+			Math.abs(option.preset.mass - values.mass) <=
+				CURSOR_PRESET_TOLERANCE.mass &&
 			Math.abs(option.preset.friction - values.friction) <=
 				CURSOR_PRESET_TOLERANCE.friction,
 	);
@@ -618,27 +624,27 @@ export function ConfigSidebar() {
 									applyCursorStylePreset(value as CursorAnimationStyle)
 								}
 							>
-									{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
-										<RadioGroup.Item
-											value={option.value}
-											class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
-										>
-											<RadioGroup.ItemInput class="sr-only" />
-											<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
-												<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
-												<div class="flex flex-col text-left">
-													<span class="text-sm font-medium text-gray-12">
-														{option.label}
-													</span>
-													<span class="text-xs text-gray-11">
-														{option.description}
-													</span>
-												</div>
-											</RadioGroup.ItemLabel>
-										</RadioGroup.Item>
-									))}
-								</RadioGroup>
-							</Field>
+								{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
+									<RadioGroup.Item
+										value={option.value}
+										class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+									>
+										<RadioGroup.ItemInput class="sr-only" />
+										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+											<div class="flex flex-col text-left">
+												<span class="text-sm font-medium text-gray-12">
+													{option.label}
+												</span>
+												<span class="text-xs text-gray-11">
+													{option.description}
+												</span>
+											</div>
+										</RadioGroup.ItemLabel>
+									</RadioGroup.Item>
+								))}
+							</RadioGroup>
+						</Field>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
@@ -1814,14 +1820,23 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<Slider
-					value={[project.background.rounding]}
-					onChange={(v) => setProject("background", "rounding", v[0])}
-					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
-				/>
+				<div class="flex flex-col gap-3">
+					<Slider
+						value={[project.background.rounding]}
+						onChange={(v) => setProject("background", "rounding", v[0])}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+					<CornerStyleSelect
+						label="Corner Style"
+						value={project.background.roundingType}
+						onChange={(value) =>
+							setProject("background", "roundingType", value)
+						}
+					/>
+				</div>
 			</Field>
 			<Field
 				name="Border"
@@ -2146,14 +2161,21 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<Slider
-					value={[project.camera.rounding!]}
-					onChange={(v) => setProject("camera", "rounding", v[0])}
-					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
-				/>
+				<div class="flex flex-col gap-3">
+					<Slider
+						value={[project.camera.rounding!]}
+						onChange={(v) => setProject("camera", "rounding", v[0])}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+					<CornerStyleSelect
+						label="Corner Style"
+						value={project.camera.roundingType}
+						onChange={(value) => setProject("camera", "roundingType", value)}
+					/>
+				</div>
 			</Field>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<div class="space-y-8">
@@ -2221,6 +2243,72 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
             </Field>
           </ComingSoonTooltip> */}
 		</KTabs.Content>
+	);
+}
+
+function CornerStyleSelect(props: {
+	label?: string;
+	value: CornerRoundingType;
+	onChange: (value: CornerRoundingType) => void;
+}) {
+	return (
+		<div class="flex flex-col gap-1.5">
+			<Show when={props.label}>
+				{(label) => (
+					<span class="text-[0.65rem] uppercase tracking-wide text-gray-11">
+						{label()}
+					</span>
+				)}
+			</Show>
+			<KSelect<{ name: string; value: CornerRoundingType }>
+				options={CORNER_STYLE_OPTIONS}
+				optionValue="value"
+				optionTextValue="name"
+				value={CORNER_STYLE_OPTIONS.find(
+					(option) => option.value === props.value,
+				)}
+				onChange={(option) => option && props.onChange(option.value)}
+				disallowEmptySelection
+				itemComponent={(itemProps) => (
+					<MenuItem<typeof KSelect.Item>
+						as={KSelect.Item}
+						item={itemProps.item}
+					>
+						<KSelect.ItemLabel class="flex-1">
+							{itemProps.item.rawValue.name}
+						</KSelect.ItemLabel>
+					</MenuItem>
+				)}
+			>
+				<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+					<KSelect.Value<{
+						name: string;
+						value: CornerRoundingType;
+					}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+						{(state) => <span>{state.selectedOption().name}</span>}
+					</KSelect.Value>
+					<KSelect.Icon<ValidComponent>
+						as={(iconProps) => (
+							<IconCapChevronDown
+								{...iconProps}
+								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+							/>
+						)}
+					/>
+				</KSelect.Trigger>
+				<KSelect.Portal>
+					<PopperContent<typeof KSelect.Content>
+						as={KSelect.Content}
+						class={cx(topSlideAnimateClasses, "z-50")}
+					>
+						<MenuItemList<typeof KSelect.Listbox>
+							class="overflow-y-auto max-h-32"
+							as={KSelect.Listbox}
+						/>
+					</PopperContent>
+				</KSelect.Portal>
+			</KSelect>
+		</div>
 	);
 }
 
