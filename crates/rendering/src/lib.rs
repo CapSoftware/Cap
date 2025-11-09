@@ -368,10 +368,13 @@ pub struct ProjectUniforms {
     camera: Option<CompositeVideoFrameUniforms>,
     camera_only: Option<CompositeVideoFrameUniforms>,
     interpolated_cursor: Option<InterpolatedCursorPosition>,
+    pub prev_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
     pub resolution_base: XY<u32>,
+    pub display_parent_motion_px: XY<f32>,
+    pub motion_blur_amount: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -386,26 +389,252 @@ impl Zoom {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MotionBounds {
+    start: Coord<FrameSpace>,
+    end: Coord<FrameSpace>,
+}
+
+impl MotionBounds {
+    fn new(start: Coord<FrameSpace>, end: Coord<FrameSpace>) -> Self {
+        Self { start, end }
+    }
+
+    fn size(&self) -> XY<f64> {
+        (self.end - self.start).coord
+    }
+
+    fn center(&self) -> XY<f64> {
+        (self.start.coord + self.end.coord) * 0.5
+    }
+
+    fn diagonal(&self) -> f64 {
+        let size = self.size();
+        (size.x * size.x + size.y * size.y).sqrt().max(f64::EPSILON)
+    }
+
+    fn contains(&self, other: &Self) -> bool {
+        self.start.coord.x <= other.start.coord.x
+            && self.start.coord.y <= other.start.coord.y
+            && self.end.coord.x >= other.end.coord.x
+            && self.end.coord.y >= other.end.coord.y
+    }
+
+    fn to_uv(&self, point: XY<f64>) -> XY<f32> {
+        let size = self.size();
+        XY::new(
+            ((point.x - self.start.coord.x) / size.x.max(f64::EPSILON)) as f32,
+            ((point.y - self.start.coord.y) / size.y.max(f64::EPSILON)) as f32,
+        )
+    }
+
+    fn top_left(&self) -> XY<f64> {
+        self.start.coord
+    }
+
+    fn top_right(&self) -> XY<f64> {
+        XY::new(self.end.coord.x, self.start.coord.y)
+    }
+
+    fn bottom_left(&self) -> XY<f64> {
+        XY::new(self.start.coord.x, self.end.coord.y)
+    }
+
+    fn bottom_right(&self) -> XY<f64> {
+        self.end.coord
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct MotionAnalysis {
+    movement_px: XY<f32>,
+    movement_uv: XY<f32>,
+    movement_magnitude: f32,
+    zoom_center_uv: XY<f32>,
+    zoom_magnitude: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MotionBlurComputation {
+    descriptor: MotionBlurDescriptor,
+    parent_movement_px: XY<f32>,
+}
+
+impl MotionBlurComputation {
+    fn none() -> Self {
+        Self {
+            descriptor: MotionBlurDescriptor::none(),
+            parent_movement_px: XY::new(0.0, 0.0),
+        }
+    }
+}
+
+fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnalysis {
+    let mut analysis = MotionAnalysis::default();
+
+    let current_center = current.center();
+    let prev_center = previous.center();
+    let movement_px = XY::new(
+        (current_center.x - prev_center.x) as f32,
+        (current_center.y - prev_center.y) as f32,
+    );
+
+    let current_size = current.size();
+    let previous_size = previous.size();
+    let min_current = current_size.x.min(current_size.y);
+    let min_previous = previous_size.x.min(previous_size.y);
+    let base_span = min_current.max(min_previous).max(1.0) as f32;
+
+    let movement_uv = XY::new(movement_px.x / base_span, movement_px.y / base_span);
+    let movement_magnitude = (movement_uv.x * movement_uv.x + movement_uv.y * movement_uv.y).sqrt();
+
+    let prev_diag = previous.diagonal();
+    let curr_diag = current.diagonal();
+    let zoom_magnitude = if prev_diag <= f64::EPSILON {
+        0.0
+    } else {
+        ((curr_diag - prev_diag).abs() / prev_diag) as f32
+    };
+
+    let zoom_center_point = if previous.contains(current) {
+        previous.center()
+    } else {
+        zoom_vanishing_point(current, previous).unwrap_or(previous.center())
+    };
+
+    analysis.movement_px = movement_px;
+    analysis.movement_uv = movement_uv;
+    analysis.movement_magnitude = movement_magnitude;
+    analysis.zoom_magnitude = zoom_magnitude;
+    analysis.zoom_center_uv = current.to_uv(zoom_center_point);
+    analysis
+}
+
+fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
+    line_intersection(
+        previous.top_left(),
+        current.top_left(),
+        previous.bottom_right(),
+        current.bottom_right(),
+    )
+    .or_else(|| {
+        line_intersection(
+            previous.top_right(),
+            current.top_right(),
+            previous.bottom_left(),
+            current.bottom_left(),
+        )
+    })
+}
+
+fn line_intersection(a1: XY<f64>, a2: XY<f64>, b1: XY<f64>, b2: XY<f64>) -> Option<XY<f64>> {
+    let denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
+    if denom.abs() <= f64::EPSILON {
+        return None;
+    }
+
+    let a_det = a1.x * a2.y - a1.y * a2.x;
+    let b_det = b1.x * b2.y - b1.y * b2.x;
+    let x = (a_det * (b1.x - b2.x) - (a1.x - a2.x) * b_det) / denom;
+    let y = (a_det * (b1.y - b2.y) - (a1.y - a2.y) * b_det) / denom;
+    Some(XY::new(x, y))
+}
+
+fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
+    let len = (vec.x * vec.x + vec.y * vec.y).sqrt();
+    if len <= max_len || len <= f32::EPSILON {
+        vec
+    } else {
+        vec * (max_len / len)
+    }
+}
+
+fn resolve_motion_descriptor(
+    analysis: &MotionAnalysis,
+    base_amount: f32,
+    move_multiplier: f32,
+    zoom_multiplier: f32,
+) -> MotionBlurDescriptor {
+    if base_amount <= f32::EPSILON {
+        return MotionBlurDescriptor::none();
+    }
+
+    let zoom_metric = analysis.zoom_magnitude;
+    let move_metric = analysis.movement_magnitude;
+    let zoom_strength = (base_amount * zoom_multiplier).min(2.0);
+    let move_strength = (base_amount * move_multiplier).min(2.0);
+
+    if zoom_metric > move_metric && zoom_metric > MOTION_MIN_THRESHOLD && zoom_strength > 0.0 {
+        let zoom_amount = (zoom_metric * zoom_strength).min(MAX_ZOOM_AMOUNT);
+        MotionBlurDescriptor::zoom(analysis.zoom_center_uv, zoom_amount, zoom_strength)
+    } else if move_metric > MOTION_MIN_THRESHOLD && move_strength > 0.0 {
+        let vector = XY::new(
+            analysis.movement_uv.x * move_strength,
+            analysis.movement_uv.y * move_strength,
+        );
+        MotionBlurDescriptor::movement(clamp_vector(vector, MOTION_VECTOR_CAP), move_strength)
+    } else {
+        MotionBlurDescriptor::none()
+    }
+}
+
+fn normalized_motion_amount(user_motion_blur: f32, fps: f32) -> f32 {
+    if user_motion_blur <= f32::EPSILON {
+        0.0
+    } else {
+        (user_motion_blur * (fps / MOTION_BLUR_BASELINE_FPS)).max(0.0)
+    }
+}
+
 const CAMERA_PADDING: f32 = 50.0;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
 const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
-const DISPLAY_TRANSLATION_BASE: f32 = 0.02;
-const DISPLAY_ZOOM_BASE: f32 = 0.03;
-const CAMERA_ZOOM_BASE: f32 = 0.015;
-const DISPLAY_BLUR_INTENSITY_SCALE: f32 = 0.75;
-const CAMERA_BLUR_INTENSITY_SCALE: f32 = 0.65;
-const MOTION_BLUR_MIN_METRIC: f32 = 0.005;
-const MOTION_BLUR_SMOOTHING: f32 = 0.7;
-const DISPLAY_BLUR_VISUAL_SCALE: f32 = 0.22;
+const MOTION_MIN_THRESHOLD: f32 = 0.003;
+const MOTION_VECTOR_CAP: f32 = 0.85;
+const MAX_ZOOM_AMOUNT: f32 = 0.9;
+const DISPLAY_MOVE_MULTIPLIER: f32 = 0.6;
+const DISPLAY_ZOOM_MULTIPLIER: f32 = 0.45;
+const CAMERA_MULTIPLIER: f32 = 1.0;
+const CAMERA_ONLY_MULTIPLIER: f32 = 0.45;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MotionBlurMode {
+    None,
+    Movement,
+    Zoom,
+}
+
+impl MotionBlurMode {
+    fn as_f32(self) -> f32 {
+        match self {
+            MotionBlurMode::None => 0.0,
+            MotionBlurMode::Movement => 1.0,
+            MotionBlurMode::Zoom => 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 struct MotionBlurDescriptor {
-    amount: f32,
-    translation_dir: [f32; 2],
-    translation_strength: f32,
-    zoom_strength: f32,
+    mode: MotionBlurMode,
+    strength: f32,
+    movement_vector_uv: [f32; 2],
+    zoom_center_uv: [f32; 2],
+    zoom_amount: f32,
+}
+
+impl Default for MotionBlurDescriptor {
+    fn default() -> Self {
+        Self {
+            mode: MotionBlurMode::None,
+            strength: 0.0,
+            movement_vector_uv: [0.0, 0.0],
+            zoom_center_uv: [0.5, 0.5],
+            zoom_amount: 0.0,
+        }
+    }
 }
 
 impl MotionBlurDescriptor {
@@ -413,40 +642,23 @@ impl MotionBlurDescriptor {
         Self::default()
     }
 
-    fn smooth_with(self, previous: MotionBlurDescriptor, retention: f32) -> Self {
-        if retention <= f32::EPSILON {
-            return self;
-        }
-
-        let retention = retention.clamp(0.0, 0.95);
-        let current_weight = 1.0 - retention;
-
-        let blended_amount = previous.amount * retention + self.amount * current_weight;
-        let blended_translation_strength =
-            previous.translation_strength * retention + self.translation_strength * current_weight;
-        let blended_zoom_strength =
-            previous.zoom_strength * retention + self.zoom_strength * current_weight;
-
-        let mut blended_dir = [
-            previous.translation_dir[0] * retention + self.translation_dir[0] * current_weight,
-            previous.translation_dir[1] * retention + self.translation_dir[1] * current_weight,
-        ];
-
-        let dir_len = (blended_dir[0] * blended_dir[0] + blended_dir[1] * blended_dir[1]).sqrt();
-        if dir_len > 1e-4 {
-            blended_dir[0] /= dir_len;
-            blended_dir[1] /= dir_len;
-        } else if self.translation_strength > previous.translation_strength {
-            blended_dir = self.translation_dir;
-        } else {
-            blended_dir = previous.translation_dir;
-        }
-
+    fn movement(vector_uv: XY<f32>, strength: f32) -> Self {
         Self {
-            amount: blended_amount.min(1.0),
-            translation_dir: blended_dir,
-            translation_strength: blended_translation_strength,
-            zoom_strength: blended_zoom_strength,
+            mode: MotionBlurMode::Movement,
+            strength,
+            movement_vector_uv: [vector_uv.x, vector_uv.y],
+            zoom_center_uv: [0.5, 0.5],
+            zoom_amount: 0.0,
+        }
+    }
+
+    fn zoom(center_uv: XY<f32>, zoom_amount: f32, strength: f32) -> Self {
+        Self {
+            mode: MotionBlurMode::Zoom,
+            strength,
+            movement_vector_uv: [0.0, 0.0],
+            zoom_center_uv: [center_uv.x, center_uv.y],
+            zoom_amount,
         }
     }
 }
@@ -614,75 +826,36 @@ impl ProjectUniforms {
     }
 
     fn compute_display_motion_blur(
-        start: Coord<FrameSpace>,
-        end: Coord<FrameSpace>,
-        prev_start: Coord<FrameSpace>,
-        prev_end: Coord<FrameSpace>,
-        fps: f32,
-        user_motion_blur: f32,
-    ) -> MotionBlurDescriptor {
-        if user_motion_blur <= f32::EPSILON {
-            return MotionBlurDescriptor::none();
+        current: MotionBounds,
+        previous: MotionBounds,
+        has_previous: bool,
+        base_amount: f32,
+        extra_zoom: f32,
+    ) -> MotionBlurComputation {
+        if !has_previous || base_amount <= f32::EPSILON {
+            return MotionBlurComputation::none();
         }
 
-        let fps_scale = (fps / MOTION_BLUR_BASELINE_FPS).max(0.1);
+        let mut analysis = analyze_motion(&current, &previous);
+        if extra_zoom > 0.0 {
+            analysis.zoom_magnitude = (analysis.zoom_magnitude + extra_zoom).min(3.0);
+        }
 
-        let center = ((start + end) * 0.5).coord;
-        let prev_center = ((prev_start + prev_end) * 0.5).coord;
-        let translation = center - prev_center;
-
-        let size = (end - start).coord;
-        let prev_size = (prev_end - prev_start).coord;
-        let base_width = size.x.abs().max(prev_size.x.abs()).max(1.0);
-        let base_height = size.y.abs().max(prev_size.y.abs()).max(1.0);
-
-        let translation_uv = XY::new(translation.x / base_width, translation.y / base_height);
-        let translation_uv_mag = ((translation_uv.x * translation_uv.x
-            + translation_uv.y * translation_uv.y)
-            .sqrt() as f32)
-            .min(10.0);
-        let translation_metric =
-            (translation_uv_mag * fps_scale / DISPLAY_TRANSLATION_BASE).clamp(0.0, 1.2);
-
-        let zoom_ratio_x = ((size.x - prev_size.x).abs() / base_width).min(1.0);
-        let zoom_ratio_y = ((size.y - prev_size.y).abs() / base_height).min(1.0);
-        let zoom_ratio = ((zoom_ratio_x + zoom_ratio_y) * 0.5) as f32;
-        let zoom_metric = (zoom_ratio * fps_scale / DISPLAY_ZOOM_BASE).clamp(0.0, 1.2);
-
-        let translation_strength = Self::motion_blur_curve(
-            translation_metric,
-            user_motion_blur,
-            DISPLAY_BLUR_INTENSITY_SCALE,
-            1.0,
+        let descriptor = resolve_motion_descriptor(
+            &analysis,
+            base_amount,
+            DISPLAY_MOVE_MULTIPLIER,
+            DISPLAY_ZOOM_MULTIPLIER,
         );
-
-        let zoom_strength = Self::motion_blur_curve(
-            zoom_metric,
-            user_motion_blur,
-            DISPLAY_BLUR_INTENSITY_SCALE,
-            1.0,
-        );
-
-        let translation_dir = if translation_metric <= MOTION_BLUR_MIN_METRIC {
-            [0.0, 0.0]
+        let parent_vector = if analysis.movement_magnitude > MOTION_MIN_THRESHOLD {
+            analysis.movement_px
         } else {
-            let magnitude =
-                (translation_uv.x * translation_uv.x + translation_uv.y * translation_uv.y).sqrt();
-            if magnitude <= f64::EPSILON {
-                [0.0, 0.0]
-            } else {
-                [
-                    (translation_uv.x / magnitude) as f32,
-                    (translation_uv.y / magnitude) as f32,
-                ]
-            }
+            XY::new(0.0, 0.0)
         };
 
-        MotionBlurDescriptor {
-            amount: translation_strength.max(zoom_strength),
-            translation_dir,
-            translation_strength,
-            zoom_strength,
+        MotionBlurComputation {
+            descriptor,
+            parent_movement_px: parent_vector,
         }
     }
 
@@ -698,42 +871,17 @@ impl ProjectUniforms {
     }
 
     fn compute_camera_motion_blur(
-        zoomed_size: f32,
-        prev_zoomed_size: f32,
-        fps: f32,
-        user_motion_blur: f32,
+        current: MotionBounds,
+        previous: MotionBounds,
+        has_previous: bool,
+        base_amount: f32,
     ) -> MotionBlurDescriptor {
-        if user_motion_blur <= f32::EPSILON {
+        if !has_previous || base_amount <= f32::EPSILON {
             return MotionBlurDescriptor::none();
         }
 
-        let fps_scale = (fps / MOTION_BLUR_BASELINE_FPS).max(0.1);
-        let delta = (zoomed_size - prev_zoomed_size).abs();
-        let metric = (delta * fps_scale / CAMERA_ZOOM_BASE).clamp(0.0, 1.0);
-
-        let zoom_strength =
-            Self::motion_blur_curve(metric, user_motion_blur, CAMERA_BLUR_INTENSITY_SCALE, 1.0);
-
-        MotionBlurDescriptor {
-            amount: zoom_strength,
-            translation_dir: [0.0, 0.0],
-            translation_strength: 0.0,
-            zoom_strength,
-        }
-    }
-
-    fn motion_blur_curve(
-        metric: f32,
-        user_motion_blur: f32,
-        intensity_scale: f32,
-        max_amount: f32,
-    ) -> f32 {
-        if user_motion_blur <= f32::EPSILON || metric <= MOTION_BLUR_MIN_METRIC {
-            return 0.0;
-        }
-
-        let intensity = (user_motion_blur / intensity_scale).clamp(0.0, 2.5);
-        (metric.powf(0.85) * intensity).min(max_amount)
+        let analysis = analyze_motion(&current, &previous);
+        resolve_motion_descriptor(&analysis, base_amount, CAMERA_MULTIPLIER, CAMERA_MULTIPLIER)
     }
 
     fn auto_zoom_focus(
@@ -852,15 +1000,11 @@ impl ProjectUniforms {
         } else {
             (frame_number - 1) as f32 / fps_f32
         };
-        let prev_prev_frame_time = if frame_number >= 2 {
-            (frame_number - 2) as f32 / fps_f32
-        } else {
-            0.0
-        };
         let current_recording_time = segment_frames.recording_time;
         let prev_recording_time = (segment_frames.recording_time - 1.0 / fps_f32).max(0.0);
-        let prev_prev_recording_time = (segment_frames.recording_time - 2.0 / fps_f32).max(0.0);
         let user_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
+        let has_previous = frame_number > 0;
+        let normalized_motion = normalized_motion_amount(user_motion_blur, fps_f32);
 
         let crop = Self::get_crop(options, project);
 
@@ -875,12 +1019,6 @@ impl ProjectUniforms {
 
         let prev_interpolated_cursor =
             interpolate_cursor(cursor_events, prev_recording_time, cursor_smoothing);
-
-        let prev_prev_interpolated_cursor = if frame_number >= 2 {
-            interpolate_cursor(cursor_events, prev_prev_recording_time, cursor_smoothing)
-        } else {
-            prev_interpolated_cursor.clone()
-        };
 
         let zoom_segments = project
             .timeline
@@ -908,13 +1046,6 @@ impl ProjectUniforms {
             prev_interpolated_cursor.clone(),
         );
 
-        let prev_prev_zoom_focus = Self::auto_zoom_focus(
-            cursor_events,
-            prev_prev_recording_time,
-            cursor_smoothing,
-            prev_prev_interpolated_cursor.clone(),
-        );
-
         let zoom = InterpolatedZoom::new(
             SegmentsCursor::new(frame_time as f64, zoom_segments),
             zoom_focus,
@@ -925,23 +1056,14 @@ impl ProjectUniforms {
             prev_zoom_focus,
         );
 
-        let prev_prev_zoom = InterpolatedZoom::new(
-            SegmentsCursor::new(prev_prev_frame_time as f64, zoom_segments),
-            prev_prev_zoom_focus,
-        );
-
         let scene =
             InterpolatedScene::new(SceneSegmentsCursor::new(frame_time as f64, scene_segments));
         let prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
             prev_frame_time as f64,
             scene_segments,
         ));
-        let prev_prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
-            prev_prev_frame_time as f64,
-            scene_segments,
-        ));
 
-        let display = {
+        let (display, display_motion_parent) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.x as f32, options.screen_size.y as f32];
 
@@ -961,107 +1083,89 @@ impl ProjectUniforms {
                 Self::display_bounds(&zoom, display_offset, display_size, output_size);
             let (prev_start, prev_end) =
                 Self::display_bounds(&prev_zoom, display_offset, display_size, output_size);
-            let (prev_prev_start, prev_prev_end) =
-                Self::display_bounds(&prev_prev_zoom, display_offset, display_size, output_size);
 
             let target_size = (end - start).coord;
             let min_target_axis = target_size.x.min(target_size.y);
+            let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.2);
 
-            let mut display_blur = Self::compute_display_motion_blur(
-                start,
-                end,
-                prev_start,
-                prev_end,
-                fps_f32,
-                user_motion_blur,
+            let display_motion = Self::compute_display_motion_blur(
+                MotionBounds::new(start, end),
+                MotionBounds::new(prev_start, prev_end),
+                has_previous,
+                normalized_motion,
+                scene_blur_strength,
             );
-            if frame_number >= 2 {
-                let prev_display_blur = Self::compute_display_motion_blur(
-                    prev_start,
-                    prev_end,
-                    prev_prev_start,
-                    prev_prev_end,
-                    fps_f32,
-                    user_motion_blur,
-                );
-                display_blur = display_blur.smooth_with(prev_display_blur, MOTION_BLUR_SMOOTHING);
-            }
-            let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.0);
-            display_blur.zoom_strength =
-                (display_blur.zoom_strength + scene_blur_strength).clamp(0.0, 1.2);
-            display_blur.amount = display_blur.amount.max(display_blur.zoom_strength).min(1.0);
+            let descriptor = display_motion.descriptor;
+            let display_parent_motion_px = display_motion.parent_movement_px;
 
-            display_blur.translation_strength *= DISPLAY_BLUR_VISUAL_SCALE;
-            display_blur.zoom_strength *= DISPLAY_BLUR_VISUAL_SCALE;
-            display_blur.amount = (display_blur.amount * DISPLAY_BLUR_VISUAL_SCALE).max(
-                display_blur
-                    .translation_strength
-                    .max(display_blur.zoom_strength),
-            );
-
-            CompositeVideoFrameUniforms {
-                output_size: [output_size.x as f32, output_size.y as f32],
-                frame_size: size,
-                crop_bounds: [
-                    crop_start.x as f32,
-                    crop_start.y as f32,
-                    crop_end.x as f32,
-                    crop_end.y as f32,
-                ],
-                target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
-                target_size: [target_size.x as f32, target_size.y as f32],
-                rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
-                mirror_x: 0.0,
-                velocity_uv: display_blur.translation_dir,
-                blur_components: [
-                    display_blur.translation_strength,
-                    display_blur.zoom_strength,
-                ],
-                motion_blur_amount: display_blur.amount,
-                camera_motion_blur_amount: 0.0,
-                shadow: project.background.shadow,
-                shadow_size: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(50.0, |s| s.size),
-                shadow_opacity: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(18.0, |s| s.opacity),
-                shadow_blur: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(50.0, |s| s.blur),
-                opacity: scene.screen_opacity as f32,
-                border_enabled: if project
-                    .background
-                    .border
-                    .as_ref()
-                    .is_some_and(|b| b.enabled)
-                {
-                    1.0
-                } else {
-                    0.0
+            (
+                CompositeVideoFrameUniforms {
+                    output_size: [output_size.x as f32, output_size.y as f32],
+                    frame_size: size,
+                    crop_bounds: [
+                        crop_start.x as f32,
+                        crop_start.y as f32,
+                        crop_end.x as f32,
+                        crop_end.y as f32,
+                    ],
+                    target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
+                    target_size: [target_size.x as f32, target_size.y as f32],
+                    rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
+                        as f32,
+                    mirror_x: 0.0,
+                    motion_blur_vector: descriptor.movement_vector_uv,
+                    motion_blur_zoom_center: descriptor.zoom_center_uv,
+                    motion_blur_params: [
+                        descriptor.mode.as_f32(),
+                        descriptor.strength,
+                        descriptor.zoom_amount,
+                        0.0,
+                    ],
+                    shadow: project.background.shadow,
+                    shadow_size: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.size),
+                    shadow_opacity: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(18.0, |s| s.opacity),
+                    shadow_blur: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.blur),
+                    opacity: scene.screen_opacity as f32,
+                    border_enabled: if project
+                        .background
+                        .border
+                        .as_ref()
+                        .is_some_and(|b| b.enabled)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: if let Some(b) = project.background.border.as_ref() {
+                        [
+                            b.color[0] as f32 / 255.0,
+                            b.color[1] as f32 / 255.0,
+                            b.color[2] as f32 / 255.0,
+                            (b.opacity / 100.0).clamp(0.0, 1.0),
+                        ]
+                    } else {
+                        [1.0, 1.0, 1.0, 0.8]
+                    },
+                    _padding2: [0.0; 4],
                 },
-                border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
-                _padding0: 0.0,
-                _padding1: [0.0; 2],
-                _padding1b: [0.0; 2],
-                border_color: if let Some(b) = project.background.border.as_ref() {
-                    [
-                        b.color[0] as f32 / 255.0,
-                        b.color[1] as f32 / 255.0,
-                        b.color[2] as f32 / 255.0,
-                        (b.opacity / 100.0).clamp(0.0, 1.0),
-                    ]
-                } else {
-                    [1.0, 1.0, 1.0, 0.8]
-                },
-                _padding2: [0.0; 4],
-            }
+                display_parent_motion_px,
+            )
         };
 
         let camera = options
@@ -1082,65 +1186,49 @@ impl ProjectUniforms {
                 let zoomed_size = Self::camera_zoom_factor(&zoom, &scene, base_size, zoom_size);
                 let prev_zoomed_size =
                     Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, zoom_size);
-                let prev_prev_zoomed_size = Self::camera_zoom_factor(
-                    &prev_prev_zoom,
-                    &prev_prev_scene,
-                    base_size,
-                    zoom_size,
-                );
-
-                let camera_blur = Self::compute_camera_motion_blur(
-                    zoomed_size,
-                    prev_zoomed_size,
-                    fps_f32,
-                    user_motion_blur,
-                );
-                let camera_blur = if frame_number >= 2 {
-                    let prev_camera_blur = Self::compute_camera_motion_blur(
-                        prev_zoomed_size,
-                        prev_prev_zoomed_size,
-                        fps_f32,
-                        user_motion_blur,
-                    );
-                    camera_blur.smooth_with(prev_camera_blur, MOTION_BLUR_SMOOTHING)
-                } else {
-                    camera_blur
-                };
 
                 let aspect = frame_size[0] / frame_size[1];
-                let size = match project.camera.shape {
+                let camera_size_for = |scale: f32| match project.camera.shape {
                     CameraShape::Source => {
                         if aspect >= 1.0 {
                             [
-                                (min_axis * zoomed_size + CAMERA_PADDING) * aspect,
-                                min_axis * zoomed_size + CAMERA_PADDING,
+                                (min_axis * scale + CAMERA_PADDING) * aspect,
+                                min_axis * scale + CAMERA_PADDING,
                             ]
                         } else {
                             [
-                                min_axis * zoomed_size + CAMERA_PADDING,
-                                (min_axis * zoomed_size + CAMERA_PADDING) / aspect,
+                                min_axis * scale + CAMERA_PADDING,
+                                (min_axis * scale + CAMERA_PADDING) / aspect,
                             ]
                         }
                     }
                     CameraShape::Square => [
-                        min_axis * zoomed_size + CAMERA_PADDING,
-                        min_axis * zoomed_size + CAMERA_PADDING,
+                        min_axis * scale + CAMERA_PADDING,
+                        min_axis * scale + CAMERA_PADDING,
                     ],
                 };
 
-                let position = {
+                let size = camera_size_for(zoomed_size);
+                let prev_size = camera_size_for(prev_zoomed_size);
+
+                let position_for = |subject_size: [f32; 2]| {
                     let x = match &project.camera.position.x {
                         CameraXPosition::Left => CAMERA_PADDING,
-                        CameraXPosition::Center => output_size[0] / 2.0 - (size[0]) / 2.0,
-                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - size[0],
+                        CameraXPosition::Center => output_size[0] / 2.0 - subject_size[0] / 2.0,
+                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - subject_size[0],
                     };
                     let y = match &project.camera.position.y {
                         CameraYPosition::Top => CAMERA_PADDING,
-                        CameraYPosition::Bottom => output_size[1] - size[1] - CAMERA_PADDING,
+                        CameraYPosition::Bottom => {
+                            output_size[1] - subject_size[1] - CAMERA_PADDING
+                        }
                     };
 
                     [x, y]
                 };
+
+                let position = position_for(size);
+                let prev_position = position_for(prev_size);
 
                 let target_bounds = [
                     position[0],
@@ -1148,6 +1236,34 @@ impl ProjectUniforms {
                     position[0] + size[0],
                     position[1] + size[1],
                 ];
+                let prev_target_bounds = [
+                    prev_position[0],
+                    prev_position[1],
+                    prev_position[0] + prev_size[0],
+                    prev_position[1] + prev_size[1],
+                ];
+
+                let current_bounds = MotionBounds::new(
+                    Coord::new(XY::new(target_bounds[0] as f64, target_bounds[1] as f64)),
+                    Coord::new(XY::new(target_bounds[2] as f64, target_bounds[3] as f64)),
+                );
+                let prev_bounds = MotionBounds::new(
+                    Coord::new(XY::new(
+                        prev_target_bounds[0] as f64,
+                        prev_target_bounds[1] as f64,
+                    )),
+                    Coord::new(XY::new(
+                        prev_target_bounds[2] as f64,
+                        prev_target_bounds[3] as f64,
+                    )),
+                );
+
+                let camera_descriptor = Self::compute_camera_motion_blur(
+                    current_bounds,
+                    prev_bounds,
+                    has_previous,
+                    normalized_motion,
+                );
 
                 let crop_bounds = match project.camera.shape {
                     CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
@@ -1170,10 +1286,14 @@ impl ProjectUniforms {
                     ],
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
-                    velocity_uv: camera_blur.translation_dir,
-                    blur_components: [camera_blur.translation_strength, camera_blur.zoom_strength],
-                    motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: camera_blur.amount,
+                    motion_blur_vector: camera_descriptor.movement_vector_uv,
+                    motion_blur_zoom_center: camera_descriptor.zoom_center_uv,
+                    motion_blur_params: [
+                        camera_descriptor.mode.as_f32(),
+                        camera_descriptor.strength,
+                        camera_descriptor.zoom_amount,
+                        0.0,
+                    ],
                     shadow: project.camera.shadow,
                     shadow_size: project
                         .camera
@@ -1241,7 +1361,17 @@ impl ProjectUniforms {
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
                 };
 
-                let camera_only_blur = (scene.camera_only_blur as f32 * 0.5).clamp(0.0, 1.0);
+                let camera_only_blur =
+                    (scene.camera_only_blur as f32 * CAMERA_ONLY_MULTIPLIER).clamp(0.0, 1.0);
+                let camera_only_descriptor = if camera_only_blur <= f32::EPSILON {
+                    MotionBlurDescriptor::none()
+                } else {
+                    MotionBlurDescriptor::zoom(
+                        XY::new(0.5, 0.5),
+                        (camera_only_blur * 0.75).min(MAX_ZOOM_AMOUNT),
+                        camera_only_blur,
+                    )
+                };
 
                 CompositeVideoFrameUniforms {
                     output_size,
@@ -1254,10 +1384,14 @@ impl ProjectUniforms {
                     ],
                     rounding_px: 0.0,
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
-                    velocity_uv: [0.0, 0.0],
-                    blur_components: [0.0, camera_only_blur],
-                    motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: camera_only_blur,
+                    motion_blur_vector: camera_only_descriptor.movement_vector_uv,
+                    motion_blur_zoom_center: camera_only_descriptor.zoom_center_uv,
+                    motion_blur_params: [
+                        camera_only_descriptor.mode.as_f32(),
+                        camera_only_descriptor.strength,
+                        camera_only_descriptor.zoom_amount,
+                        0.0,
+                    ],
                     shadow: 0.0,
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
@@ -1285,6 +1419,9 @@ impl ProjectUniforms {
             scene,
             interpolated_cursor,
             frame_rate: fps,
+            prev_cursor: prev_interpolated_cursor,
+            display_parent_motion_px: display_motion_parent,
+            motion_blur_amount: user_motion_blur,
         }
     }
 }

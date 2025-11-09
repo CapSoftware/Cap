@@ -7,7 +7,7 @@ struct Uniforms {
     position_size: vec4<f32>,
     output_size: vec4<f32>,
     screen_bounds: vec4<f32>,
-    velocity_blur_opacity: vec4<f32>,
+    motion_vector_strength: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -56,54 +56,39 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Increase samples for higher quality blur
     let num_samples = 20;
-    var color_sum = vec4<f32>(0.0);
-    var weight_sum = 0.0;
+    let base_sample = textureSample(t_cursor, s_cursor, input.uv);
+    var color_sum = base_sample;
+    var weight_sum = 1.0;
 
     // Calculate velocity magnitude for adaptive blur strength
-    let velocity = uniforms.velocity_blur_opacity.xy;
-    let motion_blur_amount = uniforms.velocity_blur_opacity.z;
-    let opacity = uniforms.velocity_blur_opacity.w;
+    let motion_vec = uniforms.motion_vector_strength.xy;
+    let blur_strength = uniforms.motion_vector_strength.z;
+    let opacity = uniforms.motion_vector_strength.w;
 
-    let velocity_mag = length(velocity);
-    let adaptive_blur = motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
+    let motion_len = length(motion_vec);
+    if (motion_len < 1e-4 || blur_strength < 0.001) {
+        return textureSample(t_cursor, s_cursor, input.uv) * opacity;
+    }
 
-    // Calculate blur direction from velocity
-    var blur_dir = velocity;
-
-    // Enhanced blur trail
-    let max_blur_offset = 3.0 * adaptive_blur;
+    let direction = motion_vec / motion_len;
+    let max_offset = motion_len;
 
     for (var i = 0; i < num_samples; i++) {
-        // Non-linear sampling for better blur distribution
-        let t = i / num_samples;
-
-        // Calculate sample offset with velocity-based scaling
-        let offset = blur_dir * max_blur_offset * (f32(i) / f32(num_samples));
+        let t = f32(i) / f32(num_samples - 1);
+        let eased = smoothstep(0.0, 1.0, t);
+        let offset = direction * max_offset * eased;
         let sample_uv = input.uv + offset / uniforms.output_size.xy;
 
         // Sample with bilinear filtering
         let sample = textureSample(t_cursor, s_cursor, sample_uv);
 
         // Accumulate weighted sample
-        color_sum += sample;
+        let weight = 1.0 - t * 0.75;
+        color_sum += sample * weight;
+        weight_sum += weight;
     }
 
-    // Normalize the result
-    var final_color = color_sum / f32(num_samples);
-
-    // Enhance contrast slightly for fast movements
-    if (velocity_mag > 30.0) {
-        // Create new color with enhanced contrast instead of modifying components
-        final_color = vec4<f32>(
-            pow(final_color.r, 0.95),
-            pow(final_color.g, 0.95),
-            pow(final_color.b, 0.95),
-            final_color.a
-        );
-    }
-
-    // Preserve opacity regardless of blur intensity so the cursor stays fully visible.
+    var final_color = color_sum / weight_sum;
     final_color *= opacity;
-
     return final_color;
 }
