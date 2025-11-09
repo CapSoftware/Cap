@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use cap_project::{CursorEvents, CursorMoveEvent, XY};
 
 use crate::{
@@ -51,7 +53,8 @@ pub fn interpolate_cursor(
     }
 
     if let Some(smoothing_config) = smoothing {
-        let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);
+        let prepared_moves = densify_cursor_moves(&cursor.moves);
+        let events = get_smoothed_cursor_events(prepared_moves.as_ref(), smoothing_config);
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
         let (pos, cursor_id, velocity) = cursor.moves.windows(2).find_map(|chunk| {
@@ -169,6 +172,87 @@ fn interpolate_smoothed_position(
     })
 }
 
+const CURSOR_FRAME_DURATION_MS: f64 = 1000.0 / 60.0;
+const GAP_INTERPOLATION_THRESHOLD_MS: f64 = CURSOR_FRAME_DURATION_MS * 4.0;
+const MIN_CURSOR_TRAVEL_FOR_INTERPOLATION: f64 = 0.02;
+const MAX_INTERPOLATED_STEPS: usize = 120;
+
+fn densify_cursor_moves<'a>(moves: &'a [CursorMoveEvent]) -> Cow<'a, [CursorMoveEvent]> {
+    if moves.len() < 2 {
+        return Cow::Borrowed(moves);
+    }
+
+    let requires_interpolation = moves.windows(2).any(|window| {
+        let current = &window[0];
+        let next = &window[1];
+        should_fill_gap(current, next)
+    });
+
+    if !requires_interpolation {
+        return Cow::Borrowed(moves);
+    }
+
+    let mut dense_moves = Vec::with_capacity(moves.len());
+    dense_moves.push(moves[0].clone());
+
+    for i in 0..moves.len() - 1 {
+        let current = &moves[i];
+        let next = &moves[i + 1];
+        if should_fill_gap(current, next) {
+            push_interpolated_samples(current, next, &mut dense_moves);
+        } else {
+            dense_moves.push(next.clone());
+        }
+    }
+
+    Cow::Owned(dense_moves)
+}
+
+fn should_fill_gap(from: &CursorMoveEvent, to: &CursorMoveEvent) -> bool {
+    if from.cursor_id != to.cursor_id {
+        return false;
+    }
+
+    let dt_ms = (to.time_ms - from.time_ms).max(0.0);
+    if dt_ms < GAP_INTERPOLATION_THRESHOLD_MS {
+        return false;
+    }
+
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let distance = (dx * dx + dy * dy).sqrt();
+
+    distance >= MIN_CURSOR_TRAVEL_FOR_INTERPOLATION
+}
+
+fn push_interpolated_samples(
+    from: &CursorMoveEvent,
+    to: &CursorMoveEvent,
+    output: &mut Vec<CursorMoveEvent>,
+) {
+    let dt_ms = (to.time_ms - from.time_ms).max(0.0);
+    if dt_ms <= 0.0 {
+        output.push(to.clone());
+        return;
+    }
+
+    let segments =
+        ((dt_ms / CURSOR_FRAME_DURATION_MS).ceil() as usize).clamp(2, MAX_INTERPOLATED_STEPS);
+
+    for step in 1..segments {
+        let t = step as f64 / segments as f64;
+        output.push(CursorMoveEvent {
+            active_modifiers: to.active_modifiers.clone(),
+            cursor_id: to.cursor_id.clone(),
+            time_ms: from.time_ms + dt_ms * t,
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t,
+        });
+    }
+
+    output.push(to.clone());
+}
+
 #[derive(Debug)]
 struct SmoothedCursorEvent {
     time: f32,
@@ -176,4 +260,49 @@ struct SmoothedCursorEvent {
     position: XY<f32>,
     velocity: XY<f32>,
     cursor_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "primary".into(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn densify_inserts_samples_for_large_gaps() {
+        let moves = vec![cursor_move(0.0, 0.1, 0.1), cursor_move(140.0, 0.9, 0.9)];
+
+        match densify_cursor_moves(&moves) {
+            Cow::Owned(dense) => {
+                assert!(dense.len() > moves.len(), "expected interpolated samples");
+                assert_eq!(
+                    dense.first().unwrap().time_ms,
+                    moves.first().unwrap().time_ms
+                );
+                assert_eq!(dense.last().unwrap().time_ms, moves.last().unwrap().time_ms);
+            }
+            Cow::Borrowed(_) => panic!("expected densified output"),
+        }
+    }
+
+    #[test]
+    fn densify_skips_small_gaps_or_cursor_switches() {
+        let small_gap = vec![cursor_move(0.0, 0.1, 0.1), cursor_move(30.0, 0.2, 0.2)];
+        assert!(matches!(densify_cursor_moves(&small_gap), Cow::Borrowed(_)));
+
+        let mut cursor_switch = vec![cursor_move(0.0, 0.1, 0.1), cursor_move(100.0, 0.8, 0.8)];
+        cursor_switch[1].cursor_id = "text".into();
+        assert!(matches!(
+            densify_cursor_moves(&cursor_switch),
+            Cow::Borrowed(_)
+        ));
+    }
 }
