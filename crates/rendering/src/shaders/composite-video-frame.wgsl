@@ -4,6 +4,7 @@ struct Uniforms {
     output_size: vec2<f32>,
     frame_size: vec2<f32>,
     velocity_uv: vec2<f32>,
+    blur_components: vec2<f32>,
     target_size: vec2<f32>,
     rounding_px: f32,
     mirror_x: f32,
@@ -121,47 +122,57 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     base_color.a = base_color.a * uniforms.opacity;
 
     let blur_amount = select(uniforms.motion_blur_amount, uniforms.camera_motion_blur_amount, uniforms.camera_motion_blur_amount > 0.0);
+    let translation_strength = uniforms.blur_components.x;
+    let zoom_strength = uniforms.blur_components.y;
 
-    if blur_amount < 0.01 {
+    if blur_amount < 0.01 || (translation_strength < 0.01 && zoom_strength < 0.01) {
         return mix(shadow_color, base_color, base_color.a);
     }
 
     let center_uv = vec2<f32>(0.5, 0.5);
-    let dir = normalize(target_uv - center_uv);
+    let to_center = target_uv - center_uv;
+    let dist_from_center = length(to_center);
+    var radial_dir = vec2<f32>(0.0, -1.0);
+    if (dist_from_center > 1e-4) {
+        radial_dir = to_center / dist_from_center;
+    }
 
-    let base_samples = 16.0;
-    let num_samples = i32(base_samples * smoothstep(0.0, 1.0, blur_amount));
+    var translation_dir = uniforms.velocity_uv;
+    let translation_len = length(translation_dir);
+    if (translation_len > 1e-4) {
+        translation_dir = translation_dir / translation_len;
+    } else {
+        translation_dir = radial_dir;
+    }
+
+    let translation_scale = select(0.08, 0.22, uniforms.camera_motion_blur_amount > 0.0);
+    let zoom_scale = select(0.08, 0.24, uniforms.camera_motion_blur_amount > 0.0);
+    let jitter_scale = select(0.0008, 0.0015 + 0.0015 * blur_amount, uniforms.camera_motion_blur_amount > 0.0);
+
+    let base_samples = clamp(8.0 + 14.0 * blur_amount, 6.0, 32.0);
+    let num_samples = i32(base_samples);
 
     var accum = base_color;
     var weight_sum = 1.0;
 
     for (var i = 1; i < num_samples; i = i + 1) {
-        let t = f32(i) / f32(num_samples);
-        let dist_from_center = length(target_uv - center_uv);
+        let t = f32(i) / f32(num_samples - 1);
+        let eased = smoothstep(0.0, 1.0, t);
 
-        let random_offset = (rand(target_uv + vec2<f32>(t)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
+        let translation_offset = translation_dir * translation_strength * translation_scale * eased;
+        let zoom_offset = radial_dir * (dist_from_center + 0.12) * zoom_strength * zoom_scale * eased;
 
-        let base_scale = select(
-            0.08,  // Regular content scale
-            0.16,  // Camera scale
-            uniforms.camera_motion_blur_amount > 0.0
-        );
-        let scale = dist_from_center * blur_amount * (base_scale + random_offset) * smoothstep(0.0, 0.1, blur_amount);
+        let jitter_seed = target_uv + vec2<f32>(t, f32(i) * 0.37);
+        let jitter_angle = rand(jitter_seed) * 6.2831853;
+        let jitter_radius = (rand(jitter_seed.yx) - 0.5) * jitter_scale * blur_amount;
+        let jitter = vec2<f32>(cos(jitter_angle), sin(jitter_angle)) * jitter_radius;
 
-        let angle_variation = (rand(target_uv + vec2<f32>(t * 2.0)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
-        let rotated_dir = vec2<f32>(
-            dir.x * cos(angle_variation) - dir.y * sin(angle_variation),
-            dir.x * sin(angle_variation) + dir.y * cos(angle_variation)
-        );
-
-        let offset = rotated_dir * scale * t;
-
-        let sample_uv = target_uv - offset;
+        let sample_uv = target_uv - translation_offset - zoom_offset + jitter;
         if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
             var sample_color = sample_texture(sample_uv, crop_bounds_uv);
             sample_color = apply_rounded_corners(sample_color, sample_uv);
 
-            let weight = (1.0 - t) * (1.0 + random_offset * 0.2);
+            let weight = 1.0 - t * 0.85;
             accum += sample_color * weight;
             weight_sum += weight;
         }

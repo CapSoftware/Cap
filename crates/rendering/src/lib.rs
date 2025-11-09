@@ -390,6 +390,67 @@ const CAMERA_PADDING: f32 = 50.0;
 
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
+const MOTION_BLUR_BASELINE_FPS: f32 = 60.0;
+const DISPLAY_TRANSLATION_BASE: f32 = 0.02;
+const DISPLAY_ZOOM_BASE: f32 = 0.03;
+const CAMERA_ZOOM_BASE: f32 = 0.015;
+const DISPLAY_BLUR_INTENSITY_SCALE: f32 = 0.75;
+const CAMERA_BLUR_INTENSITY_SCALE: f32 = 0.65;
+const MOTION_BLUR_MIN_METRIC: f32 = 0.005;
+const MOTION_BLUR_SMOOTHING: f32 = 0.7;
+const DISPLAY_BLUR_VISUAL_SCALE: f32 = 0.22;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct MotionBlurDescriptor {
+    amount: f32,
+    translation_dir: [f32; 2],
+    translation_strength: f32,
+    zoom_strength: f32,
+}
+
+impl MotionBlurDescriptor {
+    fn none() -> Self {
+        Self::default()
+    }
+
+    fn smooth_with(self, previous: MotionBlurDescriptor, retention: f32) -> Self {
+        if retention <= f32::EPSILON {
+            return self;
+        }
+
+        let retention = retention.clamp(0.0, 0.95);
+        let current_weight = 1.0 - retention;
+
+        let blended_amount = previous.amount * retention + self.amount * current_weight;
+        let blended_translation_strength =
+            previous.translation_strength * retention + self.translation_strength * current_weight;
+        let blended_zoom_strength =
+            previous.zoom_strength * retention + self.zoom_strength * current_weight;
+
+        let mut blended_dir = [
+            previous.translation_dir[0] * retention + self.translation_dir[0] * current_weight,
+            previous.translation_dir[1] * retention + self.translation_dir[1] * current_weight,
+        ];
+
+        let dir_len = (blended_dir[0] * blended_dir[0] + blended_dir[1] * blended_dir[1]).sqrt();
+        if dir_len > 1e-4 {
+            blended_dir[0] /= dir_len;
+            blended_dir[1] /= dir_len;
+        } else if self.translation_strength > previous.translation_strength {
+            blended_dir = self.translation_dir;
+        } else {
+            blended_dir = previous.translation_dir;
+        }
+
+        Self {
+            amount: blended_amount.min(1.0),
+            translation_dir: blended_dir,
+            translation_strength: blended_translation_strength,
+            zoom_strength: blended_zoom_strength,
+        }
+    }
+}
+
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
         project.background.crop.as_ref().cloned().unwrap_or(Crop {
@@ -538,6 +599,143 @@ impl ProjectUniforms {
         end - display_offset
     }
 
+    fn display_bounds(
+        zoom: &InterpolatedZoom,
+        display_offset: Coord<FrameSpace>,
+        display_size: Coord<FrameSpace>,
+        output_size: XY<f64>,
+    ) -> (Coord<FrameSpace>, Coord<FrameSpace>) {
+        let base_end = Coord::new(output_size) - display_offset;
+        let zoom_start = Coord::new(zoom.bounds.top_left * display_size.coord);
+        let zoom_end = Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord);
+        let start = display_offset + zoom_start;
+        let end = base_end + zoom_end;
+        (start, end)
+    }
+
+    fn compute_display_motion_blur(
+        start: Coord<FrameSpace>,
+        end: Coord<FrameSpace>,
+        prev_start: Coord<FrameSpace>,
+        prev_end: Coord<FrameSpace>,
+        fps: f32,
+        user_motion_blur: f32,
+    ) -> MotionBlurDescriptor {
+        if user_motion_blur <= f32::EPSILON {
+            return MotionBlurDescriptor::none();
+        }
+
+        let fps_scale = (fps / MOTION_BLUR_BASELINE_FPS).max(0.1);
+
+        let center = ((start + end) * 0.5).coord;
+        let prev_center = ((prev_start + prev_end) * 0.5).coord;
+        let translation = center - prev_center;
+
+        let size = (end - start).coord;
+        let prev_size = (prev_end - prev_start).coord;
+        let base_width = size.x.abs().max(prev_size.x.abs()).max(1.0);
+        let base_height = size.y.abs().max(prev_size.y.abs()).max(1.0);
+
+        let translation_uv = XY::new(translation.x / base_width, translation.y / base_height);
+        let translation_uv_mag = ((translation_uv.x * translation_uv.x
+            + translation_uv.y * translation_uv.y)
+            .sqrt() as f32)
+            .min(10.0);
+        let translation_metric =
+            (translation_uv_mag * fps_scale / DISPLAY_TRANSLATION_BASE).clamp(0.0, 1.2);
+
+        let zoom_ratio_x = ((size.x - prev_size.x).abs() / base_width).min(1.0);
+        let zoom_ratio_y = ((size.y - prev_size.y).abs() / base_height).min(1.0);
+        let zoom_ratio = ((zoom_ratio_x + zoom_ratio_y) * 0.5) as f32;
+        let zoom_metric = (zoom_ratio * fps_scale / DISPLAY_ZOOM_BASE).clamp(0.0, 1.2);
+
+        let translation_strength = Self::motion_blur_curve(
+            translation_metric,
+            user_motion_blur,
+            DISPLAY_BLUR_INTENSITY_SCALE,
+            1.0,
+        );
+
+        let zoom_strength = Self::motion_blur_curve(
+            zoom_metric,
+            user_motion_blur,
+            DISPLAY_BLUR_INTENSITY_SCALE,
+            1.0,
+        );
+
+        let translation_dir = if translation_metric <= MOTION_BLUR_MIN_METRIC {
+            [0.0, 0.0]
+        } else {
+            let magnitude =
+                (translation_uv.x * translation_uv.x + translation_uv.y * translation_uv.y).sqrt();
+            if magnitude <= f64::EPSILON {
+                [0.0, 0.0]
+            } else {
+                [
+                    (translation_uv.x / magnitude) as f32,
+                    (translation_uv.y / magnitude) as f32,
+                ]
+            }
+        };
+
+        MotionBlurDescriptor {
+            amount: translation_strength.max(zoom_strength),
+            translation_dir,
+            translation_strength,
+            zoom_strength,
+        }
+    }
+
+    fn camera_zoom_factor(
+        zoom: &InterpolatedZoom,
+        scene: &InterpolatedScene,
+        base_size: f32,
+        zoom_size: f32,
+    ) -> f32 {
+        let t = zoom.t as f32;
+        let lerp = t * zoom_size * base_size + (1.0 - t) * base_size;
+        lerp * scene.camera_scale as f32
+    }
+
+    fn compute_camera_motion_blur(
+        zoomed_size: f32,
+        prev_zoomed_size: f32,
+        fps: f32,
+        user_motion_blur: f32,
+    ) -> MotionBlurDescriptor {
+        if user_motion_blur <= f32::EPSILON {
+            return MotionBlurDescriptor::none();
+        }
+
+        let fps_scale = (fps / MOTION_BLUR_BASELINE_FPS).max(0.1);
+        let delta = (zoomed_size - prev_zoomed_size).abs();
+        let metric = (delta * fps_scale / CAMERA_ZOOM_BASE).clamp(0.0, 1.0);
+
+        let zoom_strength =
+            Self::motion_blur_curve(metric, user_motion_blur, CAMERA_BLUR_INTENSITY_SCALE, 1.0);
+
+        MotionBlurDescriptor {
+            amount: zoom_strength,
+            translation_dir: [0.0, 0.0],
+            translation_strength: 0.0,
+            zoom_strength,
+        }
+    }
+
+    fn motion_blur_curve(
+        metric: f32,
+        user_motion_blur: f32,
+        intensity_scale: f32,
+        max_amount: f32,
+    ) -> f32 {
+        if user_motion_blur <= f32::EPSILON || metric <= MOTION_BLUR_MIN_METRIC {
+            return 0.0;
+        }
+
+        let intensity = (user_motion_blur / intensity_scale).clamp(0.0, 2.5);
+        (metric.powf(0.85) * intensity).min(max_amount)
+    }
+
     fn auto_zoom_focus(
         cursor_events: &CursorEvents,
         time_secs: f32,
@@ -647,11 +845,22 @@ impl ProjectUniforms {
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
-        let frame_time = frame_number as f32 / fps as f32;
-
-        let velocity = [0.0, 0.0];
-
-        let motion_blur_amount = 0.0;
+        let fps_f32 = fps as f32;
+        let frame_time = frame_number as f32 / fps_f32;
+        let prev_frame_time = if frame_number == 0 {
+            0.0
+        } else {
+            (frame_number - 1) as f32 / fps_f32
+        };
+        let prev_prev_frame_time = if frame_number >= 2 {
+            (frame_number - 2) as f32 / fps_f32
+        } else {
+            0.0
+        };
+        let current_recording_time = segment_frames.recording_time;
+        let prev_recording_time = (segment_frames.recording_time - 1.0 / fps_f32).max(0.0);
+        let prev_prev_recording_time = (segment_frames.recording_time - 2.0 / fps_f32).max(0.0);
+        let user_motion_blur = project.cursor.motion_blur.clamp(0.0, 1.0);
 
         let crop = Self::get_crop(options, project);
 
@@ -661,38 +870,75 @@ impl ProjectUniforms {
             friction: project.cursor.friction,
         });
 
-        let interpolated_cursor = interpolate_cursor(
-            cursor_events,
-            segment_frames.recording_time,
-            cursor_smoothing,
-        );
+        let interpolated_cursor =
+            interpolate_cursor(cursor_events, current_recording_time, cursor_smoothing);
+
+        let prev_interpolated_cursor =
+            interpolate_cursor(cursor_events, prev_recording_time, cursor_smoothing);
+
+        let prev_prev_interpolated_cursor = if frame_number >= 2 {
+            interpolate_cursor(cursor_events, prev_prev_recording_time, cursor_smoothing)
+        } else {
+            prev_interpolated_cursor.clone()
+        };
+
+        let zoom_segments = project
+            .timeline
+            .as_ref()
+            .map(|t| t.zoom_segments.as_slice())
+            .unwrap_or(&[]);
+
+        let scene_segments = project
+            .timeline
+            .as_ref()
+            .map(|t| t.scene_segments.as_slice())
+            .unwrap_or(&[]);
 
         let zoom_focus = Self::auto_zoom_focus(
             cursor_events,
-            segment_frames.recording_time,
+            current_recording_time,
             cursor_smoothing,
             interpolated_cursor.clone(),
         );
 
+        let prev_zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            prev_recording_time,
+            cursor_smoothing,
+            prev_interpolated_cursor.clone(),
+        );
+
+        let prev_prev_zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            prev_prev_recording_time,
+            cursor_smoothing,
+            prev_prev_interpolated_cursor.clone(),
+        );
+
         let zoom = InterpolatedZoom::new(
-            SegmentsCursor::new(
-                frame_time as f64,
-                project
-                    .timeline
-                    .as_ref()
-                    .map(|t| t.zoom_segments.as_slice())
-                    .unwrap_or(&[]),
-            ),
+            SegmentsCursor::new(frame_time as f64, zoom_segments),
             zoom_focus,
         );
 
-        let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
-            frame_time as f64,
-            project
-                .timeline
-                .as_ref()
-                .map(|t| t.scene_segments.as_slice())
-                .unwrap_or(&[]),
+        let prev_zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(prev_frame_time as f64, zoom_segments),
+            prev_zoom_focus,
+        );
+
+        let prev_prev_zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(prev_prev_frame_time as f64, zoom_segments),
+            prev_prev_zoom_focus,
+        );
+
+        let scene =
+            InterpolatedScene::new(SceneSegmentsCursor::new(frame_time as f64, scene_segments));
+        let prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+            prev_frame_time as f64,
+            scene_segments,
+        ));
+        let prev_prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+            prev_prev_frame_time as f64,
+            scene_segments,
         ));
 
         let display = {
@@ -711,18 +957,47 @@ impl ProjectUniforms {
             let display_offset = Self::display_offset(options, project, resolution_base);
             let display_size = Self::display_size(options, project, resolution_base);
 
-            let end = Coord::new(output_size) - display_offset;
+            let (start, end) =
+                Self::display_bounds(&zoom, display_offset, display_size, output_size);
+            let (prev_start, prev_end) =
+                Self::display_bounds(&prev_zoom, display_offset, display_size, output_size);
+            let (prev_prev_start, prev_prev_end) =
+                Self::display_bounds(&prev_prev_zoom, display_offset, display_size, output_size);
 
-            let (zoom_start, zoom_end) = (
-                Coord::new(zoom.bounds.top_left * display_size.coord),
-                Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord),
-            );
-
-            let start = display_offset + zoom_start;
-            let end = end + zoom_end;
-
-            let target_size = end - start;
+            let target_size = (end - start).coord;
             let min_target_axis = target_size.x.min(target_size.y);
+
+            let mut display_blur = Self::compute_display_motion_blur(
+                start,
+                end,
+                prev_start,
+                prev_end,
+                fps_f32,
+                user_motion_blur,
+            );
+            if frame_number >= 2 {
+                let prev_display_blur = Self::compute_display_motion_blur(
+                    prev_start,
+                    prev_end,
+                    prev_prev_start,
+                    prev_prev_end,
+                    fps_f32,
+                    user_motion_blur,
+                );
+                display_blur = display_blur.smooth_with(prev_display_blur, MOTION_BLUR_SMOOTHING);
+            }
+            let scene_blur_strength = (scene.screen_blur as f32 * 0.8).min(1.0);
+            display_blur.zoom_strength =
+                (display_blur.zoom_strength + scene_blur_strength).clamp(0.0, 1.2);
+            display_blur.amount = display_blur.amount.max(display_blur.zoom_strength).min(1.0);
+
+            display_blur.translation_strength *= DISPLAY_BLUR_VISUAL_SCALE;
+            display_blur.zoom_strength *= DISPLAY_BLUR_VISUAL_SCALE;
+            display_blur.amount = (display_blur.amount * DISPLAY_BLUR_VISUAL_SCALE).max(
+                display_blur
+                    .translation_strength
+                    .max(display_blur.zoom_strength),
+            );
 
             CompositeVideoFrameUniforms {
                 output_size: [output_size.x as f32, output_size.y as f32],
@@ -737,8 +1012,12 @@ impl ProjectUniforms {
                 target_size: [target_size.x as f32, target_size.y as f32],
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
-                velocity_uv: velocity,
-                motion_blur_amount: (motion_blur_amount + scene.screen_blur as f32 * 0.8).min(1.0),
+                velocity_uv: display_blur.translation_dir,
+                blur_components: [
+                    display_blur.translation_strength,
+                    display_blur.zoom_strength,
+                ],
+                motion_blur_amount: display_blur.amount,
                 camera_motion_blur_amount: 0.0,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -800,10 +1079,33 @@ impl ProjectUniforms {
                     .unwrap_or(cap_project::Camera::default_zoom_size())
                     / 100.0;
 
-                let zoomed_size =
-                    (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
+                let zoomed_size = Self::camera_zoom_factor(&zoom, &scene, base_size, zoom_size);
+                let prev_zoomed_size =
+                    Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, zoom_size);
+                let prev_prev_zoomed_size = Self::camera_zoom_factor(
+                    &prev_prev_zoom,
+                    &prev_prev_scene,
+                    base_size,
+                    zoom_size,
+                );
 
-                let zoomed_size = zoomed_size * scene.camera_scale as f32;
+                let camera_blur = Self::compute_camera_motion_blur(
+                    zoomed_size,
+                    prev_zoomed_size,
+                    fps_f32,
+                    user_motion_blur,
+                );
+                let camera_blur = if frame_number >= 2 {
+                    let prev_camera_blur = Self::compute_camera_motion_blur(
+                        prev_zoomed_size,
+                        prev_prev_zoomed_size,
+                        fps_f32,
+                        user_motion_blur,
+                    );
+                    camera_blur.smooth_with(prev_camera_blur, MOTION_BLUR_SMOOTHING)
+                } else {
+                    camera_blur
+                };
 
                 let aspect = frame_size[0] / frame_size[1];
                 let size = match project.camera.shape {
@@ -847,8 +1149,6 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                let camera_motion_blur = 0.0;
-
                 let crop_bounds = match project.camera.shape {
                     CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
                     CameraShape::Square => [
@@ -870,9 +1170,10 @@ impl ProjectUniforms {
                     ],
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
-                    velocity_uv: [0.0, 0.0],
-                    motion_blur_amount,
-                    camera_motion_blur_amount: camera_motion_blur,
+                    velocity_uv: camera_blur.translation_dir,
+                    blur_components: [camera_blur.translation_strength, camera_blur.zoom_strength],
+                    motion_blur_amount: 0.0,
+                    camera_motion_blur_amount: camera_blur.amount,
                     shadow: project.camera.shadow,
                     shadow_size: project
                         .camera
@@ -940,6 +1241,8 @@ impl ProjectUniforms {
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
                 };
 
+                let camera_only_blur = (scene.camera_only_blur as f32 * 0.5).clamp(0.0, 1.0);
+
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
@@ -952,8 +1255,9 @@ impl ProjectUniforms {
                     rounding_px: 0.0,
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
+                    blur_components: [0.0, camera_only_blur],
                     motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: scene.camera_only_blur as f32 * 0.5,
+                    camera_motion_blur_amount: camera_only_blur,
                     shadow: 0.0,
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
