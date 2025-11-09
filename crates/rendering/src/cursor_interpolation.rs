@@ -1,11 +1,104 @@
 use std::borrow::Cow;
 
-use cap_project::{CursorEvents, CursorMoveEvent, XY};
+use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 
 use crate::{
     Coord, RawDisplayUVSpace,
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
+
+const CLICK_REACTION_WINDOW_MS: f64 = 160.0;
+const MIN_MASS: f32 = 0.1;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SpringProfile {
+    Default,
+    Snappy,
+    Drag,
+}
+
+struct CursorSpringPresets {
+    default: SpringMassDamperSimulationConfig,
+    snappy: SpringMassDamperSimulationConfig,
+    drag: SpringMassDamperSimulationConfig,
+}
+
+impl CursorSpringPresets {
+    fn new(base: SpringMassDamperSimulationConfig) -> Self {
+        Self {
+            default: base,
+            snappy: scale_config(base, 1.65, 0.65, 1.25),
+            drag: scale_config(base, 1.25, 0.85, 1.1),
+        }
+    }
+
+    fn config(&self, profile: SpringProfile) -> SpringMassDamperSimulationConfig {
+        match profile {
+            SpringProfile::Default => self.default,
+            SpringProfile::Snappy => self.snappy,
+            SpringProfile::Drag => self.drag,
+        }
+    }
+}
+
+fn scale_config(
+    base: SpringMassDamperSimulationConfig,
+    tension_scale: f32,
+    mass_scale: f32,
+    friction_scale: f32,
+) -> SpringMassDamperSimulationConfig {
+    SpringMassDamperSimulationConfig {
+        tension: base.tension * tension_scale,
+        mass: (base.mass * mass_scale).max(MIN_MASS),
+        friction: base.friction * friction_scale,
+    }
+}
+
+struct CursorSpringContext<'a> {
+    clicks: &'a [CursorClickEvent],
+    next_click_index: usize,
+    last_click_time: Option<f64>,
+    primary_button_down: bool,
+}
+
+impl<'a> CursorSpringContext<'a> {
+    fn new(clicks: &'a [cap_project::CursorClickEvent]) -> Self {
+        Self {
+            clicks,
+            next_click_index: 0,
+            last_click_time: None,
+            primary_button_down: false,
+        }
+    }
+
+    fn advance_to(&mut self, time_ms: f64) {
+        while let Some(click) = self.clicks.get(self.next_click_index)
+            && click.time_ms <= time_ms
+        {
+            self.last_click_time = Some(click.time_ms);
+            if click.cursor_num == 0 {
+                self.primary_button_down = click.down;
+            }
+            self.next_click_index += 1;
+        }
+    }
+
+    fn profile(&self, time_ms: f64) -> SpringProfile {
+        if self.was_recent_click(time_ms) {
+            SpringProfile::Snappy
+        } else if self.primary_button_down {
+            SpringProfile::Drag
+        } else {
+            SpringProfile::Default
+        }
+    }
+
+    fn was_recent_click(&self, time_ms: f64) -> bool {
+        self.last_click_time
+            .map(|t| (time_ms - t).abs() <= CLICK_REACTION_WINDOW_MS)
+            .unwrap_or(false)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct InterpolatedCursorPosition {
@@ -54,7 +147,7 @@ pub fn interpolate_cursor(
 
     if let Some(smoothing_config) = smoothing {
         let prepared_moves = densify_cursor_moves(&cursor.moves);
-        let events = get_smoothed_cursor_events(prepared_moves.as_ref(), smoothing_config);
+        let events = get_smoothed_cursor_events(cursor, prepared_moves.as_ref(), smoothing_config);
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
         let (pos, cursor_id, velocity) = cursor.moves.windows(2).find_map(|chunk| {
@@ -86,6 +179,7 @@ pub fn interpolate_cursor(
 }
 
 fn get_smoothed_cursor_events(
+    cursor: &CursorEvents,
     moves: &[CursorMoveEvent],
     smoothing_config: SpringMassDamperSimulationConfig,
 ) -> Vec<SmoothedCursorEvent> {
@@ -94,6 +188,8 @@ fn get_smoothed_cursor_events(
     let mut events = vec![];
 
     let mut sim = SpringMassDamperSimulation::new(smoothing_config);
+    let presets = CursorSpringPresets::new(smoothing_config);
+    let mut context = CursorSpringContext::new(&cursor.clicks);
 
     sim.set_position(XY::new(moves[0].x, moves[0].y).map(|v| v as f32));
     sim.set_velocity(XY::new(0.0, 0.0));
@@ -114,6 +210,10 @@ fn get_smoothed_cursor_events(
             .map(|e| XY::new(e.x, e.y).map(|v| v as f32))
             .unwrap_or(sim.target_position);
         sim.set_target_position(target_position);
+
+        context.advance_to(m.time_ms);
+        let profile = context.profile(m.time_ms);
+        sim.set_config(presets.config(profile));
 
         sim.run(m.time_ms as f32 - last_time);
 
@@ -276,6 +376,16 @@ mod tests {
         }
     }
 
+    fn click_event(time_ms: f64, down: bool) -> CursorClickEvent {
+        CursorClickEvent {
+            active_modifiers: vec![],
+            cursor_id: "primary".into(),
+            cursor_num: 0,
+            time_ms,
+            down,
+        }
+    }
+
     #[test]
     fn densify_inserts_samples_for_large_gaps() {
         let moves = vec![cursor_move(0.0, 0.1, 0.1), cursor_move(140.0, 0.9, 0.9)];
@@ -304,5 +414,29 @@ mod tests {
             densify_cursor_moves(&cursor_switch),
             Cow::Borrowed(_)
         ));
+    }
+
+    #[test]
+    fn spring_context_detects_dragging_between_clicks() {
+        let clicks = vec![click_event(100.0, true), click_event(360.0, false)];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        context.advance_to(280.0);
+        assert_eq!(context.profile(280.0), SpringProfile::Drag);
+
+        context.advance_to(620.0);
+        assert_eq!(context.profile(620.0), SpringProfile::Default);
+    }
+
+    #[test]
+    fn spring_context_switches_to_snappy_near_click_events() {
+        let clicks = vec![click_event(80.0, true), click_event(140.0, false)];
+        let mut context = CursorSpringContext::new(&clicks);
+
+        context.advance_to(80.0);
+        assert_eq!(context.profile(80.0), SpringProfile::Snappy);
+
+        context.advance_to(340.0);
+        assert_eq!(context.profile(340.0), SpringProfile::Default);
     }
 }

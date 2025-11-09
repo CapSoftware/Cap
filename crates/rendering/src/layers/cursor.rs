@@ -19,7 +19,8 @@ const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_VECTOR_CAP: f32 = 320.0;
 const CURSOR_MIN_MOTION: f32 = 0.01;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
-const CURSOR_MULTIPLIER: f32 = 1.0;
+const CURSOR_MULTIPLIER: f32 = 3.0;
+const CURSOR_MAX_STRENGTH: f32 = 5.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -214,8 +215,8 @@ impl CursorLayer {
         let screen_diag =
             (((screen_size.x as f32).powi(2) + (screen_size.y as f32).powi(2)).sqrt()).max(1.0);
         let fps_scale = fps / CURSOR_BASELINE_FPS;
-        let cursor_strength =
-            (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale).clamp(0.0, 3.0);
+        let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
+            .clamp(0.0, CURSOR_MAX_STRENGTH);
         let parent_motion = uniforms.display_parent_motion_px;
         let child_motion = uniforms
             .prev_cursor

@@ -30,6 +30,12 @@ impl SpringMassDamperSimulation {
         }
     }
 
+    pub fn set_config(&mut self, config: SpringMassDamperSimulationConfig) {
+        self.tension = config.tension;
+        self.mass = config.mass;
+        self.friction = config.friction;
+    }
+
     pub fn set_position(&mut self, position: XY<f32>) {
         self.position = position;
     }
