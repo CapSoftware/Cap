@@ -71,7 +71,7 @@ impl CursorShapeMacOS {
         Some(match self {
             Self::Arrow => ResolvedCursor {
                 raw: include_str!("../assets/mac/arrow.svg"),
-                hotspot: (0.347, 0.33),
+                hotspot: (0.302, 0.226),
             },
             Self::ContextualMenu => ResolvedCursor {
                 raw: include_str!("../assets/mac/contextual_menu.svg"),
@@ -108,7 +108,7 @@ impl CursorShapeMacOS {
             },
             Self::PointingHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/pointing_hand.svg"),
-                hotspot: (0.516, 0.461),
+                hotspot: (0.342, 0.172),
             },
             Self::ResizeDown => ResolvedCursor {
                 raw: include_str!("../assets/mac/resize_down.svg"),

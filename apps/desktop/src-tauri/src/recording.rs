@@ -1090,6 +1090,7 @@ fn generate_zoom_segments_from_clicks_impl(
     const MOVEMENT_WINDOW_SECONDS: f64 = 1.2;
     const MOVEMENT_EVENT_DISTANCE_THRESHOLD: f64 = 0.025;
     const MOVEMENT_WINDOW_DISTANCE_THRESHOLD: f64 = 0.1;
+    const AUTO_ZOOM_AMOUNT: f64 = 1.5;
 
     if max_duration <= 0.0 {
         return Vec::new();
@@ -1227,7 +1228,7 @@ fn generate_zoom_segments_from_clicks_impl(
             Some(ZoomSegment {
                 start,
                 end,
-                amount: 2.0,
+                amount: AUTO_ZOOM_AMOUNT,
                 mode: ZoomMode::Auto,
             })
         })
