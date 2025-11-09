@@ -74,7 +74,7 @@ impl CursorShapeWindows {
             },
             Self::IBeam => ResolvedCursor {
                 raw: include_str!("../assets/windows/ibeam.svg"),
-                hotspot: (0.5, 0.5),
+                hotspot: (0.490, 0.471),
             },
             Self::Wait => ResolvedCursor {
                 raw: include_str!("../assets/windows/wait.svg"),
