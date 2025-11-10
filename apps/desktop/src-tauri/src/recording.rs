@@ -407,13 +407,7 @@ pub async fn start_recording(
     );
 
     let filename = project_name.replace(":", ".");
-    let filename = sanitize_filename::sanitize_with_options(
-        &filename,
-        sanitize_filename::Options {
-            replacement: "-",
-            ..Default::default()
-        },
-    );
+    let filename = sanitize_filename::sanitize(&filename);
 
     let recordings_base_dir = app.path().app_data_dir().unwrap().join("recordings");
 

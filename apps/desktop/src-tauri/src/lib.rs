@@ -1902,7 +1902,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::focus_window,
             editor_delete_project,
             format_project_name,
-            sanitize_filename,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2657,18 +2656,6 @@ async fn format_project_name(
         target_kind.as_str(),
         recording_mode,
         datetime,
-    )
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn sanitize_filename(filename: String) -> String {
-    sanitize_filename::sanitize_with_options(
-        filename,
-        sanitize_filename::Options {
-            replacement: "-",
-            ..Default::default()
-        },
     )
 }
 

@@ -291,9 +291,6 @@ async editorDeleteProject() : Promise<null> {
 },
 async formatProjectName(template: string | null, targetName: string, targetKind: string, recordingMode: RecordingMode, datetime: string | null) : Promise<string> {
     return await TAURI_INVOKE("format_project_name", { template, targetName, targetKind, recordingMode, datetime });
-},
-async sanitizeFilename(filename: string) : Promise<string> {
-    return await TAURI_INVOKE("sanitize_filename", { filename });
 }
 }
 
