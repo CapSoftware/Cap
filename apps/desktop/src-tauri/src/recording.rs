@@ -293,7 +293,10 @@ pub enum RecordingAction {
 /// # Arguments
 ///
 /// * `template` - The template string with variables to replace
-/// * `inputs` - The recording inputs containing target and mode information
+/// * `target_name` - The specific name of the capture target
+/// * `target_kind` - The type of capture target (Display, Window, or Area)
+/// * `recording_mode` - The recording mode (Studio or Instant)
+/// * `datetime` - Optional datetime to use for formatting; defaults to current time
 ///
 /// # Returns
 ///
