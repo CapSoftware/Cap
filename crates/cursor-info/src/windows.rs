@@ -70,11 +70,11 @@ impl CursorShapeWindows {
         Some(match self {
             Self::Arrow => ResolvedCursor {
                 raw: include_str!("../assets/windows/arrow.svg"),
-                hotspot: (0.055, 0.085),
+                hotspot: (0.288, 0.189),
             },
             Self::IBeam => ResolvedCursor {
                 raw: include_str!("../assets/windows/ibeam.svg"),
-                hotspot: (0.5, 0.5),
+                hotspot: (0.490, 0.471),
             },
             Self::Wait => ResolvedCursor {
                 raw: include_str!("../assets/windows/wait.svg"),
@@ -114,7 +114,7 @@ impl CursorShapeWindows {
             },
             Self::Hand => ResolvedCursor {
                 raw: include_str!("../assets/windows/hand.svg"),
-                hotspot: (0.42, 0.0),
+                hotspot: (0.441, 0.143),
             },
             Self::AppStarting => ResolvedCursor {
                 raw: include_str!("../assets/windows/appstarting.svg"),
