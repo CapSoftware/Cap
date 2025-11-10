@@ -17,7 +17,8 @@ const CLICK_SHRINK_SIZE: f32 = 0.7;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
 const CURSOR_VECTOR_CAP: f32 = 320.0;
-const CURSOR_MIN_MOTION: f32 = 0.01;
+const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.01;
+const CURSOR_MIN_MOTION_PX: f32 = 1.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
 const CURSOR_MULTIPLIER: f32 = 3.0;
 const CURSOR_MAX_STRENGTH: f32 = 5.0;
@@ -243,7 +244,8 @@ impl CursorLayer {
         let normalized_motion = ((combined_motion_px.x / screen_diag).powi(2)
             + (combined_motion_px.y / screen_diag).powi(2))
         .sqrt();
-        let has_motion = normalized_motion > CURSOR_MIN_MOTION && cursor_strength > f32::EPSILON;
+        let has_motion =
+            normalized_motion > CURSOR_MIN_MOTION_NORMALIZED && cursor_strength > f32::EPSILON;
         let scaled_motion = if has_motion {
             clamp_cursor_vector(combined_motion_px * cursor_strength)
         } else {
@@ -439,8 +441,8 @@ impl CursorLayer {
 
 fn combine_cursor_motion(parent: XY<f32>, child: XY<f32>) -> XY<f32> {
     fn combine_axis(parent: f32, child: f32) -> f32 {
-        if parent.abs() > CURSOR_MIN_MOTION
-            && child.abs() > CURSOR_MIN_MOTION
+        if parent.abs() > CURSOR_MIN_MOTION_PX
+            && child.abs() > CURSOR_MIN_MOTION_PX
             && parent.signum() != child.signum()
         {
             0.0
