@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use cap_fail::fail;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
@@ -12,6 +13,7 @@ use cap_recording::{
     RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
+    sources::MicrophoneSourceError,
     sources::{
         screen_capture,
         screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
@@ -20,12 +22,14 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
-use futures::stream;
+use futures::{FutureExt, stream};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    any::Any,
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    panic::AssertUnwindSafe,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -56,6 +60,7 @@ use crate::{
     windows::{CapWindowId, ShowCapWindow},
 };
 
+#[derive(Clone)]
 pub struct InProgressRecordingCommon {
     pub target_name: String,
     pub inputs: StartRecordingInputs,
@@ -76,6 +81,23 @@ pub enum InProgressRecording {
         common: InProgressRecordingCommon,
     },
 }
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct SendableShareableContent(cidre::arc::R<cidre::sc::ShareableContent>);
+
+#[cfg(target_os = "macos")]
+impl SendableShareableContent {
+    fn retained(&self) -> cidre::arc::R<cidre::sc::ShareableContent> {
+        self.0.clone()
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for SendableShareableContent {}
+
+#[cfg(target_os = "macos")]
+unsafe impl Sync for SendableShareableContent {}
 
 impl InProgressRecording {
     pub fn capture_target(&self) -> &ScreenCaptureTarget {
@@ -444,181 +466,197 @@ pub async fn start_recording(
 
     debug!("spawning start_recording actor");
 
-    // done in spawn to catch panics just in case
     let app_handle = app.clone();
-    let spawn_actor_res = async {
-        spawn_actor({
-            let state_mtx = Arc::clone(&state_mtx);
-            let general_settings = general_settings.cloned();
-            let recording_dir = recording_dir.clone();
-            async move {
-                fail!("recording::spawn_actor");
-                let mut state = state_mtx.write().await;
+    let actor_task = {
+        let state_mtx = Arc::clone(&state_mtx);
+        let general_settings = general_settings.cloned();
+        let recording_dir = recording_dir.clone();
+        let target_name = target_name.clone();
+        let inputs = inputs.clone();
+        async move {
+            fail!("recording::spawn_actor");
+            let mut state = state_mtx.write().await;
 
-                use kameo::error::SendError;
+            use kameo::error::SendError;
+
+            let camera_feed = match state.camera_feed.ask(camera::Lock).await {
+                Ok(lock) => Some(Arc::new(lock)),
+                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+                Err(e) => return Err(anyhow!(e.to_string())),
+            };
+
+            #[cfg(target_os = "macos")]
+            let shareable_content = SendableShareableContent(
+                crate::platform::get_shareable_content()
+                    .await
+                    .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
+                    .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
+            );
+
+            let common = InProgressRecordingCommon {
+                target_name,
+                inputs: inputs.clone(),
+                recording_dir: recording_dir.clone(),
+            };
+
+            #[cfg(target_os = "macos")]
+            let excluded_windows = {
+                let window_exclusions = general_settings
+                    .as_ref()
+                    .map_or_else(general_settings::default_excluded_windows, |settings| {
+                        settings.excluded_windows.clone()
+                    });
+
+                crate::window_exclusion::resolve_window_ids(&window_exclusions)
+            };
+
+            let mut mic_restart_attempts = 0;
+
+            let done_fut = loop {
                 let mic_feed = match state.mic_feed.ask(microphone::Lock).await {
                     Ok(lock) => Some(Arc::new(lock)),
                     Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
-                    Err(e) => return Err(e.to_string()),
+                    Err(e) => return Err(anyhow!(e.to_string())),
                 };
 
-                let camera_feed = match state.camera_feed.ask(camera::Lock).await {
-                    Ok(lock) => Some(Arc::new(lock)),
-                    Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
-                    Err(e) => return Err(e.to_string()),
-                };
-
-                #[cfg(target_os = "macos")]
-                let shareable_content = crate::platform::get_shareable_content()
-                    .await
-                    .map_err(|e| format!("GetShareableContent: {e}"))?
-                    .ok_or_else(|| "GetShareableContent/NotAvailable".to_string())?;
-
-                let common = InProgressRecordingCommon {
-                    target_name,
-                    inputs: inputs.clone(),
-                    recording_dir: recording_dir.clone(),
-                };
-
-                #[cfg(target_os = "macos")]
-                let excluded_windows = {
-                    let window_exclusions = general_settings
-                        .as_ref()
-                        .map_or_else(general_settings::default_excluded_windows, |settings| {
-                            settings.excluded_windows.clone()
-                        });
-
-                    crate::window_exclusion::resolve_window_ids(&window_exclusions)
-                };
-
-                let actor = match inputs.mode {
-                    RecordingMode::Studio => {
-                        let mut builder = studio_recording::Actor::builder(
-                            recording_dir.clone(),
-                            inputs.capture_target.clone(),
-                        )
-                        .with_system_audio(inputs.capture_system_audio)
-                        .with_custom_cursor(
-                            general_settings
-                                .map(|s| s.custom_cursor_capture)
-                                .unwrap_or_default(),
-                        );
-
-                        #[cfg(target_os = "macos")]
-                        {
-                            builder = builder.with_excluded_windows(excluded_windows.clone());
-                        }
-
-                        if let Some(camera_feed) = camera_feed {
-                            builder = builder.with_camera_feed(camera_feed);
-                        }
-
-                        if let Some(mic_feed) = mic_feed {
-                            builder = builder.with_mic_feed(mic_feed);
-                        }
-
-                        let handle = builder
-                            .build(
-                                #[cfg(target_os = "macos")]
-                                shareable_content,
+                let actor_result: Result<InProgressRecording, anyhow::Error> = async {
+                    match inputs.mode {
+                        RecordingMode::Studio => {
+                            let mut builder = studio_recording::Actor::builder(
+                                recording_dir.clone(),
+                                inputs.capture_target.clone(),
                             )
-                            .await
-                            .map_err(|e| {
-                                error!("Failed to spawn studio recording actor: {e:#}");
-                                format!("{e:#}")
-                            })?;
+                            .with_system_audio(inputs.capture_system_audio)
+                            .with_custom_cursor(
+                                general_settings
+                                    .as_ref()
+                                    .map(|s| s.custom_cursor_capture)
+                                    .unwrap_or_default(),
+                            );
 
-                        InProgressRecording::Studio { handle, common }
-                    }
-                    RecordingMode::Instant => {
-                        let Some(video_upload_info) = video_upload_info.clone() else {
-                            return Err("Video upload info not found".to_string());
-                        };
+                            #[cfg(target_os = "macos")]
+                            {
+                                builder = builder.with_excluded_windows(excluded_windows.clone());
+                            }
 
-                        let mut builder = instant_recording::Actor::builder(
-                            recording_dir.clone(),
-                            inputs.capture_target.clone(),
-                        )
-                        .with_system_audio(inputs.capture_system_audio)
-                        .with_max_output_size(
-                            general_settings
-                                .as_ref()
-                                .map(|settings| settings.instant_mode_max_resolution)
-                                .unwrap_or_else(|| 1920),
-                        );
+                            if let Some(camera_feed) = camera_feed.clone() {
+                                builder = builder.with_camera_feed(camera_feed);
+                            }
 
-                        #[cfg(target_os = "macos")]
-                        {
-                            builder = builder.with_excluded_windows(excluded_windows.clone());
+                            if let Some(mic_feed) = mic_feed.clone() {
+                                builder = builder.with_mic_feed(mic_feed);
+                            }
+
+                            let handle = builder
+                                .build(
+                                    #[cfg(target_os = "macos")]
+                                    shareable_content.retained(),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    error!("Failed to spawn studio recording actor: {e:#}");
+                                    e
+                                })?;
+
+                            Ok(InProgressRecording::Studio {
+                                handle,
+                                common: common.clone(),
+                            })
                         }
+                        RecordingMode::Instant => {
+                            let Some(video_upload_info) = video_upload_info.clone() else {
+                                return Err(anyhow!("Video upload info not found"));
+                            };
 
-                        if let Some(mic_feed) = mic_feed {
-                            builder = builder.with_mic_feed(mic_feed);
-                        }
-
-                        let handle = builder
-                            .build(
-                                #[cfg(target_os = "macos")]
-                                shareable_content,
+                            let mut builder = instant_recording::Actor::builder(
+                                recording_dir.clone(),
+                                inputs.capture_target.clone(),
                             )
-                            .await
-                            .map_err(|e| {
-                                error!("Failed to spawn instant recording actor: {e}");
-                                e.to_string()
-                            })?;
+                            .with_system_audio(inputs.capture_system_audio)
+                            .with_max_output_size(
+                                general_settings
+                                    .as_ref()
+                                    .map(|settings| settings.instant_mode_max_resolution)
+                                    .unwrap_or(1920),
+                            );
 
-                        let progressive_upload = InstantMultipartUpload::spawn(
-                            app_handle,
-                            recording_dir.join("content/output.mp4"),
-                            video_upload_info.clone(),
-                            recording_dir.clone(),
-                            Some(finish_upload_rx),
-                        );
+                            #[cfg(target_os = "macos")]
+                            {
+                                builder = builder.with_excluded_windows(excluded_windows.clone());
+                            }
 
-                        InProgressRecording::Instant {
-                            handle,
-                            progressive_upload,
-                            video_upload_info,
-                            common,
-                            camera_feed,
+                            if let Some(mic_feed) = mic_feed.clone() {
+                                builder = builder.with_mic_feed(mic_feed);
+                            }
+
+                            let handle = builder
+                                .build(
+                                    #[cfg(target_os = "macos")]
+                                    shareable_content.retained(),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    error!("Failed to spawn instant recording actor: {e:#}");
+                                    e
+                                })?;
+
+                            let progressive_upload = InstantMultipartUpload::spawn(
+                                app_handle.clone(),
+                                recording_dir.join("content/output.mp4"),
+                                video_upload_info.clone(),
+                                recording_dir.clone(),
+                                Some(finish_upload_rx.clone()),
+                            );
+
+                            Ok(InProgressRecording::Instant {
+                                handle,
+                                progressive_upload,
+                                video_upload_info,
+                                common: common.clone(),
+                                camera_feed: camera_feed.clone(),
+                            })
                         }
                     }
-                };
+                }
+                .await;
 
-                let done_fut = actor.done_fut();
+                match actor_result {
+                    Ok(actor) => {
+                        let done_fut = actor.done_fut();
+                        state.set_current_recording(actor);
+                        break done_fut;
+                    }
+                    Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
+                        mic_restart_attempts += 1;
+                        state
+                            .restart_mic_feed()
+                            .await
+                            .map_err(|restart_err| anyhow!(restart_err))?;
+                    }
+                    Err(err) => return Err(err),
+                }
+            };
 
-                state.set_current_recording(actor);
+            Ok::<_, anyhow::Error>(done_fut)
+        }
+    };
 
-                Ok::<_, String>(done_fut)
-            }
-        })
-        .await
-        .map_err(|e| format!("Failed to spawn recording actor: {e}"))
-    }
-    .await;
+    let actor_task_res = AssertUnwindSafe(actor_task).catch_unwind().await;
 
-    let actor_done_fut = match spawn_actor_res {
+    let actor_done_fut = match actor_task_res {
         Ok(Ok(rx)) => rx,
-        Ok(Err(err)) | Err(err) => {
-            let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
-
-            let mut dialog = MessageDialogBuilder::new(
-                app.dialog().clone(),
-                "An error occurred".to_string(),
-                err.clone(),
-            )
-            .kind(tauri_plugin_dialog::MessageDialogKind::Error);
-
-            if let Some(window) = CapWindowId::RecordingControls.get(&app) {
-                dialog = dialog.parent(&window);
-            }
-
-            dialog.blocking_show();
-
-            let mut state = state_mtx.write().await;
-            let _ = handle_recording_end(app, Err(err.clone()), &mut state, recording_dir).await;
-
-            return Err(err);
+        Ok(Err(err)) => {
+            let message = format!("{err:#}");
+            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
+                .await?;
+            return Err(message);
+        }
+        Err(panic) => {
+            let panic_msg = panic_message(panic);
+            let message = format!("Failed to spawn recording actor: {panic_msg}");
+            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
+                .await?;
+            return Err(message);
         }
     };
 
@@ -695,6 +733,62 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
     }
 
     Ok(())
+}
+
+async fn handle_spawn_failure(
+    app: &AppHandle,
+    state_mtx: &MutableState<'_, App>,
+    recording_dir: &Path,
+    message: String,
+) -> Result<(), String> {
+    let _ = RecordingEvent::Failed {
+        error: message.clone(),
+    }
+    .emit(app);
+
+    let mut dialog = MessageDialogBuilder::new(
+        app.dialog().clone(),
+        "An error occurred".to_string(),
+        message.clone(),
+    )
+    .kind(tauri_plugin_dialog::MessageDialogKind::Error);
+
+    if let Some(window) = CapWindowId::RecordingControls.get(app) {
+        dialog = dialog.parent(&window);
+    }
+
+    dialog.blocking_show();
+
+    let mut state = state_mtx.write().await;
+    let _ = handle_recording_end(
+        app.clone(),
+        Err(message),
+        &mut state,
+        recording_dir.to_path_buf(),
+    )
+    .await;
+
+    Ok(())
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(msg) = panic.downcast_ref::<&str>() {
+        msg.to_string()
+    } else if let Some(msg) = panic.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+fn mic_actor_not_running(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        if let Some(source) = cause.downcast_ref::<MicrophoneSourceError>() {
+            matches!(source, MicrophoneSourceError::ActorNotRunning)
+        } else {
+            false
+        }
+    })
 }
 
 #[tauri::command]
