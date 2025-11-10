@@ -236,13 +236,10 @@ impl App {
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    let mic_feed = {
-        let mut app = state.write().await;
-        app.selected_mic_label = label.clone();
-        app.mic_feed.clone()
-    };
+    let mic_feed = state.read().await.mic_feed.clone();
+    let desired_label = label.clone();
 
-    match label {
+    match desired_label.as_ref() {
         None => {
             mic_feed
                 .ask(microphone::RemoveInput)
@@ -251,12 +248,19 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         }
         Some(label) => {
             mic_feed
-                .ask(feeds::microphone::SetInput { label })
+                .ask(feeds::microphone::SetInput {
+                    label: label.clone(),
+                })
                 .await
                 .map_err(|e| e.to_string())?
                 .await
                 .map_err(|e| e.to_string())?;
         }
+    }
+
+    {
+        let mut app = state.write().await;
+        app.selected_mic_label = desired_label;
     }
 
     Ok(())
