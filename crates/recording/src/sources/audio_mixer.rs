@@ -114,10 +114,7 @@ impl AudioMixerBuilder {
         let mut amix = filter_graph.add(
             &ffmpeg::filter::find("amix").expect("Failed to find amix filter"),
             "amix",
-            &format!(
-                "inputs={}:duration=first:dropout_transition=0",
-                abuffers.len()
-            ),
+            &format!("inputs={}:duration=longest", abuffers.len()),
         )?;
 
         let aformat_args = format!(
@@ -388,16 +385,21 @@ impl AudioMixer {
             let elapsed = Duration::from_secs_f64(self.samples_out as f64 / output_rate);
             let timestamp = start.instant() + start_timestamp.duration_since(start) + elapsed;
 
-            self.samples_out += filtered.samples();
+            let frame_samples = filtered.samples();
+            let mut frame = AudioFrame::new(filtered, Timestamp::Instant(timestamp));
 
-            if self
-                .output
-                .try_send(AudioFrame::new(filtered, Timestamp::Instant(timestamp)))
-                .is_err()
-            {
-                return Err(());
+            loop {
+                match self.output.try_send(frame) {
+                    Ok(()) => break,
+                    Err(err) if err.is_full() => {
+                        frame = err.into_inner();
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(_) => return Err(()),
+                }
             }
 
+            self.samples_out += frame_samples;
             filtered = ffmpeg::frame::Audio::empty();
         }
 
