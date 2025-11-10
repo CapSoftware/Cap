@@ -69,12 +69,6 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     return out;
 }
 
-fn squircle_norm(p: vec2<f32>, power: f32) -> f32 {
-    let x = pow(abs(p.x), power);
-    let y = pow(abs(p.y), power);
-    return pow(x + y, 1.0 / power);
-}
-
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Calculate the effective rendering dimensions (accounting for toolbar)
@@ -133,13 +127,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let corner_radius = select(0.1, 0.12, size == 1.0);
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
-        let corner_norm = squircle_norm(max(corner_pos, vec2<f32>(0.0, 0.0)), 4.0);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
 
         // Enhanced anti-aliasing for corners
         let pixel_size = length(fwidth(center_uv));
         let aa_width = max(pixel_size, 0.002);
 
-        let edge_distance = corner_norm - corner_radius;
+        let edge_distance = corner_dist - corner_radius;
         mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
     } else if (shape == 2.0) {
         // Full shape with aspect ratio-corrected rounded corners
