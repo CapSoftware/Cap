@@ -45,6 +45,7 @@ import {
 	type BackgroundSource,
 	type CameraShape,
 	type ClipOffsets,
+	type CursorAnimationStyle,
 	commands,
 	type SceneSegment,
 	type StereoMode,
@@ -52,10 +53,12 @@ import {
 	type ZoomSegment,
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
+import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import { useEditorContext } from "./context";
+import { type CornerRoundingType, useEditorContext } from "./context";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -207,12 +210,73 @@ const CAMERA_SHAPES = [
 	},
 ] satisfies Array<{ name: string; value: CameraShape }>;
 
+const CORNER_STYLE_OPTIONS = [
+	{ name: "Squircle", value: "squircle" },
+	{ name: "Rounded", value: "rounded" },
+] satisfies Array<{ name: string; value: CornerRoundingType }>;
+
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
 	dark: "Dark",
 	blue: "Blue",
 	purple: "Purple",
 	orange: "Orange",
+};
+
+type CursorPresetValues = {
+	tension: number;
+	mass: number;
+	friction: number;
+};
+
+const DEFAULT_CURSOR_MOTION_BLUR = 0.5;
+
+const CURSOR_ANIMATION_STYLE_OPTIONS = [
+	{
+		value: "slow",
+		label: "Slow",
+		description: "Relaxed easing with a gentle follow and higher inertia.",
+		preset: { tension: 65, mass: 1.8, friction: 16 },
+	},
+	{
+		value: "mellow",
+		label: "Mellow",
+		description: "Balanced smoothing for everyday tutorials and walkthroughs.",
+		preset: { tension: 120, mass: 1.1, friction: 18 },
+	},
+	{
+		value: "custom",
+		label: "Custom",
+		description: "Tune tension, friction, and mass manually for full control.",
+	},
+] satisfies Array<{
+	value: CursorAnimationStyle;
+	label: string;
+	description: string;
+	preset?: CursorPresetValues;
+}>;
+
+const CURSOR_PRESET_TOLERANCE = {
+	tension: 1,
+	mass: 0.05,
+	friction: 0.2,
+} as const;
+
+const findCursorPreset = (
+	values: CursorPresetValues,
+): CursorAnimationStyle | null => {
+	const preset = CURSOR_ANIMATION_STYLE_OPTIONS.find(
+		(option) =>
+			option.preset &&
+			Math.abs(option.preset.tension - values.tension) <=
+				CURSOR_PRESET_TOLERANCE.tension &&
+			Math.abs(option.preset.mass - values.mass) <=
+				CURSOR_PRESET_TOLERANCE.mass &&
+			Math.abs(option.preset.friction - values.friction) <=
+				CURSOR_PRESET_TOLERANCE.friction,
+	);
+
+	return preset?.value ?? null;
 };
 
 const TAB_IDS = {
@@ -241,6 +305,40 @@ export function ConfigSidebar() {
 
 	const clampIdleDelay = (value: number) =>
 		Math.round(Math.min(5, Math.max(0.5, value)) * 10) / 10;
+
+	type CursorPhysicsKey = "tension" | "mass" | "friction";
+
+	const setCursorPhysics = (key: CursorPhysicsKey, value: number) => {
+		const nextValues: CursorPresetValues = {
+			tension: key === "tension" ? value : project.cursor.tension,
+			mass: key === "mass" ? value : project.cursor.mass,
+			friction: key === "friction" ? value : project.cursor.friction,
+		};
+		const matched = findCursorPreset(nextValues);
+		const nextStyle = (matched ?? "custom") as CursorAnimationStyle;
+
+		batch(() => {
+			setProject("cursor", key, value);
+			if (project.cursor.animationStyle !== nextStyle) {
+				setProject("cursor", "animationStyle", nextStyle);
+			}
+		});
+	};
+
+	const applyCursorStylePreset = (style: CursorAnimationStyle) => {
+		const option = CURSOR_ANIMATION_STYLE_OPTIONS.find(
+			(item) => item.value === style,
+		);
+
+		batch(() => {
+			setProject("cursor", "animationStyle", style);
+			if (option?.preset) {
+				setProject("cursor", "tension", option.preset.tension);
+				setProject("cursor", "mass", option.preset.mass);
+				setProject("cursor", "friction", option.preset.friction);
+			}
+		});
+	};
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -517,6 +615,38 @@ export function ConfigSidebar() {
 								</div>
 							</Subfield>
 						</Show>
+						<Field
+							name="Cursor Movement Style"
+							icon={<IconLucideRabbit class="size-4" />}
+						>
+							<RadioGroup
+								class="flex flex-col gap-2"
+								value={project.cursor.animationStyle}
+								onChange={(value) =>
+									applyCursorStylePreset(value as CursorAnimationStyle)
+								}
+							>
+								{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
+									<RadioGroup.Item
+										value={option.value}
+										class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+									>
+										<RadioGroup.ItemInput class="sr-only" />
+										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+											<div class="flex flex-col text-left">
+												<span class="text-sm font-medium text-gray-12">
+													{option.label}
+												</span>
+												<span class="text-xs text-gray-11">
+													{option.description}
+												</span>
+											</div>
+										</RadioGroup.ItemLabel>
+									</RadioGroup.Item>
+								))}
+							</RadioGroup>
+						</Field>
 						<KCollapsible open={!project.cursor.raw}>
 							<Field
 								name="Smooth Movement"
@@ -536,7 +666,7 @@ export function ConfigSidebar() {
 									<Field name="Tension">
 										<Slider
 											value={[project.cursor.tension]}
-											onChange={(v) => setProject("cursor", "tension", v[0])}
+											onChange={(v) => setCursorPhysics("tension", v[0])}
 											minValue={1}
 											maxValue={500}
 											step={1}
@@ -545,7 +675,7 @@ export function ConfigSidebar() {
 									<Field name="Friction">
 										<Slider
 											value={[project.cursor.friction]}
-											onChange={(v) => setProject("cursor", "friction", v[0])}
+											onChange={(v) => setCursorPhysics("friction", v[0])}
 											minValue={0}
 											maxValue={50}
 											step={0.1}
@@ -554,7 +684,7 @@ export function ConfigSidebar() {
 									<Field name="Mass">
 										<Slider
 											value={[project.cursor.mass]}
-											onChange={(v) => setProject("cursor", "mass", v[0])}
+											onChange={(v) => setCursorPhysics("mass", v[0])}
 											minValue={0.1}
 											maxValue={10}
 											step={0.01}
@@ -577,15 +707,6 @@ export function ConfigSidebar() {
 						/>
 					</Show>
 
-					{/* <Field name="Motion Blur">
-                <Slider
-                  value={[project.cursor.motionBlur]}
-                  onChange={(v) => setProject("cursor", "motionBlur", v[0])}
-                  minValue={0}
-                  maxValue={1}
-                  step={0.001}
-                />
-              </Field> */}
 					{/* <Field name="Animation Style" icon={<IconLucideRabbit />}>
             <RadioGroup
               defaultValue="regular"
@@ -1680,13 +1801,32 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
+				<div class="flex flex-col gap-3">
+					<Slider
+						value={[project.background.rounding]}
+						onChange={(v) => setProject("background", "rounding", v[0])}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+					<CornerStyleSelect
+						label="Corner Style"
+						value={project.background.roundingType}
+						onChange={(value) =>
+							setProject("background", "roundingType", value)
+						}
+					/>
+				</div>
+			</Field>
+			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
 				<Slider
-					value={[project.background.rounding]}
-					onChange={(v) => setProject("background", "rounding", v[0])}
+					value={[project.cursor.motionBlur ?? DEFAULT_CURSOR_MOTION_BLUR]}
+					onChange={(v) => setProject("cursor", "motionBlur" as any, v[0])}
 					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
+					maxValue={1}
+					step={0.01}
+					formatTooltip={(value) => `${Math.round(value * 100)}%`}
 				/>
 			</Field>
 			<Field
@@ -1871,7 +2011,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	const { project, setProject } = useEditorContext();
 
 	return (
-		<KTabs.Content value={TAB_IDS.camera} class="flex flex-col gap-6">
+		<KTabs.Content
+			value={TAB_IDS.camera}
+			class="flex flex-col flex-1 gap-6 p-4 min-h-0"
+		>
 			<Field icon={<IconCapCamera class="size-4" />} name="Camera">
 				<div class="flex flex-col gap-6">
 					<div>
@@ -2012,14 +2155,21 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<Slider
-					value={[project.camera.rounding!]}
-					onChange={(v) => setProject("camera", "rounding", v[0])}
-					minValue={0}
-					maxValue={100}
-					step={0.1}
-					formatTooltip="%"
-				/>
+				<div class="flex flex-col gap-3">
+					<Slider
+						value={[project.camera.rounding!]}
+						onChange={(v) => setProject("camera", "rounding", v[0])}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+					<CornerStyleSelect
+						label="Corner Style"
+						value={project.camera.roundingType}
+						onChange={(value) => setProject("camera", "roundingType", value)}
+					/>
+				</div>
 			</Field>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<div class="space-y-8">
@@ -2087,6 +2237,72 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
             </Field>
           </ComingSoonTooltip> */}
 		</KTabs.Content>
+	);
+}
+
+function CornerStyleSelect(props: {
+	label?: string;
+	value: CornerRoundingType;
+	onChange: (value: CornerRoundingType) => void;
+}) {
+	return (
+		<div class="flex flex-col gap-1.5">
+			<Show when={props.label}>
+				{(label) => (
+					<span class="text-[0.65rem] uppercase tracking-wide text-gray-11">
+						{label()}
+					</span>
+				)}
+			</Show>
+			<KSelect<{ name: string; value: CornerRoundingType }>
+				options={CORNER_STYLE_OPTIONS}
+				optionValue="value"
+				optionTextValue="name"
+				value={CORNER_STYLE_OPTIONS.find(
+					(option) => option.value === props.value,
+				)}
+				onChange={(option) => option && props.onChange(option.value)}
+				disallowEmptySelection
+				itemComponent={(itemProps) => (
+					<MenuItem<typeof KSelect.Item>
+						as={KSelect.Item}
+						item={itemProps.item}
+					>
+						<KSelect.ItemLabel class="flex-1">
+							{itemProps.item.rawValue.name}
+						</KSelect.ItemLabel>
+					</MenuItem>
+				)}
+			>
+				<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+					<KSelect.Value<{
+						name: string;
+						value: CornerRoundingType;
+					}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+						{(state) => <span>{state.selectedOption().name}</span>}
+					</KSelect.Value>
+					<KSelect.Icon<ValidComponent>
+						as={(iconProps) => (
+							<IconCapChevronDown
+								{...iconProps}
+								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+							/>
+						)}
+					/>
+				</KSelect.Trigger>
+				<KSelect.Portal>
+					<PopperContent<typeof KSelect.Content>
+						as={KSelect.Content}
+						class={cx(topSlideAnimateClasses, "z-50")}
+					>
+						<MenuItemList<typeof KSelect.Listbox>
+							class="overflow-y-auto max-h-32"
+							as={KSelect.Listbox}
+						/>
+					</PopperContent>
+				</KSelect.Portal>
+			</KSelect>
+		</div>
 	);
 }
 
