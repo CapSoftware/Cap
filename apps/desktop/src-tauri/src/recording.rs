@@ -19,10 +19,13 @@ use cap_recording::{
     studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
-use cap_utils::{ensure_dir, spawn_actor};
+use cap_utils::{ensure_dir, moment_format_to_chrono, spawn_actor};
 use futures::stream;
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::borrow::Cow;
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -257,6 +260,122 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
+/// Formats the project name using a template string.
+///
+/// # Template Variables
+///
+/// The template supports the following variables that will be replaced with actual values:
+///
+/// ## Recording Mode Variables
+/// - `{recording_mode}` - The recording mode: "Studio" or "Instant"
+/// - `{mode}` - Short form of recording mode: "studio" or "instant"
+///
+/// ## Target Variables
+/// - `{target_kind}` - The type of capture target: "Display", "Window", or "Area"
+/// - `{target_name}` - The specific name of the target (e.g., "Built-in Retina Display", "Chrome", etc.)
+///
+/// ## Date/Time Variables
+/// - `{date}` - Current date in YYYY-MM-DD format (e.g., "2025-09-11")
+/// - `{time}` - Current time in HH:MM AM/PM format (e.g., "3:23 PM")
+///
+/// ## Customizable Date/Time Formats
+/// You can customize date and time formats by adding moment format specifiers:
+/// - `{moment:YYYY-MM-DD}` - Custom date format
+/// - `{moment:HH:mm}` - 24-hour time format
+/// - `{moment:hh:mm A}` - 12-hour time with AM/PM
+/// - `{moment:YYYY-MM-DD HH:mm}` - Combined custom format
+///
+/// ## Example
+///
+/// `{recording_mode} Recording {target_kind} ({target_name}) {date} {time}`
+/// -> "Instant Recording Display (Built-in Retina Display) 2025-11-12 3:23 PM"
+///
+/// # Arguments
+///
+/// * `template` - The template string with variables to replace
+/// * `target_name` - The specific name of the capture target
+/// * `target_kind` - The type of capture target (Display, Window, or Area)
+/// * `recording_mode` - The recording mode (Studio or Instant)
+/// * `datetime` - Optional datetime to use for formatting; defaults to current time
+///
+/// # Returns
+///
+/// Returns `String` with the formatted project name
+pub fn format_project_name<'a>(
+    template: Option<&str>,
+    target_name: &'a str,
+    target_kind: &'a str,
+    recording_mode: RecordingMode,
+    datetime: Option<chrono::DateTime<chrono::Local>>,
+) -> String {
+    const DEFAULT_FILENAME_TEMPLATE: &str = "{target_name} ({target_kind}) {date} {time}";
+    let datetime = datetime.unwrap_or(chrono::Local::now());
+
+    lazy_static! {
+        static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
+        static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
+        static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
+        static ref AC: aho_corasick::AhoCorasick = {
+            aho_corasick::AhoCorasick::new(&[
+                "{recording_mode}",
+                "{mode}",
+                "{target_kind}",
+                "{target_name}",
+            ])
+            .expect("Failed to build AhoCorasick automaton")
+        };
+    }
+    let haystack = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
+
+    // Get recording mode information
+    let (recording_mode, mode) = match recording_mode {
+        RecordingMode::Studio => ("Studio", "studio"),
+        RecordingMode::Instant => ("Instant", "instant"),
+    };
+
+    let result = AC
+        .try_replace_all(&haystack, &[recording_mode, mode, target_kind, target_name])
+        .expect("AhoCorasick replace should never fail with default configuration");
+
+    let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%Y-%m-%d")),
+            )
+            .to_string()
+    });
+
+    let result = TIME_REGEX.replace_all(&result, |caps: &regex::Captures| {
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%I:%M %p")),
+            )
+            .to_string()
+    });
+
+    let result = MOMENT_REGEX.replace_all(&result, |caps: &regex::Captures| {
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%Y-%m-%d %H:%M")),
+            )
+            .to_string()
+    });
+
+    result.into_owned()
+}
+
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -269,16 +388,32 @@ pub async fn start_recording(
         return Err("Recording already in progress".to_string());
     }
 
-    let id = uuid::Uuid::new_v4().to_string();
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
 
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{id}.cap"));
+    let project_name = format_project_name(
+        general_settings
+            .and_then(|s| s.default_project_name_template.clone())
+            .as_deref(),
+        inputs
+            .capture_target
+            .title()
+            .as_deref()
+            .unwrap_or("Unknown"),
+        inputs.capture_target.kind_str(),
+        inputs.mode,
+        None,
+    );
+
+    let filename = project_name.replace(":", ".");
+    let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
+
+    let recordings_base_dir = app.path().app_data_dir().unwrap().join("recordings");
+
+    let recording_dir = recordings_base_dir.join(&cap_utils::ensure_unique_filename(
+        &filename,
+        &recordings_base_dir,
+    )?);
 
     ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
     state_mtx
@@ -286,16 +421,6 @@ pub async fn start_recording(
         .await
         .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
         .await?;
-
-    let target_name = {
-        let title = inputs.capture_target.title();
-
-        match inputs.capture_target.clone() {
-            ScreenCaptureTarget::Area { .. } => title.unwrap_or_else(|| "Area".to_string()),
-            ScreenCaptureTarget::Window { .. } => title.unwrap_or_else(|| "Window".to_string()),
-            ScreenCaptureTarget::Display { .. } => title.unwrap_or_else(|| "Screen".to_string()),
-        }
-    };
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
         let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
@@ -310,10 +435,7 @@ pub async fn start_recording(
                         &app,
                         false,
                         None,
-                        Some(format!(
-                            "{target_name} {}",
-                            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-                        )),
+                        Some(project_name.clone()),
                         None,
                         inputs.organization_id.clone(),
                     )
@@ -351,17 +473,10 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    let date_time = if cfg!(windows) {
-        // Windows doesn't support colon in file paths
-        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
-    } else {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    };
-
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
-        pretty_name: format!("{target_name} {date_time}"),
+        pretty_name: project_name.clone(),
         inner: match inputs.mode {
             RecordingMode::Studio => {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
@@ -475,7 +590,7 @@ pub async fn start_recording(
                     .ok_or_else(|| "GetShareableContent/NotAvailable".to_string())?;
 
                 let common = InProgressRecordingCommon {
-                    target_name,
+                    target_name: project_name.clone(),
                     inputs: inputs.clone(),
                     recording_dir: recording_dir.clone(),
                 };
