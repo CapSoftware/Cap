@@ -285,14 +285,10 @@ pub enum RecordingAction {
 /// - `{moment:hh:mm A}` - 12-hour time with AM/PM
 /// - `{moment:YYYY-MM-DD HH:mm}` - Combined custom format
 ///
-/// ## Examples
+/// ## Example
 ///
 /// `{recording_mode} Recording {target_kind} ({target_name}) {date} {time}`
 /// -> "Instant Recording Display (Built-in Retina Display) 2025-11-12 3:23 PM"
-///
-/// `Cap {target} - {date} {time}`
-/// -> "Cap Display (Built-in Retina Display) - 2025-11-12 15:23"
-///
 ///
 /// # Arguments
 ///
