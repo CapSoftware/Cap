@@ -2,14 +2,23 @@ use crate::{
     feeds::microphone::{self, MicrophoneFeedLock},
     output_pipeline::{AudioFrame, AudioSource},
 };
-use anyhow::anyhow;
 use cap_media_info::AudioInfo;
 use futures::{SinkExt, channel::mpsc};
+use kameo::error::SendError;
 use std::sync::Arc;
+use thiserror::Error;
 
 pub struct Microphone {
     info: AudioInfo,
     _lock: Arc<MicrophoneFeedLock>,
+}
+
+#[derive(Debug, Error)]
+pub enum MicrophoneSourceError {
+    #[error("microphone actor not running")]
+    ActorNotRunning,
+    #[error("failed to add microphone sender: {0}")]
+    AddSenderFailed(SendError<()>),
 }
 
 impl AudioSource for Microphone {
@@ -31,7 +40,10 @@ impl AudioSource for Microphone {
             feed_lock
                 .ask(microphone::AddSender(tx))
                 .await
-                .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+                .map_err(|err| match err {
+                    SendError::ActorNotRunning => MicrophoneSourceError::ActorNotRunning.into(),
+                    other => MicrophoneSourceError::AddSenderFailed(other).into(),
+                })?;
 
             tokio::spawn(async move {
                 while let Ok(frame) = rx.recv_async().await {
