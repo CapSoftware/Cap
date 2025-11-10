@@ -321,7 +321,7 @@ impl Camera {
     }
 
     fn default_rounding() -> f32 {
-        30.0
+        100.0
     }
 }
 
