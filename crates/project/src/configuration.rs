@@ -408,7 +408,7 @@ pub enum CursorAnimationStyle {
     Custom,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct CursorSmoothingPreset {
     pub tension: f32,
     pub mass: f32,

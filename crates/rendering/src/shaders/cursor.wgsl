@@ -73,10 +73,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let direction = motion_vec / motion_len;
     let max_offset = motion_len;
 
-    for (var i = 0; i < num_samples; i++) {
+    for (var i = 1; i < num_samples; i++) {
         let t = f32(i) / f32(num_samples - 1);
         let eased = smoothstep(0.0, 1.0, t);
-        let offset = direction * max_offset * eased;
+        let offset = direction * (max_offset * blur_strength) * eased;
         let sample_uv = input.uv + offset / uniforms.output_size.xy;
 
         // Sample with bilinear filtering

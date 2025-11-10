@@ -275,7 +275,7 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
         let distance = corner_norm - uniforms.rounding_px;
 
         if distance >= -distance_blur / 2.0 {
-		    return vec4<f32>(0.0);
+            return vec4<f32>(0.0);
         }
     }
 
