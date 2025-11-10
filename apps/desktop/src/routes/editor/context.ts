@@ -108,7 +108,7 @@ export function serializeProjectConfiguration(
 		...rest,
 		background: {
 			...backgroundRest,
-			rounding_type: backgroundRoundingType,
+			roundingType: backgroundRoundingType,
 		},
 		camera: {
 			...cameraRest,
