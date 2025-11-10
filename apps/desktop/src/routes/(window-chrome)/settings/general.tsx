@@ -674,96 +674,127 @@ function DefaultProjectNameCard(props: {
 
 	return (
 		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
-			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-				<div class="flex flex-col gap-2 w-full">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div class="flex flex-col gap-1">
 					<p class="text-sm text-gray-12">Default Project Name</p>
-					<p class="text-xs text-gray-10 pb-1">
-						Choose the template to use as the default project name.
-						<br />
-						This will also be used as the default file name for new projects.
+					<p class="text-xs text-gray-10">
+						Choose the template to use as the default project and file name.
 					</p>
-
-					<Input
-						autocorrect="off"
-						ref={inputRef}
-						type="text"
-						class="bg-gray-3 font-mono"
-						value={inputValue()}
-						onInput={(e) => {
-							setInputValue(e.currentTarget.value);
-							updatePreview(e.currentTarget.value);
+				</div>
+				<div class="flex flex-shrink-0 gap-2">
+					<Button
+						size="sm"
+						variant="gray"
+						disabled={
+							inputValue() === DEFAULT_PROJECT_NAME_TEMPLATE &&
+							inputValue() !== props.value
+						}
+						onClick={async () => {
+							await props.onChange(null);
+							const newTemplate = initialTemplate();
+							setInputValue(newTemplate);
+							if (inputRef) inputRef.value = newTemplate;
+							await updatePreview(newTemplate);
 						}}
-					/>
+					>
+						Reset
+					</Button>
 
-					<div class="w-full flex items-center py-2 px-2 rounded-lg bg-gray-transparent-50 border border-dashed border-gray-5">
-						<IconCapLogo class="size-4 pointer-events-none mr-2" />
-						<p class="whitespace-pre-wrap">{preview()}</p>
-					</div>
+					<Button
+						size="sm"
+						variant="dark"
+						disabled={isSaveDisabled()}
+						onClick={() => {
+							props.onChange(inputValue() ?? null);
+							updatePreview();
+						}}
+					>
+						Save
+					</Button>
+				</div>
+			</div>
 
-					<Collapsible class="w-full rounded-lg">
-						<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
-							<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
-							<p class="py-0.5 px-1">How to customize?</p>
-						</Collapsible.Trigger>
+			<div class="flex flex-col gap-2 w-full">
+				<Input
+					autocorrect="off"
+					ref={inputRef}
+					type="text"
+					class="bg-gray-3 font-mono"
+					value={inputValue()}
+					onInput={(e) => {
+						setInputValue(e.currentTarget.value);
+						updatePreview(e.currentTarget.value);
+					}}
+				/>
 
-						<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
-							<p class="border-t pt-3">
-								Use placeholders in your template that will be automatically
-								filled in.
+				<div class="w-full flex items-center py-2 px-2 rounded-lg bg-gray-transparent-50 border border-dashed border-gray-5">
+					<IconCapLogo class="size-4 pointer-events-none mr-2" />
+					<p class="whitespace-pre-wrap">{preview()}</p>
+				</div>
+
+				<Collapsible class="w-full rounded-lg">
+					<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
+						<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
+						<p class="py-0.5 px-1">How to customize?</p>
+					</Collapsible.Trigger>
+
+					<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
+						<p class="border-t pt-3">
+							Use placeholders in your template that will be automatically
+							filled in.
+						</p>
+
+						<div class="space-y-1">
+							<p class="font-medium text-foreground">Recording Mode</p>
+							<p>
+								<CodeView>{"{recording_mode}"}</CodeView> → "Studio" or
+								"Instant"
 							</p>
+							<p>
+								<CodeView>{"{mode}"}</CodeView> → "studio" or "instant"
+							</p>
+						</div>
 
-							<div class="space-y-1">
-								<p class="font-medium text-foreground">Recording Mode</p>
-								<p>
-									<CodeView>{"{recording_mode}"}</CodeView> → "Studio" or
-									"Instant"
-								</p>
-								<p>
-									<CodeView>{"{mode}"}</CodeView> → "studio" or "instant"
-								</p>
-							</div>
+						<div class="space-y-1">
+							<p class="font-medium text-foreground">Target</p>
+							<p>
+								<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window", or
+								"Area"
+							</p>
+							<p>
+								<CodeView>{"{target_name}"}</CodeView> → The name of the monitor
+								or the title of the app depending on the recording mode.
+							</p>
+						</div>
 
-							<div class="space-y-1">
-								<p class="font-medium text-foreground">Target</p>
-								<p>
-									<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window",
-									or "Area"
-								</p>
-								<p>
-									<CodeView>{"{target_name}"}</CodeView> → The name of the
-									monitor or the title of the app depending on the recording
-									mode.
-								</p>
-							</div>
+						<div class="space-y-1">
+							<p class="font-medium text-foreground">Date &amp; Time</p>
+							<p>
+								<CodeView>{"{date}"}</CodeView> → {dateString}
+							</p>
+							<p>
+								<CodeView>{"{time}"}</CodeView> →{" "}
+								{macos ? "09:41 AM" : "12:00 PM"}
+							</p>
+						</div>
 
-							<div class="space-y-1">
-								<p class="font-medium text-foreground">Date &amp; Time</p>
-								<p>
-									<CodeView>{"{date}"}</CodeView> → {dateString}
-								</p>
-								<p>
-									<CodeView>{"{time}"}</CodeView> →{" "}
-									{macos ? "09:41 AM" : "12:00 PM"}
-								</p>
-							</div>
+						<div class="space-y-1">
+							<p class="font-medium text-foreground">Custom Formats</p>
+							<p>
+								You can also use a custom format for time. The placeholders are
+								case-sensitive. For 24-hour time, use{" "}
+								<CodeView>{"{moment:HH:mm}"}</CodeView> or use lower cased{" "}
+								<code>hh</code> for 12-hour format.
+							</p>
+							<p class="flex flex-col items-start pt-1">
+								<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
+								{momentExample()}
+							</p>
+						</div>
+					</Collapsible.Content>
+				</Collapsible>
 
-							<div class="space-y-1">
-								<p class="font-medium text-foreground">Custom Formats</p>
-								<p>
-									You can also use a custom format for time. The placeholders
-									are case-sensitive. For 24-hour time, use{" "}
-									<CodeView>{"{moment:HH:mm}"}</CodeView> or use lower cased{" "}
-									<code>hh</code> for 12-hour format.
-								</p>
-								<p class="flex flex-col items-start pt-1">
-									<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
-									{momentExample()}
-								</p>
-							</div>
-						</Collapsible.Content>
-					</Collapsible>
-
-					<div class="flex justify-end gap-2 pt-1">
+				{/*<div class="flex justify-end gap-2 pt-1">
 						<Button
 							size="sm"
 							variant="gray"
@@ -793,8 +824,7 @@ function DefaultProjectNameCard(props: {
 						>
 							Save
 						</Button>
-					</div>
-				</div>
+					</div>*/}
 			</div>
 		</div>
 	);
@@ -882,7 +912,7 @@ function ExcludedWindowsCard(props: {
 						</p>
 					</Show>
 				</div>
-				<div class="flex gap-2">
+				<div class="flex flex-shrink-0 gap-2">
 					<Button
 						variant="gray"
 						size="sm"
