@@ -386,6 +386,9 @@ impl output_pipeline::VideoSource for VideoSource {
 
                         if is_system_stop_error(err.as_ref()) {
                             warn!("Screen capture stream stopped by the system; attempting restart");
+                            if monitor_cancel.is_cancelled() {
+                                break Ok(());
+                            }
                             monitor_capturer.mark_stopped();
                             if let Err(restart_err) = monitor_capturer.start().await {
                                 return Err(anyhow!(format!(

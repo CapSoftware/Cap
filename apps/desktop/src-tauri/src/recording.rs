@@ -29,7 +29,7 @@ use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     panic::AssertUnwindSafe,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -647,13 +647,15 @@ pub async fn start_recording(
         Ok(Ok(rx)) => rx,
         Ok(Err(err)) => {
             let message = format!("{err:#}");
-            handle_spawn_failure(&app, &state_mtx, &recording_dir, message.clone()).await?;
+            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
+                .await?;
             return Err(message);
         }
         Err(panic) => {
             let panic_msg = panic_message(panic);
             let message = format!("Failed to spawn recording actor: {panic_msg}");
-            handle_spawn_failure(&app, &state_mtx, &recording_dir, message.clone()).await?;
+            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
+                .await?;
             return Err(message);
         }
     };
@@ -736,7 +738,7 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 async fn handle_spawn_failure(
     app: &AppHandle,
     state_mtx: &MutableState<'_, App>,
-    recording_dir: &PathBuf,
+    recording_dir: &Path,
     message: String,
 ) -> Result<(), String> {
     let _ = RecordingEvent::Failed {
@@ -758,8 +760,13 @@ async fn handle_spawn_failure(
     dialog.blocking_show();
 
     let mut state = state_mtx.write().await;
-    let _ =
-        handle_recording_end(app.clone(), Err(message), &mut state, recording_dir.clone()).await;
+    let _ = handle_recording_end(
+        app.clone(),
+        Err(message),
+        &mut state,
+        recording_dir.to_path_buf(),
+    )
+    .await;
 
     Ok(())
 }
