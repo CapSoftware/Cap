@@ -148,8 +148,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return mix(shadow_color, base_color, base_color.a);
     }
 
-    var accum = base_color;
-    var weight_sum = 1.0;
+    let base_weight = max(base_color.a, 0.001);
+    var accum = base_color * base_weight;
+    var weight_sum = base_weight;
 
     if blur_mode < 1.5 {
         let motion_vec = uniforms.motion_blur_vector;
@@ -174,8 +175,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 var sample_color = sample_texture(sample_uv, crop_bounds_uv);
                 sample_color = apply_rounded_corners(sample_color, sample_uv);
                 let weight = 1.0 - t * 0.8;
-                accum += sample_color * weight;
-                weight_sum += weight;
+                let sample_weight = weight * sample_color.a;
+                if sample_weight > 1e-6 {
+                    accum += sample_color * sample_weight;
+                    weight_sum += sample_weight;
+                }
             }
         }
     } else {
@@ -201,8 +205,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 var sample_color = sample_texture(sample_uv, crop_bounds_uv);
                 sample_color = apply_rounded_corners(sample_color, sample_uv);
                 let weight = 1.0 - t * 0.9;
-                accum += sample_color * weight;
-                weight_sum += weight;
+                let sample_weight = weight * sample_color.a;
+                if sample_weight > 1e-6 {
+                    accum += sample_color * sample_weight;
+                    weight_sum += sample_weight;
+                }
             }
         }
     }
@@ -263,23 +270,16 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
-    let target_coord = abs(target_uv * uniforms.target_size - uniforms.target_size / 2.0);
-    let rounding_point = uniforms.target_size / 2.0 - uniforms.rounding_px;
-    let target_rounding_coord = target_coord - rounding_point;
+    // Compute the signed distance to the rounded rect in pixel space so we can
+    // blend edges smoothly instead of hard-clipping them (which produced jaggies).
+    let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
+    let half_size = uniforms.target_size * 0.5;
+    let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.rounding_type);
 
-    let distance_blur = 1.0;
+    let anti_alias_width = max(fwidth(distance), 0.001);
+    let coverage = clamp(1.0 - smoothstep(-anti_alias_width, anti_alias_width, distance), 0.0, 1.0);
 
-    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 {
-        let local_coord = max(target_rounding_coord, vec2<f32>(0.0));
-        let corner_norm = rounded_corner_norm(local_coord, uniforms.rounding_type);
-        let distance = corner_norm - uniforms.rounding_px;
-
-        if distance >= -distance_blur / 2.0 {
-            return vec4<f32>(0.0);
-        }
-    }
-
-    return current_color;
+    return vec4(current_color.rgb, current_color.a * coverage);
 }
 
 fn rand(co: vec2<f32>) -> f32 {
