@@ -94,7 +94,7 @@ fn downmix_to_mono(data: &[u8], format: SampleFormat, source_channels: usize) ->
     let sample_size = sample_format_size(format)?;
 
     let frame_size = sample_size.checked_mul(source_channels)?;
-    if frame_size == 0 || data.len() % frame_size != 0 {
+    if frame_size == 0 || !data.len().is_multiple_of(frame_size) {
         return None;
     }
 
