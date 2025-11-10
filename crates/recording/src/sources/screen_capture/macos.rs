@@ -460,12 +460,6 @@ impl output_pipeline::VideoSource for VideoSource {
 }
 
 fn is_system_stop_error(err: &ns::Error) -> bool {
-    const SCK_ERROR_DOMAIN: &str = "com.apple.ScreenCaptureKit.error";
-
-    if err.domain().to_string() != SCK_ERROR_DOMAIN {
-        return false;
-    }
-
     err.localized_description().to_string() == "Stream was stopped by the system"
 }
 
