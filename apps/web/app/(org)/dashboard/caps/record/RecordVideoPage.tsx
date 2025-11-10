@@ -42,9 +42,9 @@ export const RecordVideoPage = () => {
 			className="flex flex-col flex-1 justify-center items-center w-full h-full"
 			style={{ scrollbarGutter: "stable" }}
 		>
-			<div className="flex flex-col gap-3 justify-center items-center h-full text-center">
+			<div className="w-full flex flex-col gap-3 justify-center items-center h-full text-center">
 				<div className="w-full px-5">
-					<div className="mx-auto w-full max-w-[560px]">
+					<div className="mx-auto w-full max-w-[560px] min-w-0">
 						<div className="flex flex-col items-center">
 							<p className="max-w-md text-gray-10 text-md">
 								Choose how you'd like to record your Cap
@@ -101,7 +101,7 @@ const FaqAccordion = () => {
 		{
 			id: "system-audio",
 			q: "Can I record system audio?",
-			a: "Browsers limit system‑wide audio capture. Chrome can capture tab audio, but full system audio is best with Cap Desktop.",
+			a: "Browsers limit system‑wide audio capture. We recommend using Cap Desktop for best results.",
 		},
 		{
 			id: "install",
@@ -111,8 +111,8 @@ const FaqAccordion = () => {
 	];
 
 	return (
-		<div className="mt-8 w-full max-w-[560px] px-5 text-left">
-			<div className="divide-y divide-gray-4 rounded-lg border border-gray-4 bg-gray-2 w-full">
+		<div className="mt-8 text-left">
+			<div className="w-full min-w-0 divide-y divide-gray-4 rounded-lg border border-gray-4 bg-gray-2">
 				{items.map((it) => (
 					<AccordionItem key={it.id} title={it.q} content={it.a} />
 				))}
@@ -133,7 +133,7 @@ const AccordionItem = ({
 	const headerId = useId();
 
 	return (
-		<div className="p-3">
+		<div className="p-3 w-full">
 			<button
 				id={headerId}
 				aria-controls={contentId}
@@ -157,7 +157,7 @@ const AccordionItem = ({
 						animate={{ opacity: 1, height: "auto" }}
 						exit={{ opacity: 0, height: 0 }}
 						transition={{ duration: 0.18 }}
-						className="overflow-hidden"
+						className="overflow-hidden w-full"
 					>
 						<div className="pt-2 text-sm text-gray-10">{content}</div>
 					</motion.section>
