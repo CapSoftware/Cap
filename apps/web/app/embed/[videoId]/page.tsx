@@ -125,6 +125,7 @@ export default async function EmbedVideoPage(
 					orgId: videos.orgId,
 					settings: videos.settings,
 					createdAt: videos.createdAt,
+					effectiveCreatedAt: videos.effectiveCreatedAt,
 					updatedAt: videos.updatedAt,
 					bucket: videos.bucket,
 					metadata: videos.metadata,

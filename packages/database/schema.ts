@@ -316,7 +316,10 @@ export const videos = mysqlTable(
 		>(),
 		source: json("source")
 			.$type<
-				{ type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
+				| { type: "MediaConvert" }
+				| { type: "local" }
+				| { type: "desktopMP4" }
+				| { type: "webMP4" }
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
