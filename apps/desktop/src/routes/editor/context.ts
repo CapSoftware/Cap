@@ -86,7 +86,7 @@ function withCornerDefaults<
 	};
 }
 
-function normalizeProject(
+export function normalizeProject(
 	config: ProjectConfiguration,
 ): EditorProjectConfiguration {
 	return {
