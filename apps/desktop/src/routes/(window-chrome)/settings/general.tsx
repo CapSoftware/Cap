@@ -793,38 +793,6 @@ function DefaultProjectNameCard(props: {
 						</div>
 					</Collapsible.Content>
 				</Collapsible>
-
-				{/*<div class="flex justify-end gap-2 pt-1">
-						<Button
-							size="sm"
-							variant="gray"
-							disabled={
-								inputValue() === DEFAULT_PROJECT_NAME_TEMPLATE &&
-								inputValue() !== props.value
-							}
-							onClick={async () => {
-								await props.onChange(null);
-								const newTemplate = initialTemplate();
-								setInputValue(newTemplate);
-								if (inputRef) inputRef.value = newTemplate;
-								await updatePreview(newTemplate);
-							}}
-						>
-							Reset
-						</Button>
-
-						<Button
-							size="sm"
-							variant="dark"
-							disabled={isSaveDisabled()}
-							onClick={() => {
-								props.onChange(inputValue() ?? null);
-								updatePreview();
-							}}
-						>
-							Save
-						</Button>
-					</div>*/}
 			</div>
 		</div>
 	);

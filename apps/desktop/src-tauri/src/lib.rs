@@ -25,6 +25,7 @@ mod recording_settings;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
+mod update_project_names;
 mod upload;
 mod web_api;
 mod window_exclusion;
@@ -2050,6 +2051,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+            update_project_names::migrate_if_needed(&app)?;
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);

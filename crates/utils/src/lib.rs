@@ -49,7 +49,6 @@ pub fn ensure_unique_filename(
     let initial_path = parent_dir.join(base_filename);
 
     if !initial_path.exists() {
-        println!("Ensure unique filename: is free!");
         return Ok(base_filename.to_string());
     }
 
@@ -76,13 +75,7 @@ pub fn ensure_unique_filename(
 
         let test_path = parent_dir.join(&numbered_filename);
 
-        println!("Ensure unique filename: test path count \"{counter}\"");
-
         if !test_path.exists() {
-            println!(
-                "Ensure unique filename: Found free! \"{}\"",
-                &test_path.display()
-            );
             return Ok(numbered_filename);
         }
 
