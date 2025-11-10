@@ -59,6 +59,7 @@ const Top = () => {
 		"/dashboard/caps": "Caps",
 		"/dashboard/folder": "Caps",
 		"/dashboard/shared-caps": "Shared Caps",
+		"/dashboard/caps/record": "Record a Cap",
 		"/dashboard/settings/organization": "Organization Settings",
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/spaces": "Spaces",

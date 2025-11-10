@@ -36,7 +36,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, CogIcon } from "../AnimatedIcons";
+import { CapIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import CapAIBox from "./CapAIBox";
 import SpacesList from "./SpacesList";
@@ -60,6 +60,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			subNav: [],
 		},
 		{
+			name: "Record a Cap",
+			href: `/dashboard/caps/record`,
+			icon: <RecordIcon />,
+			subNav: [],
+		},
+		{
 			name: "Organization Settings",
 			href: `/dashboard/settings/organization`,
 			ownerOnly: true,
@@ -78,7 +84,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [openAIDialog, setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
-	const isPathActive = (path: string) => pathname.includes(path);
+	const isPathActive = (path: string) => {
+		if (path === "/dashboard/caps") {
+			return pathname === "/dashboard/caps";
+		}
+		return pathname === path || pathname.startsWith(`${path}/`);
+	};
 	const isDomainSetupVerified =
 		activeOrg?.organization.customDomain &&
 		activeOrg?.organization.domainVerified;
