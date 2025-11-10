@@ -25,6 +25,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::borrow::Cow;
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
@@ -259,15 +260,6 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
-lazy_static! {
-    static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
-    static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
-    static ref DATETIME_REGEX: Regex = Regex::new(r"\{datetime(?::([^}]+))?\}").unwrap();
-    static ref TIMESTAMP_REGEX: Regex = Regex::new(r"\{timestamp(?::([^}]+))?\}").unwrap();
-}
-
-pub const DEFAULT_FILENAME_TEMPLATE: &str = "{target} {datetime}";
-
 /// Formats the project name using a template string.
 ///
 /// # Template Variables
@@ -285,25 +277,20 @@ pub const DEFAULT_FILENAME_TEMPLATE: &str = "{target} {datetime}";
 /// ## Date/Time Variables
 /// - `{date}` - Current date in YYYY-MM-DD format (e.g., "2025-09-11")
 /// - `{time}` - Current time in HH:MM AM/PM format (e.g., "3:23 PM")
-/// - `{datetime}` - Combined date and time (e.g., "2025-09-11 3:23 PM")
-/// - `{timestamp}` - Unix timestamp (e.g., "1705326783")
 ///
 /// ## Customizable Date/Time Formats
 /// You can customize date and time formats by adding moment format specifiers:
-/// - `{date:YYYY-MM-DD}` - Custom date format
-/// - `{time:HH:mm}` - 24-hour time format
-/// - `{time:hh:mm A}` - 12-hour time with AM/PM
-/// - `{datetime:YYYY-MM-DD HH:mm}` - Combined custom format
+/// - `{moment:YYYY-MM-DD}` - Custom date format
+/// - `{moment:HH:mm}` - 24-hour time format
+/// - `{moment:hh:mm A}` - 12-hour time with AM/PM
+/// - `{moment:YYYY-MM-DD HH:mm}` - Combined custom format
 ///
 /// ## Examples
 ///
 /// `{recording_mode} Recording {target_kind} ({target_name}) {date} {time}`
 /// -> "Instant Recording Display (Built-in Retina Display) 2025-11-12 3:23 PM"
 ///
-/// `{recording_mode} Recording {target_kind} ({target_name}) {date} {time}`
-/// -> "instant_display_20250115_1523"
-///
-/// `Cap {target} - {datetime:YYYY-MM-DD HH:mm}`
+/// `Cap {target} - {date} {time}`
 /// -> "Cap Display (Built-in Retina Display) - 2025-11-12 15:23"
 ///
 ///
@@ -320,9 +307,15 @@ pub fn format_project_name<'a>(
     target_name: &'a str,
     target_kind: &'a str,
     recording_mode: RecordingMode,
-    datetime: chrono::DateTime<chrono::Local>,
+    datetime: Option<chrono::DateTime<chrono::Local>>,
 ) -> String {
+    const DEFAULT_FILENAME_TEMPLATE: &str = "{target_name} ({target_kind}) {date} {time}";
+    let datetime = datetime.unwrap_or(chrono::Local::now());
+
     lazy_static! {
+        static ref DATE_REGEX: Regex = Regex::new(r"\{date(?::([^}]+))?\}").unwrap();
+        static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
+        static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
         static ref AC: aho_corasick::AhoCorasick = {
             aho_corasick::AhoCorasick::new(&[
                 "{recording_mode}",
@@ -333,7 +326,7 @@ pub fn format_project_name<'a>(
             .expect("Failed to build AhoCorasick automaton")
         };
     }
-    let template = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
+    let haystack = template.unwrap_or(DEFAULT_FILENAME_TEMPLATE);
 
     // Get recording mode information
     let (recording_mode, mode) = match recording_mode {
@@ -342,31 +335,43 @@ pub fn format_project_name<'a>(
     };
 
     let result = AC
-        .try_replace_all(&template, &[recording_mode, mode, target_kind, target_name])
+        .try_replace_all(&haystack, &[recording_mode, mode, target_kind, target_name])
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
-        let format = caps.get(1).map(|m| m.as_str()).unwrap_or("%Y-%m-%d");
-        let chrono_format = moment_format_to_chrono(format);
-        datetime.format(&chrono_format).to_string()
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%Y-%m-%d")),
+            )
+            .to_string()
     });
 
     let result = TIME_REGEX.replace_all(&result, |caps: &regex::Captures| {
-        let format = caps.get(1).map(|m| m.as_str()).unwrap_or("%l:%M %p");
-        let chrono_format = moment_format_to_chrono(format);
-        datetime.format(&chrono_format).to_string()
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%I:%M %p")),
+            )
+            .to_string()
     });
 
-    let result = DATETIME_REGEX.replace_all(&result, |caps: &regex::Captures| {
-        let format = caps.get(1).map(|m| m.as_str()).unwrap_or("%Y-%m-%d %H:%M");
-        let chrono_format = moment_format_to_chrono(format);
-        datetime.format(&chrono_format).to_string()
-    });
-
-    let result = TIMESTAMP_REGEX.replace_all(&result, |caps: &regex::Captures| {
-        caps.get(1)
-            .map(|m| datetime.format(m.as_str()).to_string())
-            .unwrap_or_else(|| datetime.timestamp().to_string())
+    let result = MOMENT_REGEX.replace_all(&result, |caps: &regex::Captures| {
+        datetime
+            .format(
+                &caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .map(moment_format_to_chrono)
+                    .unwrap_or(Cow::Borrowed("%Y-%m-%d %H:%M")),
+            )
+            .to_string()
     });
 
     result.into_owned()
@@ -398,7 +403,7 @@ pub async fn start_recording(
             .unwrap_or("Unknown"),
         inputs.capture_target.kind_str(),
         inputs.mode,
-        chrono::Local::now(),
+        None,
     );
 
     let filename = project_name.replace(":", ".");

@@ -6,6 +6,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
+import { Collapsible } from "@kobalte/core/collapsible";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
@@ -13,7 +14,9 @@ import {
 	createEffect,
 	createMemo,
 	createResource,
+	createSignal,
 	For,
+	onMount,
 	type ParentProps,
 	Show,
 } from "solid-js";
@@ -97,6 +100,9 @@ const INSTANT_MODE_RESOLUTION_OPTIONS = [
 	value: number;
 	label: string;
 }[];
+
+const DEFAULT_PROJECT_NAME_TEMPLATE =
+	"{target_name} ({target_kind}) {date} {time}";
 
 export default function GeneralSettings() {
 	const [store] = createResource(() => generalSettingsStore.get());
@@ -498,6 +504,13 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					/>
 				</SettingGroup>
 
+				<DefaultProjectNameCard
+					onChange={(value) =>
+						handleChange("defaultProjectNameTemplate", value)
+					}
+					value={settings.defaultProjectNameTemplate ?? null}
+				/>
+
 				<ExcludedWindowsCard
 					excludedWindows={excludedWindows()}
 					availableWindows={availableWindows()}
@@ -578,6 +591,210 @@ function ServerURLSetting(props: {
 						</Button>
 					</div>
 				</SettingItem>
+			</div>
+		</div>
+	);
+}
+
+function DefaultProjectNameCard(props: {
+	value: string | null;
+	onChange: (name: string | null) => Promise<void>;
+}) {
+	const MOMENT_EXAMPLE_TEMPLATE = "{moment:DDDD, MMMM D, YYYY h:mm A}";
+	const macos = type() === "macos";
+	const today = new Date();
+	const datetime = new Date(
+		today.getFullYear(),
+		today.getMonth(),
+		today.getDate(),
+		macos ? 9 : 12,
+		macos ? 41 : 0,
+		0,
+		0,
+	).toISOString();
+
+	let inputRef: HTMLInputElement | undefined;
+
+	const dateString = today.toISOString().split("T")[0];
+	const initialTemplate = () => props.value ?? DEFAULT_PROJECT_NAME_TEMPLATE;
+
+	const [inputValue, setInputValue] = createSignal<string>(initialTemplate());
+	const [preview, setPreview] = createSignal<string | null>(null);
+	const [momentExample, setMomentExample] = createSignal("");
+
+	async function updatePreview(val = inputValue()) {
+		const formatted = await commands.formatProjectName(
+			val,
+			macos ? "Safari" : "Chrome",
+			"Window",
+			"instant",
+			datetime,
+		);
+		setPreview(formatted);
+	}
+
+	onMount(() => {
+		commands
+			.formatProjectName(
+				MOMENT_EXAMPLE_TEMPLATE,
+				macos ? "Safari" : "Chrome",
+				"Window",
+				"instant",
+				datetime,
+			)
+			.then(setMomentExample);
+
+		const seed = initialTemplate();
+		setInputValue(seed);
+		if (inputRef) inputRef.value = seed;
+		updatePreview(seed);
+	});
+
+	const isSaveDisabled = () => {
+		const input = inputValue();
+		return (
+			!input ||
+			input === (props.value ?? DEFAULT_PROJECT_NAME_TEMPLATE) ||
+			input.length <= 3
+		);
+	};
+
+	function CodeView(props: { children: string }) {
+		return (
+			<button
+				type="button"
+				title="Click to copy"
+				class="bg-gray-1 hover:bg-gray-5 rounded-md m-0.5 p-0.5 cursor-pointer transition-[color,background-color,transform] ease-out duration-200 active:scale-95"
+				onClick={() => commands.writeClipboardString(props.children)}
+			>
+				<code>{props.children}</code>
+			</button>
+		);
+	}
+
+	return (
+		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+				<div class="flex flex-col gap-2 w-full">
+					<p class="text-sm text-gray-12">Default Project Name</p>
+					<p class="text-xs text-gray-10 pb-1">
+						Choose the template to use as the default project name.
+						<br />
+						This will also be used as the default file name for new projects.
+					</p>
+
+					<Input
+						autocorrect="off"
+						ref={inputRef}
+						type="text"
+						class="bg-gray-3 font-mono"
+						value={inputValue()}
+						onInput={(e) => {
+							setInputValue(e.currentTarget.value);
+							updatePreview(e.currentTarget.value);
+						}}
+					/>
+
+					<div class="w-full flex items-center py-2 px-2 rounded-lg bg-gray-transparent-50 border border-dashed border-gray-5">
+						<IconCapLogo class="size-4 pointer-events-none mr-2" />
+						<p class="whitespace-pre-wrap">{preview()}</p>
+					</div>
+
+					<Collapsible class="w-full rounded-lg">
+						<Collapsible.Trigger class="group inline-flex items-center w-full text-xs rounded-lg outline-none px-0.5 py-1">
+							<IconCapChevronDown class="size-4 ui-group-expanded:rotate-180 transition-transform duration-300 ease-in-out" />
+							<p class="py-0.5 px-1">How to customize?</p>
+						</Collapsible.Trigger>
+
+						<Collapsible.Content class="opacity-0 transition animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100 text-xs text-gray-12 space-y-3 px-1 pb-2">
+							<p class="border-t pt-3">
+								Use placeholders in your template that will be automatically
+								filled in.
+							</p>
+
+							<div class="space-y-1">
+								<p class="font-medium text-foreground">Recording Mode</p>
+								<p>
+									<CodeView>{"{recording_mode}"}</CodeView> → "Studio" or
+									"Instant"
+								</p>
+								<p>
+									<CodeView>{"{mode}"}</CodeView> → "studio" or "instant"
+								</p>
+							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-foreground">Target</p>
+								<p>
+									<CodeView>{"{target_kind}"}</CodeView> → "Display", "Window",
+									or "Area"
+								</p>
+								<p>
+									<CodeView>{"{target_name}"}</CodeView> → The name of the
+									monitor or the title of the app depending on the recording
+									mode.
+								</p>
+							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-foreground">Date &amp; Time</p>
+								<p>
+									<CodeView>{"{date}"}</CodeView> → {dateString}
+								</p>
+								<p>
+									<CodeView>{"{time}"}</CodeView> →{" "}
+									{macos ? "09:41 AM" : "12:00 PM"}
+								</p>
+							</div>
+
+							<div class="space-y-1">
+								<p class="font-medium text-foreground">Custom Formats</p>
+								<p>
+									You can also use a custom format for time. The placeholders
+									are case-sensitive. For 24-hour time, use{" "}
+									<CodeView>{"{moment:HH:mm}"}</CodeView> or use lower cased{" "}
+									<code>hh</code> for 12-hour format.
+								</p>
+								<p class="flex flex-col items-start pt-1">
+									<CodeView>{MOMENT_EXAMPLE_TEMPLATE}</CodeView> →{" "}
+									{momentExample()}
+								</p>
+							</div>
+						</Collapsible.Content>
+					</Collapsible>
+
+					<div class="flex justify-end gap-2 pt-1">
+						<Button
+							size="sm"
+							variant="gray"
+							disabled={
+								inputValue() === DEFAULT_PROJECT_NAME_TEMPLATE &&
+								inputValue() !== props.value
+							}
+							onClick={async () => {
+								await props.onChange(null);
+								const newTemplate = initialTemplate();
+								setInputValue(newTemplate);
+								if (inputRef) inputRef.value = newTemplate;
+								await updatePreview(newTemplate);
+							}}
+						>
+							Reset
+						</Button>
+
+						<Button
+							size="sm"
+							variant="dark"
+							disabled={isSaveDisabled()}
+							onClick={() => {
+								props.onChange(inputValue() ?? null);
+								updatePreview();
+							}}
+						>
+							Save
+						</Button>
+					</div>
+				</div>
 			</div>
 		</div>
 	);
