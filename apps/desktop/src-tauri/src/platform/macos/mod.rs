@@ -10,7 +10,6 @@
 // };
 // use objc::{class, msg_send, sel, sel_impl};
 
-pub mod delegates;
 mod sc_shareable_content;
 
 pub use sc_shareable_content::*;

@@ -30,7 +30,8 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
+const DEFAULT_TRAFFIC_LIGHTS_INSET_WITH_TOOLBAR: LogicalPosition<f64> =
+    LogicalPosition::new(20.0, 30.0);
 
 #[derive(Clone, Deserialize, Type)]
 pub enum CapWindowId {
@@ -148,20 +149,6 @@ impl CapWindowId {
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
-        match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
-            Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
-            Self::Camera
-            | Self::WindowCaptureOccluder { .. }
-            | Self::CaptureArea
-            | Self::RecordingsOverlay
-            | Self::TargetSelectOverlay { .. } => None,
-            _ => Some(None),
-        }
     }
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
@@ -719,12 +706,6 @@ impl ShowCapWindow {
 
         // removing this for now as it causes windows to just stay hidden sometimes -_-
         // window.hide().ok();
-
-        #[cfg(target_os = "macos")]
-        if let Some(position) = _id.traffic_lights_position() {
-            add_traffic_lights(&window, position);
-        }
-
         Ok(window)
     }
 
@@ -745,17 +726,6 @@ impl ShowCapWindow {
             builder = builder
                 .inner_size(min.0, min.1)
                 .min_inner_size(min.0, min.1);
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if id.traffic_lights_position().is_some() {
-                builder = builder
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay);
-            } else {
-                builder = builder.decorations(false)
-            }
         }
 
         #[cfg(windows)]
@@ -795,29 +765,6 @@ impl ShowCapWindow {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
-    use crate::platform::delegates;
-
-    let target_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            delegates::setup(
-                target_window.as_ref().window(),
-                controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-
-            let c_win = target_window.clone();
-            target_window.on_window_event(move |event| match event {
-                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
-                }
-                _ => {}
-            });
-        })
-        .ok();
-}
-
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(window))]
@@ -826,50 +773,7 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
         AppTheme::System => None,
         AppTheme::Light => Some(tauri::Theme::Light),
         AppTheme::Dark => Some(tauri::Theme::Dark),
-    });
-
-    #[cfg(target_os = "macos")]
-    match CapWindowId::from_str(window.label()) {
-        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
-        Ok(_) | Err(_) => {}
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(_window))]
-pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
-    #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(
-        &_window,
-        _controls_inset.map(LogicalPosition::from).or_else(|| {
-            // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(_window.label())
-                .ok()
-                .and_then(|id| id.traffic_lights_position().flatten())
-        }),
-    );
-}
-
-#[cfg(target_os = "macos")]
-fn position_traffic_lights_impl(
-    window: &tauri::Window,
-    controls_inset: Option<LogicalPosition<f64>>,
-) {
-    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
-    let c_win = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let ns_window = match c_win.ns_window() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            position_window_controls(
-                UnsafeWindowHandle(ns_window),
-                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-        })
-        .ok();
+    })
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
