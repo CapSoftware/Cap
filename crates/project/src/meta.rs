@@ -79,6 +79,8 @@ pub struct RecordingMeta {
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_id: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]

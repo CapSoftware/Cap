@@ -66,6 +66,7 @@ pub async fn upload_video(
     screenshot_path: PathBuf,
     meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
+    version_id: Option<String>,
 ) -> Result<UploadedItem, AuthedApiError> {
     info!("Uploading video {video_id}...");
 
@@ -146,8 +147,15 @@ pub async fn upload_video(
 
     let _ = (video_result?, thumbnail_result?);
 
+    // Use version_id for link if available, otherwise fall back to recording id
+    let (link_path, link_id) = if let Some(ref v_id) = version_id {
+        (format!("/v/{}", v_id), v_id.clone())
+    } else {
+        (format!("/s/{}", video_id), video_id.clone())
+    };
+
     Ok(UploadedItem {
-        link: app.make_app_url(format!("/s/{video_id}")).await,
+        link: app.make_app_url(link_path).await,
         id: video_id,
     })
 }

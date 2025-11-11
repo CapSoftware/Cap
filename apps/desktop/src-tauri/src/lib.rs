@@ -1197,6 +1197,7 @@ async fn upload_exported_video(
         screenshot_path,
         metadata,
         Some(channel.clone()),
+        s3_config.version_id.clone(),
     )
     .await
     {
@@ -2567,6 +2568,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                         file_path,
                                         screenshot_path,
                                         meta,
+                                        None,
                                         None,
                                     )
                                     .await
