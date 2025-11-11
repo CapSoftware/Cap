@@ -1,0 +1,99 @@
+name: Tinybird CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'tinybird/**'
+    types: [opened, reopened, labeled, unlabeled, synchronize]
+
+concurrency: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+
+permissions:
+  contents: read
+
+env:
+  TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
+  TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+  TINYBIRD_INSTALLER_URL: ${{ vars.TINYBIRD_INSTALLER_URL }}
+  TINYBIRD_INSTALLER_SHA256: ${{ secrets.TINYBIRD_INSTALLER_SHA256 }}
+
+jobs:
+  ci:
+    name: Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 'tinybird'
+    services:
+      tinybird:
+        image: tinybirdco/tinybird-local:latest
+        ports:
+          - 7181:7181
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Tinybird CLI
+        env:
+          INSTALLER_URL: ${{ env.TINYBIRD_INSTALLER_URL }}
+          INSTALLER_SHA256: ${{ env.TINYBIRD_INSTALLER_SHA256 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INSTALLER_URL:-}" ]]; then
+            echo "TINYBIRD_INSTALLER_URL repo variable is not set. Point it to the" >&2
+            echo "pinned Tinybird CLI release asset (e.g., https://github.com/tinybirdco/... )." >&2
+            exit 1
+          fi
+
+          if [[ -z "${INSTALLER_SHA256:-}" ]]; then
+            echo "TINYBIRD_INSTALLER_SHA256 secret is not defined." >&2
+            echo "Store the SHA-256 computed from the trusted release asset so tampering" >&2
+            echo "causes the workflow to fail before execution." >&2
+            exit 1
+          fi
+
+          installer_path="/tmp/tinybird-cli-installer"
+          curl -fSL "$INSTALLER_URL" -o "$installer_path"
+
+          echo "${INSTALLER_SHA256}  ${installer_path}" | sha256sum -c -
+
+          chmod +x "$installer_path"
+          "$installer_path"
+
+      - name: Build project
+        run: tb build
+
+      - name: Wait for Tinybird Local
+        run: |
+          set -euo pipefail
+
+          endpoints=("http://localhost:7181/_health" "http://localhost:7181/health")
+          max_attempts=20
+          base_delay=3
+
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            for endpoint in "${endpoints[@]}"; do
+              status=$(curl -fsS -o /dev/null -w "%{http_code}" "$endpoint" || true)
+              if [[ "$status" == "200" ]]; then
+                echo "Tinybird local is healthy via $endpoint"
+                exit 0
+              fi
+            done
+
+            sleep_seconds=$((base_delay * attempt))
+            echo "Tinybird local not ready (attempt ${attempt}/${max_attempts}). Retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+
+          echo "Tinybird local failed to become healthy after waiting ~$((base_delay * max_attempts * (max_attempts + 1) / 2))s" >&2
+          exit 1
+
+      - name: Test project
+        run: tb test run
+
+      - name: Deployment check
+        run: tb --cloud --host ${{ env.TINYBIRD_HOST }} --token ${{ env.TINYBIRD_TOKEN }} deploy --check

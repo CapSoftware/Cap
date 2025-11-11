@@ -114,6 +114,8 @@ function createServerEnv() {
 			NODE_ENV: z.string(),
 			WORKFLOWS_RPC_URL: z.string().optional(),
 			WORKFLOWS_RPC_SECRET: z.string().optional(),
+			TINYBIRD_HOST: z.string().optional(),
+			TINYBIRD_TOKEN: z.string().optional(),
 		},
 		experimental__runtimeEnv: {
 			S3_PUBLIC_ENDPOINT: process.env.CAP_AWS_ENDPOINT,

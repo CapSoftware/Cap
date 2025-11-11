@@ -15,4 +15,5 @@ export { Users } from "./Users/index.ts";
 export { Videos } from "./Videos/index.ts";
 export { VideosPolicy } from "./Videos/VideosPolicy.ts";
 export { VideosRepo } from "./Videos/VideosRepo.ts";
+export { VideosAnalytics } from "./VideosAnalytics/index.ts";
 export * as Workflows from "./Workflows.ts";

@@ -23,6 +23,9 @@
 			"recommended": true,
 			"suspicious": {
 				"noShadowRestrictedNames": "off"
+			},
+			"correctness": {
+				"useYield": "off"
 			}
 		}
 	},

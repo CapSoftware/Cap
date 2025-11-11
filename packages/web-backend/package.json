@@ -20,6 +20,7 @@
 		"@cap/database": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",
+		"@cap/env": "workspace:*",
 		"@effect/cluster": "^0.50.4",
 		"@effect/platform": "^0.92.1",
 		"@effect/rpc": "^0.71.0",

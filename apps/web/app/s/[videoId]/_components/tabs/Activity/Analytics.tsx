@@ -1,7 +1,4 @@
-"use client";
-
-import { use, useEffect, useMemo, useState } from "react";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { use, useMemo } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import type { CommentType } from "../../../Share";
 
@@ -9,25 +6,9 @@ const Analytics = (props: {
 	videoId: string;
 	views: MaybePromise<number>;
 	comments: CommentType[];
-	isLoadingAnalytics: boolean;
 }) => {
-	const [views, setViews] = useState(
-		props.views instanceof Promise ? use(props.views) : props.views,
-	);
-
-	useEffect(() => {
-		const fetchAnalytics = async () => {
-			try {
-				const result = await getVideoAnalytics(props.videoId);
-
-				setViews(result.count);
-			} catch (error) {
-				console.error("Error fetching analytics:", error);
-			}
-		};
-
-		fetchAnalytics();
-	}, [props.videoId]);
+	const views =
+		typeof props.views === "number" ? props.views : use(props.views);
 
 	const totalComments = useMemo(
 		() => props.comments.filter((c) => c.type === "text").length,
@@ -41,7 +22,7 @@ const Analytics = (props: {
 
 	return (
 		<CapCardAnalytics
-			isLoadingAnalytics={props.isLoadingAnalytics}
+			isLoadingAnalytics={false}
 			capId={props.videoId}
 			displayCount={views}
 			totalComments={totalComments}

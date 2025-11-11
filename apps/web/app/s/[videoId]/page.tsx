@@ -11,7 +11,6 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
@@ -22,13 +21,7 @@ import {
 	Videos,
 } from "@cap/web-backend";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
-import {
-	Comment,
-	type ImageUpload,
-	type Organisation,
-	Policy,
-	type Video,
-} from "@cap/web-domain";
+import { Comment, type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
@@ -36,7 +29,6 @@ import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import {
 	getDashboardData,
 	type OrganizationSettings,
@@ -50,6 +42,7 @@ import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import type { ShareAnalyticsContext } from "./types";
 
 // Helper function to fetch shared spaces data for a video
 async function getSharedSpacesForVideo(videoId: Video.VideoId) {
@@ -134,7 +127,7 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: video.name + " | Cap Recording",
+					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",
 					openGraph: {
 						images: [
@@ -161,7 +154,7 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: video.name + " | Cap Recording",
+						title: `${video.name} | Cap Recording`,
 						description: "Watch this video on Cap",
 						images: [
 							new URL(
@@ -254,7 +247,7 @@ export async function generateMetadata(
 export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
-	const videoId = params.videoId as Video.VideoId;
+	const videoId = Video.VideoId.make(params.videoId);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -321,6 +314,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 			</div>
 		)),
 		Effect.catchTags({
+			// biome-ignore lint/correctness/noNestedComponentDefinitions: inline Effect handler returning JSX is fine here
 			PolicyDenied: () =>
 				Effect.succeed(
 					<div
@@ -337,6 +331,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 						</p>
 					</div>,
 				),
+			// biome-ignore lint/correctness/noNestedComponentDefinitions: inline Effect handler returning JSX is fine here
 			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
@@ -363,6 +358,40 @@ async function AuthorizedContent({
 	// will have already been fetched if auth is required
 	const user = await getCurrentUser();
 	const videoId = video.id;
+	const headerList = await headers();
+
+	const getSearchParam = (key: string) => {
+		const value = searchParams?.[key];
+		if (!value) return null;
+		return Array.isArray(value) ? (value[0] ?? null) : value;
+	};
+
+	const referrerUrl =
+		headerList.get("x-referrer") ?? headerList.get("referer") ?? null;
+	const userAgent = headerList.get("x-user-agent") ?? headerList.get("user-agent");
+	const userAgentDetails = deriveUserAgentDetails(userAgent);
+	const analyticsContext: ShareAnalyticsContext = {
+		city: headerList.get("x-vercel-ip-city"),
+		country: headerList.get("x-vercel-ip-country"),
+		referrerUrl,
+		referrer: (() => {
+			if (!referrerUrl) return null;
+			try {
+				return new URL(referrerUrl).hostname;
+			} catch {
+				return null;
+			}
+		})(),
+		utmSource: getSearchParam("utm_source"),
+		utmMedium: getSearchParam("utm_medium"),
+		utmCampaign: getSearchParam("utm_campaign"),
+		utmTerm: getSearchParam("utm_term"),
+		utmContent: getSearchParam("utm_content"),
+		userAgent,
+		device: userAgentDetails.device ?? null,
+		browser: userAgentDetails.browser ?? null,
+		os: userAgentDetails.os ?? null,
+	};
 
 	if (user && video && user.id !== video.owner.id) {
 		try {
@@ -494,7 +523,7 @@ async function AuthorizedContent({
 		}
 	}
 
-	const currentMetadata = (video.metadata as VideoMetadata) || {};
+	const currentMetadata = video.metadata || {};
 	const metadata = currentMetadata;
 	let initialAiData = null;
 
@@ -558,8 +587,7 @@ async function AuthorizedContent({
 
 		const org = orgArr[0];
 		if (
-			org &&
-			org.customDomain &&
+			org?.customDomain &&
 			org.domainVerified !== null &&
 			user.id === video.owner.id
 		) {
@@ -681,7 +709,12 @@ async function AuthorizedContent({
 			);
 	}).pipe(EffectRuntime.runPromise);
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = Effect.flatMap(Videos, (videos) =>
+		videos.getAnalytics(videoId),
+	).pipe(
+		Effect.map((v) => v.count),
+		EffectRuntime.runPromise,
+	);
 
 	const [
 		membersList,
@@ -750,6 +783,7 @@ async function AuthorizedContent({
 					userOrganizations={userOrganizations}
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
+					analyticsContext={analyticsContext}
 				/>
 			</div>
 			<div className="py-4 mt-auto">
@@ -765,3 +799,52 @@ async function AuthorizedContent({
 		</>
 	);
 }
+
+type UserAgentDetails = {
+	device?: string;
+	browser?: string;
+	os?: string;
+};
+
+const deriveUserAgentDetails = (ua?: string | null): UserAgentDetails => {
+	if (!ua) return {};
+	const value = ua.toLowerCase();
+	const details: UserAgentDetails = {};
+
+	if (
+		/ipad|tablet/.test(value) ||
+		(/android/.test(value) && !/mobile/.test(value))
+	) {
+		details.device = "tablet";
+	} else if (/mobi|iphone|ipod|android/.test(value)) {
+		details.device = "mobile";
+	} else if (/mac|win|linux|cros|x11/.test(value)) {
+		details.device = "desktop";
+	}
+
+	if (/chrome|crios/.test(value) && !/edge|edg\//.test(value)) {
+		details.browser = "chrome";
+	} else if (/safari/.test(value) && !/chrome|crios/.test(value)) {
+		details.browser = "safari";
+	} else if (/firefox/.test(value)) {
+		details.browser = "firefox";
+	} else if (/edg\//.test(value)) {
+		details.browser = "edge";
+	} else if (/msie|trident/.test(value)) {
+		details.browser = "ie";
+	}
+
+	if (/windows nt/.test(value)) {
+		details.os = "windows";
+	} else if (/mac os x/.test(value)) {
+		details.os = "mac";
+	} else if (/android/.test(value)) {
+		details.os = "android";
+	} else if (/iphone|ipad|ipod/.test(value)) {
+		details.os = "ios";
+	} else if (/linux/.test(value)) {
+		details.os = "linux";
+	}
+
+	return details;
+};
