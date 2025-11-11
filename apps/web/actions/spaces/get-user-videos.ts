@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import {
 	comments,
 	folders,
+	organizations,
 	sharedVideos,
 	spaces,
 	spaceVideos,
@@ -13,7 +14,7 @@ import {
 	videoUploads,
 } from "@cap/database/schema";
 import type { Space } from "@cap/web-domain";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 
 export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 	try {
@@ -37,12 +38,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 			ownerName: users.name,
 			folderName: folders.name,
 			folderColor: folders.color,
-			effectiveDate: sql<string>`
-          COALESCE(
-            JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-            ${videos.createdAt}
-          )
-        `,
+			effectiveDate: videos.effectiveCreatedAt,
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),
@@ -64,7 +60,10 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					)
 					.leftJoin(folders, eq(sharedVideos.folderId, folders.id))
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
+					.where(
+						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -77,12 +76,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.spaceId,
 						videos.folderId,
 					)
-					.orderBy(
-						desc(sql`COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )`),
-					)
+					.orderBy(desc(videos.effectiveCreatedAt))
 			: await db()
 					.select(selectFields)
 					.from(videos)
@@ -98,7 +92,10 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 					)
 					.leftJoin(folders, eq(spaceVideos.folderId, folders.id))
 					.leftJoin(spaces, eq(folders.spaceId, spaces.id))
-					.where(eq(videos.ownerId, userId))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
+					.where(
+						and(eq(videos.ownerId, userId), isNull(organizations.tombstoneAt)),
+					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -111,12 +108,7 @@ export async function getUserVideos(spaceId: Space.SpaceIdOrOrganisationId) {
 						folders.spaceId,
 						videos.folderId,
 					)
-					.orderBy(
-						desc(sql`COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
-          ${videos.createdAt}
-        )`),
-					);
+					.orderBy(desc(videos.effectiveCreatedAt));
 
 		const processedVideoData = videoData.map((video) => {
 			const { effectiveDate: _effectiveDate, ...videoWithoutEffectiveDate } =

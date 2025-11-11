@@ -11,47 +11,80 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 		return {
 			VideoDelete: (videoId) =>
 				videos.delete(videoId).pipe(
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						S3Error: () => new InternalError({ type: "s3" }),
-					}),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
 				),
 
 			VideoDuplicate: (videoId) =>
 				videos.duplicate(videoId).pipe(
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						S3Error: () => new InternalError({ type: "s3" }),
-					}),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
 				),
 
 			GetUploadProgress: (videoId) =>
 				videos.getUploadProgress(videoId).pipe(
 					provideOptionalAuth,
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						UnknownException: () => new InternalError({ type: "unknown" }),
-					}),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag(
+						"UnknownException",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
+
+			VideoInstantCreate: (input) =>
+				videos.createInstantRecording(input).pipe(
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
+				),
+
+			VideoUploadProgressUpdate: (input) =>
+				videos
+					.updateUploadProgress(input)
+					.pipe(
+						Effect.catchTag(
+							"DatabaseError",
+							() => new InternalError({ type: "database" }),
+						),
+					),
 
 			VideoGetDownloadInfo: (videoId) =>
 				videos.getDownloadInfo(videoId).pipe(
 					provideOptionalAuth,
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						UnknownException: () => new InternalError({ type: "unknown" }),
-						S3Error: () => new InternalError({ type: "s3" }),
-					}),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag(
+						"UnknownException",
+						() => new InternalError({ type: "unknown" }),
+					),
+					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
 				),
 
 			VideosGetThumbnails: (videoIds) =>
 				Effect.all(
 					videoIds.map((id) =>
 						videos.getThumbnailURL(id).pipe(
-							Effect.catchTags({
-								DatabaseError: () => new InternalError({ type: "database" }),
-								S3Error: () => new InternalError({ type: "s3" }),
-							}),
+							Effect.catchTag(
+								"DatabaseError",
+								() => new InternalError({ type: "database" }),
+							),
+							Effect.catchTag(
+								"S3Error",
+								() => new InternalError({ type: "s3" }),
+							),
 							Effect.matchEffect({
 								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
 								onFailure: (e) =>
@@ -65,10 +98,49 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					{ concurrency: 10 },
 				).pipe(
 					provideOptionalAuth,
-					Effect.catchTags({
-						DatabaseError: () => new InternalError({ type: "database" }),
-						UnknownException: () => new InternalError({ type: "unknown" }),
-					}),
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag(
+						"UnknownException",
+						() => new InternalError({ type: "unknown" }),
+					),
+				),
+
+			VideosGetAnalytics: (videoIds) =>
+				Effect.all(
+					videoIds.map((id) =>
+						videos.getAnalytics(id).pipe(
+							Effect.catchTag(
+								"DatabaseError",
+								() => new InternalError({ type: "database" }),
+							),
+							Effect.catchTag(
+								"UnknownException",
+								() => new InternalError({ type: "unknown" }),
+							),
+							Effect.matchEffect({
+								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
+								onFailure: (e) =>
+									Schema.is(InternalError)(e)
+										? Effect.fail(e)
+										: Effect.succeed(Exit.fail(e)),
+							}),
+							Effect.map((v) => Unify.unify(v)),
+						),
+					),
+					{ concurrency: 10 },
+				).pipe(
+					provideOptionalAuth,
+					Effect.catchTag(
+						"DatabaseError",
+						() => new InternalError({ type: "database" }),
+					),
+					Effect.catchTag(
+						"UnknownException",
+						() => new InternalError({ type: "unknown" }),
+					),
 				),
 		};
 	}),

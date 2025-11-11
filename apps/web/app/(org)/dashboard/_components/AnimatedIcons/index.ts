@@ -6,6 +6,7 @@ import DownloadIcon from "./Download";
 import HomeIcon from "./Home";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
+import RecordIcon from "./Record";
 import ReferIcon from "./Refer";
 import SettingsGearIcon from "./Settings";
 
@@ -20,4 +21,5 @@ export {
 	LogoutIcon,
 	SettingsGearIcon,
 	ReferIcon,
+	RecordIcon,
 };

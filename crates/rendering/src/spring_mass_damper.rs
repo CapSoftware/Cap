@@ -16,7 +16,7 @@ pub struct SpringMassDamperSimulation {
     pub target_position: XY<f32>,
 }
 
-const SIMULATION_TICK: f32 = 1000.0 / 60.0;
+const SIMULATION_TICK_MS: f32 = 1000.0 / 60.0;
 
 impl SpringMassDamperSimulation {
     pub fn new(config: SpringMassDamperSimulationConfig) -> Self {
@@ -30,6 +30,12 @@ impl SpringMassDamperSimulation {
         }
     }
 
+    pub fn set_config(&mut self, config: SpringMassDamperSimulationConfig) {
+        self.tension = config.tension;
+        self.mass = config.mass;
+        self.friction = config.friction;
+    }
+
     pub fn set_position(&mut self, position: XY<f32>) {
         self.position = position;
     }
@@ -40,14 +46,16 @@ impl SpringMassDamperSimulation {
         self.target_position = target_position;
     }
 
-    pub fn run(&mut self, dt: f32) -> XY<f32> {
-        if dt == 0.0 {
+    pub fn run(&mut self, dt_ms: f32) -> XY<f32> {
+        if dt_ms <= 0.0 {
             return self.position;
         }
 
-        let mut t = 0.0;
+        let mut remaining = dt_ms;
 
-        loop {
+        while remaining > 0.0 {
+            let step_ms = remaining.min(SIMULATION_TICK_MS);
+            let tick = step_ms / 1000.0;
             let d = self.target_position - self.position;
             let spring_force = d * self.tension;
 
@@ -57,16 +65,10 @@ impl SpringMassDamperSimulation {
 
             let accel = total_force / self.mass.max(0.001);
 
-            let tick = (SIMULATION_TICK / 1000.0).min(dt - t);
-
             self.velocity = self.velocity + accel * tick;
             self.position = self.position + self.velocity * tick;
 
-            if t >= dt {
-                break;
-            }
-
-            t = (t + SIMULATION_TICK).min(dt);
+            remaining -= step_ms;
         }
 
         self.position

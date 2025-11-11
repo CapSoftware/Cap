@@ -61,6 +61,62 @@ export type CustomDomainResponse = {
 	domain_verified: boolean | null;
 };
 
+export type CornerRoundingType = "rounded" | "squircle";
+
+type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
+
+export type EditorProjectConfiguration = Omit<
+	ProjectConfiguration,
+	"background" | "camera"
+> & {
+	background: WithCornerStyle<ProjectConfiguration["background"]>;
+	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
+};
+
+function withCornerDefaults<
+	T extends {
+		roundingType?: CornerRoundingType;
+		rounding_type?: CornerRoundingType;
+	},
+>(value: T): T & { roundingType: CornerRoundingType } {
+	const roundingType = value.roundingType ?? value.rounding_type ?? "squircle";
+	return {
+		...value,
+		roundingType,
+	};
+}
+
+export function normalizeProject(
+	config: ProjectConfiguration,
+): EditorProjectConfiguration {
+	return {
+		...config,
+		background: withCornerDefaults(config.background),
+		camera: withCornerDefaults(config.camera),
+	};
+}
+
+export function serializeProjectConfiguration(
+	project: EditorProjectConfiguration,
+): ProjectConfiguration {
+	const { background, camera, ...rest } = project;
+	const { roundingType: backgroundRoundingType, ...backgroundRest } =
+		background;
+	const { roundingType: cameraRoundingType, ...cameraRest } = camera;
+
+	return {
+		...rest,
+		background: {
+			...backgroundRest,
+			roundingType: backgroundRoundingType,
+		},
+		camera: {
+			...cameraRest,
+			rounding_type: cameraRoundingType,
+		},
+	};
+}
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
 	(props: {
 		meta: () => TransformedMeta;
@@ -68,8 +124,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 		refetchMeta(): Promise<void>;
 	}) => {
 		const editorInstanceContext = useEditorInstanceContext();
-		const [project, setProject] = createStore<ProjectConfiguration>(
-			props.editorInstance.savedProjectConfig,
+		const [project, setProject] = createStore<EditorProjectConfiguration>(
+			normalizeProject(props.editorInstance.savedProjectConfig),
 		);
 
 		const projectActions = {
@@ -200,6 +256,43 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			setClipSegmentTimescale: (index: number, timescale: number) => {
+				setProject(
+					produce((project) => {
+						const timeline = project.timeline;
+						if (!timeline) return;
+
+						const segment = timeline.segments[index];
+						if (!segment) return;
+
+						const currentLength =
+							(segment.end - segment.start) / segment.timescale;
+						const nextLength = (segment.end - segment.start) / timescale;
+
+						const lengthDiff = nextLength - currentLength;
+
+						const absoluteStart = timeline.segments.reduce((acc, curr, i) => {
+							if (i >= index) return acc;
+							return acc + (curr.end - curr.start) / curr.timescale;
+						}, 0);
+
+						const diff = (v: number) => {
+							const diff = (lengthDiff * (v - absoluteStart)) / currentLength;
+
+							if (v > absoluteStart + currentLength) return lengthDiff;
+							else if (v > absoluteStart) return diff;
+							else return 0;
+						};
+
+						for (const zoomSegment of timeline.zoomSegments) {
+							zoomSegment.start += diff(zoomSegment.start);
+							zoomSegment.end += diff(zoomSegment.end);
+						}
+
+						segment.timescale = timescale;
+					}),
+				);
+			},
 		};
 
 		createEffect(
@@ -208,7 +301,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					trackStore(project);
 				},
 				debounce(() => {
-					commands.setProjectConfig(project);
+					commands.setProjectConfig(serializeProjectConfiguration(project));
 				}),
 				{ defer: true },
 			),

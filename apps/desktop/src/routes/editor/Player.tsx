@@ -7,7 +7,12 @@ import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
-import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
+import {
+	FPS,
+	OUTPUT_SIZE,
+	serializeProjectConfiguration,
+	useEditorContext,
+} from "./context";
 import { EditorButton, Slider } from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
@@ -68,7 +73,9 @@ export function Player() {
 					setProject(updatedProject);
 
 					// Save the updated project configuration
-					await commands.setProjectConfig(updatedProject);
+					await commands.setProjectConfig(
+						serializeProjectConfiguration(updatedProject),
+					);
 				}
 			}
 		}
@@ -97,7 +104,7 @@ export function Player() {
 		return total > 0 && total - editorState.playbackTime <= 0.1;
 	};
 
-	const cropDialogHandler = () => {
+	const cropDialogHandler = async () => {
 		const display = editorInstance.recordings.segments[0].display;
 		setDialog({
 			open: true,
@@ -112,6 +119,8 @@ export function Player() {
 				}),
 			},
 		});
+		await commands.stopPlayback();
+		setEditorState("playing", false);
 	};
 
 	createEffect(() => {
@@ -204,7 +213,7 @@ export function Player() {
 				<AspectRatioSelect />
 				<EditorButton
 					tooltipText="Crop Video"
-					onClick={() => cropDialogHandler()}
+					onClick={cropDialogHandler}
 					leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 				>
 					Crop

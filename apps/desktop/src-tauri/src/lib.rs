@@ -50,27 +50,20 @@ use cap_recording::{
 use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
+use cpal::StreamError;
 use editor_window::{EditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
-use png::{ColorType, Encoder};
 use recording::InProgressRecording;
-use relative_path::RelativePathBuf;
-use scap::{
-    capturer::Capturer,
-    frame::{Frame, VideoFrame},
-};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::{
     collections::BTreeMap,
-    fs::File,
     future::Future,
-    io::BufWriter,
     marker::PhantomData,
     path::{Path, PathBuf},
     process::Command,
@@ -117,6 +110,8 @@ pub struct App {
     recording_state: RecordingState,
     recording_logging_handle: LoggingHandle,
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
+    mic_meter_sender: flume::Sender<microphone::MicrophoneSamples>,
+    selected_mic_label: Option<String>,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
     logs_dir: PathBuf,
@@ -176,6 +171,32 @@ impl App {
         }
     }
 
+    async fn restart_mic_feed(&mut self) -> Result<(), String> {
+        info!("Restarting microphone feed after actor shutdown");
+
+        let (error_tx, error_rx) = flume::bounded(1);
+        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+        spawn_mic_error_logger(error_rx);
+
+        mic_feed
+            .ask(microphone::AddSender(self.mic_meter_sender.clone()))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if let Some(label) = self.selected_mic_label.clone() {
+            let ready = mic_feed
+                .ask(microphone::SetInput { label })
+                .await
+                .map_err(|e| e.to_string())?;
+            ready.await.map_err(|e| e.to_string())?;
+        }
+
+        self.mic_feed = mic_feed;
+
+        Ok(())
+    }
+
     async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
         let logfile =
             std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
@@ -216,8 +237,9 @@ impl App {
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let mic_feed = state.read().await.mic_feed.clone();
+    let desired_label = label.clone();
 
-    match label {
+    match desired_label.as_ref() {
         None => {
             mic_feed
                 .ask(microphone::RemoveInput)
@@ -226,12 +248,19 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         }
         Some(label) => {
             mic_feed
-                .ask(feeds::microphone::SetInput { label })
+                .ask(feeds::microphone::SetInput {
+                    label: label.clone(),
+                })
                 .await
                 .map_err(|e| e.to_string())?
                 .await
                 .map_err(|e| e.to_string())?;
         }
+    }
+
+    {
+        let mut app = state.write().await;
+        app.selected_mic_label = desired_label;
     }
 
     Ok(())
@@ -279,6 +308,16 @@ async fn set_camera_input(
     Ok(())
 }
 
+fn spawn_mic_error_logger(error_rx: flume::Receiver<StreamError>) {
+    tokio::spawn(async move {
+        let Ok(err) = error_rx.recv_async().await else {
+            return;
+        };
+
+        error!("Mic feed actor error: {err}");
+    });
+}
+
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
 pub struct RecordingOptionsChanged;
 
@@ -292,6 +331,9 @@ pub struct RecordingDeleted {
     #[allow(unused)]
     path: PathBuf,
 }
+
+#[derive(specta::Type, tauri_specta::Event, Serialize)]
+pub struct SetCaptureAreaPending(bool);
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
@@ -308,9 +350,6 @@ pub struct RecordingStopped;
 pub struct RequestStartRecording {
     pub mode: RecordingMode,
 }
-
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestNewScreenshot;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenRecordingPicker {
@@ -1252,135 +1291,6 @@ async fn upload_screenshot(
 
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(app, _state))]
-async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
-    let id = uuid::Uuid::new_v4().to_string();
-
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("screenshots")
-        .join(format!("{id}.cap"));
-
-    std::fs::create_dir_all(&recording_dir).map_err(|e| e.to_string())?;
-
-    let (width, height, bgra_data) = {
-        let options = scap::capturer::Options {
-            fps: 1,
-            output_type: scap::frame::FrameType::BGRAFrame,
-            show_highlight: false,
-            ..Default::default()
-        };
-
-        if let Some(window) = CapWindowId::Main.get(&app) {
-            let _ = window.hide();
-        }
-
-        let mut capturer =
-            Capturer::build(options).map_err(|e| format!("Failed to construct error: {e}"))?;
-        capturer.start_capture();
-        let frame = capturer
-            .get_next_frame()
-            .map_err(|e| format!("Failed to get frame: {e}"))?;
-        capturer.stop_capture();
-
-        if let Some(window) = CapWindowId::Main.get(&app) {
-            let _ = window.show();
-        }
-
-        match frame {
-            Frame::Video(VideoFrame::BGRA(bgra_frame)) => Ok((
-                bgra_frame.width as u32,
-                bgra_frame.height as u32,
-                bgra_frame.data,
-            )),
-            _ => Err("Unexpected frame type".to_string()),
-        }
-    }?;
-
-    let now = chrono::Local::now();
-    let screenshot_name = format!(
-        "Cap {} at {}.png",
-        now.format("%Y-%m-%d"),
-        now.format("%H.%M.%S")
-    );
-    let screenshot_path = recording_dir.join(&screenshot_name);
-
-    let app_handle = app.clone();
-    let recording_dir = recording_dir.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut rgba_data = vec![0; bgra_data.len()];
-        for (bgra, rgba) in bgra_data.chunks_exact(4).zip(rgba_data.chunks_exact_mut(4)) {
-            rgba[0] = bgra[2];
-            rgba[1] = bgra[1];
-            rgba[2] = bgra[0];
-            rgba[3] = bgra[3];
-        }
-
-        let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
-        let w = &mut BufWriter::new(file);
-
-        let mut encoder = Encoder::new(w, width, height);
-        encoder.set_color(ColorType::Rgba);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-
-        writer
-            .write_image_data(&rgba_data)
-            .map_err(|e| e.to_string())?;
-
-        AppSounds::Screenshot.play();
-
-        let now = chrono::Local::now();
-        let screenshot_name = format!(
-            "Cap {} at {}.png",
-            now.format("%Y-%m-%d"),
-            now.format("%H.%M.%S")
-        );
-
-        use cap_project::*;
-        RecordingMeta {
-            platform: Some(Platform::default()),
-            project_path: recording_dir.clone(),
-            sharing: None,
-            pretty_name: screenshot_name,
-            inner: RecordingMetaInner::Studio(cap_project::StudioRecordingMeta::SingleSegment {
-                segment: cap_project::SingleSegment {
-                    display: VideoMeta {
-                        path: RelativePathBuf::from_path(
-                            screenshot_path.strip_prefix(&recording_dir).unwrap(),
-                        )
-                        .unwrap(),
-                        fps: 0,
-                        start_time: None,
-                    },
-                    camera: None,
-                    audio: None,
-                    cursor: None,
-                },
-            }),
-            upload: None,
-        }
-        .save_for_project()
-        .unwrap();
-
-        NewScreenshotAdded {
-            path: screenshot_path,
-        }
-        .emit(&app_handle)
-        .ok();
-
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))??;
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
 #[instrument(skip(app))]
 async fn save_file_dialog(
     app: AppHandle,
@@ -1750,7 +1660,7 @@ async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Re
 async fn get_mic_waveforms(editor_instance: WindowEditorInstance) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
-    for segment in editor_instance.segments.iter() {
+    for segment in editor_instance.segment_medias.iter() {
         if let Some(audio) = &segment.audio {
             out.push(audio::get_waveform(audio));
         } else {
@@ -1769,7 +1679,7 @@ async fn get_system_audio_waveforms(
 ) -> Result<Vec<Vec<f32>>, String> {
     let mut out = Vec::new();
 
-    for segment in editor_instance.segments.iter() {
+    for segment in editor_instance.segment_medias.iter() {
         if let Some(audio) = &segment.system_audio {
             out.push(audio::get_waveform(audio));
         } else {
@@ -1970,7 +1880,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::list_windows_with_thumbnails,
             windows::refresh_window_content_protection,
             general_settings::get_default_excluded_windows,
-            take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
             fake_window::set_fake_window_bounds,
@@ -2014,6 +1923,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             show_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
+            platform::is_system_audio_capture_supported,
             list_fails,
             set_fail,
             update_auth_plan,
@@ -2050,7 +1960,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             RecordingStopped,
             RequestStartRecording,
             RequestOpenRecordingPicker,
-            RequestNewScreenshot,
             RequestOpenSettings,
             RequestScreenCapturePrewarm,
             NewNotification,
@@ -2061,6 +1970,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
             upload::UploadProgressEvent,
+            SetCaptureAreaPending,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2083,6 +1993,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
+    let mic_meter_sender = mic_samples_tx.clone();
 
     let camera_feed = CameraFeed::spawn(CameraFeed::default());
     let _ = camera_feed.ask(feeds::camera::AddSender(camera_tx)).await;
@@ -2092,18 +2003,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
 
-        // TODO: make this part of a global actor one day
-        tokio::spawn(async move {
-            let Ok(err) = error_rx.recv_async().await else {
-                return;
-            };
+        spawn_mic_error_logger(error_rx);
 
-            error!("Mic feed actor error: {err}");
-        });
-
-        let _ = mic_feed
+        if let Err(err) = mic_feed
             .ask(feeds::microphone::AddSender(mic_samples_tx))
-            .await;
+            .await
+        {
+            error!("Failed to attach audio meter sender: {err}");
+        }
 
         mic_feed
     };
@@ -2273,6 +2180,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     recording_state: RecordingState::None,
                     recording_logging_handle,
                     mic_feed,
+                    mic_meter_sender,
+                    selected_mic_label: None,
                     camera_feed,
                     server_url,
                     logs_dir: logs_dir.clone(),

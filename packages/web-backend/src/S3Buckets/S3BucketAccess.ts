@@ -107,7 +107,7 @@ export const createS3BucketAccess = Effect.gen(function* () {
 				provider.getInternal.pipe(
 					Effect.flatMap((client) =>
 						Effect.gen(function* () {
-							let _body;
+							let _body: S3.PutObjectCommandInput["Body"];
 
 							if (typeof body === "string" || body instanceof Uint8Array) {
 								_body = body;
@@ -275,6 +275,28 @@ export const createS3BucketAccess = Effect.gen(function* () {
 						Effect.map((client) =>
 							client.send(
 								new S3.CompleteMultipartUploadCommand({
+									Bucket: provider.bucket,
+									Key: key,
+									UploadId: uploadId,
+									...args,
+								}),
+							),
+						),
+					),
+				),
+			abort: (
+				key: string,
+				uploadId: string,
+				args?: Omit<
+					S3.AbortMultipartUploadCommandInput,
+					"Key" | "Bucket" | "UploadId"
+				>,
+			) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.AbortMultipartUploadCommand({
 									Bucket: provider.bucket,
 									Key: key,
 									UploadId: uploadId,

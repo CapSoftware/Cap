@@ -11,6 +11,7 @@
 		"build": "tsdown"
 	},
 	"dependencies": {
+		"@cap/env": "workspace:*",
 		"@aws-sdk/client-s3": "^3.485.0",
 		"@aws-sdk/cloudfront-signer": "^3.821.0",
 		"@aws-sdk/credential-providers": "^3.908.0",

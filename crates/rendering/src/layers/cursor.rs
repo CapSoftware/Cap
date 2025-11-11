@@ -16,6 +16,12 @@ const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 const CURSOR_IDLE_MIN_DELAY_MS: f64 = 500.0;
 const CURSOR_IDLE_FADE_OUT_MS: f64 = 400.0;
+const CURSOR_VECTOR_CAP: f32 = 320.0;
+const CURSOR_MIN_MOTION_NORMALIZED: f32 = 0.01;
+const CURSOR_MIN_MOTION_PX: f32 = 1.0;
+const CURSOR_BASELINE_FPS: f32 = 60.0;
+const CURSOR_MULTIPLIER: f32 = 3.0;
+const CURSOR_MAX_STRENGTH: f32 = 5.0;
 
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
@@ -205,14 +211,46 @@ impl CursorLayer {
             return;
         };
 
-        let velocity: [f32; 2] = [0.0, 0.0];
-        // let velocity: [f32; 2] = [
-        //     interpolated_cursor.velocity.x * 75.0,
-        //     interpolated_cursor.velocity.y * 75.0,
-        // ];
+        let fps = uniforms.frame_rate.max(1) as f32;
+        let screen_size = constants.options.screen_size;
+        let screen_diag =
+            (((screen_size.x as f32).powi(2) + (screen_size.y as f32).powi(2)).sqrt()).max(1.0);
+        let fps_scale = fps / CURSOR_BASELINE_FPS;
+        let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
+            .clamp(0.0, CURSOR_MAX_STRENGTH);
+        let parent_motion = uniforms.display_parent_motion_px;
+        let child_motion = uniforms
+            .prev_cursor
+            .as_ref()
+            .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
+            .map(|prev| {
+                let delta_uv = XY::new(
+                    (interpolated_cursor.position.coord.x - prev.position.coord.x) as f32,
+                    (interpolated_cursor.position.coord.y - prev.position.coord.y) as f32,
+                );
+                XY::new(
+                    delta_uv.x * screen_size.x as f32,
+                    delta_uv.y * screen_size.y as f32,
+                )
+            })
+            .unwrap_or_else(|| XY::new(0.0, 0.0));
 
-        let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
+        let combined_motion_px = if cursor_strength <= f32::EPSILON {
+            XY::new(0.0, 0.0)
+        } else {
+            combine_cursor_motion(parent_motion, child_motion)
+        };
+
+        let normalized_motion = ((combined_motion_px.x / screen_diag).powi(2)
+            + (combined_motion_px.y / screen_diag).powi(2))
+        .sqrt();
+        let has_motion =
+            normalized_motion > CURSOR_MIN_MOTION_NORMALIZED && cursor_strength > f32::EPSILON;
+        let scaled_motion = if has_motion {
+            clamp_cursor_vector(combined_motion_px * cursor_strength)
+        } else {
+            XY::new(0.0, 0.0)
+        };
 
         let mut cursor_opacity = 1.0f32;
         if uniforms.project.cursor.hide_when_idle && !cursor.moves.is_empty() {
@@ -356,6 +394,8 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
+        let effective_strength = if has_motion { cursor_strength } else { 0.0 };
+
         let cursor_uniforms = CursorUniforms {
             position_size: [
                 zoomed_position.x as f32,
@@ -370,7 +410,12 @@ impl CursorLayer {
                 0.0,
             ],
             screen_bounds: uniforms.display.target_bounds,
-            velocity_blur_opacity: [velocity[0], velocity[1], motion_blur_amount, cursor_opacity],
+            motion_vector_strength: [
+                scaled_motion.x,
+                scaled_motion.y,
+                effective_strength,
+                cursor_opacity,
+            ],
         };
 
         constants.queue.write_buffer(
@@ -394,13 +439,40 @@ impl CursorLayer {
     }
 }
 
+fn combine_cursor_motion(parent: XY<f32>, child: XY<f32>) -> XY<f32> {
+    fn combine_axis(parent: f32, child: f32) -> f32 {
+        if parent.abs() > CURSOR_MIN_MOTION_PX
+            && child.abs() > CURSOR_MIN_MOTION_PX
+            && parent.signum() != child.signum()
+        {
+            0.0
+        } else {
+            parent + child
+        }
+    }
+
+    XY::new(
+        combine_axis(parent.x, child.x),
+        combine_axis(parent.y, child.y),
+    )
+}
+
+fn clamp_cursor_vector(vec: XY<f32>) -> XY<f32> {
+    let len = (vec.x * vec.x + vec.y * vec.y).sqrt();
+    if len <= CURSOR_VECTOR_CAP || len <= f32::EPSILON {
+        vec
+    } else {
+        vec * (CURSOR_VECTOR_CAP / len)
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 pub struct CursorUniforms {
     position_size: [f32; 4],
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
-    velocity_blur_opacity: [f32; 4],
+    motion_vector_strength: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(

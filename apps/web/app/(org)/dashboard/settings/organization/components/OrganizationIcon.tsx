@@ -8,7 +8,6 @@ import { useId } from "react";
 import { toast } from "sonner";
 import { FileInput } from "@/components/FileInput";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 
 export const OrganizationIcon = () => {
