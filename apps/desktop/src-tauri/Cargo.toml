@@ -20,30 +20,30 @@ swift-rs = { version = "1.0.6", features = ["build"] }
 
 [dependencies]
 tauri = { workspace = true, features = [
-	"macos-private-api",
-	"protocol-asset",
-	"tray-icon",
-	"image-png",
-	"devtools",
+    "macos-private-api",
+    "protocol-asset",
+    "tray-icon",
+    "image-png",
+    "devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
-tauri-plugin-dialog = "2.2.0"
-tauri-plugin-fs = "2.2.0"
-tauri-plugin-global-shortcut = "2.2.0"
-tauri-plugin-http = "2.2.0"
-tauri-plugin-notification = "2.2.0"
-tauri-plugin-os = "2.2.0"
-tauri-plugin-process = "2.2.0"
-tauri-plugin-shell = "2.2.0"
-tauri-plugin-single-instance = { version = "2.2.0", features = ["deep-link"] }
-tauri-plugin-store = "2.2.0"
+tauri-plugin-dialog = "2.4.0"
+tauri-plugin-fs = "2.4.2"
+tauri-plugin-global-shortcut = "2.3.0"
+tauri-plugin-http = "2.5.2"
+tauri-plugin-notification = "2.3.1"
+tauri-plugin-os = "2.3.1"
+tauri-plugin-process = "2.3.0"
+tauri-plugin-shell = "2.3.1"
+tauri-plugin-single-instance = { version = "2.3.4", features = ["deep-link"] }
+tauri-plugin-store = "2.4.0"
 tauri-plugin-updater = "2.9.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
-tauri-plugin-window-state = "2.2.0"
-tauri-plugin-positioner = "2.2.0"
-tauri-plugin-deep-link = "2.2.0"
-tauri-plugin-clipboard-manager = "2.2.1"
-tauri-plugin-opener = "2.2.6"
+tauri-plugin-window-state = "2.4.0"
+tauri-plugin-positioner = "2.3.0"
+tauri-plugin-deep-link = "2.4.3"
+tauri-plugin-clipboard-manager = "2.3.0"
+tauri-plugin-opener = "2.5.0"
 
 serde = { workspace = true }
 serde_json = "1.0.111"
@@ -109,7 +109,7 @@ async-stream = "0.3.6"
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
-opentelemetry-otlp = "0.31.0" #{ version = , features = ["http-proto", "reqwest-client"] }
+opentelemetry-otlp = "0.31.0"                                                 #{ version = , features = ["http-proto", "reqwest-client"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
@@ -119,9 +119,9 @@ workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 objc2-app-kit = { version = "0.3.0", features = [
-	"NSWindow",
-	"NSResponder",
-	"NSHapticFeedback",
+    "NSWindow",
+    "NSResponder",
+    "NSHapticFeedback",
 ] }
 cocoa = "0.26.0"
 objc = "0.2.7"
@@ -131,10 +131,10 @@ cidre = { workspace = true }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
-	"Win32_Foundation",
-	"Win32_System",
-	"Win32_UI_WindowsAndMessaging",
-	"Win32_Graphics_Gdi",
+    "Win32_Foundation",
+    "Win32_System",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
 ] }
 windows-sys = { workspace = true }
 

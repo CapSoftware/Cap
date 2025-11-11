@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["apps/cli", "apps/desktop/src-tauri", "crates/*", "crates/workspace-hack"]
+members = [
+    "apps/cli",
+    "apps/desktop/src-tauri",
+    "crates/*",
+    "crates/workspace-hack",
+]
 
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
@@ -17,7 +22,7 @@ tokio = { version = "1.39.3", features = [
     "rt-multi-thread",
     "time",
 ] }
-tauri = { version = "2.5.0", features = ["specta"] }
+tauri = { version = "2.8.5", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
