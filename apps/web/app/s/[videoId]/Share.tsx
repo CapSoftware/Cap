@@ -17,10 +17,12 @@ import {
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
+import { usePublicEnv } from "@/utils/public-env";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
+import { useShareAnalytics } from "./useShareAnalytics";
 import type { ShareAnalyticsContext, VideoData } from "./types";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
@@ -49,7 +51,7 @@ interface ShareProps {
 		processing?: boolean;
 	} | null;
 	aiGenerationEnabled: boolean;
-	analyticsContext?: ShareAnalyticsContext;
+	analyticsContext: ShareAnalyticsContext;
 }
 
 const useVideoStatus = (
@@ -140,9 +142,15 @@ export const Share = ({
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
 		: data.createdAt;
+	const publicEnv = usePublicEnv();
 
 	const playerRef = useRef<HTMLVideoElement | null>(null);
+	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 	const activityRef = useRef<{ scrollToBottom: () => void }>(null);
+	const handlePlayerRef = useCallback((node: HTMLVideoElement | null) => {
+		playerRef.current = node;
+		setVideoElement(node);
+	}, []);
 	const initialComments: CommentType[] =
 		comments instanceof Promise ? use(comments) : comments;
 	const [commentsData, setCommentsData] =
@@ -274,6 +282,13 @@ export const Share = ({
 		isDisabled("disableSummary") &&
 		isDisabled("disableTranscript");
 
+	useShareAnalytics({
+		videoId: data.id,
+		analyticsContext,
+		videoElement,
+		enabled: publicEnv.analyticsAvailable,
+	});
+
 	return (
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
@@ -289,8 +304,7 @@ export const Share = ({
 								areReactionStampsDisabled={areReactionStampsDisabled}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
-								analyticsContext={analyticsContext}
-								ref={playerRef}
+								ref={handlePlayerRef}
 							/>
 						</div>
 					</div>

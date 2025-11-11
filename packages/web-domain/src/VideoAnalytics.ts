@@ -16,7 +16,6 @@ export class VideoCaptureEvent extends Schema.Class<VideoCaptureEvent>(
 )({
 	video: VideoId,
 	sessionId: Schema.optional(Schema.String),
-	watchTimeSeconds: Schema.optional(Schema.Number),
 	city: Schema.optional(Schema.String),
 	country: Schema.optional(Schema.String),
 	device: Schema.optional(Schema.String),
@@ -29,6 +28,13 @@ export class VideoCaptureEvent extends Schema.Class<VideoCaptureEvent>(
 	utmCampaign: Schema.optional(Schema.String),
 	utmTerm: Schema.optional(Schema.String),
 	utmContent: Schema.optional(Schema.String),
+	watchTimeSeconds: Schema.optional(Schema.Int),
+	locale: Schema.optional(Schema.String),
+	language: Schema.optional(Schema.String),
+	timezone: Schema.optional(Schema.String),
+	pathname: Schema.optional(Schema.String),
+	href: Schema.optional(Schema.String),
+	userAgent: Schema.optional(Schema.String),
 }) {}
 
 export class VideoAnalyticsRpcs extends RpcGroup.make(

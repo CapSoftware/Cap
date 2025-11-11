@@ -89,42 +89,59 @@ export class VideosAnalytics extends Effect.Service<VideosAnalytics>()(
 					const host = serverEnv().TINYBIRD_HOST;
 					if (!token || !host) return;
 
-					const payload = {
-						timestamp: new Date().toISOString(),
-						version: "1",
-						session_id: event.sessionId ?? null,
-						video_id: videoId,
-						watch_time_seconds: event.watchTimeSeconds ?? 0,
+					const toNullableString = (value?: string | null) =>
+						value && value.trim().length > 0 ? value : null;
+					const toNullableNumber = (value?: number | null) =>
+						typeof value === "number" && Number.isFinite(value) ? value : null;
+					const toNullableInt = (value?: number | null) =>
+						typeof value === "number" && Number.isFinite(value)
+							? Math.trunc(value)
+							: null;
+
+					const watchTime = toNullableNumber(event.watchTimeSeconds) ?? 0;
+
+					const serializedPayload = JSON.stringify({
 						city: event.city ?? null,
 						country: event.country ?? null,
 						device: event.device ?? null,
 						browser: event.browser ?? null,
 						os: event.os ?? null,
-						referrer: event.referrer ?? null,
-						referrer_url: event.referrerUrl ?? null,
-						utm_source: event.utmSource ?? null,
-						utm_medium: event.utmMedium ?? null,
-						utm_campaign: event.utmCampaign ?? null,
-						utm_term: event.utmTerm ?? null,
-						utm_content: event.utmContent ?? null,
-						payload: JSON.stringify({
-							watchTimeSeconds: event.watchTimeSeconds ?? 0,
-							city: event.city ?? null,
-							country: event.country ?? null,
-							device: event.device ?? null,
-							browser: event.browser ?? null,
-							os: event.os ?? null,
-							referrer: event.referrer ?? null,
-							referrerUrl: event.referrerUrl ?? null,
-							utmSource: event.utmSource ?? null,
-							utmMedium: event.utmMedium ?? null,
-							utmCampaign: event.utmCampaign ?? null,
-							utmTerm: event.utmTerm ?? null,
-							utmContent: event.utmContent ?? null,
-						}),
-					};
+						referrer: toNullableString(event.referrer),
+						referrerUrl: toNullableString(event.referrerUrl),
+						utmSource: toNullableString(event.utmSource),
+						utmMedium: toNullableString(event.utmMedium),
+						utmCampaign: toNullableString(event.utmCampaign),
+						utmTerm: toNullableString(event.utmTerm),
+						utmContent: toNullableString(event.utmContent),
+						locale: toNullableString(event.locale),
+						language: toNullableString(event.language),
+						timezone: toNullableString(event.timezone),
+						pathname: toNullableString(event.pathname),
+						href: toNullableString(event.href),
+						userAgent: toNullableString(event.userAgent),
+						watchTimeSeconds: watchTime,
+					});
 
-					console.log("TINYBIRD EVENT", payload);
+					const payload = {
+						timestamp: new Date().toISOString(),
+						version: "1",
+						session_id: toNullableString(event.sessionId),
+						video_id: videoId,
+						watch_time_seconds: watchTime,
+						city: event.city ?? null,
+						country: event.country ?? null,
+						device: event.device ?? null,
+						browser: event.browser ?? null,
+						os: event.os ?? null,
+						referrer: toNullableString(event.referrer),
+						referrer_url: toNullableString(event.referrerUrl),
+						utm_source: toNullableString(event.utmSource),
+						utm_medium: toNullableString(event.utmMedium),
+						utm_campaign: toNullableString(event.utmCampaign),
+						utm_term: toNullableString(event.utmTerm),
+						utm_content: toNullableString(event.utmContent),
+						payload: serializedPayload,
+					};
 
 					yield* client
 						.post(`${host}/v0/events?name=analytics_views`, {

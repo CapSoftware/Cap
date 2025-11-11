@@ -368,6 +368,8 @@ async function AuthorizedContent({
 
 	const referrerUrl =
 		headerList.get("x-referrer") ?? headerList.get("referer") ?? null;
+	const userAgent = headerList.get("x-user-agent") ?? headerList.get("user-agent");
+	const userAgentDetails = deriveUserAgentDetails(userAgent);
 	const analyticsContext: ShareAnalyticsContext = {
 		city: headerList.get("x-vercel-ip-city"),
 		country: headerList.get("x-vercel-ip-country"),
@@ -385,7 +387,10 @@ async function AuthorizedContent({
 		utmCampaign: getSearchParam("utm_campaign"),
 		utmTerm: getSearchParam("utm_term"),
 		utmContent: getSearchParam("utm_content"),
-		userAgent: headerList.get("x-user-agent") ?? headerList.get("user-agent"),
+		userAgent,
+		device: userAgentDetails.device ?? null,
+		browser: userAgentDetails.browser ?? null,
+		os: userAgentDetails.os ?? null,
 	};
 
 	if (user && video && user.id !== video.owner.id) {
@@ -794,3 +799,52 @@ async function AuthorizedContent({
 		</>
 	);
 }
+
+type UserAgentDetails = {
+	device?: string;
+	browser?: string;
+	os?: string;
+};
+
+const deriveUserAgentDetails = (ua?: string | null): UserAgentDetails => {
+	if (!ua) return {};
+	const value = ua.toLowerCase();
+	const details: UserAgentDetails = {};
+
+	if (
+		/ipad|tablet/.test(value) ||
+		(/android/.test(value) && !/mobile/.test(value))
+	) {
+		details.device = "tablet";
+	} else if (/mobi|iphone|ipod|android/.test(value)) {
+		details.device = "mobile";
+	} else if (/mac|win|linux|cros|x11/.test(value)) {
+		details.device = "desktop";
+	}
+
+	if (/chrome|crios/.test(value) && !/edge|edg\//.test(value)) {
+		details.browser = "chrome";
+	} else if (/safari/.test(value) && !/chrome|crios/.test(value)) {
+		details.browser = "safari";
+	} else if (/firefox/.test(value)) {
+		details.browser = "firefox";
+	} else if (/edg\//.test(value)) {
+		details.browser = "edge";
+	} else if (/msie|trident/.test(value)) {
+		details.browser = "ie";
+	}
+
+	if (/windows nt/.test(value)) {
+		details.os = "windows";
+	} else if (/mac os x/.test(value)) {
+		details.os = "mac";
+	} else if (/android/.test(value)) {
+		details.os = "android";
+	} else if (/iphone|ipad|ipod/.test(value)) {
+		details.os = "ios";
+	} else if (/linux/.test(value)) {
+		details.os = "linux";
+	}
+
+	return details;
+};

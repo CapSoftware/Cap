@@ -1,7 +1,7 @@
 import * as Db from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
-import { CurrentUser, Policy, Video } from "@cap/web-domain";
+import { CurrentUser, Folder, Policy, Video } from "@cap/web-domain";
 import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";

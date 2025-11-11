@@ -56,6 +56,7 @@ export const VideosAnalyticsRpcsLive =
 						provideOptionalAuth,
 						Effect.catchTags({
 							DatabaseError: () => new InternalError({ type: "database" }),
+							HttpBodyError: () => new InternalError({ type: "httpRequest" }),
 							RequestError: () => new InternalError({ type: "httpRequest" }),
 							ResponseError: () => new InternalError({ type: "httpResponse" }),
 							UnknownException: () => new InternalError({ type: "unknown" }),

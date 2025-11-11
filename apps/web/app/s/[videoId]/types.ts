@@ -29,4 +29,7 @@ export type ShareAnalyticsContext = {
 	utmTerm?: string | null;
 	utmContent?: string | null;
 	userAgent?: string | null;
+	device?: string | null;
+	browser?: string | null;
+	os?: string | null;
 };
