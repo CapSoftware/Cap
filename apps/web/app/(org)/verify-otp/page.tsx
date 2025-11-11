@@ -8,7 +8,7 @@ export const metadata = {
 };
 
 export default async function VerifyOTPPage(props: {
-	searchParams: Promise<{ email?: string; next?: string; lastSent?: string }>;
+	searchParams: Promise<{ email?: string; next?: string; lastSent?: string ; type?: string  }>;
 }) {
 	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
@@ -20,6 +20,7 @@ export default async function VerifyOTPPage(props: {
 	if (!searchParams.email) {
 		redirect("/login");
 	}
+	const verifyType = searchParams.type === "credentials" ? "credentials" : "email";
 
 	return (
 		<div className="flex h-screen w-full items-center justify-center">
@@ -28,6 +29,7 @@ export default async function VerifyOTPPage(props: {
 					email={searchParams.email}
 					next={searchParams.next}
 					lastSent={searchParams.lastSent}
+					type={verifyType}
 				/>
 			</Suspense>
 		</div>

@@ -9,6 +9,7 @@ import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { dub } from "../dub.ts";
 import { sendEmail } from "../emails/config.ts";
 import { nanoId } from "../helpers.ts";
@@ -16,6 +17,7 @@ import { db } from "../index.ts";
 import { organizationMembers, organizations, users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { verifyPassword } from "@cap/database/crypto";
 
 export const maxDuration = 120;
 
@@ -102,6 +104,52 @@ export const authOptions = (): NextAuthOptions => {
 								subject: `Your Cap Verification Code`,
 								react: email,
 							});
+						}
+					},
+				}),
+				CredentialsProvider({
+					name: "Credentials",
+					credentials: {
+						email: { label: "Email", type: "text", placeholder: "you@domain.com" },
+						password: { label: "Password", type: "password" },
+					},
+					async authorize(credentials) {
+						try {
+							if (!credentials?.email || !credentials?.password) {
+								throw new Error("Missing email or password");
+							}
+
+							const [user] = await db()
+								.select()
+								.from(users)
+								.where(eq(users.email, credentials.email))
+								.limit(1);
+
+							if (!user) throw new Error("Invalid email or password");
+
+							console.log(user);
+
+							if(user.password==null){
+								throw new Error("No password found for user");
+							}
+
+							// Require email verification before login
+							if (!user.emailVerified) {
+								throw new Error("Please verify your email before logging in.");
+							}
+
+							const isValid = await verifyPassword(user.password,credentials.password);
+							if (!isValid) throw new Error("Invalid email or password");
+
+							return {
+								id: user.id,
+								name: user.name,
+								email: user.email,
+								image: user.image,
+							};
+						} catch (err) {
+							console.error("Credential authorize error:", err);
+							throw err;
 						}
 					},
 				}),

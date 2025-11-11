@@ -15,10 +15,12 @@ export function VerifyOTPForm({
 	email,
 	next,
 	lastSent,
+	type
 }: {
 	email: string;
 	next?: string;
 	lastSent?: string;
+	type?: "email" | "credentials";
 }) {
 	const [code, setCode] = useState(["", "", "", "", "", ""]);
 	const [lastResendTime, setLastResendTime] = useState<number | null>(
@@ -75,6 +77,33 @@ export function VerifyOTPForm({
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
+			if (type === "credentials") {
+				const res = await fetch("/api/auth/verify-otp", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email, otp: otpCode }),
+				});
+
+				const data = await res.json().catch(() => ({}));
+
+				if (!res.ok || !data?.status) {
+					throw data?.message || "Invalid or expired OTP. Please try again.";
+				}
+				const password = sessionStorage.getItem("signup_password");
+				if (!password) {
+					throw "Something went wrong. Please try logging in again.";
+				}
+				const result = await signIn("credentials", {
+					email,
+					password,
+					redirect: false,
+				});
+				if (result?.error) {
+					throw "Login failed after verification. Please log in again.";
+				}
+				return;
+			}
+
 			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
@@ -112,6 +141,21 @@ export function VerifyOTPForm({
 
 					throw `Please wait ${remainingSeconds} seconds before requesting a new code`;
 				}
+			}
+
+			if (type === "credentials") {
+				const res = await fetch("/api/auth/resend", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email }),
+				});
+
+				const data = await res.json();
+				if (!data?.status) {
+					throw data?.message || "OTP resend failed.";
+				}
+				setLastResendTime(Date.now());
+				return data;
 			}
 
 			const result = await signIn("email", {

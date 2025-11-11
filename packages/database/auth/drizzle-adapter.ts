@@ -19,6 +19,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 	return {
 		async createUser(userData: any) {
 			const userId = User.UserId.make(nanoId());
+			const hashedPassword = userData.password;
 			await db.transaction(async (tx) => {
 				const [pendingInvite] = await tx
 					.select({ id: organizationInvites.id })
@@ -37,6 +38,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					emailVerified: userData.emailVerified,
 					name: userData.name,
 					image: userData.image,
+					password:hashedPassword,
 					activeOrganizationId: Organisation.OrganisationId.make(""),
 				});
 
