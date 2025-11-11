@@ -18,6 +18,8 @@ permissions:
 env:
   TINYBIRD_HOST: ${{ secrets.TINYBIRD_HOST }}
   TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+  TINYBIRD_INSTALLER_URL: ${{ vars.TINYBIRD_INSTALLER_URL }}
+  TINYBIRD_INSTALLER_SHA256: ${{ secrets.TINYBIRD_INSTALLER_SHA256 }}
 
 jobs:
   ci:
@@ -35,7 +37,32 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Install Tinybird CLI
-        run: curl https://tinybird.co | sh
+        env:
+          INSTALLER_URL: ${{ env.TINYBIRD_INSTALLER_URL }}
+          INSTALLER_SHA256: ${{ env.TINYBIRD_INSTALLER_SHA256 }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${INSTALLER_URL:-}" ]]; then
+            echo "TINYBIRD_INSTALLER_URL repo variable is not set. Point it to the" >&2
+            echo "pinned Tinybird CLI release asset (e.g., https://github.com/tinybirdco/... )." >&2
+            exit 1
+          fi
+
+          if [[ -z "${INSTALLER_SHA256:-}" ]]; then
+            echo "TINYBIRD_INSTALLER_SHA256 secret is not defined." >&2
+            echo "Store the SHA-256 computed from the trusted release asset so tampering" >&2
+            echo "causes the workflow to fail before execution." >&2
+            exit 1
+          fi
+
+          installer_path="/tmp/tinybird-cli-installer"
+          curl -fSL "$INSTALLER_URL" -o "$installer_path"
+
+          echo "${INSTALLER_SHA256}  ${installer_path}" | sha256sum -c -
+
+          chmod +x "$installer_path"
+          "$installer_path"
 
       - name: Build project
         run: tb build
