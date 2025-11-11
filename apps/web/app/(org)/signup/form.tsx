@@ -278,7 +278,6 @@ export function SignupForm() {
 														return;
 													}
 
-													sessionStorage.setItem("signup_password", password);
 													toast.success("Verification code sent to your email!");
 													trackEvent("auth_email_sent", { email_domain: email.split("@")[1] });
 

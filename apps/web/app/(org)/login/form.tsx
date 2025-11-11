@@ -279,7 +279,7 @@ export function LoginForm() {
 												  // Handle specific known errors first
 												  if (res?.error?.toLowerCase().includes("verify")) {
 													toast.error("Please verify your email before logging in.");
-													const res = await fetch("/api/signup/resend", {
+													const res = await fetch("/api/auth/resend", {
 														method: "POST",
 														headers: { "Content-Type": "application/json" },
 														body: JSON.stringify({ email }),

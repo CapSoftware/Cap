@@ -87,19 +87,21 @@ export function VerifyOTPForm({
 				const data = await res.json().catch(() => ({}));
 
 				if (!res.ok || !data?.status) {
-					throw data?.message || "Invalid or expired OTP. Please try again.";
+					throw "Invalid or expired OTP. Please try again.";
 				}
-				const password = sessionStorage.getItem("signup_password");
-				if (!password) {
-					throw "Something went wrong. Please try logging in again.";
+				if (!data?.authToken) {
+					throw "Authentication token not received. Please try again.";
 				}
+
+				// Use the temporary auth token to sign in via credentials provider
 				const result = await signIn("credentials", {
 					email,
-					password,
+					otp_token: data.authToken,
 					redirect: false,
 				});
+
 				if (result?.error) {
-					throw "Login failed after verification. Please log in again.";
+					throw "Login failed after verification. Please try logging in again.";
 				}
 				return;
 			}

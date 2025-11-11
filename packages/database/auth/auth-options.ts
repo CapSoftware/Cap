@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { serverEnv } from "@cap/env";
 import { Organisation, User } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import {eq, and} from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
@@ -14,7 +14,7 @@ import { dub } from "../dub.ts";
 import { sendEmail } from "../emails/config.ts";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
-import { organizationMembers, organizations, users } from "../schema.ts";
+import {organizationMembers, organizations, users, verificationTokens} from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import { verifyPassword } from "@cap/database/crypto";
@@ -112,11 +112,12 @@ export const authOptions = (): NextAuthOptions => {
 					credentials: {
 						email: { label: "Email", type: "text", placeholder: "you@domain.com" },
 						password: { label: "Password", type: "password" },
+						otp_token: { label: "OTP Token", type: "text" },
 					},
 					async authorize(credentials) {
 						try {
-							if (!credentials?.email || !credentials?.password) {
-								throw new Error("Missing email or password");
+							if (!credentials?.email) {
+								throw new Error("Missing email");
 							}
 
 							const [user] = await db()
@@ -127,9 +128,56 @@ export const authOptions = (): NextAuthOptions => {
 
 							if (!user) throw new Error("Invalid email or password");
 
-							console.log(user);
+							// If otp_token is provided, verify it instead of password
+							// This is used for completing signup after OTP verification
+							if (credentials.otp_token) {
+								const authTokenIdentifier = `auth-token:${credentials.email}`;
+								const [tokenRecord] = await db()
+									.select()
+									.from(verificationTokens)
+									.where(
+										and(
+											eq(
+												verificationTokens.identifier,
+												authTokenIdentifier,
+											),
+											eq(verificationTokens.token, credentials.otp_token),
+										),
+									)
+									.limit(1);
 
-							if(user.password==null){
+								if (!tokenRecord) {
+									throw new Error("Invalid or expired authentication token");
+								}
+
+								if (new Date(tokenRecord.expires) < new Date()) {
+									throw new Error("Authentication token expired");
+								}
+
+								// Require email verification
+								if (!user.emailVerified) {
+									throw new Error("Please verify your email before logging in.");
+								}
+
+								// Delete the one-time token after use
+								await db()
+									.delete(verificationTokens)
+									.where(eq(verificationTokens.identifier, authTokenIdentifier));
+
+								return {
+									id: user.id,
+									name: user.name,
+									email: user.email,
+									image: user.image,
+								};
+							}
+
+							// Normal password authentication
+							if (!credentials?.password) {
+								throw new Error("Missing password");
+							}
+
+							if (user.password === null) {
 								throw new Error("No password found for user");
 							}
 
@@ -138,7 +186,10 @@ export const authOptions = (): NextAuthOptions => {
 								throw new Error("Please verify your email before logging in.");
 							}
 
-							const isValid = await verifyPassword(user.password,credentials.password);
+							const isValid = await verifyPassword(
+								user.password,
+								credentials.password,
+							);
 							if (!isValid) throw new Error("Invalid email or password");
 
 							return {
