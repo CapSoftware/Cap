@@ -40,6 +40,31 @@ jobs:
       - name: Build project
         run: tb build
 
+      - name: Wait for Tinybird Local
+        run: |
+          set -euo pipefail
+
+          endpoints=("http://localhost:7181/_health" "http://localhost:7181/health")
+          max_attempts=20
+          base_delay=3
+
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            for endpoint in "${endpoints[@]}"; do
+              status=$(curl -fsS -o /dev/null -w "%{http_code}" "$endpoint" || true)
+              if [[ "$status" == "200" ]]; then
+                echo "Tinybird local is healthy via $endpoint"
+                exit 0
+              fi
+            done
+
+            sleep_seconds=$((base_delay * attempt))
+            echo "Tinybird local not ready (attempt ${attempt}/${max_attempts}). Retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+
+          echo "Tinybird local failed to become healthy after waiting ~$((base_delay * max_attempts * (max_attempts + 1) / 2))s" >&2
+          exit 1
+
       - name: Test project
         run: tb test run
 
