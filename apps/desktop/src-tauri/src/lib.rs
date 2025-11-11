@@ -50,6 +50,7 @@ use cap_recording::{
 use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
+use cpal::StreamError;
 use editor_window::{EditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
@@ -109,6 +110,8 @@ pub struct App {
     recording_state: RecordingState,
     recording_logging_handle: LoggingHandle,
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
+    mic_meter_sender: flume::Sender<microphone::MicrophoneSamples>,
+    selected_mic_label: Option<String>,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
     logs_dir: PathBuf,
@@ -168,6 +171,32 @@ impl App {
         }
     }
 
+    async fn restart_mic_feed(&mut self) -> Result<(), String> {
+        info!("Restarting microphone feed after actor shutdown");
+
+        let (error_tx, error_rx) = flume::bounded(1);
+        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+        spawn_mic_error_logger(error_rx);
+
+        mic_feed
+            .ask(microphone::AddSender(self.mic_meter_sender.clone()))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if let Some(label) = self.selected_mic_label.clone() {
+            let ready = mic_feed
+                .ask(microphone::SetInput { label })
+                .await
+                .map_err(|e| e.to_string())?;
+            ready.await.map_err(|e| e.to_string())?;
+        }
+
+        self.mic_feed = mic_feed;
+
+        Ok(())
+    }
+
     async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
         let logfile =
             std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
@@ -208,8 +237,9 @@ impl App {
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let mic_feed = state.read().await.mic_feed.clone();
+    let desired_label = label.clone();
 
-    match label {
+    match desired_label.as_ref() {
         None => {
             mic_feed
                 .ask(microphone::RemoveInput)
@@ -218,12 +248,19 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         }
         Some(label) => {
             mic_feed
-                .ask(feeds::microphone::SetInput { label })
+                .ask(feeds::microphone::SetInput {
+                    label: label.clone(),
+                })
                 .await
                 .map_err(|e| e.to_string())?
                 .await
                 .map_err(|e| e.to_string())?;
         }
+    }
+
+    {
+        let mut app = state.write().await;
+        app.selected_mic_label = desired_label;
     }
 
     Ok(())
@@ -269,6 +306,16 @@ async fn set_camera_input(
     }
 
     Ok(())
+}
+
+fn spawn_mic_error_logger(error_rx: flume::Receiver<StreamError>) {
+    tokio::spawn(async move {
+        let Ok(err) = error_rx.recv_async().await else {
+            return;
+        };
+
+        error!("Mic feed actor error: {err}");
+    });
 }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
@@ -1946,6 +1993,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
+    let mic_meter_sender = mic_samples_tx.clone();
 
     let camera_feed = CameraFeed::spawn(CameraFeed::default());
     let _ = camera_feed.ask(feeds::camera::AddSender(camera_tx)).await;
@@ -1955,18 +2003,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
 
-        // TODO: make this part of a global actor one day
-        tokio::spawn(async move {
-            let Ok(err) = error_rx.recv_async().await else {
-                return;
-            };
+        spawn_mic_error_logger(error_rx);
 
-            error!("Mic feed actor error: {err}");
-        });
-
-        let _ = mic_feed
+        if let Err(err) = mic_feed
             .ask(feeds::microphone::AddSender(mic_samples_tx))
-            .await;
+            .await
+        {
+            error!("Failed to attach audio meter sender: {err}");
+        }
 
         mic_feed
     };
@@ -2136,6 +2180,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     recording_state: RecordingState::None,
                     recording_logging_handle,
                     mic_feed,
+                    mic_meter_sender,
+                    selected_mic_label: None,
                     camera_feed,
                     server_url,
                     logs_dir: logs_dir.clone(),

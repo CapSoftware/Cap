@@ -19,7 +19,7 @@ importers:
         version: 0.44.0
       dotenv-cli:
         specifier: latest
-        version: 10.0.0
+        version: 11.0.0
       tsdown:
         specifier: ^0.15.6
         version: 0.15.6(typescript@5.8.3)
@@ -115,7 +115,7 @@ importers:
         version: 0.14.10(solid-js@1.9.6)
       '@solidjs/start':
         specifier: ^1.1.3
-        version: 1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)
+        version: 1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)
       '@tanstack/solid-query':
         specifier: ^5.51.21
         version: 5.75.4(solid-js@1.9.6)
@@ -202,7 +202,7 @@ importers:
         version: 9.0.1
       vinxi:
         specifier: ^0.5.6
-        version: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+        version: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
       webcodecs:
         specifier: ^0.1.0
         version: 0.1.0
@@ -389,12 +389,6 @@ importers:
       '@deepgram/sdk':
         specifier: ^3.3.4
         version: 3.13.0(encoding@0.1.13)
-      '@dnd-kit/core':
-        specifier: ^6.3.1
-        version: 6.3.1(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
-      '@dnd-kit/utilities':
-        specifier: ^3.2.2
-        version: 3.2.2(react@19.1.1)
       '@dub/analytics':
         specifier: ^0.0.27
         version: 0.0.27
@@ -476,9 +470,15 @@ importers:
       '@radix-ui/colors':
         specifier: ^3.0.0
         version: 3.0.0
+      '@radix-ui/react-dialog':
+        specifier: ^1.1.13
+        version: 1.1.13(@types/react-dom@19.1.9(@types/react@19.1.13))(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@radix-ui/react-dropdown-menu':
         specifier: ^2.0.6
         version: 2.1.14(@types/react-dom@19.1.9(@types/react@19.1.13))(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+      '@radix-ui/react-popover':
+        specifier: ^1.0.7
+        version: 1.1.13(@types/react-dom@19.1.9(@types/react@19.1.13))(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@radix-ui/react-select':
         specifier: ^2.2.5
         version: 2.2.5(@types/react-dom@19.1.9(@types/react@19.1.13))(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -560,9 +560,6 @@ importers:
       cookies-next:
         specifier: ^4.1.0
         version: 4.3.0
-      country-flag-icons:
-        specifier: ^1.5.21
-        version: 1.5.21
       date-fns:
         specifier: ^4.1.0
         version: 4.1.0
@@ -674,9 +671,6 @@ importers:
       react-tooltip:
         specifier: ^5.26.3
         version: 5.28.1(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
-      recharts:
-        specifier: ^3.3.0
-        version: 3.3.0(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react-is@17.0.2)(react@19.1.1)(redux@5.0.1)
       resend:
         specifier: 4.6.0
         version: 4.6.0(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -975,7 +969,7 @@ importers:
         version: 19.1.9(@types/react@19.1.13)
       dotenv-cli:
         specifier: latest
-        version: 10.0.0
+        version: 11.0.0
       drizzle-kit:
         specifier: 0.31.0
         version: 0.31.0
@@ -1266,6 +1260,9 @@ importers:
       '@cap/database':
         specifier: workspace:*
         version: link:../database
+      '@cap/env':
+        specifier: workspace:*
+        version: link:../env
       '@cap/utils':
         specifier: workspace:*
         version: link:../utils
@@ -2071,22 +2068,6 @@ packages:
   '@dependents/detective-less@4.1.0':
     resolution: {integrity: sha512-KrkT6qO5NxqNfy68sBl6CTSoJ4SNDIS5iQArkibhlbGU4LaDukZ3q2HIkh8aUKDio6o4itU4xDR7t82Y2eP1Bg==}
     engines: {node: '>=14'}
-
-  '@dnd-kit/accessibility@3.1.1':
-    resolution: {integrity: sha512-2P+YgaXF+gRsIihwwY1gCsQSYnu9Zyj2py8kY5fFvUM1qm2WA2u639R6YNVfU4GWr+ZM5mqEsfHZZLoRONbemw==}
-    peerDependencies:
-      react: '>=16.8.0'
-
-  '@dnd-kit/core@6.3.1':
-    resolution: {integrity: sha512-xkGBRQQab4RLwgXxoqETICr6S5JlogafbhNsidmrkVv2YRs5MLwpjoF2qpiGjQt8S9AoxtIV603s0GIUpY5eYQ==}
-    peerDependencies:
-      react: '>=16.8.0'
-      react-dom: '>=16.8.0'
-
-  '@dnd-kit/utilities@3.2.2':
-    resolution: {integrity: sha512-+MKAJEOfaBe5SmV6t34p80MMKhjvUz0vRrvVJbPT0WElzaOJ/1xs+D+KDv+tD/NE5ujfrChEcshd4fLn0wpiqg==}
-    peerDependencies:
-      react: '>=16.8.0'
 
   '@drizzle-team/brocli@0.10.2':
     resolution: {integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==}
@@ -5211,17 +5192,6 @@ packages:
     peerDependencies:
       react: ^18.0 || ^19.0 || ^19.0.0-rc
 
-  '@reduxjs/toolkit@2.10.1':
-    resolution: {integrity: sha512-/U17EXQ9Do9Yx4DlNGU6eVNfZvFJfYpUtRRdLf19PbPjdWBxNlxGZXywQZ1p1Nz8nMkWplTI7iD/23m07nolDA==}
-    peerDependencies:
-      react: ^16.9.0 || ^17.0.0 || ^18 || ^19
-      react-redux: ^7.2.1 || ^8.1.3 || ^9.0.0
-    peerDependenciesMeta:
-      react:
-        optional: true
-      react-redux:
-        optional: true
-
   '@remix-run/router@1.23.0':
     resolution: {integrity: sha512-O3rHJzAQKamUz1fvE0Qaw0xSFqsA/yafi2iqeE0pvdFtCO1viYx8QL6f3Ln/aCCTLxs68SLf0KPM9eSeM8yBnA==}
     engines: {node: '>=14.0.0'}
@@ -6214,9 +6184,6 @@ packages:
   '@standard-schema/spec@1.0.0':
     resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
 
-  '@standard-schema/utils@0.3.0':
-    resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
-
   '@storybook/addon-actions@8.6.12':
     resolution: {integrity: sha512-B5kfiRvi35oJ0NIo53CGH66H471A3XTzrfaa6SxXEJsgxxSeKScG5YeXcCvLiZfvANRQ7QDsmzPUgg0o3hdMXw==}
     peerDependencies:
@@ -6293,10 +6260,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.1.0-alpha.5':
-    resolution: {integrity: sha512-7UCaQwTWzgj46aIVoqxhqRoQqyjuu+inU+PJ1lOtZW1FUQ7yzxo2+/I3bNzuo5qvnfyB55SB9g84Kvf7wMBdQg==}
+  '@storybook/builder-vite@10.1.0-alpha.7':
+    resolution: {integrity: sha512-vSt4d6DpvMR84dk2Eeiqb1u0dXa3OzovJX5rAgmqq3E8y8BPCoAdvL0/UhohlzcKT0bH4qu9aXEsDqrqmK+11Q==}
     peerDependencies:
-      storybook: ^10.1.0-alpha.5
+      storybook: ^10.1.0-alpha.7
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -6307,12 +6274,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.1.0-alpha.5':
-    resolution: {integrity: sha512-rRFLuEITBxQ7idQjHKJVvKdszWavxNSi+TwOpfjiWEiagQ59r+VRPLlfgp9P/3vvnSUEaPKTXwBBqkflFIPrWQ==}
+  '@storybook/csf-plugin@10.1.0-alpha.7':
+    resolution: {integrity: sha512-Edhy4P01ENkUT0WTFA+3qkg0QfYIeD17hG+3tBuOlygUkEcuUB5rXTwcj5HCzLqWbFUjT6iM7EZuQZw1NycapA==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.1.0-alpha.5
+      storybook: ^10.1.0-alpha.7
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -6825,33 +6792,6 @@ packages:
   '@types/cors@2.8.19':
     resolution: {integrity: sha512-mFNylyeyqN93lfe/9CSxOGREz8cpzAhH+E93xJ4xWQf62V8sQ/24reV2nyzUWM6H6Xji+GGHpkbLe7pVoUEskg==}
 
-  '@types/d3-array@3.2.2':
-    resolution: {integrity: sha512-hOLWVbm7uRza0BYXpIIW5pxfrKe0W+D5lrFiAEYR+pb6w3N2SwSMaJbXdUfSEv+dT4MfHBLtn5js0LAWaO6otw==}
-
-  '@types/d3-color@3.1.3':
-    resolution: {integrity: sha512-iO90scth9WAbmgv7ogoq57O9YpKmFBbmoEoCHDB2xMBY0+/KVrqAaCDyCE16dUspeOvIxFFRI+0sEtqDqy2b4A==}
-
-  '@types/d3-ease@3.0.2':
-    resolution: {integrity: sha512-NcV1JjO5oDzoK26oMzbILE6HW7uVXOHLQvHshBUW4UMdZGfiY6v5BeQwh9a9tCzv+CeefZQHJt5SRgK154RtiA==}
-
-  '@types/d3-interpolate@3.0.4':
-    resolution: {integrity: sha512-mgLPETlrpVV1YRJIglr4Ez47g7Yxjl1lj7YKsiMCb27VJH9W8NVM6Bb9d8kkpG/uAQS5AmbA48q2IAolKKo1MA==}
-
-  '@types/d3-path@3.1.1':
-    resolution: {integrity: sha512-VMZBYyQvbGmWyWVea0EHs/BwLgxc+MKi1zLDCONksozI4YJMcTt8ZEuIR4Sb1MMTE8MMW49v0IwI5+b7RmfWlg==}
-
-  '@types/d3-scale@4.0.9':
-    resolution: {integrity: sha512-dLmtwB8zkAeO/juAMfnV+sItKjlsw2lKdZVVy6LRr0cBmegxSABiLEpGVmSJJ8O08i4+sGR6qQtb6WtuwJdvVw==}
-
-  '@types/d3-shape@3.1.7':
-    resolution: {integrity: sha512-VLvUQ33C+3J+8p+Daf+nYSOsjB4GXp19/S/aGo60m9h1v6XaxjiT82lKVWJCfzhtuZ3yD7i/TPeC/fuKLLOSmg==}
-
-  '@types/d3-time@3.0.4':
-    resolution: {integrity: sha512-yuzZug1nkAAaBlBBikKZTgzCeA+k1uy4ZFwWANOfKw5z5LRhV0gNA7gNkKm7HoK+HRN0wX3EkxGk0fpbWhmB7g==}
-
-  '@types/d3-timer@3.0.2':
-    resolution: {integrity: sha512-Ps3T8E8dZDam6fUyNiMkekK3XUsaUEik+idO9/YjPtfj2qruF8tFBXS7XhtE4iIXBLxhmLjP3SXpLhVf21I9Lw==}
-
   '@types/debug@4.1.12':
     resolution: {integrity: sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ==}
 
@@ -7031,9 +6971,6 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
-
-  '@types/use-sync-external-store@0.0.6':
-    resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
 
   '@types/uuid@9.0.8':
     resolution: {integrity: sha512-jg+97EGIcY9AGHJJRaaPVgetKDsrTgbRjQ5Msgjh/DQKEFl0DtyRr/VCOyD1T2R1MNeWPK/u7JoGhlDZnKBAfA==}
@@ -8290,9 +8227,6 @@ packages:
     resolution: {integrity: sha512-KIHbLJqu73RGr/hnbrO9uBeixNGuvSQjul/jdFvS/KFSIH1hWVd1ng7zOHx+YrEfInLG7q4n6GHQ9cDtxv/P6g==}
     engines: {node: '>= 0.10'}
 
-  country-flag-icons@1.5.21:
-    resolution: {integrity: sha512-0KmU4oeiyAM+F+atzK99ghQDQJKxEY3tiDhnRraVFL4o65rZgrmrx7xKi0b+hxcVpcEpuUbu+KCC6TKTZQTDcA==}
-
   cp-file@10.0.0:
     resolution: {integrity: sha512-vy2Vi1r2epK5WqxOLnskeKeZkdZvTKfFZQCplE3XWsP+SUJyd5XAUFC9lFgTjjXJF2GMne/UML14iEmkAaDfFg==}
     engines: {node: '>=14.16'}
@@ -8353,50 +8287,6 @@ packages:
 
   custom-media-element@1.4.2:
     resolution: {integrity: sha512-AM6FRWqJyW7pWTvXb4uJj6yvHE7C6UutdhJ5o3XO5NEl5aWFcfnpz8/TuW8qr1+/wfbj50wRvdArnSNjTmjmVw==}
-
-  d3-array@3.2.4:
-    resolution: {integrity: sha512-tdQAmyA18i4J7wprpYq8ClcxZy3SC31QMeByyCFyRt7BVHdREQZ5lpzoe5mFEYZUWe+oq8HBvk9JjpibyEV4Jg==}
-    engines: {node: '>=12'}
-
-  d3-color@3.1.0:
-    resolution: {integrity: sha512-zg/chbXyeBtMQ1LbD/WSoW2DpC3I0mpmPdW+ynRTj/x2DAWYrIY7qeZIHidozwV24m4iavr15lNwIwLxRmOxhA==}
-    engines: {node: '>=12'}
-
-  d3-ease@3.0.1:
-    resolution: {integrity: sha512-wR/XK3D3XcLIZwpbvQwQ5fK+8Ykds1ip7A2Txe0yxncXSdq1L9skcG7blcedkOX+ZcgxGAmLX1FrRGbADwzi0w==}
-    engines: {node: '>=12'}
-
-  d3-format@3.1.0:
-    resolution: {integrity: sha512-YyUI6AEuY/Wpt8KWLgZHsIU86atmikuoOmCfommt0LYHiQSPjvX2AcFc38PX0CBpr2RCyZhjex+NS/LPOv6YqA==}
-    engines: {node: '>=12'}
-
-  d3-interpolate@3.0.1:
-    resolution: {integrity: sha512-3bYs1rOD33uo8aqJfKP3JWPAibgw8Zm2+L9vBKEHJ2Rg+viTR7o5Mmv5mZcieN+FRYaAOWX5SJATX6k1PWz72g==}
-    engines: {node: '>=12'}
-
-  d3-path@3.1.0:
-    resolution: {integrity: sha512-p3KP5HCf/bvjBSSKuXid6Zqijx7wIfNW+J/maPs+iwR35at5JCbLUT0LzF1cnjbCHWhqzQTIN2Jpe8pRebIEFQ==}
-    engines: {node: '>=12'}
-
-  d3-scale@4.0.2:
-    resolution: {integrity: sha512-GZW464g1SH7ag3Y7hXjf8RoUuAFIqklOAq3MRl4OaWabTFJY9PN/E1YklhXLh+OQ3fM9yS2nOkCoS+WLZ6kvxQ==}
-    engines: {node: '>=12'}
-
-  d3-shape@3.2.0:
-    resolution: {integrity: sha512-SaLBuwGm3MOViRq2ABk3eLoxwZELpH6zhl3FbAoJ7Vm1gofKx6El1Ib5z23NUEhF9AsGl7y+dzLe5Cw2AArGTA==}
-    engines: {node: '>=12'}
-
-  d3-time-format@4.1.0:
-    resolution: {integrity: sha512-dJxPBlzC7NugB2PDLwo9Q8JiTR3M3e4/XANkreKSUxF8vvXKqm1Yfq4Q5dl8budlunRVlUUaDUgFt7eA8D6NLg==}
-    engines: {node: '>=12'}
-
-  d3-time@3.1.0:
-    resolution: {integrity: sha512-VqKjzBLejbSMT4IgbmVgDjpkYrNWUYJnbCGo874u7MMKIWsILRX+OpX/gTk8MqjpT1A/c6HY2dCA77ZN0lkQ2Q==}
-    engines: {node: '>=12'}
-
-  d3-timer@3.0.1:
-    resolution: {integrity: sha512-ndfJ/JxxMd3nw31uyKoY2naivF+r29V+Lc0svZxe1JvvIRmi8hUsrMvdOwgS1o6uBHmiz91geQ0ylPP0aj1VUA==}
-    engines: {node: '>=12'}
 
   damerau-levenshtein@1.0.8:
     resolution: {integrity: sha512-sdQSFB7+llfUcQHUQO3+B8ERRj0Oa4w9POWMI/puGtuf7gFywGmkaLCElnudfTiKZV+NvHqL0ifzdrI8Ro7ESA==}
@@ -8514,9 +8404,6 @@ packages:
 
   decache@4.6.2:
     resolution: {integrity: sha512-2LPqkLeu8XWHU8qNCS3kcF6sCcb5zIzvWaAHYSvPfwhdd7mHuah29NssMzrTYyHN4F5oFy2ko9OBYxegtU0FEw==}
-
-  decimal.js-light@2.5.1:
-    resolution: {integrity: sha512-qIMFpTMZmny+MMIitAB6D7iVPEorVw6YQRWkvarTkT4tBeSLLiHzcwj6q0MmYSFCiVpiqPJTJEYIrpcPzVEIvg==}
 
   decimal.js@10.5.0:
     resolution: {integrity: sha512-8vDa8Qxvr/+d94hSh5P3IJwI5t8/c0KsMp+g8bNw9cY2icONa5aPfvKeieW1WlG0WQYwwhJ7mjui2xtiePQSXw==}
@@ -8722,8 +8609,16 @@ packages:
     resolution: {integrity: sha512-lnOnttzfrzkRx2echxJHQRB6vOAMSCzzZg79IxpC00tU42wZPuZkQxNNrrwVAxaQZIIh001l4PxVlCrBxngBzA==}
     hasBin: true
 
+  dotenv-cli@11.0.0:
+    resolution: {integrity: sha512-r5pA8idbk7GFWuHEU7trSTflWcdBpQEK+Aw17UrSHjS6CReuhrrPcyC3zcQBPQvhArRHnBo/h6eLH1fkCvNlww==}
+    hasBin: true
+
   dotenv-expand@11.0.7:
     resolution: {integrity: sha512-zIHwmZPRshsCdpMDyVsqGmgyP0yT8GAgXUnkdAoJisxvf33k7yO6OuoKmcTGuXPWSsm8Oh88nZicRLA9Y0rUeA==}
+    engines: {node: '>=12'}
+
+  dotenv-expand@12.0.3:
+    resolution: {integrity: sha512-uc47g4b+4k/M/SeaW1y4OApx+mtLWl92l5LMPP0GNXctZqELk+YGgOPIIC5elYmUH4OuoK3JLhuRUYegeySiFA==}
     engines: {node: '>=12'}
 
   dotenv@16.0.3:
@@ -8986,9 +8881,6 @@ packages:
   es-to-primitive@1.3.0:
     resolution: {integrity: sha512-w+5mJ3GuFL+NjVtJlvydShqE1eN3h3PbI7/5LAsYJP/2qtuMXjfL2LpHSRqo4b4eSF5K/DH1JXKUAHSB2UW50g==}
     engines: {node: '>= 0.4'}
-
-  es-toolkit@1.41.0:
-    resolution: {integrity: sha512-bDd3oRmbVgqZCJS6WmeQieOrzpl3URcWBUVDXxOELlUW2FuW+0glPOz1n0KnRie+PdyvUZcXz2sOn00c6pPRIA==}
 
   esast-util-from-estree@2.0.0:
     resolution: {integrity: sha512-4CyanoAudUSBAn5K13H4JhsMH6L9ZP7XbLVe/dKybkxMO7eDyLsT8UHl9TRNrU2Gr9nz+FovfSIjuXWJ81uVwQ==}
@@ -9317,9 +9209,6 @@ packages:
 
   eventemitter3@4.0.7:
     resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
-
-  eventemitter3@5.0.1:
-    resolution: {integrity: sha512-GWkBvjiSZK87ELrYOSESUYeVIc9mvLLf/nXalMOS5dYrgZq9o5OVkbZAVM06CVxYsCwH9BDZFPlQTlPA1j4ahA==}
 
   events@1.1.1:
     resolution: {integrity: sha512-kEcvvCBByWXGnZy6JUlgAp2gBIUjfCAV6P6TgT1/aaQKcmuAEC4OZTV1I4EWQLz2gxZw76atuVyvHhTxvi0Flw==}
@@ -10013,9 +9902,6 @@ packages:
   immediate@3.0.6:
     resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
 
-  immer@10.2.0:
-    resolution: {integrity: sha512-d/+XTN3zfODyjr89gM3mPq1WNX2B8pYsu7eORitdwyA2sBubnTl3laYlBk4sXY5FUa5qTZGBDPJICVbvqzjlbw==}
-
   import-fresh@3.3.1:
     resolution: {integrity: sha512-TR3KfrTZTYLPB6jUjfx6MF9WcWrHL9su5TObK4ZkYgBdWKPOFoSoQIdEuTuR82pmtxH2spWG9h6etwfr1pLBqQ==}
     engines: {node: '>=6'}
@@ -10063,10 +9949,6 @@ packages:
   internal-slot@1.1.0:
     resolution: {integrity: sha512-4gd7VpWNQNB4UKKCFFVcp1AVv+FMOgs9NKzjHKusc8jTMhd5eL1NqQqOpE0KzMds804/yHlglp3uxgluOqAPLw==}
     engines: {node: '>= 0.4'}
-
-  internmap@2.0.3:
-    resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
-    engines: {node: '>=12'}
 
   ioredis@5.6.1:
     resolution: {integrity: sha512-UxC0Yv1Y4WRJiGQxQkP0hfdL0/5/6YvdfOOClRgJ0qppSarkhneSa6UvkMkms0AkdGimSH3Ikqm+6mkMmX7vGA==}
@@ -12054,18 +11936,6 @@ packages:
   react-promise-suspense@0.3.4:
     resolution: {integrity: sha512-I42jl7L3Ze6kZaq+7zXWSunBa3b1on5yfvUW6Eo/3fFOj6dZ5Bqmcd264nJbTK/gn1HjjILAjSwnZbV4RpSaNQ==}
 
-  react-redux@9.2.0:
-    resolution: {integrity: sha512-ROY9fvHhwOD9ySfrF0wmvu//bKCQ6AeZZq1nJNtbDC+kk5DuSuNX/n6YWYF/SYy7bSba4D4FSz8DJeKY/S/r+g==}
-    peerDependencies:
-      '@types/react': ^18.2.25 || ^19
-      react: ^18.0 || ^19
-      redux: ^5.0.0
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
-      redux:
-        optional: true
-
   react-refresh@0.17.0:
     resolution: {integrity: sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==}
     engines: {node: '>=0.10.0'}
@@ -12191,14 +12061,6 @@ packages:
     resolution: {integrity: sha512-YTUo+Flmw4ZXiWfQKGcwwc11KnoRAYgzAE2E7mXKCjSviTKShtxBsN6YUUBB2gtaBzKzeKunxhUwNHQuRryhWA==}
     engines: {node: '>= 4'}
 
-  recharts@3.3.0:
-    resolution: {integrity: sha512-Vi0qmTB0iz1+/Cz9o5B7irVyUjX2ynvEgImbgMt/3sKRREcUM07QiYjS1QpAVrkmVlXqy5gykq4nGWMz9AS4Rg==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-      react-dom: ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-      react-is: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-
   recma-build-jsx@1.0.0:
     resolution: {integrity: sha512-8GtdyqaBcDfva+GUKDr3nev3VpKAhup1+RvkMvUxURHpW7QyIvk9F5wz7Vzo06CEMSilw6uArgRqhpiUcWp8ew==}
 
@@ -12222,14 +12084,6 @@ packages:
   redis-parser@3.0.0:
     resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
     engines: {node: '>=4'}
-
-  redux-thunk@3.1.0:
-    resolution: {integrity: sha512-NW2r5T6ksUKXCabzhL9z+h206HQw/NJkcLm1GPImRQ8IzfXwRGqjVhKJGauHirT0DAuyy6hjdnMZaRoAcy0Klw==}
-    peerDependencies:
-      redux: ^5.0.0
-
-  redux@5.0.1:
-    resolution: {integrity: sha512-M9/ELqF6fy8FwmkpnF0S3YKOqMyoWJ4+CS5Efg2ct3oY9daQvd/Pc71FpGZsVsbl3Cpb+IIcjBDUnnyBdQbq4w==}
 
   reflect.getprototypeof@1.0.10:
     resolution: {integrity: sha512-00o4I+DVrefhv+nX0ulyi3biSHCPDe+yLv5o/p6d/UVlirijB8E16FtfwSAi4g3tcqrQ4lRAqQSoFEZJehYEcw==}
@@ -12297,9 +12151,6 @@ packages:
 
   requires-port@1.0.0:
     resolution: {integrity: sha512-KigOCHcocU3XODJxsu8i/j8T9tzT4adHiecwORRQ0ZZFcp7ahwXuRU1m+yuO90C5ZUyGeGfocHDI14M3L3yDAQ==}
-
-  reselect@5.1.1:
-    resolution: {integrity: sha512-K/BG6eIky/SBpzfHZv/dd+9JBFiS4SWV7FIujVyJRux6e45+73RaUHXLmIR1f7WOMaQ0U1km6qwklRQxpJJY0w==}
 
   resend@4.6.0:
     resolution: {integrity: sha512-D5T2I82FvEUYFlrHzaDvVtr5ADHdhuoLaXgLFGABKyNtQgPWIuz0Vp2L2Evx779qjK37aF4kcw1yXJDHhA2JnQ==}
@@ -13807,9 +13658,6 @@ packages:
 
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
-
-  victory-vendor@37.3.6:
-    resolution: {integrity: sha512-SbPDPdDBYp+5MJHhBCAyI7wKM3d5ivekigc2Dk2s7pgbZ9wIgIBYGVw4zGHBml/qTFbexrofXW6Gu4noGxrOwQ==}
 
   vinxi@0.5.6:
     resolution: {integrity: sha512-K9zaoHEdLXSVw3akoKcpRaRaGNZcXAnB0XBcke74y0FbXqcR3+rlFxOH/Pi3Maq3K7wAPBGyE91HW0lATfv5Kg==}
@@ -15866,24 +15714,6 @@ snapshots:
     dependencies:
       gonzales-pe: 4.3.0
       node-source-walk: 6.0.2
-
-  '@dnd-kit/accessibility@3.1.1(react@19.1.1)':
-    dependencies:
-      react: 19.1.1
-      tslib: 2.8.1
-
-  '@dnd-kit/core@6.3.1(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
-    dependencies:
-      '@dnd-kit/accessibility': 3.1.1(react@19.1.1)
-      '@dnd-kit/utilities': 3.2.2(react@19.1.1)
-      react: 19.1.1
-      react-dom: 19.1.1(react@19.1.1)
-      tslib: 2.8.1
-
-  '@dnd-kit/utilities@3.2.2(react@19.1.1)':
-    dependencies:
-      react: 19.1.1
-      tslib: 2.8.1
 
   '@drizzle-team/brocli@0.10.2': {}
 
@@ -18889,18 +18719,6 @@ snapshots:
     dependencies:
       react: 19.1.1
 
-  '@reduxjs/toolkit@2.10.1(react-redux@9.2.0(@types/react@19.1.13)(react@19.1.1)(redux@5.0.1))(react@19.1.1)':
-    dependencies:
-      '@standard-schema/spec': 1.0.0
-      '@standard-schema/utils': 0.3.0
-      immer: 10.2.0
-      redux: 5.0.1
-      redux-thunk: 3.1.0(redux@5.0.1)
-      reselect: 5.1.1
-    optionalDependencies:
-      react: 19.1.1
-      react-redux: 9.2.0(@types/react@19.1.13)(react@19.1.1)(redux@5.0.1)
-
   '@remix-run/router@1.23.0': {}
 
   '@remotion/licensing@4.0.298': {}
@@ -19988,11 +19806,11 @@ snapshots:
     dependencies:
       solid-js: 1.9.6
 
-  '@solidjs/start@1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)':
+  '@solidjs/start@1.1.3(@testing-library/jest-dom@6.5.0)(@types/node@22.15.17)(jiti@2.6.1)(solid-js@1.9.6)(terser@5.44.0)(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(yaml@2.8.1)':
     dependencies:
       '@tanstack/server-functions-plugin': 1.119.2(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
-      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
-      '@vinxi/server-components': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/server-components': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
       defu: 6.1.4
       error-stack-parser: 2.1.4
       html-to-image: 1.11.13
@@ -20003,7 +19821,7 @@ snapshots:
       source-map-js: 1.2.1
       terracotta: 1.0.6(solid-js@1.9.6)
       tinyglobby: 0.2.13
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
       vite-plugin-solid: 2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))
     transitivePeerDependencies:
       - '@testing-library/jest-dom'
@@ -20026,8 +19844,6 @@ snapshots:
   '@speed-highlight/core@1.2.7': {}
 
   '@standard-schema/spec@1.0.0': {}
-
-  '@standard-schema/utils@0.3.0': {}
 
   '@storybook/addon-actions@8.6.12(storybook@8.6.12(prettier@3.5.3))':
     dependencies:
@@ -20133,9 +19949,9 @@ snapshots:
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)
 
-  '@storybook/builder-vite@10.1.0-alpha.5(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/builder-vite@10.1.0-alpha.7(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
-      '@storybook/csf-plugin': 10.1.0-alpha.5(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/csf-plugin': 10.1.0-alpha.7(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)
@@ -20165,7 +19981,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.1.0-alpha.5(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
+  '@storybook/csf-plugin@10.1.0-alpha.7(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 2.3.10
@@ -20729,30 +20545,6 @@ snapshots:
     dependencies:
       '@types/node': 20.17.43
 
-  '@types/d3-array@3.2.2': {}
-
-  '@types/d3-color@3.1.3': {}
-
-  '@types/d3-ease@3.0.2': {}
-
-  '@types/d3-interpolate@3.0.4':
-    dependencies:
-      '@types/d3-color': 3.1.3
-
-  '@types/d3-path@3.1.1': {}
-
-  '@types/d3-scale@4.0.9':
-    dependencies:
-      '@types/d3-time': 3.0.4
-
-  '@types/d3-shape@3.1.7':
-    dependencies:
-      '@types/d3-path': 3.1.1
-
-  '@types/d3-time@3.0.4': {}
-
-  '@types/d3-timer@3.0.2': {}
-
   '@types/debug@4.1.12':
     dependencies:
       '@types/ms': 2.1.0
@@ -20953,8 +20745,6 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
-
-  '@types/use-sync-external-store@0.0.6': {}
 
   '@types/uuid@9.0.8': {}
 
@@ -21269,7 +21059,7 @@ snapshots:
       untun: 0.1.3
       uqr: 0.1.2
 
-  '@vinxi/plugin-directives@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
+  '@vinxi/plugin-directives@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
     dependencies:
       '@babel/parser': 7.27.2
       acorn: 8.14.1
@@ -21280,18 +21070,18 @@ snapshots:
       magicast: 0.2.11
       recast: 0.23.11
       tslib: 2.8.1
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
 
-  '@vinxi/server-components@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
+  '@vinxi/server-components@0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))':
     dependencies:
-      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
+      '@vinxi/plugin-directives': 0.5.1(vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1))
       acorn: 8.14.1
       acorn-loose: 8.5.0
       acorn-typescript: 1.4.13(acorn@8.14.1)
       astring: 1.9.0
       magicast: 0.2.11
       recast: 0.23.11
-      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
+      vinxi: 0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1)
 
   '@virtual-grid/core@2.0.1': {}
 
@@ -22416,8 +22206,6 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  country-flag-icons@1.5.21: {}
-
   cp-file@10.0.0:
     dependencies:
       graceful-fs: 4.2.11
@@ -22477,44 +22265,6 @@ snapshots:
   csstype@3.1.3: {}
 
   custom-media-element@1.4.2: {}
-
-  d3-array@3.2.4:
-    dependencies:
-      internmap: 2.0.3
-
-  d3-color@3.1.0: {}
-
-  d3-ease@3.0.1: {}
-
-  d3-format@3.1.0: {}
-
-  d3-interpolate@3.0.1:
-    dependencies:
-      d3-color: 3.1.0
-
-  d3-path@3.1.0: {}
-
-  d3-scale@4.0.2:
-    dependencies:
-      d3-array: 3.2.4
-      d3-format: 3.1.0
-      d3-interpolate: 3.0.1
-      d3-time: 3.1.0
-      d3-time-format: 4.1.0
-
-  d3-shape@3.2.0:
-    dependencies:
-      d3-path: 3.1.0
-
-  d3-time-format@4.1.0:
-    dependencies:
-      d3-time: 3.1.0
-
-  d3-time@3.1.0:
-    dependencies:
-      d3-array: 3.2.4
-
-  d3-timer@3.0.1: {}
 
   damerau-levenshtein@1.0.8: {}
 
@@ -22588,8 +22338,6 @@ snapshots:
   decache@4.6.2:
     dependencies:
       callsite: 1.0.0
-
-  decimal.js-light@2.5.1: {}
 
   decimal.js@10.5.0: {}
 
@@ -22788,7 +22536,18 @@ snapshots:
       dotenv-expand: 11.0.7
       minimist: 1.2.8
 
+  dotenv-cli@11.0.0:
+    dependencies:
+      cross-spawn: 7.0.6
+      dotenv: 17.2.1
+      dotenv-expand: 12.0.3
+      minimist: 1.2.8
+
   dotenv-expand@11.0.7:
+    dependencies:
+      dotenv: 16.5.0
+
+  dotenv-expand@12.0.3:
     dependencies:
       dotenv: 16.5.0
 
@@ -23023,8 +22782,6 @@ snapshots:
       is-callable: 1.2.7
       is-date-object: 1.1.0
       is-symbol: 1.1.1
-
-  es-toolkit@1.41.0: {}
 
   esast-util-from-estree@2.0.0:
     dependencies:
@@ -23751,8 +23508,6 @@ snapshots:
   event-target-shim@5.0.1: {}
 
   eventemitter3@4.0.7: {}
-
-  eventemitter3@5.0.1: {}
 
   events@1.1.1: {}
 
@@ -24576,8 +24331,6 @@ snapshots:
 
   immediate@3.0.6: {}
 
-  immer@10.2.0: {}
-
   import-fresh@3.3.1:
     dependencies:
       parent-module: 1.0.1
@@ -24618,8 +24371,6 @@ snapshots:
       es-errors: 1.3.0
       hasown: 2.0.2
       side-channel: 1.1.0
-
-  internmap@2.0.3: {}
 
   ioredis@5.6.1:
     dependencies:
@@ -25963,7 +25714,7 @@ snapshots:
       cors: 2.8.5
       next: 15.5.4(@babel/core@7.27.1)(@opentelemetry/api@1.9.0)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
 
-  nitropack@2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(xml2js@0.6.2):
+  nitropack@2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(xml2js@0.6.2):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.4.0
       '@netlify/functions': 3.1.5(encoding@0.1.13)(rollup@4.40.2)
@@ -26017,7 +25768,7 @@ snapshots:
       pretty-bytes: 6.1.1
       radix3: 1.1.2
       rollup: 4.40.2
-      rollup-plugin-visualizer: 5.14.0(rollup@4.40.2)
+      rollup-plugin-visualizer: 5.14.0(rolldown@1.0.0-beta.47)(rollup@4.40.2)
       scule: 1.3.0
       semver: 7.7.2
       serve-placeholder: 2.0.2
@@ -26951,15 +26702,6 @@ snapshots:
     dependencies:
       fast-deep-equal: 2.0.1
 
-  react-redux@9.2.0(@types/react@19.1.13)(react@19.1.1)(redux@5.0.1):
-    dependencies:
-      '@types/use-sync-external-store': 0.0.6
-      react: 19.1.1
-      use-sync-external-store: 1.5.0(react@19.1.1)
-    optionalDependencies:
-      '@types/react': 19.1.13
-      redux: 5.0.1
-
   react-refresh@0.17.0: {}
 
   react-remove-scroll-bar@2.3.8(@types/react@19.1.13)(react@19.1.1):
@@ -27102,26 +26844,6 @@ snapshots:
       tiny-invariant: 1.3.3
       tslib: 2.8.1
 
-  recharts@3.3.0(@types/react@19.1.13)(react-dom@19.1.1(react@19.1.1))(react-is@17.0.2)(react@19.1.1)(redux@5.0.1):
-    dependencies:
-      '@reduxjs/toolkit': 2.10.1(react-redux@9.2.0(@types/react@19.1.13)(react@19.1.1)(redux@5.0.1))(react@19.1.1)
-      clsx: 2.1.1
-      decimal.js-light: 2.5.1
-      es-toolkit: 1.41.0
-      eventemitter3: 5.0.1
-      immer: 10.2.0
-      react: 19.1.1
-      react-dom: 19.1.1(react@19.1.1)
-      react-is: 17.0.2
-      react-redux: 9.2.0(@types/react@19.1.13)(react@19.1.1)(redux@5.0.1)
-      reselect: 5.1.1
-      tiny-invariant: 1.3.3
-      use-sync-external-store: 1.5.0(react@19.1.1)
-      victory-vendor: 37.3.6
-    transitivePeerDependencies:
-      - '@types/react'
-      - redux
-
   recma-build-jsx@1.0.0:
     dependencies:
       '@types/estree': 1.0.8
@@ -27162,12 +26884,6 @@ snapshots:
   redis-parser@3.0.0:
     dependencies:
       redis-errors: 1.2.0
-
-  redux-thunk@3.1.0(redux@5.0.1):
-    dependencies:
-      redux: 5.0.1
-
-  redux@5.0.1: {}
 
   reflect.getprototypeof@1.0.10:
     dependencies:
@@ -27277,8 +26993,6 @@ snapshots:
   require-package-name@2.0.1: {}
 
   requires-port@1.0.0: {}
-
-  reselect@5.1.1: {}
 
   resend@4.6.0(react-dom@19.1.1(react@19.1.1))(react@19.1.1):
     dependencies:
@@ -27393,13 +27107,14 @@ snapshots:
     dependencies:
       rollup-plugin-inject: 3.0.2
 
-  rollup-plugin-visualizer@5.14.0(rollup@4.40.2):
+  rollup-plugin-visualizer@5.14.0(rolldown@1.0.0-beta.47)(rollup@4.40.2):
     dependencies:
       open: 8.4.2
       picomatch: 4.0.3
       source-map: 0.7.4
       yargs: 17.7.2
     optionalDependencies:
+      rolldown: 1.0.0-beta.47
       rollup: 4.40.2
 
   rollup-pluginutils@2.8.2:
@@ -27982,7 +27697,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(esbuild@0.25.5)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5)):
     dependencies:
-      '@storybook/builder-vite': 10.1.0-alpha.5(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
+      '@storybook/builder-vite': 10.1.0-alpha.7(esbuild@0.25.5)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.6.1)(terser@5.44.0)(yaml@2.8.1))(webpack@5.101.3(esbuild@0.25.5))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6
@@ -29103,24 +28818,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.2
 
-  victory-vendor@37.3.6:
-    dependencies:
-      '@types/d3-array': 3.2.2
-      '@types/d3-ease': 3.0.2
-      '@types/d3-interpolate': 3.0.4
-      '@types/d3-scale': 4.0.9
-      '@types/d3-shape': 3.1.7
-      '@types/d3-time': 3.0.4
-      '@types/d3-timer': 3.0.2
-      d3-array: 3.2.4
-      d3-ease: 3.0.1
-      d3-interpolate: 3.0.1
-      d3-scale: 4.0.2
-      d3-shape: 3.2.0
-      d3-time: 3.1.0
-      d3-timer: 3.0.1
-
-  vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1):
+  vinxi@0.5.6(@planetscale/database@1.19.0)(@types/node@22.15.17)(db0@0.3.2(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(mysql2@3.15.2))(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(ioredis@5.6.1)(jiti@2.6.1)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(terser@5.44.0)(xml2js@0.6.2)(yaml@2.8.1):
     dependencies:
       '@babel/core': 7.27.1
       '@babel/plugin-syntax-jsx': 7.27.1(@babel/core@7.27.1)
@@ -29142,7 +28840,7 @@ snapshots:
       hookable: 5.5.3
       http-proxy: 1.18.1
       micromatch: 4.0.8
-      nitropack: 2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(xml2js@0.6.2)
+      nitropack: 2.11.11(@planetscale/database@1.19.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))(encoding@0.1.13)(mysql2@3.15.2)(rolldown@1.0.0-beta.47)(xml2js@0.6.2)
       node-fetch-native: 1.6.6
       path-to-regexp: 6.3.0
       pathe: 1.1.2

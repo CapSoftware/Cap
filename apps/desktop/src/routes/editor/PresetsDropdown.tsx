@@ -2,7 +2,7 @@ import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { cx } from "cva";
 import { createSignal, For, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { useEditorContext } from "./context";
+import { normalizeProject, useEditorContext } from "./context";
 import {
 	DropdownItem,
 	dropdownContainerClasses,
@@ -47,12 +47,11 @@ export function PresetsDropdown() {
 
 									function applyPreset() {
 										setShowSettings(false);
-										setProject(
-											reconcile({
-												...preset.config,
-												timeline: project.timeline,
-											}),
-										);
+										const normalizedConfig = normalizeProject({
+											...preset.config,
+											timeline: project.timeline,
+										});
+										setProject(reconcile(normalizedConfig));
 									}
 
 									return (

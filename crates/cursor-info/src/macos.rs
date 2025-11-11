@@ -71,7 +71,7 @@ impl CursorShapeMacOS {
         Some(match self {
             Self::Arrow => ResolvedCursor {
                 raw: include_str!("../assets/mac/arrow.svg"),
-                hotspot: (0.347, 0.33),
+                hotspot: (0.302, 0.226),
             },
             Self::ContextualMenu => ResolvedCursor {
                 raw: include_str!("../assets/mac/contextual_menu.svg"),
@@ -96,7 +96,7 @@ impl CursorShapeMacOS {
             },
             Self::IBeam => ResolvedCursor {
                 raw: include_str!("../assets/mac/ibeam.svg"),
-                hotspot: (0.525, 0.52),
+                hotspot: (0.484, 0.520),
             },
             Self::OpenHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/open_hand.svg"),
@@ -108,7 +108,7 @@ impl CursorShapeMacOS {
             },
             Self::PointingHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/pointing_hand.svg"),
-                hotspot: (0.516, 0.461),
+                hotspot: (0.342, 0.172),
             },
             Self::ResizeDown => ResolvedCursor {
                 raw: include_str!("../assets/mac/resize_down.svg"),
@@ -141,7 +141,7 @@ impl CursorShapeMacOS {
             // Tahoe cursor variants
             Self::TahoeArrow => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/default.svg"),
-                hotspot: (0.495, 0.463),
+                hotspot: (0.320, 0.192),
             },
             Self::TahoeContextualMenu => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/context-menu.svg"),
@@ -167,7 +167,7 @@ impl CursorShapeMacOS {
 
             Self::TahoeIBeam => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/text.svg"),
-                hotspot: (0.525, 0.52),
+                hotspot: (0.493, 0.464),
             },
             Self::TahoeOpenHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/grab.svg"),
@@ -179,7 +179,7 @@ impl CursorShapeMacOS {
             },
             Self::TahoePointingHand => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/pointer.svg"),
-                hotspot: (0.516, 0.459),
+                hotspot: (0.425, 0.167),
             },
             Self::TahoeResizeDown => ResolvedCursor {
                 raw: include_str!("../assets/mac/tahoe/resize-s.svg"),

@@ -10,6 +10,7 @@ import HomeIcon from "./Home";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
 import ReactionIcon from "./Reaction";
+import RecordIcon from "./Record";
 import ReferIcon from "./Refer";
 import SettingsGearIcon from "./Settings";
 export {
@@ -27,4 +28,5 @@ export {
 	ClapIcon,
 	ChatIcon,
 	ReactionIcon,
+	RecordIcon,
 };

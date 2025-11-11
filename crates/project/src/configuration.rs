@@ -180,6 +180,14 @@ impl<T> From<(T, T)> for XY<T> {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CornerStyle {
+    #[default]
+    Squircle,
+    Rounded,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
@@ -216,6 +224,8 @@ pub struct BackgroundConfiguration {
     pub blur: f64,
     pub padding: f64,
     pub rounding: f64,
+    #[serde(default)]
+    pub rounding_type: CornerStyle,
     pub inset: u32,
     pub crop: Option<Crop>,
     #[serde(default)]
@@ -244,6 +254,7 @@ impl Default for BackgroundConfiguration {
             blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
+            rounding_type: CornerStyle::default(),
             inset: 0,
             crop: None,
             shadow: 73.6,
@@ -292,6 +303,8 @@ pub struct Camera {
     pub advanced_shadow: Option<ShadowConfiguration>,
     #[serde(default)]
     pub shape: CameraShape,
+    #[serde(default)]
+    pub rounding_type: CornerStyle,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -308,7 +321,7 @@ impl Camera {
     }
 
     fn default_rounding() -> f32 {
-        30.0
+        100.0
     }
 }
 
@@ -328,6 +341,7 @@ impl Default for Camera {
                 blur: 10.5,
             }),
             shape: CameraShape::Square,
+            rounding_type: CornerStyle::default(),
         }
     }
 }
@@ -384,13 +398,39 @@ pub enum CursorType {
     Circle,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorAnimationStyle {
     #[default]
-    Regular,
     Slow,
-    Fast,
+    #[serde(alias = "regular", alias = "quick", alias = "rapid", alias = "fast")]
+    Mellow,
+    Custom,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct CursorSmoothingPreset {
+    pub tension: f32,
+    pub mass: f32,
+    pub friction: f32,
+}
+
+impl CursorAnimationStyle {
+    pub fn preset(self) -> Option<CursorSmoothingPreset> {
+        match self {
+            Self::Slow => Some(CursorSmoothingPreset {
+                tension: 65.0,
+                mass: 1.8,
+                friction: 16.0,
+            }),
+            Self::Mellow => Some(CursorSmoothingPreset {
+                tension: 120.0,
+                mass: 1.1,
+                friction: 18.0,
+            }),
+            Self::Custom => None,
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -422,20 +462,29 @@ fn yes() -> bool {
 
 impl Default for CursorConfiguration {
     fn default() -> Self {
-        Self {
+        let animation_style = CursorAnimationStyle::default();
+        let mut config = Self {
             hide: false,
             hide_when_idle: false,
             hide_when_idle_delay: Self::default_hide_when_idle_delay(),
             size: 100,
             r#type: CursorType::default(),
-            animation_style: CursorAnimationStyle::Regular,
-            tension: 100.0,
-            mass: 1.0,
-            friction: 20.0,
+            animation_style,
+            tension: 65.0,
+            mass: 1.8,
+            friction: 16.0,
             raw: false,
             motion_blur: 0.5,
             use_svg: true,
+        };
+
+        if let Some(preset) = animation_style.preset() {
+            config.tension = preset.tension;
+            config.mass = preset.mass;
+            config.friction = preset.friction;
         }
+
+        config
     }
 }
 impl CursorConfiguration {

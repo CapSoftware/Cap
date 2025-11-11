@@ -61,6 +61,62 @@ export type CustomDomainResponse = {
 	domain_verified: boolean | null;
 };
 
+export type CornerRoundingType = "rounded" | "squircle";
+
+type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
+
+export type EditorProjectConfiguration = Omit<
+	ProjectConfiguration,
+	"background" | "camera"
+> & {
+	background: WithCornerStyle<ProjectConfiguration["background"]>;
+	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
+};
+
+function withCornerDefaults<
+	T extends {
+		roundingType?: CornerRoundingType;
+		rounding_type?: CornerRoundingType;
+	},
+>(value: T): T & { roundingType: CornerRoundingType } {
+	const roundingType = value.roundingType ?? value.rounding_type ?? "squircle";
+	return {
+		...value,
+		roundingType,
+	};
+}
+
+export function normalizeProject(
+	config: ProjectConfiguration,
+): EditorProjectConfiguration {
+	return {
+		...config,
+		background: withCornerDefaults(config.background),
+		camera: withCornerDefaults(config.camera),
+	};
+}
+
+export function serializeProjectConfiguration(
+	project: EditorProjectConfiguration,
+): ProjectConfiguration {
+	const { background, camera, ...rest } = project;
+	const { roundingType: backgroundRoundingType, ...backgroundRest } =
+		background;
+	const { roundingType: cameraRoundingType, ...cameraRest } = camera;
+
+	return {
+		...rest,
+		background: {
+			...backgroundRest,
+			roundingType: backgroundRoundingType,
+		},
+		camera: {
+			...cameraRest,
+			rounding_type: cameraRoundingType,
+		},
+	};
+}
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
 	(props: {
 		meta: () => TransformedMeta;
@@ -68,8 +124,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 		refetchMeta(): Promise<void>;
 	}) => {
 		const editorInstanceContext = useEditorInstanceContext();
-		const [project, setProject] = createStore<ProjectConfiguration>(
-			props.editorInstance.savedProjectConfig,
+		const [project, setProject] = createStore<EditorProjectConfiguration>(
+			normalizeProject(props.editorInstance.savedProjectConfig),
 		);
 
 		const projectActions = {
@@ -245,7 +301,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					trackStore(project);
 				},
 				debounce(() => {
-					commands.setProjectConfig(project);
+					commands.setProjectConfig(serializeProjectConfiguration(project));
 				}),
 				{ defer: true },
 			),

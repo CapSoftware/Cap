@@ -17,12 +17,12 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::broadcast;
+use tokio::{select, sync::broadcast};
 use tokio_util::{
     future::FutureExt as _,
     sync::{CancellationToken, DropGuard},
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub struct CMSampleBufferCapture;
@@ -269,7 +269,6 @@ pub struct CaptureError(pub arc::R<ns::Error>);
 struct Capturer {
     started: Arc<AtomicBool>,
     capturer: Arc<scap_screencapturekit::Capturer>,
-    // error_rx: broadcast::Receiver<arc::R<ns::Error>>,
 }
 
 impl Clone for Capturer {
@@ -283,31 +282,52 @@ impl Clone for Capturer {
 }
 
 impl Capturer {
-    fn new(
-        capturer: Arc<scap_screencapturekit::Capturer>,
-        // error_rx: broadcast::Receiver<arc::R<ns::Error>>,
-    ) -> Self {
+    fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
         Self {
             started: Arc::new(AtomicBool::new(false)),
             capturer,
-            // error_rx,
         }
     }
 
-    async fn start(&mut self) -> anyhow::Result<()> {
-        if !self.started.fetch_xor(true, atomic::Ordering::Relaxed) {
-            self.capturer.start().await?;
+    async fn start(&self) -> anyhow::Result<()> {
+        if self
+            .started
+            .compare_exchange(
+                false,
+                true,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            self.capturer
+                .start()
+                .await
+                .map_err(|err| anyhow!(format!("{err}")))?;
         }
 
         Ok(())
     }
 
-    async fn stop(&mut self) -> anyhow::Result<()> {
-        if self.started.fetch_xor(true, atomic::Ordering::Relaxed) {
+    async fn stop(&self) -> anyhow::Result<()> {
+        if self
+            .started
+            .compare_exchange(
+                true,
+                false,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
             self.capturer.stop().await.context("capturer_stop")?;
         }
 
         Ok(())
+    }
+
+    fn mark_stopped(&self) {
+        self.started.store(false, atomic::Ordering::Relaxed);
     }
 }
 
@@ -332,29 +352,66 @@ impl output_pipeline::VideoSource for VideoSource {
     type Frame = VideoFrame;
 
     async fn setup(
-        mut config: Self::Config,
+        config: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
-        ctx.tasks().spawn("screen-capture", async move {
-            if let Ok(err) = config.error_rx.recv().await {
-                return Err(anyhow!("{err}"));
-            }
+        let VideoSourceConfig {
+            inner,
+            capturer,
+            mut error_rx,
+            cancel_token,
+            drop_guard,
+            video_frame_counter,
+        } = config;
 
-            Ok(())
+        let monitor_capturer = capturer.clone();
+        let monitor_cancel = cancel_token.clone();
+        ctx.tasks().spawn("screen-capture-monitor", async move {
+            loop {
+                select! {
+                    _ = monitor_cancel.cancelled() => break Ok(()),
+                    recv = error_rx.recv() => {
+                        let err = match recv {
+                            Ok(err) => err,
+                            Err(broadcast::error::RecvError::Closed) => break Ok(()),
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                warn!("Screen capture error channel lagged; continuing");
+                                continue;
+                            }
+                        };
+
+                        if is_system_stop_error(err.as_ref()) {
+                            warn!("Screen capture stream stopped by the system; attempting restart");
+                            if monitor_cancel.is_cancelled() {
+                                break Ok(());
+                            }
+                            monitor_capturer.mark_stopped();
+                            if let Err(restart_err) = monitor_capturer.start().await {
+                                return Err(anyhow!(format!(
+                                    "Failed to restart ScreenCaptureKit stream: {restart_err:#}"
+                                )));
+                            }
+                            continue;
+                        }
+
+                        return Err(anyhow!(format!("{err}")));
+                    }
+                }
+            }
         });
 
-        ChannelVideoSource::setup(config.inner, video_tx, ctx)
+        ChannelVideoSource::setup(inner, video_tx, ctx)
             .await
             .map(|source| Self {
                 inner: source,
-                capturer: config.capturer,
-                cancel_token: config.cancel_token,
-                _drop_guard: config.drop_guard,
-                video_frame_counter: config.video_frame_counter,
+                capturer,
+                cancel_token,
+                _drop_guard: drop_guard,
+                video_frame_counter,
             })
     }
 
@@ -402,6 +459,10 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 }
 
+fn is_system_stop_error(err: &ns::Error) -> bool {
+    err.localized_description().to_string() == "Stream was stopped by the system"
+}
+
 pub struct SystemAudioSourceConfig(
     ChannelAudioSourceConfig,
     Capturer,
@@ -414,22 +475,36 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     type Config = SystemAudioSourceConfig;
 
     fn setup(
-        mut config: Self::Config,
+        config: Self::Config,
         tx: mpsc::Sender<AudioFrame>,
         ctx: &mut SetupCtx,
     ) -> impl Future<Output = anyhow::Result<Self>> + 'static
     where
         Self: Sized,
     {
+        let SystemAudioSourceConfig(channel_config, capturer, mut error_rx) = config;
+
         ctx.tasks().spawn("system-audio", async move {
-            if let Ok(err) = config.2.recv().await {
-                return Err(anyhow!("{err}"));
+            loop {
+                match error_rx.recv().await {
+                    Ok(err) => {
+                        if is_system_stop_error(err.as_ref()) {
+                            warn!("Screen capture audio stream stopped by the system; awaiting restart");
+                            continue;
+                        }
+
+                        return Err(anyhow!("{err}"));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
             }
 
             Ok(())
         });
 
-        ChannelAudioSource::setup(config.0, tx, ctx).map(|v| v.map(|source| Self(source, config.1)))
+        ChannelAudioSource::setup(channel_config, tx, ctx)
+            .map(|v| v.map(|source| Self(source, capturer)))
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {

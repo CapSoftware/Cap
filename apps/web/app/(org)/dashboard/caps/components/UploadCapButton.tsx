@@ -18,6 +18,7 @@ import {
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { ThumbnailRequest } from "@/lib/Requests/ThumbnailRequest";
+import { sendProgressUpdate } from "./sendProgressUpdate";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -517,29 +518,3 @@ async function legacyUploadCap(
 	setUploadStatus(undefined);
 	return false;
 }
-
-const sendProgressUpdate = async (
-	videoId: string,
-	uploaded: number,
-	total: number,
-) => {
-	try {
-		const response = await fetch("/api/desktop/video/progress", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				videoId,
-				uploaded,
-				total,
-				updatedAt: new Date().toISOString(),
-			}),
-		});
-
-		if (!response.ok)
-			console.error("Failed to send progress update:", response.status);
-	} catch (err) {
-		console.error("Error sending progress update:", err);
-	}
-};
