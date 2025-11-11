@@ -17,3 +17,16 @@ export type VideoOwner = {
 	name?: string | null;
 	image?: ImageUpload.ImageUrl | null;
 };
+
+export type ShareAnalyticsContext = {
+	city?: string | null;
+	country?: string | null;
+	referrer?: string | null;
+	referrerUrl?: string | null;
+	utmSource?: string | null;
+	utmMedium?: string | null;
+	utmCampaign?: string | null;
+	utmTerm?: string | null;
+	utmContent?: string | null;
+	userAgent?: string | null;
+};

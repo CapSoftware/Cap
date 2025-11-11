@@ -1488,9 +1488,20 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const mediaCurrentTime = useMediaSelector(
 		(state) => state.mediaCurrentTime ?? 0,
 	);
-	const [seekableStart = 0, seekableEnd = 0] = useMediaSelector(
+	const [seekableStartRaw = 0, seekableEndRaw = 0] = useMediaSelector(
 		(state) => state.mediaSeekable ?? [0, 0],
 	);
+	const seekableStart = Number.isFinite(seekableStartRaw)
+		? seekableStartRaw
+		: 0;
+	const seekableEnd =
+		Number.isFinite(seekableEndRaw) && seekableEndRaw >= seekableStart
+			? seekableEndRaw
+			: seekableStart;
+	const isSeekRangeValid =
+		Number.isFinite(seekableEnd) &&
+		Number.isFinite(seekableStart) &&
+		seekableEnd > seekableStart;
 	const mediaBuffered = useMediaSelector((state) => state.mediaBuffered ?? []);
 	const mediaEnded = useMediaSelector((state) => state.mediaEnded ?? false);
 
@@ -1537,7 +1548,29 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const timeCache = React.useRef<Map<number, string>>(new Map());
 
-	const displayValue = seekState.pendingSeekTime ?? mediaCurrentTime;
+	const onInteractionStart = React.useCallback(() => {
+		if (!store.getState().dragging) {
+			store.setState("dragging", true);
+		}
+	}, [store.getState, store.setState]);
+
+	const onInteractionEnd = React.useCallback(() => {
+		if (store.getState().dragging) {
+			store.setState("dragging", false);
+		}
+	}, [store.getState, store.setState]);
+
+	const displayValueCandidate =
+		seekState.pendingSeekTime ?? mediaCurrentTime ?? seekableStart;
+	const displayValue = Math.min(
+		Math.max(
+			Number.isFinite(displayValueCandidate)
+				? displayValueCandidate
+				: seekableStart,
+			seekableStart,
+		),
+		seekableEnd,
+	);
 
 	const isDisabled = disabled || context.disabled;
 	const tooltipDisabled =
@@ -1709,7 +1742,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	);
 
 	const onHoverProgressUpdate = React.useCallback(() => {
-		if (!seekRef.current || seekableEnd <= 0) return;
+		if (!seekRef.current || !isSeekRangeValid) return;
 
 		const hoverPercent = Math.min(
 			100,
@@ -1719,7 +1752,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			SEEK_HOVER_PERCENT,
 			`${hoverPercent.toFixed(4)}%`,
 		);
-	}, [seekableEnd]);
+	}, [isSeekRangeValid, seekableEnd]);
 
 	React.useEffect(() => {
 		if (seekState.pendingSeekTime !== null) {
@@ -1752,7 +1785,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	}, [dispatch, seekState.isHovering, tooltipDisabled]);
 
 	const bufferedProgress = React.useMemo(() => {
-		if (mediaBuffered.length === 0 || seekableEnd <= 0) return 0;
+		if (mediaBuffered.length === 0 || !isSeekRangeValid) return 0;
 
 		if (mediaEnded) return 1;
 
@@ -1765,7 +1798,14 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		}
 
 		return Math.min(1, seekableStart / seekableEnd);
-	}, [mediaBuffered, mediaCurrentTime, seekableEnd, mediaEnded, seekableStart]);
+	}, [
+		isSeekRangeValid,
+		mediaBuffered,
+		mediaCurrentTime,
+		seekableEnd,
+		mediaEnded,
+		seekableStart,
+	]);
 
 	const onPointerEnter = React.useCallback(() => {
 		if (seekRef.current) {
@@ -1777,7 +1817,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		horizontalMovementRef.current = 0;
 		verticalMovementRef.current = 0;
 
-		if (seekableEnd > 0) {
+		if (isSeekRangeValid) {
 			if (hoverTimeoutRef.current) {
 				clearTimeout(hoverTimeoutRef.current);
 			}
@@ -1792,7 +1832,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				}
 			}
 		}
-	}, [seekableEnd, onTooltipPositionUpdate, tooltipDisabled]);
+	}, [isSeekRangeValid, onTooltipPositionUpdate, tooltipDisabled]);
 
 	const onPointerLeave = React.useCallback(() => {
 		if (hoverTimeoutRef.current) {
@@ -1835,7 +1875,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 
 	const onPointerMove = React.useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
-			if (seekableEnd <= 0) return;
+			if (!isSeekRangeValid) return;
 
 			if (!seekRectRef.current && seekRef.current) {
 				seekRectRef.current = seekRef.current.getBoundingClientRect();
@@ -1926,6 +1966,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			});
 		},
 		[
+			isSeekRangeValid,
 			onPreviewUpdate,
 			onTooltipPositionUpdate,
 			onHoverProgressUpdate,
@@ -1939,11 +1980,9 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		(value: number[]) => {
 			const time = value[0] ?? 0;
 
-			setSeekState((prev) => ({ ...prev, pendingSeekTime: time }));
+			if (!store.getState().dragging) return;
 
-			if (!store.getState().dragging) {
-				store.setState("dragging", true);
-			}
+			setSeekState((prev) => ({ ...prev, pendingSeekTime: time }));
 
 			if (seekThrottleRef.current) {
 				cancelAnimationFrame(seekThrottleRef.current);
@@ -1957,7 +1996,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				seekThrottleRef.current = null;
 			});
 		},
-		[dispatch, store.getState, store.setState],
+		[dispatch, store.getState],
 	);
 
 	const onSeekCommit = React.useCallback(
@@ -1998,9 +2037,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 			horizontalMovementRef.current = 0;
 			verticalMovementRef.current = 0;
 
-			if (store.getState().dragging) {
-				store.setState("dragging", false);
-			}
+			onInteractionEnd();
 
 			dispatch({
 				type: MediaActionTypes.MEDIA_SEEK_REQUEST,
@@ -2012,7 +2049,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				detail: undefined,
 			});
 		},
-		[dispatch, store.getState, store.setState],
+		[dispatch, onInteractionEnd],
 	);
 
 	React.useEffect(() => {
@@ -2037,7 +2074,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 	const hoverTime = getCachedTime(hoverTimeRef.current, seekableEnd);
 
 	const chapterSeparators = React.useMemo(() => {
-		if (withoutChapter || chapterCues.length <= 1 || seekableEnd <= 0) {
+		if (withoutChapter || chapterCues.length <= 1 || !isSeekRangeValid) {
 			return null;
 		}
 
@@ -2059,7 +2096,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				/>
 			);
 		});
-	}, [chapterCues, seekableEnd, withoutChapter]);
+	}, [chapterCues, isSeekRangeValid, seekableEnd, withoutChapter]);
 
 	const spriteStyle = React.useMemo<React.CSSProperties>(() => {
 		if (!thumbnail?.coords || !thumbnail?.src) {
@@ -2088,7 +2125,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 		};
 	}, [thumbnail?.coords, thumbnail?.src]);
 
-	const SeekSlider = (
+	const SeekSlider = isSeekRangeValid ? (
 		<div data-slot="media-player-seek-container" className="relative w-full">
 			<SliderPrimitive.Root
 				aria-controls={context.mediaId}
@@ -2109,6 +2146,11 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				value={[displayValue]}
 				onValueChange={onSeek}
 				onValueCommit={onSeekCommit}
+				onPointerDown={onInteractionStart}
+				onPointerUp={onInteractionEnd}
+				onPointerCancel={onInteractionEnd}
+				onKeyDown={onInteractionStart}
+				onKeyUp={onInteractionEnd}
 				onPointerEnter={onPointerEnter}
 				onPointerLeave={onPointerLeave}
 				onPointerMove={onPointerMove}
@@ -2122,7 +2164,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 						}}
 					/>
 					<SliderPrimitive.Range className="absolute h-full bg-white will-change-[width]" />
-					{seekState.isHovering && seekableEnd > 0 && (
+					{seekState.isHovering && (
 						<div
 							data-slot="media-player-seek-hover-range"
 							className="absolute h-full bg-white/70 will-change-[width,opacity]"
@@ -2136,74 +2178,70 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
 				</SliderPrimitive.Track>
 				<SliderPrimitive.Thumb className="relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
 			</SliderPrimitive.Root>
-			{!withoutTooltip &&
-				!context.withoutTooltip &&
-				seekState.isHovering &&
-				seekableEnd > 0 && (
-					<MediaPlayerPortal>
+			{!withoutTooltip && !context.withoutTooltip && seekState.isHovering && (
+				<MediaPlayerPortal>
+					<div
+						ref={tooltipRef}
+						className="pointer-events-none z-50 [backface-visibility:hidden] [contain:layout_style] [transition:opacity_150ms_ease-in-out]"
+						style={{
+							position: "fixed" as const,
+							left: `var(${SEEK_TOOLTIP_X}, 0rem)`,
+							top: `var(${SEEK_TOOLTIP_Y}, 0rem)`,
+							transform: `translateX(-50%) translateY(calc(-100% - ${currentTooltipSideOffset}px))`,
+							visibility: seekState.hasInitialPosition ? "visible" : "hidden",
+							opacity: seekState.hasInitialPosition ? 1 : 0,
+						}}
+					>
 						<div
-							ref={tooltipRef}
-							className="pointer-events-none z-50 [backface-visibility:hidden] [contain:layout_style] [transition:opacity_150ms_ease-in-out]"
-							style={{
-								position: "fixed" as const,
-								left: `var(${SEEK_TOOLTIP_X}, 0rem)`,
-								top: `var(${SEEK_TOOLTIP_Y}, 0rem)`,
-								transform: `translateX(-50%) translateY(calc(-100% - ${currentTooltipSideOffset}px))`,
-								visibility: seekState.hasInitialPosition ? "visible" : "hidden",
-								opacity: seekState.hasInitialPosition ? 1 : 0,
-							}}
+							className={cn(
+								"flex flex-col items-center gap-1.5 rounded-md border border-white/10 bg-gray-12 text-foreground shadow-sm",
+								thumbnail && "min-h-10",
+								!thumbnail && currentChapterCue && "px-3 py-1.5",
+							)}
 						>
+                {thumbnail?.src && (
+                  <div
+                    data-slot="media-player-seek-thumbnail"
+                    className="overflow-hidden rounded-md rounded-b-none"
+                    style={{
+                      width: `${SPRITE_CONTAINER_WIDTH}px`,
+                      height: `${SPRITE_CONTAINER_HEIGHT}px`,
+                    }}
+                  >
+                    <div
+                      className="bg-no-repeat [background-size:cover]"
+                      style={spriteStyle}
+                    />
+                  </div>
+                )}
+							{currentChapterCue && (
+								<div
+									data-slot="media-player-seek-chapter-title"
+									className="text-xs text-center text-white line-clamp-2 max-w-48"
+								>
+									{currentChapterCue.text}
+								</div>
+							)}
 							<div
+								data-slot="media-player-seek-time"
 								className={cn(
-									"flex flex-col items-center gap-1.5 rounded-md border border-white/10 bg-gray-12 text-foreground shadow-sm",
-									thumbnail && "min-h-10",
-									!thumbnail && currentChapterCue && "px-3 py-1.5",
+									"whitespace-nowrap text-center text-xs text-white tabular-nums",
+									thumbnail && "pb-1.5",
+									!(thumbnail || currentChapterCue) && "px-2.5 py-1",
 								)}
 							>
-								{thumbnail?.src && (
-									<div
-										data-slot="media-player-seek-thumbnail"
-										className="overflow-hidden rounded-md rounded-b-none"
-										style={{
-											width: `${SPRITE_CONTAINER_WIDTH}px`,
-											height: `${SPRITE_CONTAINER_HEIGHT}px`,
-										}}
-									>
-										{thumbnail.coords ? (
-											<div style={spriteStyle} />
-										) : (
-											<img
-												src={thumbnail.src}
-												alt={`Preview at ${hoverTime}`}
-												className="object-cover size-full"
-											/>
-										)}
-									</div>
-								)}
-								{currentChapterCue && (
-									<div
-										data-slot="media-player-seek-chapter-title"
-										className="text-xs text-center text-white line-clamp-2 max-w-48"
-									>
-										{currentChapterCue.text}
-									</div>
-								)}
-								<div
-									data-slot="media-player-seek-time"
-									className={cn(
-										"whitespace-nowrap text-center text-xs text-white tabular-nums",
-										thumbnail && "pb-1.5",
-										!(thumbnail || currentChapterCue) && "px-2.5 py-1",
-									)}
-								>
-									{tooltipTimeVariant === "progress"
-										? `${hoverTime} / ${duration}`
-										: hoverTime}
-								</div>
+								{tooltipTimeVariant === "progress"
+									? `${hoverTime} / ${duration}`
+									: hoverTime}
 							</div>
 						</div>
-					</MediaPlayerPortal>
-				)}
+					</div>
+				</MediaPlayerPortal>
+			)}
+		</div>
+	) : (
+		<div data-slot="media-player-seek-container" className="relative w-full">
+			<div className="overflow-hidden relative w-full h-1 rounded-full bg-white/15" />
 		</div>
 	);
 

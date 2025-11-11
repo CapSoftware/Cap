@@ -1,7 +1,12 @@
 import { serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { Policy, Video, VideoAnalytics } from "@cap/web-domain";
-import { FetchHttpClient, HttpBody, HttpClient } from "@effect/platform";
+import {
+	FetchHttpClient,
+	HttpBody,
+	HttpClient,
+	HttpClientResponse,
+} from "@effect/platform";
 import { Effect } from "effect";
 import { VideosPolicy } from "../Videos/VideosPolicy";
 import { VideosRepo } from "../Videos/VideosRepo";
@@ -66,7 +71,7 @@ export class VideosAnalytics extends Effect.Service<VideosAnalytics>()(
 				}),
 
 				getAnalytics: Effect.fn("VideosAnalytics.getAnalytics")(function* (
-					videoId: Video.VideoId,
+					_videoId: Video.VideoId,
 				) {
 					// TODO: Implement this
 
@@ -84,30 +89,50 @@ export class VideosAnalytics extends Effect.Service<VideosAnalytics>()(
 					const host = serverEnv().TINYBIRD_HOST;
 					if (!token || !host) return;
 
-					console.log("TINYBIRD EVENT"); // TODO
-					const response = yield* client.post(
-						`${host}/v0/events?name=analytics_views`,
-						{
-							body: HttpBody.unsafeJson({
-								timestamp: new Date().toISOString(),
-								version: "1",
-								session_id: "todo", // TODO
-								video_id: videoId,
-								payload: JSON.stringify({
-									hello: "world", // TODO
-								}),
-							}),
-							headers: {
-								Authorization: `Bearer ${token}`,
-							},
-						},
-					);
-					// const response = yield* HttpClientResponse.filterStatusOk(response);
-					if (response.status !== 200) {
-						// TODO
-					}
+					const payload = {
+						timestamp: new Date().toISOString(),
+						version: "1",
+						session_id: event.sessionId ?? null,
+						video_id: videoId,
+						watch_time_seconds: event.watchTimeSeconds ?? 0,
+						city: event.city ?? null,
+						country: event.country ?? null,
+						device: event.device ?? null,
+						browser: event.browser ?? null,
+						os: event.os ?? null,
+						referrer: event.referrer ?? null,
+						referrer_url: event.referrerUrl ?? null,
+						utm_source: event.utmSource ?? null,
+						utm_medium: event.utmMedium ?? null,
+						utm_campaign: event.utmCampaign ?? null,
+						utm_term: event.utmTerm ?? null,
+						utm_content: event.utmContent ?? null,
+						payload: JSON.stringify({
+							watchTimeSeconds: event.watchTimeSeconds ?? 0,
+							city: event.city ?? null,
+							country: event.country ?? null,
+							device: event.device ?? null,
+							browser: event.browser ?? null,
+							os: event.os ?? null,
+							referrer: event.referrer ?? null,
+							referrerUrl: event.referrerUrl ?? null,
+							utmSource: event.utmSource ?? null,
+							utmMedium: event.utmMedium ?? null,
+							utmCampaign: event.utmCampaign ?? null,
+							utmTerm: event.utmTerm ?? null,
+							utmContent: event.utmContent ?? null,
+						}),
+					};
 
-					console.log(response.status, yield* response.text);
+					console.log("TINYBIRD EVENT", payload);
+
+					yield* client
+						.post(`${host}/v0/events?name=analytics_views`, {
+							body: yield* HttpBody.json(payload),
+						headers: {
+							Authorization: `Bearer ${token}`,
+						},
+					});
 				}),
 			};
 		}),

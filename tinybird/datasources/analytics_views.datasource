@@ -10,6 +10,21 @@ SCHEMA >
     `session_id` Nullable(String) `json:$.session_id`,
     `video_id` String `json:$.video_id`,
 
+    `watch_time_seconds` Float32 `json:$.watch_time_seconds`,
+
+    `city` LowCardinality(String) `json:$.city`,
+    `country` LowCardinality(String) `json:$.country`,
+    `device` LowCardinality(String) `json:$.device`,
+    `browser` LowCardinality(String) `json:$.browser`,
+    `os` LowCardinality(String) `json:$.os`,
+    `referrer` LowCardinality(String) `json:$.referrer`,
+    `referrer_url` String `json:$.referrer_url`,
+    `utm_source` LowCardinality(String) `json:$.utm_source`,
+    `utm_medium` LowCardinality(String) `json:$.utm_medium`,
+    `utm_campaign` LowCardinality(String) `json:$.utm_campaign`,
+    `utm_term` LowCardinality(String) `json:$.utm_term`,
+    `utm_content` LowCardinality(String) `json:$.utm_content`,
+
     `payload` String `json:$.payload`
 
 ENGINE MergeTree

@@ -1,18 +1,20 @@
 import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
-import type { ImageUpload } from "@cap/web-domain";
+import type { ImageUpload, VideoAnalytics } from "@cap/web-domain";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import type { VideoData } from "../types";
+import type { ShareAnalyticsContext, VideoData } from "../types";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
@@ -22,9 +24,12 @@ import {
 	type TranscriptEntry,
 } from "./utils/transcript-utils";
 
+const SHARE_WATCH_TIME_ENABLED =
+	process.env.NEXT_PUBLIC_SHARE_WATCH_TIME === "true";
+
 declare global {
 	interface Window {
-		MSStream: any;
+		MSStream: unknown;
 	}
 }
 
@@ -46,6 +51,7 @@ export const ShareVideo = forwardRef<
 		areCommentStampsDisabled?: boolean;
 		areReactionStampsDisabled?: boolean;
 		aiProcessing?: boolean;
+		analyticsContext?: ShareAnalyticsContext;
 	}
 >(
 	(
@@ -57,6 +63,7 @@ export const ShareVideo = forwardRef<
 			areChaptersDisabled,
 			areCommentStampsDisabled,
 			areReactionStampsDisabled,
+			analyticsContext,
 		},
 		ref,
 	) => {
@@ -75,17 +82,213 @@ export const ShareVideo = forwardRef<
 		);
 
 		const rpc = useRpcClient();
-		const mutation = useEffectMutation({
-			mutationFn: () =>
-				rpc.VideosCaptureEvent({
-					video: data.id,
-				}),
+		const { mutate: captureEvent } = useEffectMutation({
+			mutationFn: (event: VideoAnalytics.VideoCaptureEvent) =>
+				rpc.VideosCaptureEvent(event),
 		});
 
-		// biome-ignore lint/correctness/useExhaustiveDependencies: just cause
+		const sessionId = useMemo(() => ensureShareSessionId(), []);
+		const userAgentDetails = useMemo(
+			() =>
+				deriveUserAgentDetails(
+					analyticsContext?.userAgent ??
+						(typeof navigator !== "undefined"
+							? navigator.userAgent
+							: undefined),
+				),
+			[analyticsContext?.userAgent],
+		);
+
+		const analyticsBase = useMemo(
+			() => ({
+				video: data.id,
+				sessionId: sessionId ?? undefined,
+				city: analyticsContext?.city ?? undefined,
+				country: analyticsContext?.country ?? undefined,
+				referrer: analyticsContext?.referrer ?? undefined,
+				referrerUrl: analyticsContext?.referrerUrl ?? undefined,
+				utmSource: analyticsContext?.utmSource ?? undefined,
+				utmMedium: analyticsContext?.utmMedium ?? undefined,
+				utmCampaign: analyticsContext?.utmCampaign ?? undefined,
+				utmTerm: analyticsContext?.utmTerm ?? undefined,
+				utmContent: analyticsContext?.utmContent ?? undefined,
+				device: userAgentDetails.device ?? undefined,
+				browser: userAgentDetails.browser ?? undefined,
+				os: userAgentDetails.os ?? undefined,
+			}),
+			[
+				analyticsContext?.city,
+				analyticsContext?.country,
+				analyticsContext?.referrer,
+				analyticsContext?.referrerUrl,
+				analyticsContext?.utmSource,
+				analyticsContext?.utmMedium,
+				analyticsContext?.utmCampaign,
+				analyticsContext?.utmTerm,
+				analyticsContext?.utmContent,
+				data.id,
+				sessionId,
+				userAgentDetails.browser,
+				userAgentDetails.device,
+				userAgentDetails.os,
+			],
+		);
+
+		const watchTimeTrackingEnabled =
+			SHARE_WATCH_TIME_ENABLED && Boolean(sessionId) && Boolean(analyticsContext);
+
+		const watchStateRef = useRef({
+			startedAt: null as number | null,
+			accumulatedMs: 0,
+		});
+		const hasFlushedRef = useRef(false);
+		const hasInitializedRef = useRef(false);
+		const didStrictCleanupRef = useRef(false);
+
+		const startWatchTimer = useCallback(() => {
+			if (!watchTimeTrackingEnabled) return;
+			if (watchStateRef.current.startedAt !== null) return;
+			watchStateRef.current.startedAt = nowMs();
+		}, [watchTimeTrackingEnabled]);
+
+		const stopWatchTimer = useCallback(() => {
+			if (!watchTimeTrackingEnabled) return;
+			if (watchStateRef.current.startedAt === null) return;
+			watchStateRef.current.accumulatedMs +=
+				nowMs() - watchStateRef.current.startedAt;
+			watchStateRef.current.startedAt = null;
+		}, [watchTimeTrackingEnabled]);
+
+		const readWatchTimeSeconds = useCallback(() => {
+			if (!watchTimeTrackingEnabled) return 0;
+			stopWatchTimer();
+			return watchStateRef.current.accumulatedMs / 1000;
+		}, [stopWatchTimer, watchTimeTrackingEnabled]);
+
+		const flushAnalyticsEvent = useCallback(
+			(_reason?: string) => {
+				if (!watchTimeTrackingEnabled) return;
+				if (hasFlushedRef.current) return;
+				const watchTimeSeconds = Number(
+					Math.max(0, readWatchTimeSeconds()).toFixed(2),
+				);
+				const payload: VideoAnalytics.VideoCaptureEvent = {
+					...analyticsBase,
+					watchTimeSeconds,
+				};
+				captureEvent(payload);
+				hasFlushedRef.current = true;
+			},
+			[analyticsBase, captureEvent, readWatchTimeSeconds, watchTimeTrackingEnabled],
+		);
+
 		useEffect(() => {
-			if (mutation.isIdle) mutation.mutate();
-		}, []);
+			if (!watchTimeTrackingEnabled) return;
+			if (hasInitializedRef.current) {
+				flushAnalyticsEvent(`video-change-${data.id}`);
+			} else {
+				hasInitializedRef.current = true;
+			}
+			watchStateRef.current = { startedAt: null, accumulatedMs: 0 };
+			hasFlushedRef.current = false;
+		}, [data.id, flushAnalyticsEvent, watchTimeTrackingEnabled]);
+
+		useEffect(
+			() => () => {
+				if (!watchTimeTrackingEnabled) return;
+				if (didStrictCleanupRef.current) {
+					flushAnalyticsEvent("unmount");
+				} else {
+					didStrictCleanupRef.current = true;
+				}
+			},
+			[flushAnalyticsEvent, watchTimeTrackingEnabled],
+		);
+
+		useEffect(() => {
+			if (!watchTimeTrackingEnabled) return;
+			if (typeof window === "undefined") return;
+			let rafId: number | null = null;
+			let cleanup: (() => void) | undefined;
+
+			const attach = () => {
+				const video = videoRef.current;
+				if (!video) return false;
+
+				const handlePlay = () => startWatchTimer();
+				const handlePause = () => stopWatchTimer();
+				const handleEnded = () => {
+					stopWatchTimer();
+					flushAnalyticsEvent("ended");
+				};
+
+				video.addEventListener("play", handlePlay);
+				video.addEventListener("playing", handlePlay);
+				video.addEventListener("pause", handlePause);
+				video.addEventListener("waiting", handlePause);
+				video.addEventListener("seeking", handlePause);
+				video.addEventListener("ended", handleEnded);
+
+				cleanup = () => {
+					video.removeEventListener("play", handlePlay);
+					video.removeEventListener("playing", handlePlay);
+					video.removeEventListener("pause", handlePause);
+					video.removeEventListener("waiting", handlePause);
+					video.removeEventListener("seeking", handlePause);
+					video.removeEventListener("ended", handleEnded);
+				};
+
+				return true;
+			};
+
+			if (!attach()) {
+				const check = () => {
+					if (attach()) return;
+					rafId = window.requestAnimationFrame(check);
+				};
+				rafId = window.requestAnimationFrame(check);
+			}
+
+			return () => {
+				cleanup?.();
+				if (rafId) window.cancelAnimationFrame(rafId);
+			};
+		}, [
+			flushAnalyticsEvent,
+			startWatchTimer,
+			stopWatchTimer,
+			watchTimeTrackingEnabled,
+		]);
+
+		useEffect(() => {
+			if (!watchTimeTrackingEnabled) return;
+			if (typeof window === "undefined") return;
+			const handleVisibility = () => {
+				if (document.visibilityState === "hidden") {
+					flushAnalyticsEvent("visibility");
+				}
+			};
+			const handlePageHide = () => flushAnalyticsEvent("pagehide");
+			const handleBeforeUnload = () => flushAnalyticsEvent("beforeunload");
+
+			document.addEventListener("visibilitychange", handleVisibility);
+			window.addEventListener("pagehide", handlePageHide);
+			window.addEventListener("beforeunload", handleBeforeUnload);
+
+			return () => {
+				document.removeEventListener("visibilitychange", handleVisibility);
+				window.removeEventListener("pagehide", handlePageHide);
+				window.removeEventListener("beforeunload", handleBeforeUnload);
+			};
+		}, [flushAnalyticsEvent, watchTimeTrackingEnabled]);
+
+		useEffect(
+			() => () => {
+				if (!watchTimeTrackingEnabled) return;
+				flushAnalyticsEvent("unmount");
+			},
+			[flushAnalyticsEvent, watchTimeTrackingEnabled],
+		);
 
 		// Handle comments data
 		useEffect(() => {
@@ -145,7 +348,7 @@ export const ShareVideo = forwardRef<
 					setSubtitleUrl(null);
 				}
 			}
-		}, [data.transcriptionStatus, transcriptData]);
+		}, [data.transcriptionStatus, transcriptData, subtitleUrl]);
 
 		// Handle chapters URL creation
 		useEffect(() => {
@@ -171,7 +374,7 @@ export const ShareVideo = forwardRef<
 					setChaptersUrl(null);
 				}
 			}
-		}, [chapters]);
+		}, [chapters, chaptersUrl]);
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
@@ -236,8 +439,10 @@ export const ShareVideo = forwardRef<
 
 				{!data.owner.isPro && (
 					<div className="absolute top-4 left-4 z-30">
-						<div
-							className="block cursor-pointer"
+						<button
+							type="button"
+							aria-label="Upgrade to remove watermark"
+							className="block cursor-pointer bg-transparent border-0 p-0"
 							onClick={(e) => {
 								e.stopPropagation();
 								setUpgradeModalOpen(true);
@@ -254,7 +459,7 @@ export const ShareVideo = forwardRef<
 									</p>
 								</div>
 							</div>
-						</div>
+						</button>
 					</div>
 				)}
 				<UpgradeModal
@@ -265,3 +470,75 @@ export const ShareVideo = forwardRef<
 		);
 	},
 );
+
+const SHARE_SESSION_STORAGE_KEY = "cap_share_view_session";
+
+const ensureShareSessionId = () => {
+	if (typeof window === "undefined") return undefined;
+	try {
+		const existing = window.sessionStorage.getItem(SHARE_SESSION_STORAGE_KEY);
+		if (existing) return existing;
+		const newId =
+			typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+				? crypto.randomUUID()
+				: Math.random().toString(36).slice(2);
+		window.sessionStorage.setItem(SHARE_SESSION_STORAGE_KEY, newId);
+		return newId;
+	} catch {
+		return undefined;
+	}
+};
+
+const nowMs = () =>
+	typeof performance !== "undefined" && typeof performance.now === "function"
+		? performance.now()
+		: Date.now();
+
+type UserAgentDetails = {
+	device?: string;
+	browser?: string;
+	os?: string;
+};
+
+const deriveUserAgentDetails = (ua?: string): UserAgentDetails => {
+	if (!ua) return {};
+	const value = ua.toLowerCase();
+	const details: UserAgentDetails = {};
+
+	if (
+		/ipad|tablet/.test(value) ||
+		(/android/.test(value) && !/mobile/.test(value))
+	) {
+		details.device = "tablet";
+	} else if (/mobi|iphone|ipod|android/.test(value)) {
+		details.device = "mobile";
+	} else {
+		details.device = "desktop";
+	}
+
+	if (/edg\//.test(value)) details.browser = "Edge";
+	else if (
+		/chrome|crios|crmo/.test(value) &&
+		!/opr\//.test(value) &&
+		!/edg\//.test(value)
+	)
+		details.browser = "Chrome";
+	else if (/safari/.test(value) && !/chrome|crios|android/.test(value))
+		details.browser = "Safari";
+	else if (/firefox|fxios/.test(value)) details.browser = "Firefox";
+	else if (/opr\//.test(value) || /opera/.test(value))
+		details.browser = "Opera";
+	else if (/msie|trident/.test(value)) details.browser = "IE";
+	else details.browser = "Other";
+
+	if (/windows nt/.test(value)) details.os = "Windows";
+	else if (/mac os x/.test(value) && !/iphone|ipad|ipod/.test(value))
+		details.os = "macOS";
+	else if (/iphone|ipad|ipod/.test(value)) details.os = "iOS";
+	else if (/android/.test(value)) details.os = "Android";
+	else if (/cros/.test(value)) details.os = "ChromeOS";
+	else if (/linux/.test(value)) details.os = "Linux";
+	else details.os = "Other";
+
+	return details;
+};

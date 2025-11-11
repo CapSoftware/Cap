@@ -21,7 +21,7 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import SummaryChapters from "./_components/SummaryChapters";
 import { Toolbar } from "./_components/Toolbar";
-import type { VideoData } from "./types";
+import type { ShareAnalyticsContext, VideoData } from "./types";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 	authorName: string | null;
@@ -49,6 +49,7 @@ interface ShareProps {
 		processing?: boolean;
 	} | null;
 	aiGenerationEnabled: boolean;
+	analyticsContext?: ShareAnalyticsContext;
 }
 
 const useVideoStatus = (
@@ -134,6 +135,7 @@ export const Share = ({
 	initialAiData,
 	aiGenerationEnabled,
 	videoSettings,
+	analyticsContext,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -287,6 +289,7 @@ export const Share = ({
 								areReactionStampsDisabled={areReactionStampsDisabled}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
+								analyticsContext={analyticsContext}
 								ref={playerRef}
 							/>
 						</div>

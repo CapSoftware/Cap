@@ -73,9 +73,9 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTag("S3Error", () => new InternalError({ type: "s3" })),
 				),
 
-			VideosGetThumbnails: (videoIds) =>
+			VideosGetThumbnails: (videoIds: ReadonlyArray<Video.VideoId>) =>
 				Effect.all(
-					videoIds.map((id) =>
+					videoIds.map((id: Video.VideoId) =>
 						videos.getThumbnailURL(id).pipe(
 							Effect.catchTag(
 								"DatabaseError",
@@ -98,49 +98,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					{ concurrency: 10 },
 				).pipe(
 					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
-					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
-					),
-				),
-
-			VideosGetAnalytics: (videoIds) =>
-				Effect.all(
-					videoIds.map((id) =>
-						videos.getAnalytics(id).pipe(
-							Effect.catchTag(
-								"DatabaseError",
-								() => new InternalError({ type: "database" }),
-							),
-							Effect.catchTag(
-								"UnknownException",
-								() => new InternalError({ type: "unknown" }),
-							),
-							Effect.matchEffect({
-								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
-								onFailure: (e) =>
-									Schema.is(InternalError)(e)
-										? Effect.fail(e)
-										: Effect.succeed(Exit.fail(e)),
-							}),
-							Effect.map((v) => Unify.unify(v)),
-						),
-					),
-					{ concurrency: 10 },
-				).pipe(
-					provideOptionalAuth,
-					Effect.catchTag(
-						"DatabaseError",
-						() => new InternalError({ type: "database" }),
-					),
-					Effect.catchTag(
-						"UnknownException",
-						() => new InternalError({ type: "unknown" }),
-					),
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
+					}),
 				),
 		};
 	}),
