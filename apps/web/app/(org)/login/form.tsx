@@ -10,7 +10,7 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
-import { LucideArrowUpRight } from "lucide-react";
+import { KeyRound, LucideArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -40,6 +40,8 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const [password, setPassword] = useState("");
+	const [showCredientialLogin,setShowCredientialLogin]=useState(false);	
 	const theme = Cookies.get("theme") || "light";
 
 	useEffect(() => {
@@ -248,6 +250,60 @@ export function LoginForm() {
 											e.preventDefault();
 											if (!email) return;
 
+											if (showCredientialLogin) {
+												if (!email || !password) {
+												  toast.error("Please enter email and password");
+												  return;
+												}
+											  
+												try {
+												  setLoading(true);
+												  trackEvent("auth_started", { method: "password", is_signup: false });
+											  
+												  const res = await signIn("credentials", {
+													email,
+													password,
+													redirect: false,
+													...(next && next.length > 0 ? { callbackUrl: next } : {}),
+												  });
+											  
+												  setLoading(false);
+											  
+												  if (res?.ok && !res?.error) {
+													trackEvent("auth_success", { method: "password", is_signup: false });
+													router.push(next || "/dashboard");
+													return;
+												  }
+												  // Handle specific known errors first
+												  if (res?.error?.toLowerCase().includes("verify")) {
+													toast.error("Please verify your email before logging in.");
+													const resend = await fetch("/api/auth/resend", {
+													  method: "POST",
+													  headers: { "Content-Type": "application/json" },
+													  body: JSON.stringify({ email }),
+													});
+												
+													const data = await resend.json();
+													if (!data?.status) throw new Error("Something went wrong, try other login methods.");
+												
+													router.push(`/verify-otp?email=${encodeURIComponent(email)}&type=credentials`);
+													return;
+												  }
+
+												  if (res?.error) {
+													toast.error(res.error);
+													return;
+												  }
+
+												} catch (error) {
+												  console.error("Credential login error:", error);
+												  toast.error("Unexpected error, please try again later.");
+												} finally {
+												  setLoading(false);
+												}
+												return;
+											  }
+
 											// Check if we're rate limited on the client side
 											if (lastEmailSentTime) {
 												const timeSinceLastRequest =
@@ -309,15 +365,28 @@ export function LoginForm() {
 										}}
 										className="flex flex-col space-y-3"
 									>
-										<NormalLogin
-											setShowOrgInput={setShowOrgInput}
-											email={email}
-											emailSent={emailSent}
-											setEmail={setEmail}
-											loading={loading}
-											oauthError={oauthError}
-											handleGoogleSignIn={handleGoogleSignIn}
-										/>
+										{showCredientialLogin ? (
+											<LoginWithEmailAndPassword
+												email={email}
+												emailSent={emailSent}
+												setEmail={setEmail}
+												password={password}
+												setPassword={setPassword}
+												loading={loading}
+												setShowCredientialLogin={setShowCredientialLogin}
+											/>
+										) : (
+											<NormalLogin
+												setShowOrgInput={setShowOrgInput}
+												email={email}
+												emailSent={emailSent}
+												setEmail={setEmail}
+												loading={loading}
+												oauthError={oauthError}
+												handleGoogleSignIn={handleGoogleSignIn}
+												setShowCredientialLogin={setShowCredientialLogin}
+											/>
+										)}
 									</motion.form>
 								)}
 							</motion.div>
@@ -388,6 +457,91 @@ const LoginWithSSO = ({
 	);
 };
 
+const LoginWithEmailAndPassword = ({
+	email,
+	emailSent,
+	setEmail,
+	loading,
+	password,
+	setPassword,
+	setShowCredientialLogin
+}: {
+	email: string;
+	emailSent: boolean;
+	setEmail: (email: string) => void;
+	password: string,
+	setPassword: (password: string) => void;
+	loading: boolean;
+	setShowCredientialLogin : (show : boolean) => void
+
+}) => {
+	return (
+		<motion.div>
+			<motion.div layout className="flex flex-col space-y-3">
+				<MotionInput
+					id="email"
+					name="email"
+					autoFocus
+					type="email"
+					placeholder={emailSent ? "" : "tim@apple.com"}
+					autoComplete="email"
+					required
+					value={email}
+					disabled={emailSent || loading}
+					onChange={(e) => {
+						setEmail(e.target.value);
+					}}
+				/>
+				<MotionInput
+					id="password"
+					name="password"
+					autoFocus
+					type="password"
+					placeholder={emailSent ? "" : "password"}
+					autoComplete="current-password"
+					required
+					value={password}
+					disabled={emailSent || loading}
+					onChange={(e) => {
+						setPassword(e.target.value);
+					}}
+				/>
+				<MotionButton
+					variant="dark"
+					type="submit"
+					disabled={loading || emailSent}
+					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+				>
+					Login with email
+				</MotionButton>
+				<MotionButton
+				variant="gray"
+				type="button"
+				className="w-full"
+				layout
+				onClick={() => setShowCredientialLogin(false)}
+				disabled={loading || emailSent}
+			>
+				<LucideArrowUpRight size={20} />
+				Login with OTP
+			</MotionButton>
+				<motion.p
+					layout="position"
+					className="mt-3 mb-2 text-xs text-center text-gray-9"
+				>
+					Don't have an account?{" "}
+					<Link
+						href="/signup"
+						className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+					>
+						Sign up here
+					</Link>
+				</motion.p>
+			</motion.div>
+		</motion.div>
+	);
+};
+
 const NormalLogin = ({
 	setShowOrgInput,
 	email,
@@ -396,6 +550,7 @@ const NormalLogin = ({
 	loading,
 	oauthError,
 	handleGoogleSignIn,
+	setShowCredientialLogin
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -404,6 +559,7 @@ const NormalLogin = ({
 	loading: boolean;
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
+	setShowCredientialLogin : (show : boolean) => void
 }) => {
 	const publicEnv = usePublicEnv();
 
@@ -455,7 +611,17 @@ const NormalLogin = ({
 					Sign up here
 				</Link>
 			</motion.p>
-
+			<MotionButton
+				variant="gray"
+				type="button"
+				className="w-full"
+				layout
+				onClick={() => setShowCredientialLogin(true)}
+				disabled={loading || emailSent}
+			>
+				<KeyRound size={18}/>
+				Login with Password
+			</MotionButton>
 			{(publicEnv.googleAuthAvailable || publicEnv.workosAuthAvailable) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">

@@ -66,6 +66,7 @@ export const users = mysqlTable(
 		lastName: varchar("lastName", { length: 255 }),
 		email: varchar("email", { length: 255 }).notNull(),
 		emailVerified: timestamp("emailVerified"),
+		password: encryptedTextNullable("password"),
 		image: varchar("image", { length: 255 }).$type<ImageUpload.ImageUrlOrKey>(),
 		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
 		stripeSubscriptionId: varchar("stripeSubscriptionId", {

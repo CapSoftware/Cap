@@ -15,10 +15,12 @@ export function VerifyOTPForm({
 	email,
 	next,
 	lastSent,
+	type
 }: {
 	email: string;
 	next?: string;
 	lastSent?: string;
+	type?: "email" | "credentials";
 }) {
 	const [code, setCode] = useState(["", "", "", "", "", ""]);
 	const [lastResendTime, setLastResendTime] = useState<number | null>(
@@ -75,6 +77,35 @@ export function VerifyOTPForm({
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
+			if (type === "credentials") {
+				const res = await fetch("/api/auth/verify-otp", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email, otp: otpCode }),
+				});
+
+				const data = await res.json().catch(() => ({}));
+
+				if (!res.ok || !data?.status) {
+					throw "Invalid or expired OTP. Please try again.";
+				}
+				if (!data?.authToken) {
+					throw "Authentication token not received. Please try again.";
+				}
+
+				// Use the temporary auth token to sign in via credentials provider
+				const result = await signIn("credentials", {
+					email,
+					otp_token: data.authToken,
+					redirect: false,
+				});
+
+				if (result?.error) {
+					throw "Login failed after verification. Please try logging in again.";
+				}
+				return;
+			}
+
 			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
@@ -112,6 +143,21 @@ export function VerifyOTPForm({
 
 					throw `Please wait ${remainingSeconds} seconds before requesting a new code`;
 				}
+			}
+
+			if (type === "credentials") {
+				const res = await fetch("/api/auth/resend", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email }),
+				});
+
+				const data = await res.json();
+				if (!data?.status) {
+					throw data?.message || "OTP resend failed.";
+				}
+				setLastResendTime(Date.now());
+				return data;
 			}
 
 			const result = await signIn("email", {
