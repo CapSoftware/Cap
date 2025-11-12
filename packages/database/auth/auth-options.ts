@@ -126,7 +126,7 @@ export const authOptions = (): NextAuthOptions => {
 								.where(eq(users.email, credentials.email))
 								.limit(1);
 
-							if (!user) throw new Error("Invalid email or password");
+							if (!user) throw new Error("We couldn’t find your account. Try signing up!");
 
 							// If otp_token is provided, verify it instead of password
 							// This is used for completing signup after OTP verification
@@ -173,15 +173,11 @@ export const authOptions = (): NextAuthOptions => {
 							}
 
 							// Normal password authentication
-							if (!credentials?.password) {
-								throw new Error("Missing password");
+							if (!credentials?.password || user.password === null) {
+								throw new Error("Invalid email or password");
 							}
-
-							if (user.password === null) {
-								throw new Error("No password found for user");
-							}
-
 							// Require email verification before login
+							//navigation to verify-otp and sending otp handled at client side
 							if (!user.emailVerified) {
 								throw new Error("Please verify your email before logging in.");
 							}

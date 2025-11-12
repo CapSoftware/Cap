@@ -271,33 +271,33 @@ export function LoginForm() {
 											  
 												  if (res?.ok && !res?.error) {
 													trackEvent("auth_success", { method: "password", is_signup: false });
-													router.push(next || "/");
+													router.push(next || "/dashboard");
 													return;
 												  }
-
-										  
 												  // Handle specific known errors first
 												  if (res?.error?.toLowerCase().includes("verify")) {
 													toast.error("Please verify your email before logging in.");
-													const res = await fetch("/api/auth/resend", {
-														method: "POST",
-														headers: { "Content-Type": "application/json" },
-														body: JSON.stringify({ email }),
+													const resend = await fetch("/api/auth/resend", {
+													  method: "POST",
+													  headers: { "Content-Type": "application/json" },
+													  body: JSON.stringify({ email }),
 													});
-									
-													const data = await res.json();
-													if (!data?.status) {
-														throw "Something went wrong,try other login methods";
-													}
-													router.push(`/verify-otp?email=${encodeURIComponent(email)}&type=credientials`);
+												
+													const data = await resend.json();
+													if (!data?.status) throw new Error("Something went wrong, try other login methods.");
+												
+													router.push(`/verify-otp?email=${encodeURIComponent(email)}&type=credentials`);
 													return;
 												  }
-											  
-												  // Otherwise generic error
-												  toast.error("Invalid credentials – try again?");
+
+												  if (res?.error) {
+													toast.error(res.error);
+													return;
+												  }
+
 												} catch (error) {
 												  console.error("Credential login error:", error);
-												  toast.error("Invalid credentials – try again?");
+												  toast.error("Unexpected error, please try again later.");
 												} finally {
 												  setLoading(false);
 												}
@@ -498,7 +498,7 @@ const LoginWithEmailAndPassword = ({
 					autoFocus
 					type="password"
 					placeholder={emailSent ? "" : "password"}
-					autoComplete="password"
+					autoComplete="current-password"
 					required
 					value={password}
 					disabled={emailSent || loading}
@@ -525,6 +525,18 @@ const LoginWithEmailAndPassword = ({
 				<LucideArrowUpRight size={20} />
 				Login with OTP
 			</MotionButton>
+				<motion.p
+					layout="position"
+					className="mt-3 mb-2 text-xs text-center text-gray-9"
+				>
+					Don't have an account?{" "}
+					<Link
+						href="/signup"
+						className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+					>
+						Sign up here
+					</Link>
+				</motion.p>
 			</motion.div>
 		</motion.div>
 	);

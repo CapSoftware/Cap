@@ -274,7 +274,7 @@ export function SignupForm() {
 													setLoading(false);
 
 													if (!response.ok) {
-														toast.error(data.error || "Failed to create account");
+														toast.error(data.message || "Something went wrong during signup. Please try again.");
 														return;
 													}
 
@@ -505,7 +505,7 @@ const SignUpWithEmailAndPassword = ({
 					autoFocus
 					type="password"
 					placeholder={emailSent ? "" : "password"}
-					autoComplete="password"
+					autoComplete="new-password"
 					required
 					value={password}
 					disabled={emailSent || loading}
