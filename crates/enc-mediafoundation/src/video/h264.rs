@@ -435,23 +435,22 @@ impl H264Encoder {
                         // (e.g., hardware encoder transient failures, specific MFT implementations).
                         // This is a known contract violation by certain Media Foundation Transforms.
                         // We handle this gracefully by skipping the frame instead of panicking.
-                        let sample = {
-                            let mut output_buffers = [output_buffer];
-                            self.transform
-                                .ProcessOutput(0, &mut output_buffers, &mut status)?;
-                            output_buffers[0].pSample.as_ref().cloned()
-                        };
+                        let mut output_buffers = [output_buffer];
+                        self.transform.ProcessOutput(0, &mut output_buffers, &mut status)?;
 
-                        if let Some(sample) = sample {
+                        // Use the sample directly without cloning to prevent memory leaks
+                        if let Some(sample) = output_buffers[0].pSample.take() {
                             consecutive_empty_samples = 0;
                             on_sample(sample)?;
                         } else {
                             consecutive_empty_samples += 1;
                             if consecutive_empty_samples > MAX_CONSECUTIVE_EMPTY_SAMPLES {
-                                return Err(windows::core::Error::new(
-                                    windows::core::HRESULT(0),
-                                    "Too many consecutive empty samples",
-                                ));
+                                return Err(
+                                    windows::core::Error::new(
+                                        windows::core::HRESULT(0),
+                                        "Too many consecutive empty samples"
+                                    )
+                                );
                             }
                         }
                     }
