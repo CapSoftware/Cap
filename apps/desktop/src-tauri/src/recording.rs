@@ -261,6 +261,8 @@ pub struct StartRecordingInputs {
     pub mode: RecordingMode,
     #[serde(default)]
     pub organization_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
@@ -338,6 +340,7 @@ pub async fn start_recording(
                         )),
                         None,
                         inputs.organization_id.clone(),
+                        inputs.workspace_id.clone(),
                     )
                     .await
                     {

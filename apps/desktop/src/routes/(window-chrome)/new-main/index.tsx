@@ -3,29 +3,13 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import {
-	getCurrentWindow,
-	LogicalSize,
-	primaryMonitor,
-} from "@tauri-apps/api/window";
+import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow, LogicalSize, primaryMonitor } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	ErrorBoundary,
-	onCleanup,
-	onMount,
-	Show,
-	Suspense,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMount, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
 // Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
@@ -60,10 +44,7 @@ import IconLucideSearch from "~icons/lucide/search";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "../OptionsContext";
+import { RecordingOptionsProvider, useRecordingOptions } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
@@ -82,20 +63,13 @@ function getWindowSize() {
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
 		if (!id) return false;
-		return "DeviceID" in id
-			? id.DeviceID === c.device_id
-			: id.ModelID === c.model_id;
+		return "DeviceID" in id ? id.DeviceID === c.device_id : id.ModelID === c.model_id;
 	});
 };
 
-type WindowListItem = Pick<
-	CaptureWindow,
-	"id" | "owner_name" | "name" | "bounds" | "refresh_rate"
->;
+type WindowListItem = Pick<CaptureWindow, "id" | "owner_name" | "name" | "bounds" | "refresh_rate">;
 
-const createWindowSignature = (
-	list?: readonly WindowListItem[],
-): string | undefined => {
+const createWindowSignature = (list?: readonly WindowListItem[]): string | undefined => {
 	if (!list) return undefined;
 
 	return list
@@ -117,14 +91,10 @@ const createWindowSignature = (
 
 type DisplayListItem = Pick<CaptureDisplay, "id" | "name" | "refresh_rate">;
 
-const createDisplaySignature = (
-	list?: readonly DisplayListItem[],
-): string | undefined => {
+const createDisplaySignature = (list?: readonly DisplayListItem[]): string | undefined => {
 	if (!list) return undefined;
 
-	return list
-		.map((item) => [item.id, item.name, item.refresh_rate].join(":"))
-		.join("|");
+	return list.map((item) => [item.id, item.name, item.refresh_rate].join(":")).join("|");
 };
 
 type TargetMenuPanelProps =
@@ -150,28 +120,19 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
-	const placeholder =
-		props.variant === "display" ? "Search displays" : "Search windows";
-	const noResultsMessage =
-		props.variant === "display"
-			? "No matching displays"
-			: "No matching windows";
+	const placeholder = props.variant === "display" ? "Search displays" : "Search windows";
+	const noResultsMessage = props.variant === "display" ? "No matching displays" : "No matching windows";
 
-	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
-		() => {
-			if (props.variant !== "display") return [];
-			const query = normalizedQuery();
-			const targets = props.targets ?? [];
-			if (!query) return targets;
+	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(() => {
+		if (props.variant !== "display") return [];
+		const query = normalizedQuery();
+		const targets = props.targets ?? [];
+		if (!query) return targets;
 
-			const matchesQuery = (value?: string | null) =>
-				!!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
 
-			return targets.filter(
-				(target) => matchesQuery(target.name) || matchesQuery(target.id),
-			);
-		},
-	);
+		return targets.filter((target) => matchesQuery(target.name) || matchesQuery(target.id));
+	});
 
 	const filteredWindowTargets = createMemo<CaptureWindowWithThumbnail[]>(() => {
 		if (props.variant !== "window") return [];
@@ -179,14 +140,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) =>
-			!!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
 
 		return targets.filter(
-			(target) =>
-				matchesQuery(target.name) ||
-				matchesQuery(target.owner_name) ||
-				matchesQuery(target.id),
+			(target) => matchesQuery(target.name) || matchesQuery(target.owner_name) || matchesQuery(target.id)
 		);
 	});
 
@@ -225,10 +182,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 			</div>
 			<div class="pt-4">
-				<div
-					class="px-2 custom-scroll"
-					style="max-height: calc(256px - 100px - 1rem)"
-				>
+				<div class="px-2 custom-scroll" style="max-height: calc(256px - 100px - 1rem)">
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -290,7 +244,7 @@ function createUpdateCheck() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Cap is available, would you like to install it?`,
-			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" }
 		);
 
 		if (!shouldUpdate) return;
@@ -359,13 +313,9 @@ function Page() {
 	});
 
 	const displayMenuLoading = () =>
-		!hasDisplayTargetsData() &&
-		(displayTargets.status === "pending" ||
-			displayTargets.fetchStatus === "fetching");
+		!hasDisplayTargetsData() && (displayTargets.status === "pending" || displayTargets.fetchStatus === "fetching");
 	const windowMenuLoading = () =>
-		!hasWindowTargetsData() &&
-		(windowTargets.status === "pending" ||
-			windowTargets.fetchStatus === "fetching");
+		!hasWindowTargetsData() && (windowTargets.status === "pending" || windowTargets.fetchStatus === "fetching");
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
@@ -378,10 +328,7 @@ function Page() {
 	};
 
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
-		setOptions(
-			"captureTarget",
-			reconcile({ variant: "display", id: target.id }),
-		);
+		setOptions("captureTarget", reconcile({ variant: "display", id: target.id }));
 		setOptions("targetMode", "display");
 		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setDisplayMenuOpen(false);
@@ -389,10 +336,7 @@ function Page() {
 	};
 
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
-		setOptions(
-			"captureTarget",
-			reconcile({ variant: "window", id: target.id }),
-		);
+		setOptions("captureTarget", reconcile({ variant: "window", id: target.id }));
 		setOptions("targetMode", "window");
 		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setWindowMenuOpen(false);
@@ -424,15 +368,13 @@ function Page() {
 		const size = getWindowSize();
 		currentWindow.setSize(new LogicalSize(size.width, size.height));
 
-		const unlistenFocus = currentWindow.onFocusChanged(
-			({ payload: focused }) => {
-				if (focused) {
-					const size = getWindowSize();
+		const unlistenFocus = currentWindow.onFocusChanged(({ payload: focused }) => {
+			if (focused) {
+				const size = getWindowSize();
 
-					currentWindow.setSize(new LogicalSize(size.width, size.height));
-				}
-			},
-		);
+				currentWindow.setSize(new LogicalSize(size.width, size.height));
+			}
+		});
 
 		const unlistenResize = currentWindow.onResized(() => {
 			const size = getWindowSize();
@@ -454,16 +396,10 @@ function Page() {
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
 
-	const windowListSignature = createMemo(() =>
-		createWindowSignature(windows.data),
-	);
-	const displayListSignature = createMemo(() =>
-		createDisplaySignature(screens.data),
-	);
-	const [windowThumbnailsSignature, setWindowThumbnailsSignature] =
-		createSignal<string | undefined>();
-	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] =
-		createSignal<string | undefined>();
+	const windowListSignature = createMemo(() => createWindowSignature(windows.data));
+	const displayListSignature = createMemo(() => createDisplaySignature(screens.data));
+	const [windowThumbnailsSignature, setWindowThumbnailsSignature] = createSignal<string | undefined>();
+	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] = createSignal<string | undefined>();
 
 	createEffect(() => {
 		if (windowTargets.status !== "success") return;
@@ -514,12 +450,10 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			}
 
 			return screen;
@@ -571,10 +505,7 @@ function Page() {
 		if (!screen) return;
 
 		if (target.variant === "window" && windows.data?.length === 0) {
-			setOptions(
-				"captureTarget",
-				reconcile({ variant: "display", id: screen.id }),
-			);
+			setOptions("captureTarget", reconcile({ variant: "display", id: screen.id }));
 		}
 	});
 
@@ -613,10 +544,8 @@ function Page() {
 			/>
 			<MicrophoneSelect
 				disabled={mics.isPending}
-				options={mics.isPending ? [] : (mics.data ?? [])}
-				value={
-					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-				}
+				options={mics.isPending ? [] : mics.data ?? []}
+				value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
 				onChange={(v) => setMicInput.mutate(v)}
 			/>
 			<SystemAudio />
@@ -638,8 +567,7 @@ function Page() {
 					<div
 						class={cx(
 							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-								"ring-blue-9",
+							(rawOptions.targetMode === "display" || displayMenuOpen()) && "ring-blue-9"
 						)}
 					>
 						<TargetTypeButton
@@ -648,11 +576,8 @@ function Page() {
 							disabled={isRecording()}
 							onClick={() => {
 								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "display" ? null : "display",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
+								setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
 								else commands.closeTargetSelectOverlays();
 							}}
 							name="Display"
@@ -661,7 +586,7 @@ function Page() {
 						<TargetDropdownButton
 							class={cx(
 								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								displayMenuOpen() && "bg-gray-5",
+								displayMenuOpen() && "bg-gray-5"
 							)}
 							ref={(el) => (displayTriggerRef = el)}
 							disabled={isRecording()}
@@ -683,8 +608,7 @@ function Page() {
 					<div
 						class={cx(
 							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-								"ring-blue-9",
+							(rawOptions.targetMode === "window" || windowMenuOpen()) && "ring-blue-9"
 						)}
 					>
 						<TargetTypeButton
@@ -693,11 +617,8 @@ function Page() {
 							disabled={isRecording()}
 							onClick={() => {
 								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "window" ? null : "window",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
+								setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
 								else commands.closeTargetSelectOverlays();
 							}}
 							name="Window"
@@ -706,7 +627,7 @@ function Page() {
 						<TargetDropdownButton
 							class={cx(
 								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								windowMenuOpen() && "bg-gray-5",
+								windowMenuOpen() && "bg-gray-5"
 							)}
 							ref={(el) => (windowTriggerRef = el)}
 							disabled={isRecording()}
@@ -732,8 +653,7 @@ function Page() {
 						onClick={() => {
 							if (isRecording()) return;
 							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-							if (rawOptions.targetMode)
-								commands.openTargetSelectOverlays(null);
+							if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
 							else commands.closeTargetSelectOverlays();
 						}}
 						name="Area"
@@ -770,10 +690,7 @@ function Page() {
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
-					class={cx(
-						"flex items-center mx-2 w-full",
-						ostype() === "macos" && "flex-row-reverse",
-					)}
+					class={cx("flex items-center mx-2 w-full", ostype() === "macos" && "flex-row-reverse")}
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
@@ -816,9 +733,7 @@ function Page() {
 							</button>
 						)}
 					</div>
-					{ostype() === "macos" && (
-						<div class="flex-1" data-tauri-drag-region />
-					)}
+					{ostype() === "macos" && <div class="flex-1" data-tauri-drag-region />}
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
@@ -832,14 +747,10 @@ function Page() {
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
-									ostype() === "windows" && "ml-2",
+									ostype() === "windows" && "ml-2"
 								)}
 							>
-								{license.data?.type === "commercial"
-									? "Commercial"
-									: license.data?.type === "pro"
-										? "Pro"
-										: "Personal"}
+								{license.data?.type === "commercial" ? "Commercial" : license.data?.type === "pro" ? "Pro" : "Personal"}
 							</span>
 						</Suspense>
 					</ErrorBoundary>

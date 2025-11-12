@@ -1121,6 +1121,7 @@ async fn upload_exported_video(
     mode: UploadMode,
     channel: Channel<UploadProgress>,
     organization_id: Option<String>,
+    workspace_id: Option<String>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1168,6 +1169,7 @@ async fn upload_exported_video(
             Some(meta.pretty_name.clone()),
             Some(metadata.clone()),
             organization_id,
+            workspace_id,
         )
         .await
     }
@@ -1570,6 +1572,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
             last_checked: chrono::Utc::now().timestamp() as i32,
         }),
         organizations: auth.organizations,
+        workspaces: auth.workspaces,
     };
     println!("Updating auth store with new pro status");
     AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
@@ -2246,6 +2249,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         mode: event.mode,
                         capture_system_audio: settings.system_audio,
                         organization_id: settings.organization_id,
+                        workspace_id: settings.workspace_id,
                     }
                 })
                 .await;

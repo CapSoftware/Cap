@@ -775,6 +775,7 @@ function createRecordingMutations(
 					{ Initial: { pre_created_video: null } },
 					uploadChannel,
 					null,
+					null,
 				);
 			} else {
 				setActionState({

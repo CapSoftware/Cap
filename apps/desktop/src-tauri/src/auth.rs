@@ -7,7 +7,7 @@ use tauri_plugin_store::StoreExt;
 use web_api::ManagerExt;
 
 use crate::{
-    api::{self, Organization},
+    api::{self, Organization, Workspace},
     web_api,
 };
 
@@ -19,6 +19,8 @@ pub struct AuthStore {
     pub intercom_hash: Option<String>,
     #[serde(default)]
     pub organizations: Vec<Organization>,
+    #[serde(default)]
+    pub workspaces: Vec<Workspace>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -69,39 +71,46 @@ impl AuthStore {
         }
 
         let mut auth = auth;
-        println!(
-            "Fetching plan for user {}",
-            auth.user_id.as_deref().unwrap_or("unknown")
-        );
-        let response = app
-            .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
-            .await
-            .map_err(|e| {
-                println!("Failed to fetch plan: {e}");
-                e.to_string()
-            })?;
-        println!("Plan fetch response status: {}", response.status());
 
-        if !response.status().is_success() {
-            let error_msg = format!("Failed to fetch plan: {}", response.status());
-            return Err(error_msg);
-        }
+        // Commented out plan fetch - not implemented yet
+        // println!(
+        //     "Fetching plan for user {}",
+        //     auth.user_id.as_deref().unwrap_or("unknown")
+        // );
+        // let response = app
+        //     .authed_api_request("/api/desktop/plan", |client, url| client.get(url))
+        //     .await
+        //     .map_err(|e| {
+        //         println!("Failed to fetch plan: {e}");
+        //         e.to_string()
+        //     })?;
+        // println!("Plan fetch response status: {}", response.status());
 
-        #[derive(Deserialize)]
-        struct Response {
-            upgraded: bool,
-            intercom_hash: Option<String>,
-        }
+        // if !response.status().is_success() {
+        //     let error_msg = format!("Failed to fetch plan: {}", response.status());
+        //     return Err(error_msg);
+        // }
 
-        let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
+        // #[derive(Deserialize)]
+        // struct Response {
+        //     upgraded: bool,
+        //     intercom_hash: Option<String>,
+        // }
 
-        auth.plan = Some(Plan {
-            upgraded: plan_response.upgraded,
-            last_checked: chrono::Utc::now().timestamp() as i32,
-            manual: auth.plan.as_ref().is_some_and(|p| p.manual),
-        });
-        auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
-        auth.organizations = api::fetch_organizations(app)
+        // let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
+
+        // auth.plan = Some(Plan {
+        //     upgraded: plan_response.upgraded,
+        //     last_checked: chrono::Utc::now().timestamp() as i32,
+        //     manual: auth.plan.as_ref().is_some_and(|p| p.manual),
+        // });
+        // auth.intercom_hash = Some(plan_response.intercom_hash.unwrap_or_default());
+
+        // Commented out organizations fetch - not implemented
+        // auth.organizations = api::fetch_organizations(app)
+        //     .await
+        //     .map_err(|e| e.to_string())?;
+        auth.workspaces = api::fetch_workspaces(app)
             .await
             .map_err(|e| e.to_string())?;
 

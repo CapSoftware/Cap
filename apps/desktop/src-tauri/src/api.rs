@@ -284,3 +284,39 @@ pub async fn fetch_organizations(app: &AppHandle) -> Result<Vec<Organization>, A
         .await
         .map_err(|err| format!("api/fetch_organizations/response: {err}").into())
 }
+
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    pub avatar_url: Option<String>,
+}
+
+pub async fn fetch_workspaces(app: &AppHandle) -> Result<Vec<Workspace>, AuthedApiError> {
+    #[derive(Deserialize)]
+    struct Response {
+        workspaces: Vec<Workspace>,
+    }
+
+    let resp = app
+        .authed_api_request("/api/desktop/workspaces", |client, url| client.get(url))
+        .await
+        .map_err(|err| format!("api/fetch_workspaces/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/fetch_workspaces/{status}: {error_body}").into());
+    }
+
+    let response: Response = resp
+        .json()
+        .await
+        .map_err(|err| format!("api/fetch_workspaces/response: {err}"))?;
+
+    Ok(response.workspaces)
+}

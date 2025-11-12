@@ -21,6 +21,7 @@ pub struct RecordingSettingsStore {
     pub mode: Option<RecordingMode>,
     pub system_audio: bool,
     pub organization_id: Option<String>,
+    pub workspace_id: Option<String>,
 }
 
 impl RecordingSettingsStore {

@@ -185,7 +185,7 @@ pub async fn upload_image(
         .ok_or("Invalid file path")?
         .to_string();
 
-    let s3_config = create_or_get_video(app, true, None, None, None, None).await?;
+    let s3_config = create_or_get_video(app, true, None, None, None, None, None).await?;
 
     let (stream, total_size) = file_reader_stream(file_path).await?;
     singlepart_uploader(
@@ -215,6 +215,7 @@ pub async fn create_or_get_video(
     name: Option<String>,
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
+    workspace_id: Option<String>,
 ) -> Result<S3UploadMeta, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
@@ -239,6 +240,10 @@ pub async fn create_or_get_video(
 
     if let Some(org_id) = organization_id {
         s3_config_url.push_str(&format!("&orgId={}", org_id));
+    }
+
+    if let Some(ws_id) = workspace_id {
+        s3_config_url.push_str(&format!("&workspaceId={}", ws_id));
     }
 
     let response = app
