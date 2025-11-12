@@ -35,6 +35,9 @@ pnpm-lock.yaml
 .vinxi
 native-deps*
 apps/storybook/storybook-static
+.tinyb
+
+**/.tinyb
 
 *.tsbuildinfo
 .cargo/config.toml

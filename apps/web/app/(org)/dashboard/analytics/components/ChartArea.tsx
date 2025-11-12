@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useId, useMemo } from "react";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import {
 	type ChartConfig,
@@ -10,14 +10,6 @@ import {
 } from "@/components/ui/chart";
 
 export const description = "An area chart with gradient fill";
-
-const chartData = Array.from({ length: 24 }, (_, i) => ({
-	hour: i + 1,
-	views: Math.floor(Math.random() * 100),
-	comments: Math.floor(Math.random() * 100),
-	reactions: Math.floor(Math.random() * 100),
-	caps: Math.floor(Math.random() * 100),
-}));
 
 const chartConfig = {
 	views: {
@@ -40,14 +32,49 @@ const chartConfig = {
 
 interface ChartAreaProps {
 	selectedMetric: "caps" | "views" | "comments" | "reactions";
+	data: Array<{
+		bucket: string;
+		caps: number;
+		views: number;
+		comments: number;
+		reactions: number;
+	}>;
+	isLoading?: boolean;
 }
 
-function ChartArea({ selectedMetric }: ChartAreaProps) {
+function ChartArea({ selectedMetric, data, isLoading }: ChartAreaProps) {
 	const viewsGradientId = useId();
 	const commentsGradientId = useId();
 	const reactionsGradientId = useId();
 	const capsGradientId = useId();
 	const glowFilterId = useId();
+
+	const chartData = useMemo(() => {
+		if (!data || data.length === 0) return [];
+		const bucketDuration =
+			data.length > 1
+				? new Date(data[1]!.bucket).getTime() - new Date(data[0]!.bucket).getTime()
+				: 0;
+		const hourly = bucketDuration > 0 && bucketDuration <= 60 * 60 * 1000;
+		return data.map((point) => ({
+			...point,
+			label: formatBucketLabel(point.bucket, hourly),
+		}));
+	}, [data]);
+
+	if (isLoading && chartData.length === 0) {
+		return (
+			<div className="h-[300px] w-full animate-pulse rounded-xl bg-gray-3" />
+		);
+	}
+
+	if (chartData.length === 0) {
+		return (
+			<div className="flex h-[300px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-gray-5 text-sm text-gray-9">
+				No analytics data yet.
+			</div>
+		);
+	}
 
 	return (
 		<ChartContainer className="h-[500px]" config={chartConfig}>
@@ -67,8 +94,8 @@ function ChartArea({ selectedMetric }: ChartAreaProps) {
 					stroke="var(--gray-8)"
 					opacity={0.3}
 				/>
-				<XAxis
-					dataKey="hour"
+					<XAxis
+						dataKey="label"
 					axisLine={false}
 					tickMargin={10}
 					interval={0}
@@ -172,3 +199,14 @@ function ChartArea({ selectedMetric }: ChartAreaProps) {
 }
 
 export default ChartArea;
+
+const formatBucketLabel = (bucket: string, hourly: boolean) => {
+	const date = new Date(bucket);
+	if (Number.isNaN(date.getTime())) return bucket;
+	if (hourly)
+		return date.toLocaleTimeString([], {
+			hour: "numeric",
+			minute: undefined,
+		});
+	return date.toLocaleDateString([], { month: "short", day: "numeric" });
+};

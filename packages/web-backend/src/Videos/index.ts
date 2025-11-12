@@ -8,9 +8,14 @@ import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
+import { Tinybird } from "../Tinybird/index.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
+
+const DEFAULT_ANALYTICS_RANGE_DAYS = 30;
+const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
+const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 
 type UploadProgressUpdateInput = Schema.Type<
 	typeof Video.UploadProgressUpdateInput
@@ -30,6 +35,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
+		const tinybird = yield* Tinybird;
 
 		const getByIdForViewing = (id: Video.VideoId) =>
 			repo
@@ -359,17 +365,23 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					return yield* Effect.fail(new Video.NotFoundError());
 				const [video] = maybeVideo.value;
 
-				const response = yield* Effect.tryPromise(() =>
-					dub().analytics.retrieve({
-						domain: "cap.link",
-						key: video.id,
-					}),
+				const now = new Date();
+				const from = new Date(
+					now.getTime() - DEFAULT_ANALYTICS_RANGE_DAYS * 24 * 60 * 60 * 1000,
 				);
-				const { clicks } = response as { clicks: unknown };
-
-				if (typeof clicks !== "number" || clicks === null) return { count: 0 };
-
-				return { count: clicks };
+				const pathname = `/s/${video.id}`;
+				const sql = `
+					SELECT coalesce(uniqMerge(visits), 0) AS views
+					FROM analytics_pages_mv
+					WHERE pathname = '${escapeSqlLiteral(pathname)}'
+						AND date >= toDate('${formatDate(from)}')
+						AND date <= toDate('${formatDate(now)}')
+				`;
+				const response = yield* tinybird
+					.querySql<{ views: number }>(sql)
+					.pipe(Effect.catchAll(() => Effect.succeed({ data: [] })));
+				const views = response.data[0]?.views ?? 0;
+				return { count: Number.isFinite(views) ? Number(views) : 0 };
 			}),
 		};
 	}),
@@ -378,5 +390,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		VideosRepo.Default,
 		Database.Default,
 		S3Buckets.Default,
+		Tinybird.Default,
 	],
 }) {}

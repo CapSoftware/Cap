@@ -748,6 +748,7 @@ async function AuthorizedContent({
 					customDomain={customDomain}
 					domainVerified={domainVerified}
 					userOrganizations={userOrganizations}
+					viewerId={user?.id ?? null}
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
 				/>
