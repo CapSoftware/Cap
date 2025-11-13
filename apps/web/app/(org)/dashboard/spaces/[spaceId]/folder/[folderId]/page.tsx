@@ -103,7 +103,9 @@ const FolderPage = async (props: {
 				{/* Display Videos */}
 				<FolderVideosSection
 					initialVideos={videosData}
-					dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
+					analyticsEnabled={Boolean(
+						serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
+					)}
 				/>
 			</div>
 		);

@@ -1,0 +1,16 @@
+DESCRIPTION >
+    Session level facts derived from analytics events.
+
+SCHEMA >
+	tenant_id LowCardinality(String),
+	date Date,
+	session_id String,
+	browser LowCardinality(String),
+	device LowCardinality(String),
+	os LowCardinality(String)
+
+ENGINE ReplacingMergeTree
+ENGINE_PARTITION_KEY toYYYYMM(date)
+ENGINE_SORTING_KEY (tenant_id, date, session_id)
+ENGINE_TTL date + INTERVAL 90 DAY
+ENGINE_SETTINGS index_granularity = 256
