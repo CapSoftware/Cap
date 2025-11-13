@@ -265,6 +265,7 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .center()
+                    .transparent(true)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -275,9 +276,38 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                if new_recording_flow {
-                    #[cfg(target_os = "macos")]
-                    crate::platform::set_window_level(window.as_ref().window(), 50);
+                #[cfg(target_os = "macos")]
+                {
+                    window
+                        .run_on_main_thread({
+                            let win = window.as_ref().window();
+                            move || unsafe {
+                                let ns_win =
+                                    win.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+
+                                // Hide traffic lights if needed
+                                if let Some(button) = (*ns_win).standardWindowButton(
+                                    objc2_app_kit::NSWindowButton::CloseButton,
+                                ) {
+                                    button.setHidden(true);
+                                }
+                                if let Some(button) = (*ns_win).standardWindowButton(
+                                    objc2_app_kit::NSWindowButton::MiniaturizeButton,
+                                ) {
+                                    button.setHidden(true);
+                                }
+                                if let Some(button) = (*ns_win)
+                                    .standardWindowButton(objc2_app_kit::NSWindowButton::ZoomButton)
+                                {
+                                    button.setHidden(true);
+                                }
+                            }
+                        })
+                        .ok();
+
+                    if new_recording_flow {
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                    }
                 }
 
                 #[cfg(target_os = "macos")]
@@ -398,6 +428,7 @@ impl ShowCapWindow {
                 .resizable(true)
                 .maximized(false)
                 .center()
+                .transparent(true)
                 .build()?
             }
             Self::Editor { .. } => {

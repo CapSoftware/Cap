@@ -3,29 +3,13 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
-import {
-	getAllWebviewWindows,
-	WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
-import {
-	getCurrentWindow,
-	LogicalSize,
-	primaryMonitor,
-} from "@tauri-apps/api/window";
+import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow, LogicalSize, primaryMonitor } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
-import {
-	createEffect,
-	createMemo,
-	createSignal,
-	ErrorBoundary,
-	onCleanup,
-	onMount,
-	Show,
-	Suspense,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMount, Show, Suspense } from "solid-js";
 import { reconcile } from "solid-js/store";
 // Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
@@ -60,10 +44,7 @@ import IconLucideSearch from "~icons/lucide/search";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "../OptionsContext";
+import { RecordingOptionsProvider, useRecordingOptions } from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
@@ -71,31 +52,26 @@ import SystemAudio from "./SystemAudio";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import HorizontalTargetButton from "./HorizontalTargetButton";
+import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
 
 function getWindowSize() {
 	return {
-		width: 270,
-		height: 256,
+		width: 272,
+		height: 386,
 	};
 }
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
 		if (!id) return false;
-		return "DeviceID" in id
-			? id.DeviceID === c.device_id
-			: id.ModelID === c.model_id;
+		return "DeviceID" in id ? id.DeviceID === c.device_id : id.ModelID === c.model_id;
 	});
 };
 
-type WindowListItem = Pick<
-	CaptureWindow,
-	"id" | "owner_name" | "name" | "bounds" | "refresh_rate"
->;
+type WindowListItem = Pick<CaptureWindow, "id" | "owner_name" | "name" | "bounds" | "refresh_rate">;
 
-const createWindowSignature = (
-	list?: readonly WindowListItem[],
-): string | undefined => {
+const createWindowSignature = (list?: readonly WindowListItem[]): string | undefined => {
 	if (!list) return undefined;
 
 	return list
@@ -117,14 +93,10 @@ const createWindowSignature = (
 
 type DisplayListItem = Pick<CaptureDisplay, "id" | "name" | "refresh_rate">;
 
-const createDisplaySignature = (
-	list?: readonly DisplayListItem[],
-): string | undefined => {
+const createDisplaySignature = (list?: readonly DisplayListItem[]): string | undefined => {
 	if (!list) return undefined;
 
-	return list
-		.map((item) => [item.id, item.name, item.refresh_rate].join(":"))
-		.join("|");
+	return list.map((item) => [item.id, item.name, item.refresh_rate].join(":")).join("|");
 };
 
 type TargetMenuPanelProps =
@@ -150,28 +122,19 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
-	const placeholder =
-		props.variant === "display" ? "Search displays" : "Search windows";
-	const noResultsMessage =
-		props.variant === "display"
-			? "No matching displays"
-			: "No matching windows";
+	const placeholder = props.variant === "display" ? "Search displays" : "Search windows";
+	const noResultsMessage = props.variant === "display" ? "No matching displays" : "No matching windows";
 
-	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
-		() => {
-			if (props.variant !== "display") return [];
-			const query = normalizedQuery();
-			const targets = props.targets ?? [];
-			if (!query) return targets;
+	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(() => {
+		if (props.variant !== "display") return [];
+		const query = normalizedQuery();
+		const targets = props.targets ?? [];
+		if (!query) return targets;
 
-			const matchesQuery = (value?: string | null) =>
-				!!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
 
-			return targets.filter(
-				(target) => matchesQuery(target.name) || matchesQuery(target.id),
-			);
-		},
-	);
+		return targets.filter((target) => matchesQuery(target.name) || matchesQuery(target.id));
+	});
 
 	const filteredWindowTargets = createMemo<CaptureWindowWithThumbnail[]>(() => {
 		if (props.variant !== "window") return [];
@@ -179,14 +142,10 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) =>
-			!!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
 
 		return targets.filter(
-			(target) =>
-				matchesQuery(target.name) ||
-				matchesQuery(target.owner_name) ||
-				matchesQuery(target.id),
+			(target) => matchesQuery(target.name) || matchesQuery(target.owner_name) || matchesQuery(target.id)
 		);
 	});
 
@@ -225,10 +184,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 			</div>
 			<div class="pt-4">
-				<div
-					class="px-2 custom-scroll"
-					style="max-height: calc(256px - 100px - 1rem)"
-				>
+				<div class="px-2 custom-scroll" style="max-height: calc(256px - 100px - 1rem)">
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -290,7 +246,7 @@ function createUpdateCheck() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Cap is available, would you like to install it?`,
-			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
+			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" }
 		);
 
 		if (!shouldUpdate) return;
@@ -359,13 +315,9 @@ function Page() {
 	});
 
 	const displayMenuLoading = () =>
-		!hasDisplayTargetsData() &&
-		(displayTargets.status === "pending" ||
-			displayTargets.fetchStatus === "fetching");
+		!hasDisplayTargetsData() && (displayTargets.status === "pending" || displayTargets.fetchStatus === "fetching");
 	const windowMenuLoading = () =>
-		!hasWindowTargetsData() &&
-		(windowTargets.status === "pending" ||
-			windowTargets.fetchStatus === "fetching");
+		!hasWindowTargetsData() && (windowTargets.status === "pending" || windowTargets.fetchStatus === "fetching");
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
@@ -378,10 +330,7 @@ function Page() {
 	};
 
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
-		setOptions(
-			"captureTarget",
-			reconcile({ variant: "display", id: target.id }),
-		);
+		setOptions("captureTarget", reconcile({ variant: "display", id: target.id }));
 		setOptions("targetMode", "display");
 		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setDisplayMenuOpen(false);
@@ -389,10 +338,7 @@ function Page() {
 	};
 
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
-		setOptions(
-			"captureTarget",
-			reconcile({ variant: "window", id: target.id }),
-		);
+		setOptions("captureTarget", reconcile({ variant: "window", id: target.id }));
 		setOptions("targetMode", "window");
 		commands.openTargetSelectOverlays(rawOptions.captureTarget);
 		setWindowMenuOpen(false);
@@ -424,15 +370,13 @@ function Page() {
 		const size = getWindowSize();
 		currentWindow.setSize(new LogicalSize(size.width, size.height));
 
-		const unlistenFocus = currentWindow.onFocusChanged(
-			({ payload: focused }) => {
-				if (focused) {
-					const size = getWindowSize();
+		const unlistenFocus = currentWindow.onFocusChanged(({ payload: focused }) => {
+			if (focused) {
+				const size = getWindowSize();
 
-					currentWindow.setSize(new LogicalSize(size.width, size.height));
-				}
-			},
-		);
+				currentWindow.setSize(new LogicalSize(size.width, size.height));
+			}
+		});
 
 		const unlistenResize = currentWindow.onResized(() => {
 			const size = getWindowSize();
@@ -454,16 +398,10 @@ function Page() {
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
 
-	const windowListSignature = createMemo(() =>
-		createWindowSignature(windows.data),
-	);
-	const displayListSignature = createMemo(() =>
-		createDisplaySignature(screens.data),
-	);
-	const [windowThumbnailsSignature, setWindowThumbnailsSignature] =
-		createSignal<string | undefined>();
-	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] =
-		createSignal<string | undefined>();
+	const windowListSignature = createMemo(() => createWindowSignature(windows.data));
+	const displayListSignature = createMemo(() => createDisplaySignature(screens.data));
+	const [windowThumbnailsSignature, setWindowThumbnailsSignature] = createSignal<string | undefined>();
+	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] = createSignal<string | undefined>();
 
 	createEffect(() => {
 		if (windowTargets.status !== "success") return;
@@ -514,12 +452,10 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen =
-					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			}
 
 			return screen;
@@ -571,10 +507,7 @@ function Page() {
 		if (!screen) return;
 
 		if (target.variant === "window" && windows.data?.length === 0) {
-			setOptions(
-				"captureTarget",
-				reconcile({ variant: "display", id: screen.id }),
-			);
+			setOptions("captureTarget", reconcile({ variant: "display", id: screen.id }));
 		}
 	});
 
@@ -600,26 +533,71 @@ function Page() {
 	const signIn = createSignInMutation();
 
 	const BaseControls = () => (
-		<div class="space-y-2">
-			<CameraSelect
-				disabled={cameras.isPending}
-				options={cameras.data ?? []}
-				value={options.camera() ?? null}
-				onChange={(c) => {
-					if (!c) setCamera.mutate(null);
-					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-					else setCamera.mutate({ DeviceID: c.device_id });
-				}}
-			/>
-			<MicrophoneSelect
-				disabled={mics.isPending}
-				options={mics.isPending ? [] : (mics.data ?? [])}
-				value={
-					mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-				}
-				onChange={(v) => setMicInput.mutate(v)}
-			/>
-			<SystemAudio />
+		<div class="flex flex-col gap-4">
+			<p class="text-xs text-white/70 leading-none">Select inputs</p>
+			<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
+				<CameraSelect
+					disabled={cameras.isPending}
+					options={cameras.data ?? []}
+					value={options.camera() ?? null}
+					onChange={(c) => {
+						if (!c) setCamera.mutate(null);
+						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+						else setCamera.mutate({ DeviceID: c.device_id });
+					}}
+				/>
+				<MicrophoneSelect
+					disabled={mics.isPending}
+					options={mics.isPending ? [] : mics.data ?? []}
+					value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+					onChange={(v) => setMicInput.mutate(v)}
+				/>
+				<SystemAudio />
+			</div>
+		</div>
+	);
+
+	const RecordingControls = () => (
+		<div class="flex flex-col gap-4">
+			<p class="text-xs text-white/70 leading-none">Select what to record</p>
+			<div class="flex flex-col gap-2 w-full">
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "display"}
+					Component={DisplayIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Display"
+				/>
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "window"}
+					Component={WindowIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Window"
+				/>
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "area"}
+					Component={CropIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Area"
+				/>
+			</div>
 		</div>
 	);
 
@@ -633,113 +611,9 @@ function Page() {
 			exitClass="scale-100"
 			exitToClass="scale-95"
 		>
-			<div class="flex flex-col gap-2 w-full">
-				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "display" || displayMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "display"}
-							Component={IconMdiMonitor}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "display" ? null : "display",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
-							name="Display"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								displayMenuOpen() && "bg-gray-5",
-							)}
-							ref={(el) => (displayTriggerRef = el)}
-							disabled={isRecording()}
-							expanded={displayMenuOpen()}
-							onClick={() => {
-								setDisplayMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setWindowMenuOpen(false);
-										setHasOpenedDisplayMenu(true);
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose display"
-						/>
-					</div>
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "window" || windowMenuOpen()) &&
-								"ring-blue-9",
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "window"}
-							Component={IconLucideAppWindowMac}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) =>
-									v === "window" ? null : "window",
-								);
-								if (rawOptions.targetMode)
-									commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
-							name="Window"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								windowMenuOpen() && "bg-gray-5",
-							)}
-							ref={(el) => (windowTriggerRef = el)}
-							disabled={isRecording()}
-							expanded={windowMenuOpen()}
-							onClick={() => {
-								setWindowMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setDisplayMenuOpen(false);
-										setHasOpenedWindowMenu(true);
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose window"
-						/>
-					</div>
-					<TargetTypeButton
-						selected={rawOptions.targetMode === "area"}
-						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-						disabled={isRecording()}
-						onClick={() => {
-							if (isRecording()) return;
-							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-							if (rawOptions.targetMode)
-								commands.openTargetSelectOverlays(null);
-							else commands.closeTargetSelectOverlays();
-						}}
-						name="Area"
-					/>
-				</div>
+			<div class="flex flex-col gap-4 w-full">
 				<BaseControls />
+				<RecordingControls />
 			</div>
 		</Transition>
 	);
@@ -766,14 +640,14 @@ function Page() {
 		<div
 			class={`flex relative ${
 				displayMenuOpen() || windowMenuOpen() ? "" : "justify-center"
-			} flex-col px-3 gap-2 h-full text-[--text-primary]`}
+			} flex-col gap-2 h-full text-[--text-primary] bg-white/5 rounded-[16px] p-4`}
+			style={{
+				"box-shadow": "0 1px 2px 0 rgba(255, 255, 255, 0.05) inset",
+			}}
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
-					class={cx(
-						"flex items-center mx-2 w-full",
-						ostype() === "macos" && "flex-row-reverse",
-					)}
+					class={cx("flex items-center mx-2 w-full", ostype() === "macos" && "flex-row-reverse")}
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
@@ -816,9 +690,7 @@ function Page() {
 							</button>
 						)}
 					</div>
-					{ostype() === "macos" && (
-						<div class="flex-1" data-tauri-drag-region />
-					)}
+					{ostype() === "macos" && <div class="flex-1" data-tauri-drag-region />}
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
@@ -832,14 +704,10 @@ function Page() {
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
-									ostype() === "windows" && "ml-2",
+									ostype() === "windows" && "ml-2"
 								)}
 							>
-								{license.data?.type === "commercial"
-									? "Commercial"
-									: license.data?.type === "pro"
-										? "Pro"
-										: "Personal"}
+								{license.data?.type === "commercial" ? "Commercial" : license.data?.type === "pro" ? "Pro" : "Personal"}
 							</span>
 						</Suspense>
 					</ErrorBoundary>
