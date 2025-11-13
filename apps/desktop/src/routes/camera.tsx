@@ -64,13 +64,11 @@ function NativeCameraPreviewPage() {
 
 	return (
 		<div data-tauri-drag-region class="flex relative flex-col w-screen h-screen cursor-move group">
-			<div class="h-13">
+			<div class="h-12">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row items-center justify-center gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-6 transition-[opacity,transform] text-white"
+						class="flex flex-row items-center justify-center gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-6 transition-[opacity,transform] text-white rounded-[18px] border border-white/15"
 						style={{
-							"border-radius": "18px",
-							border: "1px solid var(--Highlight-extra, rgba(255, 255, 255, 0.15))",
 							background:
 								"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--neutral-950, #090A0B)",
 							"background-blend-mode": "plus-lighter, normal",
