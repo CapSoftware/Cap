@@ -53,7 +53,8 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 		if (!data || data.length === 0) return [];
 		const bucketDuration =
 			data.length > 1
-				? new Date(data[1]!.bucket).getTime() - new Date(data[0]!.bucket).getTime()
+				? new Date(data[1]!.bucket).getTime() -
+					new Date(data[0]!.bucket).getTime()
 				: 0;
 		const hourly = bucketDuration > 0 && bucketDuration <= 60 * 60 * 1000;
 		return data.map((point) => ({
@@ -82,7 +83,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 		}
 
 		const roundedMax = Math.ceil(max * 1.1);
-		const magnitude = Math.pow(10, Math.floor(Math.log10(roundedMax)));
+		const magnitude = 10 ** Math.floor(Math.log10(roundedMax));
 		const normalized = roundedMax / magnitude;
 		let niceMax: number;
 
@@ -145,8 +146,8 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 					stroke="var(--gray-8)"
 					opacity={0.3}
 				/>
-					<XAxis
-						dataKey="label"
+				<XAxis
+					dataKey="label"
 					axisLine={false}
 					tickMargin={10}
 					interval={0}
@@ -178,13 +179,7 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 						<stop offset="5%" stopColor="#ec4899" stopOpacity={0.5} />
 						<stop offset="95%" stopColor="#ec4899" stopOpacity={0} />
 					</linearGradient>
-					<linearGradient
-						id={reactionsGradientId}
-						x1="0"
-						y1="0"
-						x2="0"
-						y2="1"
-					>
+					<linearGradient id={reactionsGradientId} x1="0" y1="0" x2="0" y2="1">
 						<stop offset="5%" stopColor="#f97316" stopOpacity={0.5} />
 						<stop offset="95%" stopColor="#f97316" stopOpacity={0} />
 					</linearGradient>

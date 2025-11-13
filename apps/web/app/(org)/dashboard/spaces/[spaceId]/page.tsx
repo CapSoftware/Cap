@@ -258,9 +258,9 @@ export default async function SharedCapsPage(props: {
 				count={totalCount}
 				spaceData={space}
 				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
-				analyticsEnabled={
-					Boolean(serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST)
-				}
+				analyticsEnabled={Boolean(
+					serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
+				)}
 				spaceMembers={spaceMembersData}
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
@@ -364,9 +364,9 @@ export default async function SharedCapsPage(props: {
 				hideSharedWith
 				organizationData={organization}
 				spaceId={params.spaceId as Space.SpaceIdOrOrganisationId}
-				analyticsEnabled={
-					Boolean(serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST)
-				}
+				analyticsEnabled={Boolean(
+					serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
+				)}
 				organizationMembers={organizationMembersData}
 				currentUserId={user.id}
 				folders={foldersData}

@@ -6,19 +6,19 @@ import {
 	faMobileScreen,
 	faRecordVinyl,
 } from "@fortawesome/free-solid-svg-icons";
-import OtherStatBox from "./OtherStatBox";
 import type { BreakdownRow } from "../types";
+import OtherStatBox from "./OtherStatBox";
 import TableCard, {
-	BrowserRowData,
-	CapRowData,
-	CityRowData,
-	CountryRowData,
-	DeviceRowData,
-	OSRowData,
+	type BrowserRowData,
+	type CapRowData,
+	type CityRowData,
+	type CountryRowData,
+	type DeviceRowData,
+	type OSRowData,
 } from "./TableCard";
 
 export interface OtherStatsData {
- 	countries: BreakdownRow[];
+	countries: BreakdownRow[];
 	cities: BreakdownRow[];
 	browsers: BreakdownRow[];
 	operatingSystems: BreakdownRow[];
@@ -126,11 +126,7 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
 						title="Countries"
-						columns={[
-							"Country",
-							"Views",
-							"Percentage",
-						]}
+						columns={["Country", "Views", "Percentage"]}
 						rows={data.countries.map(toCountryRow)}
 						type="country"
 						isLoading={isLoading}
@@ -148,22 +144,14 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
 						title="Browsers"
-						columns={[
-							"Browser",
-							"Views",
-							"Percentage",
-						]}
+						columns={["Browser", "Views", "Percentage"]}
 						rows={data.browsers.map(toBrowserRow)}
 						type="browser"
 						isLoading={isLoading}
 					/>
 					<TableCard
 						title="Operating Systems"
-						columns={[
-							"Operating System",
-							"Views",
-							"Percentage",
-						]}
+						columns={["Operating System", "Views", "Percentage"]}
 						rows={data.operatingSystems.map(toOSRow)}
 						type="os"
 						isLoading={isLoading}
@@ -211,4 +199,4 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 			)}
 		</div>
 	);
-} 
+}

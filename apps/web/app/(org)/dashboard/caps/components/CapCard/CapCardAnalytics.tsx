@@ -3,13 +3,13 @@ import {
 	FontAwesomeIcon,
 	type FontAwesomeIconProps,
 } from "@fortawesome/react-fontawesome";
+import Link from "next/link";
 import {
 	type ComponentProps,
 	type ForwardedRef,
 	forwardRef,
 	type PropsWithChildren,
 } from "react";
-import Link from "next/link";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardAnalyticsProps {
@@ -42,9 +42,7 @@ export const CapCardAnalytics = Object.assign(
 						className="inline-flex cursor-pointer"
 					>
 						<IconItem icon={faEye}>
-							<span className="text-sm text-gray-12">
-								{displayCount}
-							</span>
+							<span className="text-sm text-gray-12">{displayCount}</span>
 						</IconItem>
 					</Link>
 				</Tooltip>
@@ -58,9 +56,7 @@ export const CapCardAnalytics = Object.assign(
 						className="inline-flex cursor-pointer"
 					>
 						<IconItem icon={faComment}>
-							<span className="text-sm text-gray-12">
-								{totalComments}
-							</span>
+							<span className="text-sm text-gray-12">{totalComments}</span>
 						</IconItem>
 					</Link>
 				</Tooltip>
@@ -74,9 +70,7 @@ export const CapCardAnalytics = Object.assign(
 						className="inline-flex cursor-pointer"
 					>
 						<IconItem icon={faSmile}>
-							<span className="text-sm text-gray-12">
-								{totalReactions}
-							</span>
+							<span className="text-sm text-gray-12">{totalReactions}</span>
 						</IconItem>
 					</Link>
 				</Tooltip>

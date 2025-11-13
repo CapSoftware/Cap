@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { comments, videos, spaceVideos } from "@cap/database/schema";
+import { comments, spaceVideos, videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
 import { and, between, eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
@@ -31,7 +31,10 @@ type TinybirdAnalyticsData = {
 	topCapsRaw: TopCapRow[];
 };
 
-const RANGE_CONFIG: Record<AnalyticsRange, { hours: number; bucket: "hour" | "day" }> = {
+const RANGE_CONFIG: Record<
+	AnalyticsRange,
+	{ hours: number; bucket: "hour" | "day" }
+> = {
 	"24h": { hours: 24, bucket: "hour" },
 	"7d": { hours: 7 * 24, bucket: "day" },
 	"30d": { hours: 30 * 24, bucket: "day" },
@@ -39,17 +42,23 @@ const RANGE_CONFIG: Record<AnalyticsRange, { hours: number; bucket: "hour" | "da
 
 const escapeLiteral = (value: string) => value.replace(/'/g, "''");
 const toDateString = (date: Date) => date.toISOString().slice(0, 10);
-const toDateTimeString = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
+const toDateTimeString = (date: Date) =>
+	date.toISOString().slice(0, 19).replace("T", " ");
 
 const buildPathnameFilter = (spaceVideoIds?: VideoId[]): string => {
 	if (!spaceVideoIds || spaceVideoIds.length === 0) {
 		return "";
 	}
-	const pathnames = spaceVideoIds.map((id) => `'/s/${escapeLiteral(id)}'`).join(", ");
+	const pathnames = spaceVideoIds
+		.map((id) => `'/s/${escapeLiteral(id)}'`)
+		.join(", ");
 	return `AND pathname IN (${pathnames})`;
 };
 
-const normalizeBucket = (input: string | null | undefined, bucket: "hour" | "day") => {
+const normalizeBucket = (
+	input: string | null | undefined,
+	bucket: "hour" | "day",
+) => {
 	if (!input) return undefined;
 	if (input.endsWith("Z")) return input;
 	if (bucket === "day" && input.length === 10) return `${input}T00:00:00Z`;
@@ -77,10 +86,10 @@ const fallbackIfEmpty = <Row>(
 ) =>
 	fallback
 		? primary.pipe(
-			Effect.flatMap((rows) =>
-				rows.length > 0 ? Effect.succeed(rows) : fallback,
-			),
-		)
+				Effect.flatMap((rows) =>
+					rows.length > 0 ? Effect.succeed(rows) : fallback,
+				),
+			)
 		: primary;
 
 const withTinybirdFallback = <Row>(
@@ -132,7 +141,10 @@ export const getOrgAnalyticsData = async (
 	const capVideoIds = capId ? [capId as VideoId] : undefined;
 	const videoIds = capVideoIds || spaceVideoIds;
 
-	if ((spaceId && spaceVideoIds && spaceVideoIds.length === 0) || (capId && !capVideoIds)) {
+	if (
+		(spaceId && spaceVideoIds && spaceVideoIds.length === 0) ||
+		(capId && !capVideoIds)
+	) {
 		let capName: string | undefined;
 		if (capId) {
 			const capNames = await loadVideoNames([capId]);
@@ -166,16 +178,35 @@ export const getOrgAnalyticsData = async (
 
 	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
 		queryVideoSeries(typedOrgId, from, to, rangeConfig.bucket, videoIds),
-		queryCommentsSeries(typedOrgId, from, to, "text", rangeConfig.bucket, videoIds),
-		queryCommentsSeries(typedOrgId, from, to, "emoji", rangeConfig.bucket, videoIds),
+		queryCommentsSeries(
+			typedOrgId,
+			from,
+			to,
+			"text",
+			rangeConfig.bucket,
+			videoIds,
+		),
+		queryCommentsSeries(
+			typedOrgId,
+			from,
+			to,
+			"emoji",
+			rangeConfig.bucket,
+			videoIds,
+		),
 	]);
 
 	const tinybirdData = await runPromise(
 		Effect.gen(function* () {
 			const tinybird = yield* Tinybird;
 			console.log("getOrgAnalyticsData - orgId:", orgId, "range:", range);
-			console.log("getOrgAnalyticsData - from:", from.toISOString(), "to:", to.toISOString());
-			
+			console.log(
+				"getOrgAnalyticsData - from:",
+				from.toISOString(),
+				"to:",
+				to.toISOString(),
+			);
+
 			const viewSeries = yield* queryViewSeries(
 				tinybird,
 				typedOrgId,
@@ -184,20 +215,59 @@ export const getOrgAnalyticsData = async (
 				rangeConfig.bucket,
 				videoIds,
 			);
-			console.log("getOrgAnalyticsData - viewSeries:", JSON.stringify(viewSeries, null, 2));
-			
-			const countries = yield* queryCountries(tinybird, typedOrgId, from, to, videoIds);
-			console.log("getOrgAnalyticsData - countries:", JSON.stringify(countries, null, 2));
-			
-			const cities = yield* queryCities(tinybird, typedOrgId, from, to, videoIds);
-			console.log("getOrgAnalyticsData - cities:", JSON.stringify(cities, null, 2));
-			
-			const browsers = yield* queryBrowsers(tinybird, typedOrgId, from, to, videoIds);
-			console.log("getOrgAnalyticsData - browsers:", JSON.stringify(browsers, null, 2));
-			
-			const devices = yield* queryDevices(tinybird, typedOrgId, from, to, videoIds);
-			console.log("getOrgAnalyticsData - devices:", JSON.stringify(devices, null, 2));
-			
+			console.log(
+				"getOrgAnalyticsData - viewSeries:",
+				JSON.stringify(viewSeries, null, 2),
+			);
+
+			const countries = yield* queryCountries(
+				tinybird,
+				typedOrgId,
+				from,
+				to,
+				videoIds,
+			);
+			console.log(
+				"getOrgAnalyticsData - countries:",
+				JSON.stringify(countries, null, 2),
+			);
+
+			const cities = yield* queryCities(
+				tinybird,
+				typedOrgId,
+				from,
+				to,
+				videoIds,
+			);
+			console.log(
+				"getOrgAnalyticsData - cities:",
+				JSON.stringify(cities, null, 2),
+			);
+
+			const browsers = yield* queryBrowsers(
+				tinybird,
+				typedOrgId,
+				from,
+				to,
+				videoIds,
+			);
+			console.log(
+				"getOrgAnalyticsData - browsers:",
+				JSON.stringify(browsers, null, 2),
+			);
+
+			const devices = yield* queryDevices(
+				tinybird,
+				typedOrgId,
+				from,
+				to,
+				videoIds,
+			);
+			console.log(
+				"getOrgAnalyticsData - devices:",
+				JSON.stringify(devices, null, 2),
+			);
+
 			const operatingSystems = yield* queryOperatingSystems(
 				tinybird,
 				typedOrgId,
@@ -205,11 +275,19 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log("getOrgAnalyticsData - operatingSystems:", JSON.stringify(operatingSystems, null, 2));
-			
-			const topCapsRaw = capId ? [] : yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
-			console.log("getOrgAnalyticsData - topCapsRaw:", JSON.stringify(topCapsRaw, null, 2));
-			
+			console.log(
+				"getOrgAnalyticsData - operatingSystems:",
+				JSON.stringify(operatingSystems, null, 2),
+			);
+
+			const topCapsRaw = capId
+				? []
+				: yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
+			console.log(
+				"getOrgAnalyticsData - topCapsRaw:",
+				JSON.stringify(topCapsRaw, null, 2),
+			);
+
 			return {
 				viewSeries,
 				countries,
@@ -222,15 +300,22 @@ export const getOrgAnalyticsData = async (
 		}),
 	);
 
-	const totalViews = tinybirdData.viewSeries.reduce((sum, row) => sum + row.views, 0);
+	const totalViews = tinybirdData.viewSeries.reduce(
+		(sum, row) => sum + row.views,
+		0,
+	);
 	const totalCaps = capsSeries.reduce((sum, row) => sum + row.count, 0);
 	const totalComments = commentSeries.reduce((sum, row) => sum + row.count, 0);
-	const totalReactions = reactionSeries.reduce((sum, row) => sum + row.count, 0);
+	const totalReactions = reactionSeries.reduce(
+		(sum, row) => sum + row.count,
+		0,
+	);
 
 	const chartData = buckets.map((bucket) => ({
 		bucket,
 		caps: capsSeries.find((row) => row.bucket === bucket)?.count ?? 0,
-		views: tinybirdData.viewSeries.find((row) => row.bucket === bucket)?.views ?? 0,
+		views:
+			tinybirdData.viewSeries.find((row) => row.bucket === bucket)?.views ?? 0,
 		comments: commentSeries.find((row) => row.bucket === bucket)?.count ?? 0,
 		reactions: reactionSeries.find((row) => row.bucket === bucket)?.count ?? 0,
 	}));
@@ -298,8 +383,13 @@ const normalizeOSName = (name: string): string => {
 	const normalized = name.trim();
 	if (!normalized) return "Unknown";
 	const lower = normalized.toLowerCase();
-	
-	if (lower.includes("mac") || lower === "macos" || lower === "mac os" || lower === "darwin") {
+
+	if (
+		lower.includes("mac") ||
+		lower === "macos" ||
+		lower === "mac os" ||
+		lower === "darwin"
+	) {
 		return "macOS";
 	}
 	if (lower.includes("windows") || lower === "win") {
@@ -320,7 +410,7 @@ const normalizeOSName = (name: string): string => {
 	if (lower.includes("fedora")) {
 		return "Fedora";
 	}
-	
+
 	return normalized;
 };
 
@@ -329,7 +419,7 @@ const normalizeDeviceName = (name: string): string => {
 	const normalized = name.trim();
 	if (!normalized) return "Unknown";
 	const lower = normalized.toLowerCase();
-	
+
 	if (lower === "desktop" || lower === "desktop computer" || lower === "pc") {
 		return "Desktop";
 	}
@@ -339,7 +429,7 @@ const normalizeDeviceName = (name: string): string => {
 	if (lower === "tablet" || lower === "ipad") {
 		return "Tablet";
 	}
-	
+
 	return normalized;
 };
 
@@ -348,7 +438,7 @@ const normalizeBrowserName = (name: string): string => {
 	const normalized = name.trim();
 	if (!normalized) return "Unknown";
 	const lower = normalized.toLowerCase();
-	
+
 	if (lower.includes("chrome") && !lower.includes("chromium")) {
 		return "Chrome";
 	}
@@ -370,7 +460,7 @@ const normalizeBrowserName = (name: string): string => {
 	if (lower.includes("internet explorer") || lower === "ie") {
 		return "Internet Explorer";
 	}
-	
+
 	return normalized;
 };
 
@@ -381,14 +471,14 @@ const normalizeAndAggregate = <T extends { name: string; views: number }>(
 	normalizeFn: (name: string) => string,
 ): BreakdownRow[] => {
 	const aggregated = new Map<string, number>();
-	
+
 	for (const row of rows) {
 		const originalName = getName(row);
 		const normalizedName = normalizeFn(originalName);
 		const currentViews = aggregated.get(normalizedName) ?? 0;
 		aggregated.set(normalizedName, currentViews + row.views);
 	}
-	
+
 	return Array.from(aggregated.entries())
 		.map(([name, views]) => ({
 			name,
@@ -435,7 +525,7 @@ const queryVideoSeries = async (
 		eq(videos.orgId, orgId),
 		between(videos.createdAt, from, to),
 	];
-	
+
 	if (spaceVideoIds && spaceVideoIds.length > 0) {
 		conditions.push(inArray(videos.id, spaceVideoIds));
 	}
@@ -473,7 +563,7 @@ const queryCommentsSeries = async (
 		eq(comments.type, type),
 		between(comments.createdAt, from, to),
 	];
-	
+
 	if (spaceVideoIds && spaceVideoIds.length > 0) {
 		conditions.push(inArray(videos.id, spaceVideoIds));
 	}
@@ -502,7 +592,8 @@ const queryViewSeries = (
 	spaceVideoIds?: VideoId[],
 ) => {
 	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
-	const bucketFormatter = bucket === "hour" ? "%Y-%m-%dT%H:00:00Z" : "%Y-%m-%dT00:00:00Z";
+	const bucketFormatter =
+		bucket === "hour" ? "%Y-%m-%dT%H:00:00Z" : "%Y-%m-%dT00:00:00Z";
 	const rawSql = `
 		SELECT
 			formatDateTime(${bucket === "hour" ? "toStartOfHour" : "toStartOfDay"}(timestamp), '${bucketFormatter}') as bucket,
@@ -534,9 +625,9 @@ const queryViewSeries = (
 		bucket === "hour"
 			? rawEffect
 			: fallbackIfEmpty(
-				withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
-				rawEffect,
-			);
+					withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
+					rawEffect,
+				);
 
 	return effect.pipe(
 		Effect.map((rows) =>

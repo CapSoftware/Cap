@@ -1,14 +1,12 @@
 "use server";
 
-import { Tinybird } from "@cap/web-backend";
-import { Effect } from "effect";
-
-import { runPromise } from "@/lib/server";
-
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
+import { Tinybird } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect } from "effect";
+import { runPromise } from "@/lib/server";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const MIN_RANGE_DAYS = 1;
@@ -17,11 +15,10 @@ const DEFAULT_RANGE_DAYS = MAX_RANGE_DAYS;
 
 const escapeLiteral = (value: string) => value.replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
-const formatDateTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
+const formatDateTime = (date: Date) =>
+	date.toISOString().slice(0, 19).replace("T", " ");
 const buildConditions = (clauses: Array<string | undefined>) =>
-	clauses
-		.filter((clause): clause is string => Boolean(clause))
-		.join(" AND ");
+	clauses.filter((clause): clause is string => Boolean(clause)).join(" AND ");
 
 const normalizeRangeDays = (rangeDays?: number) => {
 	if (!Number.isFinite(rangeDays)) return DEFAULT_RANGE_DAYS;
@@ -70,29 +67,29 @@ export async function getVideoAnalytics(
 			const rawSql = `SELECT coalesce(uniq(session_id), 0) AS views FROM analytics_events WHERE ${buildConditions(rawConditions)}`;
 
 			const querySql = (sql: string) =>
-				tinybird
-					.querySql<{ views: number }>(sql)
-					.pipe(
-						Effect.catchAll((e) => {
-							console.error("tinybird sql error", e);
-							return Effect.succeed({ data: [] });
-						}),
-					);
+				tinybird.querySql<{ views: number }>(sql).pipe(
+					Effect.catchAll((e) => {
+						console.error("tinybird sql error", e);
+						return Effect.succeed({ data: [] });
+					}),
+				);
 
 			const aggregateResult = yield* querySql(aggregateSql);
-			
-			const fallbackResult =
-				aggregateResult.data?.length
-					? aggregateResult
-					: yield* querySql(rawSql);
+
+			const fallbackResult = aggregateResult.data?.length
+				? aggregateResult
+				: yield* querySql(rawSql);
 
 			const data = fallbackResult?.data ?? [];
 			const firstItem = data[0];
-			const count = typeof firstItem === "number"
-				? firstItem
-				: typeof firstItem === "object" && firstItem !== null && "views" in firstItem
-					? Number(firstItem.views ?? 0)
-					: 0;
+			const count =
+				typeof firstItem === "number"
+					? firstItem
+					: typeof firstItem === "object" &&
+							firstItem !== null &&
+							"views" in firstItem
+						? Number(firstItem.views ?? 0)
+						: 0;
 			return { count: Number.isFinite(count) ? count : 0 };
 		}),
 	);

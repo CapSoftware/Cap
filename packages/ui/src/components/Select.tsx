@@ -5,8 +5,8 @@ import { cva, cx } from "class-variance-authority";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import * as React from "react";
 
-type SelectVariant = "default" | "light" | "dark" | "gray" | "transparent"
-type Size = "default" | "fit" | "sm" | "md" | "lg"
+type SelectVariant = "default" | "light" | "dark" | "gray" | "transparent";
+type Size = "default" | "fit" | "sm" | "md" | "lg";
 
 const SelectVariantContext = React.createContext<SelectVariant>("default");
 
@@ -31,7 +31,8 @@ const selectTriggerVariants = cva(
 				default:
 					"bg-gray-2 border-gray-5 text-gray-12 hover:bg-gray-3 hover:border-gray-6",
 				dark: "bg-gray-12 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-1 border-gray-5 hover:bg-gray-11 hover:border-gray-6",
-				light: "bg-gray-1 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-12 border-gray-5 hover:bg-gray-3 hover:border-gray-6",
+				light:
+					"bg-gray-1 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-12 border-gray-5 hover:bg-gray-3 hover:border-gray-6",
 				gray: "bg-gray-5 text-gray-12 border-gray-5 hover:bg-gray-7 hover:border-gray-6",
 				transparent:
 					"bg-transparent text-gray-12 border-transparent hover:bg-gray-3 hover:border-gray-6",
@@ -65,7 +66,8 @@ const selectContentVariants = cva(
 			variant: {
 				default: "bg-gray-2 border-gray-5 text-gray-12",
 				dark: "hover:bg-gray-11-50 bg-gray-12 dark-button-border dark-button-shadow text-gray-1 border-gray-5",
-				light: "bg-gray-1 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-12 border-gray-5",
+				light:
+					"bg-gray-1 transition-all duration-200 data-[state=open]:ring-offset-2 data-[state=open]:ring-gray-10 ring-transparent ring-offset-gray-3 text-gray-12 border-gray-5",
 				gray: "bg-gray-5 text-gray-12 border-gray-5",
 				transparent:
 					"bg-transparent hover:bg-gray-3 text-gray-12 border-transparent",
@@ -89,7 +91,8 @@ const selectItemVariants = cva(
 			variant: {
 				default: "text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
 				dark: "text-gray-1 hover:text-gray-12 focus:text-gray-12 hover:bg-gray-1 focus:bg-gray-1",
-				light: "text-gray-12 hover:text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
+				light:
+					"text-gray-12 hover:text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
 				gray: "text-gray-12 hover:text-gray-12 hover:bg-gray-6 focus:bg-gray-6",
 				transparent:
 					"text-gray-12 hover:text-gray-12 hover:bg-gray-3 focus:bg-gray-3",
@@ -129,12 +132,21 @@ function Select({
 			data-slot="select"
 			{...props}
 		>
-			<SelectTrigger variant={variant} size={size} className={className} icon={icon}>
+			<SelectTrigger
+				variant={variant}
+				size={size}
+				className={className}
+				icon={icon}
+			>
 				<SelectValue className="text-sm" placeholder={placeholder} />
 			</SelectTrigger>
 			<SelectContent variant={variant}>
 				{options.map((option) => (
-					<SelectItem key={option.value} value={option.value} icon={option.icon}>
+					<SelectItem
+						key={option.value}
+						value={option.value}
+						icon={option.icon}
+					>
 						<div className="flex gap-2 items-center">
 							{option.image && option.image}
 							{option.label}
@@ -176,13 +188,13 @@ function SelectTrigger({
 	variant?: SelectVariant;
 	icon?: React.ReactNode;
 }) {
-		const iconSizeVariant = {
+	const iconSizeVariant = {
 		default: "size-2.5",
 		fit: "size-2",
 		sm: "size-2",
 		md: "size-3",
 		lg: "size-3",
-	}
+	};
 	return (
 		<SelectPrimitive.Trigger
 			data-slot="select-trigger"
@@ -190,7 +202,10 @@ function SelectTrigger({
 			className={cx(selectTriggerVariants({ size, variant }), className)}
 			{...props}
 		>
-			{icon && React.cloneElement(icon as React.ReactElement<{ className: string }>, { className: cx(iconSizeVariant[size], "text-gray-9") })}
+			{icon &&
+				React.cloneElement(icon as React.ReactElement<{ className: string }>, {
+					className: cx(iconSizeVariant[size], "text-gray-9"),
+				})}
 			{children}
 			<SelectPrimitive.Icon asChild>
 				<ChevronDownIcon className="opacity-50 size-4 caret-icon" />
@@ -265,15 +280,18 @@ function SelectItem({
 			className={cx(selectItemVariants({ variant }), className)}
 			{...props}
 		>
-			
 			<span className="absolute right-2 flex size-3.5 items-center justify-center">
 				<SelectPrimitive.ItemIndicator>
 					<CheckIcon className="size-4" />
 				</SelectPrimitive.ItemIndicator>
 			</span>
 			<div className="flex justify-between items-center w-full">
-			<SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
-			{icon && React.cloneElement(icon as React.ReactElement<{ className: string }>, { className: cx("size-3", "text-gray-9") })}
+				<SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+				{icon &&
+					React.cloneElement(
+						icon as React.ReactElement<{ className: string }>,
+						{ className: cx("size-3", "text-gray-9") },
+					)}
 			</div>
 		</SelectPrimitive.Item>
 	);

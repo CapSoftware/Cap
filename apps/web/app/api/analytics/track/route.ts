@@ -44,16 +44,12 @@ export async function POST(request: NextRequest) {
 	const osName = parser.getOS().name ?? "unknown";
 	const deviceType = parser.getDevice().type ?? "desktop";
 
-	const timestamp = body.occurredAt
-		? new Date(body.occurredAt)
-		: new Date();
+	const timestamp = body.occurredAt ? new Date(body.occurredAt) : new Date();
 
 	const country =
-		sanitizeString(request.headers.get("x-vercel-ip-country")) ||
-		"";
+		sanitizeString(request.headers.get("x-vercel-ip-country")) || "";
 	const region =
-		sanitizeString(request.headers.get("x-vercel-ip-country-region")) ||
-		"";
+		sanitizeString(request.headers.get("x-vercel-ip-country-region")) || "";
 	const city = sanitizeString(request.headers.get("x-vercel-ip-city")) || "";
 
 	const hostname =
@@ -62,9 +58,7 @@ export async function POST(request: NextRequest) {
 		"";
 
 	const tenantId =
-		body.orgId ||
-		body.ownerId ||
-		(hostname ? `domain:${hostname}` : "public");
+		body.orgId || body.ownerId || (hostname ? `domain:${hostname}` : "public");
 
 	const pathname = body.pathname ?? `/s/${body.videoId}`;
 

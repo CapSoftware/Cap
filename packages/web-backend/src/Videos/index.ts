@@ -16,7 +16,8 @@ import { VideosRepo } from "./VideosRepo.ts";
 const DEFAULT_ANALYTICS_RANGE_DAYS = 90;
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
-const formatDateTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
+const formatDateTime = (date: Date) =>
+	date.toISOString().slice(0, 19).replace("T", " ");
 const buildPathname = (videoId: Video.VideoId) => `/s/${videoId}`;
 
 type UploadProgressUpdateInput = Schema.Type<
@@ -110,22 +111,20 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				}
 
 				const runTinybirdQuery = <
-					Row extends { pathname?: string | null; views?: number }
+					Row extends { pathname?: string | null; views?: number },
 				>(
 					sql: string,
 				) =>
-					tinybird
-						.querySql<Row>(sql)
-						.pipe(
-							Effect.catchAll((error) => {
-								console.error("tinybird analytics query failed", {
-									sql,
-									error,
-								});
-								return Effect.succeed<{ data: Row[] }>({ data: [] });
-							}),
-							Effect.map((response) => response.data ?? []),
-						);
+					tinybird.querySql<Row>(sql).pipe(
+						Effect.catchAll((error) => {
+							console.error("tinybird analytics query failed", {
+								sql,
+								error,
+							});
+							return Effect.succeed<{ data: Row[] }>({ data: [] });
+						}),
+						Effect.map((response) => response.data ?? []),
+					);
 
 				for (const [orgKey, entries] of videosByOrg) {
 					const pathnames = entries.map((entry) => entry.pathname);
@@ -158,7 +157,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					const aggregateRows = yield* runTinybirdQuery(aggregateSql);
 					const rows =
-						aggregateRows.length > 0 ? aggregateRows : yield* runTinybirdQuery(rawSql);
+						aggregateRows.length > 0
+							? aggregateRows
+							: yield* runTinybirdQuery(rawSql);
 
 					for (const row of rows) {
 						const pathname = row.pathname ?? "";
@@ -178,9 +179,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				return videoExits.map((exit, index) =>
 					Exit.map(exit, () => ({
 						count:
-							countsByPathname.get(
-								buildPathname(videoIds[index] ?? ""),
-							) ?? 0,
+							countsByPathname.get(buildPathname(videoIds[index] ?? "")) ?? 0,
 					})),
 				);
 			},
@@ -500,8 +499,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				videoId: Video.VideoId,
 			) {
 				const [result] = yield* getAnalyticsBulkInternal([videoId]);
-				if (!result)
-					return { count: 0 };
+				if (!result) return { count: 0 };
 				return yield* Exit.matchEffect(result, {
 					onSuccess: (value) => Effect.succeed(value),
 					onFailure: (error) => Effect.fail(error),

@@ -103,9 +103,9 @@ const FolderPage = async (props: {
 				{/* Display Videos */}
 				<FolderVideosSection
 					initialVideos={videosData}
-					analyticsEnabled={
-						Boolean(serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST)
-					}
+					analyticsEnabled={Boolean(
+						serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
+					)}
 				/>
 			</div>
 		);

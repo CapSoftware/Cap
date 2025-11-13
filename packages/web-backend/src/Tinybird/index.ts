@@ -32,9 +32,7 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 		const host = env.TINYBIRD_HOST;
 
 		if (!host) {
-			yield* Effect.die(
-				new Error("TINYBIRD_HOST must be set"),
-			);
+			yield* Effect.die(new Error("TINYBIRD_HOST must be set"));
 		}
 
 		yield* Effect.logDebug("Initializing Tinybird service", {
@@ -66,37 +64,38 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 						},
 					});
 
-				const textBody = await response.text();
+					const textBody = await response.text();
 
-				if (!response.ok) {
-					const errorMessage = textBody || `Tinybird request failed (${response.status})`;
-					console.error("Tinybird request failed", {
-						path,
-						status: response.status,
-						statusText: response.statusText,
-						body: textBody,
-					});
-					throw new Error(errorMessage);
-				}
+					if (!response.ok) {
+						const errorMessage =
+							textBody || `Tinybird request failed (${response.status})`;
+						console.error("Tinybird request failed", {
+							path,
+							status: response.status,
+							statusText: response.statusText,
+							body: textBody,
+						});
+						throw new Error(errorMessage);
+					}
 
-				if (!textBody) {
-					console.log("Tinybird empty response", { path });
-					return { data: [] } as TinybirdResponse<T>;
-				}
+					if (!textBody) {
+						console.log("Tinybird empty response", { path });
+						return { data: [] } as TinybirdResponse<T>;
+					}
 
-				let parsed: unknown;
-				try {
-					parsed = JSON.parse(textBody);
-				} catch (parseError) {
-					console.error("Tinybird JSON parse error", {
-						path,
-						responseBody: textBody,
-						bodyLength: textBody.length,
-						bodyPreview: textBody.slice(0, 500),
-						parseError,
-					});
-					throw new Error(`Tinybird returned invalid JSON for ${path}`);
-				}
+					let parsed: unknown;
+					try {
+						parsed = JSON.parse(textBody);
+					} catch (parseError) {
+						console.error("Tinybird JSON parse error", {
+							path,
+							responseBody: textBody,
+							bodyLength: textBody.length,
+							bodyPreview: textBody.slice(0, 500),
+							parseError,
+						});
+						throw new Error(`Tinybird returned invalid JSON for ${path}`);
+					}
 
 					const normalized: TinybirdResponse<T> = Array.isArray(parsed)
 						? ({ data: parsed } as TinybirdResponse<T>)
@@ -235,7 +234,8 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 					});
 					const textBody = await response.text();
 					if (!response.ok) {
-						const errorMessage = textBody || `Tinybird request failed (${response.status})`;
+						const errorMessage =
+							textBody || `Tinybird request failed (${response.status})`;
 						console.error("Tinybird request failed", {
 							path,
 							status: response.status,
@@ -256,7 +256,9 @@ export class Tinybird extends Effect.Service<Tinybird>()("Tinybird", {
 								? (parsed as TinybirdResponse<T>)
 								: ({ data: [parsed as T] } as TinybirdResponse<T>);
 						if ((normalizedRes as TinybirdResponse<T>).error) {
-							throw new Error((normalizedRes as TinybirdResponse<T>).error as string);
+							throw new Error(
+								(normalizedRes as TinybirdResponse<T>).error as string,
+							);
 						}
 						return normalizedRes;
 					} catch {

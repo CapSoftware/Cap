@@ -5,7 +5,14 @@ const TB_DATASOURCE = "analytics_events";
 const MAX_VIEWS = 100;
 const INGEST_CHUNK_SIZE = 5000;
 
-const BROWSERS = ["Chrome", "Safari", "Firefox", "Edge", "Mobile Safari", "Samsung Internet"];
+const BROWSERS = [
+	"Chrome",
+	"Safari",
+	"Firefox",
+	"Edge",
+	"Mobile Safari",
+	"Samsung Internet",
+];
 const DEVICES = ["Desktop", "Mobile", "Tablet"];
 const OS_OPTIONS = ["Mac OS", "Windows", "iOS", "Android", "Linux"];
 
@@ -53,7 +60,13 @@ function generateTestEvent(videoId, orgId = "", index = 0) {
 	const browser = randomChoice(BROWSERS);
 	const device = randomChoice(DEVICES);
 	const os = randomChoice(OS_OPTIONS);
-	const sessionId = generateSessionId(videoId, timestamp, city.name, browser, index);
+	const sessionId = generateSessionId(
+		videoId,
+		timestamp,
+		city.name,
+		browser,
+		index,
+	);
 
 	return {
 		timestamp,
@@ -102,7 +115,8 @@ async function tinybirdIngest({ host, token, datasource, ndjson }) {
 
 function parseDatabaseUrl(url) {
 	if (!url) throw new Error("DATABASE_URL not found");
-	if (!url.startsWith("mysql://")) throw new Error("DATABASE_URL is not a MySQL URL");
+	if (!url.startsWith("mysql://"))
+		throw new Error("DATABASE_URL is not a MySQL URL");
 
 	const parsed = new URL(url);
 	const config = {
@@ -147,20 +161,27 @@ async function getVideoIds() {
 
 function distributeViews(videoIds, totalViews) {
 	if (videoIds.length === 0) return [];
-	if (videoIds.length === 1) return [{ videoId: videoIds[0], views: totalViews }];
+	if (videoIds.length === 1)
+		return [{ videoId: videoIds[0], views: totalViews }];
 
 	const distribution = [];
 	let remaining = totalViews;
 
 	for (let i = 0; i < videoIds.length - 1; i++) {
 		const maxForThis = Math.floor(remaining / (videoIds.length - i));
-		const views = randomInt(1, Math.max(1, Math.min(maxForThis, remaining - (videoIds.length - i - 1))));
+		const views = randomInt(
+			1,
+			Math.max(1, Math.min(maxForThis, remaining - (videoIds.length - i - 1))),
+		);
 		distribution.push({ videoId: videoIds[i], views });
 		remaining -= views;
 	}
 
 	if (remaining > 0) {
-		distribution.push({ videoId: videoIds[videoIds.length - 1], views: remaining });
+		distribution.push({
+			videoId: videoIds[videoIds.length - 1],
+			views: remaining,
+		});
 	} else {
 		distribution.push({ videoId: videoIds[videoIds.length - 1], views: 1 });
 	}
@@ -180,7 +201,9 @@ async function main() {
 	console.log(`Found ${videoIds.length} video(s)`);
 
 	const distribution = distributeViews(videoIds, MAX_VIEWS);
-	console.log(`Generating ${MAX_VIEWS} test views across ${distribution.length} video(s)...`);
+	console.log(
+		`Generating ${MAX_VIEWS} test views across ${distribution.length} video(s)...`,
+	);
 
 	const events = [];
 	for (const { videoId, views } of distribution) {
@@ -213,10 +236,14 @@ async function main() {
 			ndjson,
 		});
 		totalWritten += chunk.length;
-		console.log(`Ingested chunk ${i + 1}/${chunks.length} (${chunk.length} events)`);
+		console.log(
+			`Ingested chunk ${i + 1}/${chunks.length} (${chunk.length} events)`,
+		);
 	}
 
-	console.log(`\n✅ Successfully ingested ${totalWritten} events into Tinybird`);
+	console.log(
+		`\n✅ Successfully ingested ${totalWritten} events into Tinybird`,
+	);
 	console.log(`\nSummary:`);
 	console.log(`  Videos: ${distribution.length}`);
 	console.log(`  Total events: ${totalWritten}`);
@@ -230,4 +257,3 @@ main().catch((err) => {
 	console.error("Error:", err);
 	process.exit(1);
 });
-

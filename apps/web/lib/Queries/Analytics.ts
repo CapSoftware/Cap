@@ -52,13 +52,15 @@ export function useVideosAnalyticsQuery(
 						),
 						{ concurrency: "unbounded" },
 					).pipe(
-						Effect.map((rows: Array<{ videoId: Video.VideoId; count: number }>) => {
-							const output: Partial<Record<Video.VideoId, number>> = {};
-							for (const row of rows) {
-								output[row.videoId] = row.count;
-							}
-							return output as Record<Video.VideoId, number>;
-						}),
+						Effect.map(
+							(rows: Array<{ videoId: Video.VideoId; count: number }>) => {
+								const output: Partial<Record<Video.VideoId, number>> = {};
+								for (const row of rows) {
+									output[row.videoId] = row.count;
+								}
+								return output as Record<Video.VideoId, number>;
+							},
+						),
 					),
 			);
 		},

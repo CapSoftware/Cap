@@ -96,7 +96,9 @@ export const Caps = ({
 		});
 	};
 
-	const rpc = useRpcClient();
+	const rpc = useRpcClient() as {
+		VideoDelete: (id: Video.VideoId) => Effect.Effect<void, unknown, never>;
+	};
 
 	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
@@ -124,7 +126,9 @@ export const Caps = ({
 			}
 		}),
 		onMutate: (ids: Video.VideoId[]) => {
-			toast.loading(`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`);
+			toast.loading(
+				`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
+			);
 		},
 		onSuccess: (data: { success: number; error?: number }) => {
 			setSelectedCaps([]);
@@ -133,17 +137,23 @@ export const Caps = ({
 				toast.success(
 					`Successfully deleted ${data.success} cap${
 						data.success === 1 ? "" : "s"
-					}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`,
+					}, but failed to delete ${data.error} cap${
+						data.error === 1 ? "" : "s"
+					}`,
 				);
 			} else {
 				toast.success(
-					`Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`,
+					`Successfully deleted ${data.success} cap${
+						data.success === 1 ? "" : "s"
+					}`,
 				);
 			}
 		},
 		onError: (error: unknown) => {
 			const message =
-				error instanceof Error ? error.message : "An error occurred while deleting caps";
+				error instanceof Error
+					? error.message
+					: "An error occurred while deleting caps";
 			toast.error(message);
 		},
 	});

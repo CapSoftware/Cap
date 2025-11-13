@@ -5,15 +5,16 @@ const parseRangeParam = (value: string | null) => {
 	if (!value) return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
-	const normalized = trimmed.endsWith("d") || trimmed.endsWith("D")
-		? trimmed.slice(0, -1)
-		: trimmed;
+	const normalized =
+		trimmed.endsWith("d") || trimmed.endsWith("D")
+			? trimmed.slice(0, -1)
+			: trimmed;
 	const parsed = Number.parseInt(normalized, 10);
 	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
 	return parsed;
 };
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
 	const url = new URL(request.url);

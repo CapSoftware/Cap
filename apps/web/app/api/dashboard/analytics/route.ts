@@ -10,8 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
 	const user = await getCurrentUser();
-	if (!user)
-		return Response.json({ error: "Unauthorized" }, { status: 401 });
+	if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
 	const { searchParams } = new URL(request.url);
 	const requestedOrgId = searchParams.get("orgId");
@@ -36,6 +35,9 @@ export async function GET(request: NextRequest) {
 		return Response.json({ data });
 	} catch (error) {
 		console.error("Failed to load analytics", error);
-		return Response.json({ error: "Failed to load analytics" }, { status: 500 });
+		return Response.json(
+			{ error: "Failed to load analytics" },
+			{ status: 500 },
+		);
 	}
 }

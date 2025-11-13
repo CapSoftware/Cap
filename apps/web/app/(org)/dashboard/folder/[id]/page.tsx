@@ -84,9 +84,9 @@ const FolderPage = async (props: PageProps<"/dashboard/folder/[id]">) => {
 				{/* Display Videos */}
 				<FolderVideosSection
 					initialVideos={videosData}
-					analyticsEnabled={
-						Boolean(serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST)
-					}
+					analyticsEnabled={Boolean(
+						serverEnv().TINYBIRD_TOKEN && serverEnv().TINYBIRD_HOST,
+					)}
 				/>
 			</div>
 		);

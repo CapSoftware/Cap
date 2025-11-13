@@ -110,9 +110,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 
 			VideosGetAnalytics: (videoIds) =>
 				videos.getAnalyticsBulk(videoIds).pipe(
-					Effect.map((results) =>
-						results.map((result) => Unify.unify(result)),
-					),
+					Effect.map((results) => results.map((result) => Unify.unify(result))),
 					provideOptionalAuth,
 					Effect.catchTag(
 						"DatabaseError",

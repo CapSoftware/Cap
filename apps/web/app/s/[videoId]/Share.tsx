@@ -80,20 +80,20 @@ const trackVideoView = (payload: {
 		referrer: document.referrer,
 		hostname: window.location.hostname,
 		timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-		language:
-			typeof navigator !== "undefined" ? navigator.language : undefined,
+		language: typeof navigator !== "undefined" ? navigator.language : undefined,
 		locale:
 			typeof navigator !== "undefined" && navigator.languages?.length
 				? navigator.languages[0]
 				: undefined,
 		screen: screen
 			? {
-				width: screen.width,
-				height: screen.height,
-				colorDepth: screen.colorDepth,
-			}
+					width: screen.width,
+					height: screen.height,
+					colorDepth: screen.colorDepth,
+				}
 			: undefined,
-		userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+		userAgent:
+			typeof navigator !== "undefined" ? navigator.userAgent : undefined,
 		occurredAt: new Date().toISOString(),
 	};
 
