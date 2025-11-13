@@ -8,10 +8,7 @@ import { onCleanup, onMount, type ParentProps, Suspense } from "solid-js";
 import { AbsoluteInsetLoader } from "~/components/Loader";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { initializeTitlebar } from "~/utils/titlebar-state";
-import {
-	useWindowChromeContext,
-	WindowChromeContext,
-} from "./(window-chrome)/Context";
+import { useWindowChromeContext, WindowChromeContext } from "./(window-chrome)/Context";
 
 export const route = {
 	info: {
@@ -34,7 +31,7 @@ export default function (props: RouteSectionProps) {
 
 	return (
 		<WindowChromeContext>
-			<div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen divide-y divide-gray-5 bg-gray-1">
+			<div class="flex overflow-hidden flex-col w-screen h-screen max-h-screen bg-gray-1 p-1">
 				<Header />
 
 				{/* breaks sometimes */}
@@ -79,10 +76,7 @@ function Header() {
 
 	return (
 		<header
-			class={cx(
-				"flex items-center space-x-1 h-9 select-none shrink-0 bg-gray-2",
-				isWindows ? "flex-row" : "flex-row-reverse pl-[4.2rem]",
-			)}
+			class={cx("flex items-center space-x-1 h-10 select-none shrink-0 bg-gray-1", isWindows ? "flex-row" : "flex-row")}
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
@@ -96,9 +90,5 @@ function Inner(props: ParentProps) {
 		if (location.pathname !== "/") getCurrentWindow().show();
 	});
 
-	return (
-		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
-			{props.children}
-		</div>
-	);
+	return <div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">{props.children}</div>;
 }

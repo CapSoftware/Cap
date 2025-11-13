@@ -52,6 +52,7 @@ import SystemAudio from "./SystemAudio";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
+import { CloseIcon, InflightLogo, SettingsIcon } from "~/icons";
 
 function getWindowSize() {
 	return {
@@ -690,9 +691,21 @@ function Page() {
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
-					class={cx("flex items-center mx-2 w-full", ostype() === "macos" && "flex-row-reverse")}
+					class={cx("flex items-center justify-between px-3 w-full", ostype() === "macos" && "flex-row")}
 					data-tauri-drag-region
 				>
+					<div
+						class="flex justify-center items-center size-8 hover:bg-white/5 rounded-[8px] group cursor-pointer"
+						data-tauri-drag-region
+						onClick={() => {
+							getCurrentWindow().close();
+						}}
+					>
+						<CloseIcon class="text-neutral-300 group-hover:text-white size-4" />
+					</div>
+					<div class="flex justify-center items-center" data-tauri-drag-region>
+						<InflightLogo class="pointer-events-none" />
+					</div>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
 							<button
@@ -701,12 +714,12 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center size-5 -ml-[1.5px]"
+								class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[8px] group cursor-pointer"
 							>
-								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+								<SettingsIcon class="text-neutral-300 group-hover:text-white size-4" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Previous Recordings</span>}>
+						{/* <Tooltip content={<span>Previous Recordings</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -731,10 +744,11 @@ function Page() {
 							>
 								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
-						)}
+						)} */}
 					</div>
-					{ostype() === "macos" && <div class="flex-1" data-tauri-drag-region />}
-					<ErrorBoundary fallback={<></>}>
+					{/* {ostype() === "macos" && <div class="flex-1 bg-red-500" data-tauri-drag-region />} */}
+
+					{/* <ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
 								onClick={async () => {
@@ -753,7 +767,7 @@ function Page() {
 								{license.data?.type === "commercial" ? "Commercial" : license.data?.type === "pro" ? "Pro" : "Personal"}
 							</span>
 						</Suspense>
-					</ErrorBoundary>
+					</ErrorBoundary> */}
 				</div>
 			</WindowChromeHeader>
 			<Show when={signIn.isPending}>
