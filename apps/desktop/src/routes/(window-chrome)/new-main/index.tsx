@@ -52,12 +52,13 @@ import SystemAudio from "./SystemAudio";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
-import { CloseIcon, InflightLogo, SettingsIcon } from "~/icons";
+import HorizontalTargetButton from "./HorizontalTargetButton";
+import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
 
 function getWindowSize() {
 	return {
-		width: 270,
-		height: 256,
+		width: 272,
+		height: 386,
 	};
 }
 
@@ -532,24 +533,71 @@ function Page() {
 	const signIn = createSignInMutation();
 
 	const BaseControls = () => (
-		<div class="space-y-2">
-			<CameraSelect
-				disabled={cameras.isPending}
-				options={cameras.data ?? []}
-				value={options.camera() ?? null}
-				onChange={(c) => {
-					if (!c) setCamera.mutate(null);
-					else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-					else setCamera.mutate({ DeviceID: c.device_id });
-				}}
-			/>
-			<MicrophoneSelect
-				disabled={mics.isPending}
-				options={mics.isPending ? [] : mics.data ?? []}
-				value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
-				onChange={(v) => setMicInput.mutate(v)}
-			/>
-			<SystemAudio />
+		<div class="flex flex-col gap-4">
+			<p class="text-xs text-white/70 leading-none">Select inputs</p>
+			<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
+				<CameraSelect
+					disabled={cameras.isPending}
+					options={cameras.data ?? []}
+					value={options.camera() ?? null}
+					onChange={(c) => {
+						if (!c) setCamera.mutate(null);
+						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+						else setCamera.mutate({ DeviceID: c.device_id });
+					}}
+				/>
+				<MicrophoneSelect
+					disabled={mics.isPending}
+					options={mics.isPending ? [] : mics.data ?? []}
+					value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+					onChange={(v) => setMicInput.mutate(v)}
+				/>
+				<SystemAudio />
+			</div>
+		</div>
+	);
+
+	const RecordingControls = () => (
+		<div class="flex flex-col gap-4">
+			<p class="text-xs text-white/70 leading-none">Select what to record</p>
+			<div class="flex flex-col gap-2 w-full">
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "display"}
+					Component={DisplayIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Display"
+				/>
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "window"}
+					Component={WindowIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Window"
+				/>
+				<HorizontalTargetButton
+					selected={rawOptions.targetMode === "area"}
+					Component={CropIcon}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+						else commands.closeTargetSelectOverlays();
+					}}
+					name="Area"
+				/>
+			</div>
 		</div>
 	);
 
@@ -563,104 +611,9 @@ function Page() {
 			exitClass="scale-100"
 			exitToClass="scale-95"
 		>
-			<div class="flex flex-col gap-2 w-full">
-				<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "display" || displayMenuOpen()) && "ring-blue-9"
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "display"}
-							Component={IconMdiMonitor}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) => (v === "display" ? null : "display"));
-								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
-							name="Display"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								displayMenuOpen() && "bg-gray-5"
-							)}
-							ref={(el) => (displayTriggerRef = el)}
-							disabled={isRecording()}
-							expanded={displayMenuOpen()}
-							onClick={() => {
-								setDisplayMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setWindowMenuOpen(false);
-										setHasOpenedDisplayMenu(true);
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose display"
-						/>
-					</div>
-					<div
-						class={cx(
-							"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
-							(rawOptions.targetMode === "window" || windowMenuOpen()) && "ring-blue-9"
-						)}
-					>
-						<TargetTypeButton
-							selected={rawOptions.targetMode === "window"}
-							Component={IconLucideAppWindowMac}
-							disabled={isRecording()}
-							onClick={() => {
-								if (isRecording()) return;
-								setOptions("targetMode", (v) => (v === "window" ? null : "window"));
-								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-								else commands.closeTargetSelectOverlays();
-							}}
-							name="Window"
-							class="flex-1 rounded-none focus-visible:ring-0 focus-visible:ring-offset-0"
-						/>
-						<TargetDropdownButton
-							class={cx(
-								"rounded-none border-l border-gray-6 focus-visible:ring-0 focus-visible:ring-offset-0",
-								windowMenuOpen() && "bg-gray-5"
-							)}
-							ref={(el) => (windowTriggerRef = el)}
-							disabled={isRecording()}
-							expanded={windowMenuOpen()}
-							onClick={() => {
-								setWindowMenuOpen((prev) => {
-									const next = !prev;
-									if (next) {
-										setDisplayMenuOpen(false);
-										setHasOpenedWindowMenu(true);
-									}
-									return next;
-								});
-							}}
-							aria-haspopup="menu"
-							aria-label="Choose window"
-						/>
-					</div>
-					<TargetTypeButton
-						selected={rawOptions.targetMode === "area"}
-						Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-						disabled={isRecording()}
-						onClick={() => {
-							if (isRecording()) return;
-							setOptions("targetMode", (v) => (v === "area" ? null : "area"));
-							if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-							else commands.closeTargetSelectOverlays();
-						}}
-						name="Area"
-					/>
-				</div>
+			<div class="flex flex-col gap-4 w-full">
 				<BaseControls />
+				<RecordingControls />
 			</div>
 		</Transition>
 	);
@@ -687,25 +640,30 @@ function Page() {
 		<div
 			class={`flex relative ${
 				displayMenuOpen() || windowMenuOpen() ? "" : "justify-center"
-			} flex-col px-3 gap-2 h-full text-[--text-primary]`}
+			} flex-col gap-2 h-full text-[--text-primary] bg-white/5 rounded-[16px] p-4`}
+			style={{
+				"box-shadow": "0 1px 2px 0 rgba(255, 255, 255, 0.05) inset",
+			}}
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
 					class={cx("flex items-center justify-between px-3 w-full", ostype() === "macos" && "flex-row")}
 					data-tauri-drag-region
 				>
-					<div
-						class="flex justify-center items-center size-8 hover:bg-white/5 rounded-[8px] group cursor-pointer"
-						data-tauri-drag-region
-						onClick={() => {
+					<button
+						type="button"
+						onClick={async () => {
 							getCurrentWindow().close();
 						}}
+						class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[8px]"
 					>
-						<CloseIcon class="text-neutral-300 group-hover:text-white size-4" />
+						<CloseIcon class="text-neutral-300 size-4 group-hover:text-white" />
+					</button>
+
+					<div class="flex items-center gap-1 pointer-events-none">
+						<InflightLogo class="" />
 					</div>
-					<div class="flex justify-center items-center" data-tauri-drag-region>
-						<InflightLogo class="pointer-events-none" />
-					</div>
+
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
 							<button
@@ -714,9 +672,9 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[8px] group cursor-pointer"
+								class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[6px]"
 							>
-								<SettingsIcon class="text-neutral-300 group-hover:text-white size-4" />
+								<SettingsIcon class="text-neutral-300 size-4 group-hover:text-white" />
 							</button>
 						</Tooltip>
 						{/* <Tooltip content={<span>Previous Recordings</span>}>
@@ -746,8 +704,7 @@ function Page() {
 							</button>
 						)} */}
 					</div>
-					{/* {ostype() === "macos" && <div class="flex-1 bg-red-500" data-tauri-drag-region />} */}
-
+					{/* {ostype() === "macos" && <div class="flex-1" data-tauri-drag-region />} */}
 					{/* <ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span

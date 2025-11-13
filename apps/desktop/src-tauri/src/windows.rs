@@ -265,6 +265,7 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .center()
+                    .transparent(true)
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
@@ -428,6 +429,7 @@ impl ShowCapWindow {
                 .resizable(true)
                 .maximized(false)
                 .center()
+                .transparent(true)
                 .build()?
             }
             Self::Editor { .. } => {
