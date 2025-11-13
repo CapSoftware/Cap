@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
 				return;
 			}
 
-				const tinybird = yield* Tinybird;
+			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),

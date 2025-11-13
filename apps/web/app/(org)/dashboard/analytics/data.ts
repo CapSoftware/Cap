@@ -91,9 +91,10 @@ const getLifetimeRangeStart = async (
 	orgId: OrgId,
 	videoIds?: VideoId[],
 ): Promise<Date | undefined> => {
-	const whereClause = videoIds && videoIds.length > 0
-		? and(eq(videos.orgId, orgId), inArray(videos.id, videoIds))
-		: eq(videos.orgId, orgId);
+	const whereClause =
+		videoIds && videoIds.length > 0
+			? and(eq(videos.orgId, orgId), inArray(videos.id, videoIds))
+			: eq(videos.orgId, orgId);
 
 	const rows = await db()
 		.select({ minCreatedAt: sql<Date>`MIN(${videos.createdAt})` })
@@ -151,15 +152,13 @@ const withTinybirdFallback = <Row>(
 		Effect.map((res: unknown) => {
 			const response = res as { data?: unknown[] };
 			const data = response.data ?? [];
-			return data.filter((item): item is Row =>
-				typeof item === "object" && item !== null,
+			return data.filter(
+				(item): item is Row => typeof item === "object" && item !== null,
 			) as Row[];
 		}),
 	);
 
-const getSpaceVideoIds = async (
-	spaceId: SpaceOrOrgId,
-): Promise<VideoId[]> => {
+const getSpaceVideoIds = async (spaceId: SpaceOrOrgId): Promise<VideoId[]> => {
 	const rows = await db()
 		.select({ videoId: spaceVideos.videoId })
 		.from(spaceVideos)
@@ -225,27 +224,13 @@ export const getOrgAnalyticsData = async (
 
 	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
 		queryVideoSeries(typedOrgId, from, to, bucket, videoIds),
-		queryCommentsSeries(
-			typedOrgId,
-			from,
-			to,
-			"text",
-			bucket,
-			videoIds,
-		),
-		queryCommentsSeries(
-			typedOrgId,
-			from,
-			to,
-			"emoji",
-			bucket,
-			videoIds,
-		),
+		queryCommentsSeries(typedOrgId, from, to, "text", bucket, videoIds),
+		queryCommentsSeries(typedOrgId, from, to, "emoji", bucket, videoIds),
 	]);
 
-		const tinybirdData = await runPromise(
-			Effect.gen(function* () {
-				const tinybird = yield* Tinybird;
+	const tinybirdData = await runPromise(
+		Effect.gen(function* () {
+			const tinybird = yield* Tinybird;
 
 			const viewSeries = yield* queryViewSeries(
 				tinybird,
@@ -316,8 +301,14 @@ export const getOrgAnalyticsData = async (
 		(sum: number, row: ViewSeriesRow) => sum + row.views,
 		0,
 	);
-	const totalCaps = capsSeries.reduce((sum: number, row: CountSeriesRow) => sum + row.count, 0);
-	const totalComments = commentSeries.reduce((sum: number, row: CountSeriesRow) => sum + row.count, 0);
+	const totalCaps = capsSeries.reduce(
+		(sum: number, row: CountSeriesRow) => sum + row.count,
+		0,
+	);
+	const totalComments = commentSeries.reduce(
+		(sum: number, row: CountSeriesRow) => sum + row.count,
+		0,
+	);
 	const totalReactions = reactionSeries.reduce(
 		(sum: number, row: CountSeriesRow) => sum + row.count,
 		0,
@@ -325,15 +316,25 @@ export const getOrgAnalyticsData = async (
 
 	const chartData = buckets.map((bucket) => ({
 		bucket,
-		caps: capsSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
+		caps:
+			capsSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ??
+			0,
 		views:
-			tinybirdData.viewSeries.find((row: ViewSeriesRow) => row.bucket === bucket)?.views ?? 0,
-		comments: commentSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
-		reactions: reactionSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
+			tinybirdData.viewSeries.find(
+				(row: ViewSeriesRow) => row.bucket === bucket,
+			)?.views ?? 0,
+		comments:
+			commentSeries.find((row: CountSeriesRow) => row.bucket === bucket)
+				?.count ?? 0,
+		reactions:
+			reactionSeries.find((row: CountSeriesRow) => row.bucket === bucket)
+				?.count ?? 0,
 	}));
 
 	const videoNames = await loadVideoNames(
-		tinybirdData.topCapsRaw.map((cap: TopCapRow) => cap.videoId).filter(Boolean),
+		tinybirdData.topCapsRaw
+			.map((cap: TopCapRow) => cap.videoId)
+			.filter(Boolean),
 	);
 
 	let capName: string | undefined;
@@ -953,7 +954,9 @@ const queryTopCaps = (
 					videoId: row.pathname?.split("/s/")[1] ?? row.pathname,
 					views: Number(row.views) || 0,
 				}))
-				.filter((row: { videoId: string; views: number }): row is TopCapRow => Boolean(row.videoId)),
+				.filter((row: { videoId: string; views: number }): row is TopCapRow =>
+					Boolean(row.videoId),
+				),
 		),
 	);
 };
