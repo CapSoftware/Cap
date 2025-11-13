@@ -1,4 +1,4 @@
-import { InternalError, Video } from "@cap/web-domain";
+import { InternalError, Policy, Video } from "@cap/web-domain";
 import { Effect, Exit, Schema, Unify } from "effect";
 
 import { provideOptionalAuth } from "../Auth.ts";
@@ -110,7 +110,23 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 
 			VideosGetAnalytics: (videoIds) =>
 				videos.getAnalyticsBulk(videoIds).pipe(
-					Effect.map((results) => results.map((result) => Unify.unify(result))),
+					Effect.map((results) =>
+						results.map((result) =>
+							Exit.mapError(
+								Exit.map(result, (v) => ({ count: v.count } as const)),
+								(error) => {
+									if (Schema.is(Video.NotFoundError)(error)) return error;
+									if (Schema.is(Policy.PolicyDeniedError)(error)) return error;
+									if (Schema.is(Video.VerifyVideoPasswordError)(error))
+										return error;
+									return error as Video.NotFoundError | Policy.PolicyDeniedError | Video.VerifyVideoPasswordError;
+								},
+							),
+						) as readonly Exit.Exit<
+							{ readonly count: number },
+							Video.NotFoundError | Policy.PolicyDeniedError | Video.VerifyVideoPasswordError
+						>[],
+					),
 					provideOptionalAuth,
 					Effect.catchTag(
 						"DatabaseError",
