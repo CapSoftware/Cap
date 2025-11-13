@@ -20,6 +20,7 @@ interface ActivityProps {
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;
+	isOwner: boolean;
 	commentsDisabled: boolean;
 }
 
@@ -29,6 +30,7 @@ export const Activity = Object.assign(
 			{
 				videoId,
 				isOwnerOrMember,
+				isOwner,
 				comments,
 				handleCommentSuccess,
 				optimisticComments,
@@ -48,6 +50,7 @@ export const Activity = Object.assign(
 								views={props.views}
 								comments={comments}
 								isLoadingAnalytics={false}
+								isOwner={isOwner}
 							/>
 						</Suspense>
 					}

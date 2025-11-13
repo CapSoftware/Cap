@@ -18,6 +18,7 @@ interface CapCardAnalyticsProps {
 	totalComments: number;
 	isLoadingAnalytics: boolean;
 	totalReactions: number;
+	isOwner?: boolean;
 }
 
 export const CapCardAnalytics = Object.assign(
@@ -27,53 +28,66 @@ export const CapCardAnalytics = Object.assign(
 		totalComments,
 		totalReactions,
 		isLoadingAnalytics,
+		isOwner = true,
 	}: CapCardAnalyticsProps) =>
 		isLoadingAnalytics ? (
 			<CapCardAnalytics.Skeleton />
 		) : (
 			<Shell>
-				<Tooltip
-					content="View analytics"
-					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-					delayDuration={100}
-				>
+				<div className="flex flex-wrap gap-4 items-center">
+					<Tooltip
+						content="View analytics"
+						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+						delayDuration={100}
+					>
+						<Link
+							href={`/dashboard/analytics?capId=${capId}`}
+							className="inline-flex cursor-pointer"
+						>
+							<IconItem icon={faEye}>
+								<span className="text-sm text-gray-12">{displayCount}</span>
+							</IconItem>
+						</Link>
+					</Tooltip>
+					<Tooltip
+						content="View analytics"
+						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+						delayDuration={100}
+					>
+						<Link
+							href={`/dashboard/analytics?capId=${capId}`}
+							className="inline-flex cursor-pointer"
+						>
+							<IconItem icon={faComment}>
+								<span className="text-sm text-gray-12">{totalComments}</span>
+							</IconItem>
+						</Link>
+					</Tooltip>
+					<Tooltip
+						content="View analytics"
+						className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+						delayDuration={100}
+					>
+						<Link
+							href={`/dashboard/analytics?capId=${capId}`}
+							className="inline-flex cursor-pointer"
+						>
+							<IconItem icon={faSmile}>
+								<span className="text-sm text-gray-12">{totalReactions}</span>
+							</IconItem>
+						</Link>
+					</Tooltip>
+				</div>
+				{isOwner && (
 					<Link
 						href={`/dashboard/analytics?capId=${capId}`}
-						className="inline-flex cursor-pointer"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-xs text-blue-600 hover:underline"
 					>
-						<IconItem icon={faEye}>
-							<span className="text-sm text-gray-12">{displayCount}</span>
-						</IconItem>
+						View analytics
 					</Link>
-				</Tooltip>
-				<Tooltip
-					content="View analytics"
-					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-					delayDuration={100}
-				>
-					<Link
-						href={`/dashboard/analytics?capId=${capId}`}
-						className="inline-flex cursor-pointer"
-					>
-						<IconItem icon={faComment}>
-							<span className="text-sm text-gray-12">{totalComments}</span>
-						</IconItem>
-					</Link>
-				</Tooltip>
-				<Tooltip
-					content="View analytics"
-					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
-					delayDuration={100}
-				>
-					<Link
-						href={`/dashboard/analytics?capId=${capId}`}
-						className="inline-flex cursor-pointer"
-					>
-						<IconItem icon={faSmile}>
-							<span className="text-sm text-gray-12">{totalReactions}</span>
-						</IconItem>
-					</Link>
-				</Tooltip>
+				)}
 			</Shell>
 		),
 	{
@@ -88,7 +102,7 @@ export const CapCardAnalytics = Object.assign(
 );
 
 const Shell = (props: PropsWithChildren) => (
-	<div className="flex flex-wrap gap-4 items-center text-sm text-gray-60">
+	<div className="flex flex-wrap gap-4 items-center justify-between text-sm text-gray-60">
 		{props.children}
 	</div>
 );
