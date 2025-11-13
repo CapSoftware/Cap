@@ -7,7 +7,7 @@ import type { CameraInfo } from "~/utils/tauri";
 import InfoPill from "./InfoPill";
 import TargetSelectInfoPill from "./TargetSelectInfoPill";
 import useRequestPermission from "./useRequestPermission";
-import { CameraIcon } from "~/icons";
+import { CameraIcon, ChevronDown } from "~/icons";
 
 const NO_CAMERA = "No Camera";
 
@@ -21,7 +21,7 @@ export default function CameraSelect(props: {
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect group"
 			iconClass="size-4"
 		/>
 	);
@@ -88,6 +88,10 @@ export function CameraSelectBase(props: {
 			>
 				<CameraIcon class={props.iconClass} />
 				<p class="flex-1 text-sm text-left truncate">{props.value?.display_name ?? NO_CAMERA}</p>
+
+				<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+					<ChevronDown class={props.iconClass} />
+				</div>
 				{/* <TargetSelectInfoPill
 					PillComponent={props.PillComponent}
 					value={props.value}

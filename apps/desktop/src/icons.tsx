@@ -267,3 +267,16 @@ export const ArrowsOutIcon = (props: { class?: string }) => {
 		</svg>
 	);
 };
+
+export const ChevronDown = (props: { class?: string }) => {
+	return (
+		<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+			<path
+				fill-rule="evenodd"
+				clip-rule="evenodd"
+				d="M2.57564 5.57613C2.80995 5.34181 3.18985 5.34181 3.42417 5.57613L7.9999 10.1519L12.5756 5.57613C12.81 5.34181 13.1899 5.34181 13.4242 5.57613C13.6585 5.81044 13.6585 6.19034 13.4242 6.42465L8.42417 11.4247C8.18985 11.659 7.80995 11.659 7.57564 11.4247L2.57564 6.42465C2.34132 6.19034 2.34132 5.81044 2.57564 5.57613Z"
+				fill="currentColor"
+			/>
+		</svg>
+	);
+};

@@ -240,6 +240,7 @@ impl ShowCapWindow {
                 .focused(true)
                 .maximizable(false)
                 .shadow(true)
+                .transparent(true)
                 .build()?,
             Self::Main { init_target_mode } => {
                 if !permissions::do_permissions_check(false).necessary_granted() {
