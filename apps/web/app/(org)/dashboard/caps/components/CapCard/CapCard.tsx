@@ -554,7 +554,7 @@ export const CapCard = ({
 					</div>
 				)}
 
-				<div className="relative">
+				<div className="relative aspect-video w-full">
 					<Link
 						className={clsx(
 							"relative",
