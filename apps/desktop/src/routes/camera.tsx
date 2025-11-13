@@ -1,11 +1,6 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
-import {
-	currentMonitor,
-	getCurrentWindow,
-	LogicalPosition,
-	LogicalSize,
-} from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -23,10 +18,8 @@ import { generalSettingsStore } from "~/store";
 import { createCameraMutation } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import { commands } from "~/utils/tauri";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "./(window-chrome)/OptionsContext";
+import { RecordingOptionsProvider, useRecordingOptions } from "./(window-chrome)/OptionsContext";
+import { ArrowsOutIcon, CloseIcon } from "~/icons";
 
 namespace CameraWindow {
 	export type Size = "sm" | "lg";
@@ -42,15 +35,11 @@ export default function () {
 	document.documentElement.classList.toggle("dark", true);
 
 	const generalSettings = generalSettingsStore.createQuery();
-	const isNativePreviewEnabled =
-		generalSettings.data?.enableNativeCameraPreview || false;
+	const isNativePreviewEnabled = generalSettings.data?.enableNativeCameraPreview || false;
 
 	return (
 		<RecordingOptionsProvider>
-			<Show
-				when={isNativePreviewEnabled}
-				fallback={<LegacyCameraPreviewPage />}
-			>
+			<Show when={isNativePreviewEnabled} fallback={<LegacyCameraPreviewPage />}>
 				<NativeCameraPreviewPage />
 			</Show>
 		</RecordingOptionsProvider>
@@ -64,56 +53,56 @@ function NativeCameraPreviewPage() {
 			shape: "round",
 			mirrored: false,
 		}),
-		{ name: "cameraWindowState" },
+		{ name: "cameraWindowState" }
 	);
 
 	createEffect(() => commands.setCameraPreviewState(state));
 
-	const [cameraPreviewReady] = createResource(() =>
-		commands.awaitCameraPreviewReady(),
-	);
+	const [cameraPreviewReady] = createResource(() => commands.awaitCameraPreviewReady());
 
 	const setCamera = createCameraMutation();
 
 	return (
-		<div
-			data-tauri-drag-region
-			class="flex relative flex-col w-screen h-screen cursor-move group"
-		>
+		<div data-tauri-drag-region class="flex relative flex-col w-screen h-screen cursor-move group">
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
-					<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
-						<ControlButton onClick={() => setCamera.mutate(null)}>
-							<IconCapCircleX class="size-5.5" />
-						</ControlButton>
-						<ControlButton
+					<div
+						class="flex flex-row items-center justify-center gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-6 transition-[opacity,transform] text-white"
+						style={{
+							"border-radius": "18px",
+							border: "1px solid var(--Highlight-extra, rgba(255, 255, 255, 0.15))",
+							background:
+								"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--neutral-950, #090A0B)",
+							"background-blend-mode": "plus-lighter, normal",
+							"box-shadow":
+								"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+						}}
+					>
+						<ControlButtonWithBackground onClick={() => setCamera.mutate(null)}>
+							<CloseIcon class="size-4" />
+						</ControlButtonWithBackground>
+						<ControlButtonWithBackground
 							pressed={state.size === "lg"}
 							onClick={() => {
 								setState("size", (s) => (s === "sm" ? "lg" : "sm"));
 							}}
 						>
-							<IconCapEnlarge class="size-5.5" />
-						</ControlButton>
-						<ControlButton
+							<ArrowsOutIcon class="size-4" />
+						</ControlButtonWithBackground>
+						<ControlButtonWithBackground
 							pressed={state.shape !== "round"}
-							onClick={() =>
-								setState("shape", (s) =>
-									s === "round" ? "square" : s === "square" ? "full" : "round",
-								)
-							}
+							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
-							{state.shape === "full" && (
-								<IconLucideRectangleHorizontal class="size-5.5" />
-							)}
-						</ControlButton>
-						<ControlButton
+							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
+						</ControlButtonWithBackground>
+						{/* <ControlButton
 							pressed={state.mirrored}
 							onClick={() => setState("mirrored", (m) => !m)}
 						>
 							<IconCapArrows class="size-5.5" />
-						</ControlButton>
+						</ControlButton> */}
 					</div>
 				</div>
 			</div>
@@ -128,18 +117,26 @@ function NativeCameraPreviewPage() {
 	);
 }
 
-function ControlButton(
+function ControlButtonWithBackground(
 	props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
 		active?: boolean;
-	},
+	}
 ) {
 	return (
 		<KToggleButton
 			type="button"
-			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			class="flex items-center justify-center size-8 hover:bg-white/5 ui-pressed:bg-white/10 ui-pressed:hover:bg-white/15 ui-pressed:text-white rounded-[12px] "
 			{...props}
 		/>
 	);
+}
+
+function ControlButton(
+	props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
+		active?: boolean;
+	}
+) {
+	return <KToggleButton type="button" class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12" {...props} />;
 }
 
 // Legacy stuff below
@@ -153,7 +150,7 @@ function LegacyCameraPreviewPage() {
 			shape: "round",
 			mirrored: false,
 		}),
-		{ name: "cameraWindowState" },
+		{ name: "cameraWindowState" }
 	);
 
 	const [latestFrame, setLatestFrame] = createLazySignal<{
@@ -186,20 +183,14 @@ function LegacyCameraPreviewPage() {
 	}
 
 	const { cameraWsPort } = (window as any).__CAP__;
-	const [ws, isConnected] = createImageDataWS(
-		`ws://localhost:${cameraWsPort}`,
-		imageDataHandler,
-	);
+	const [ws, isConnected] = createImageDataWS(`ws://localhost:${cameraWsPort}`, imageDataHandler);
 
 	const reconnectInterval = setInterval(() => {
 		if (!isConnected()) {
 			console.log("Attempting to reconnect...");
 			ws.close();
 
-			const newWs = createImageDataWS(
-				`ws://localhost:${cameraWsPort}`,
-				imageDataHandler,
-			);
+			const newWs = createImageDataWS(`ws://localhost:${cameraWsPort}`, imageDataHandler);
 			Object.assign(ws, newWs[0]);
 		}
 	}, 5000);
@@ -210,23 +201,15 @@ function LegacyCameraPreviewPage() {
 	});
 
 	const [windowSize] = createResource(
-		() =>
-			[
-				state.size,
-				state.shape,
-				frameDimensions()?.width,
-				frameDimensions()?.height,
-			] as const,
+		() => [state.size, state.shape, frameDimensions()?.width, frameDimensions()?.height] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
 			const monitor = await currentMonitor();
 
 			const BAR_HEIGHT = 56;
 			const base = size === "sm" ? 230 : 400;
 			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
-			const windowWidth =
-				shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
-			const windowHeight =
-				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
+			const windowWidth = shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
+			const windowHeight = shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
 			const totalHeight = windowHeight + BAR_HEIGHT;
 
 			if (!monitor) return;
@@ -240,12 +223,12 @@ function LegacyCameraPreviewPage() {
 			currentWindow.setPosition(
 				new LogicalPosition(
 					width + monitor.position.toLogical(scalingFactor).x,
-					height + monitor.position.toLogical(scalingFactor).y,
-				),
+					height + monitor.position.toLogical(scalingFactor).y
+				)
 			);
 
 			return { width, height, size: base, windowWidth, windowHeight };
-		},
+		}
 	);
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
@@ -258,8 +241,8 @@ function LegacyCameraPreviewPage() {
 			(label) => {
 				if (label === null) getCurrentWindow().close();
 			},
-			{ defer: true },
-		),
+			{ defer: true }
+		)
 	);
 
 	onMount(() => getCurrentWindow().show());
@@ -286,22 +269,13 @@ function LegacyCameraPreviewPage() {
 						</ControlButton>
 						<ControlButton
 							pressed={state.shape !== "round"}
-							onClick={() =>
-								setState("shape", (s) =>
-									s === "round" ? "square" : s === "square" ? "full" : "round",
-								)
-							}
+							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
-							{state.shape === "full" && (
-								<IconLucideRectangleHorizontal class="size-5.5" />
-							)}
+							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
 						</ControlButton>
-						<ControlButton
-							pressed={state.mirrored}
-							onClick={() => setState("mirrored", (m) => !m)}
-						>
+						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
 					</div>
@@ -310,7 +284,7 @@ function LegacyCameraPreviewPage() {
 			<div
 				class={cx(
 					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
-					state.shape === "round" ? "rounded-full" : "rounded-3xl",
+					state.shape === "round" ? "rounded-full" : "rounded-3xl"
 				)}
 				data-tauri-drag-region
 			>
@@ -318,8 +292,7 @@ function LegacyCameraPreviewPage() {
 					<Show when={latestFrame()}>
 						{(latestFrame) => {
 							const style = () => {
-								const aspectRatio =
-									latestFrame().data.width / latestFrame().data.height;
+								const aspectRatio = latestFrame().data.width / latestFrame().data.height;
 
 								const base = windowSize.latest?.size ?? 0;
 								const winWidth = windowSize.latest?.windowWidth ?? base;
