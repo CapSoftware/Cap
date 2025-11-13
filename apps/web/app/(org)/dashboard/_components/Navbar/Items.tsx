@@ -62,7 +62,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		{
 			name: "Analytics",
 			href: `/dashboard/analytics`,
-			exactMatch: true,
+			matchChildren: true,
 			icon: <ChartLineIcon />,
 			subNav: [],
 		},
@@ -91,8 +91,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [openAIDialog, setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
-	const isPathActive = (path: string, exactMatch: boolean = false) =>
-		exactMatch ? pathname === path : pathname.includes(path);
+	const isPathActive = (path: string, matchChildren: boolean = false) => {
+		if (matchChildren) {
+			return pathname === path || pathname.startsWith(`${path}/`);
+		}
+
+		return pathname === path;
+	};
 
 	const isDomainSetupVerified =
 		activeOrg?.organization.customDomain &&
@@ -282,7 +287,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								key={item.name}
 								className="flex relative justify-center items-center mb-1.5 w-full"
 							>
-					{isPathActive(item.href, item.exactMatch ?? false) && (
+					{isPathActive(item.href, item.matchChildren ?? false) && (
 									<motion.div
 										animate={{
 											width: sidebarCollapsed ? 36 : "100%",
@@ -311,7 +316,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
 									extraText={item.extraText}
-									exactMatch={item.exactMatch ?? false}
+									matchChildren={item.matchChildren ?? false}
 								/>
 							</div>
 						))}
@@ -401,7 +406,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
-	exactMatch,
+	matchChildren,
 	extraText,
 }: {
 	name: string;
@@ -413,9 +418,9 @@ const NavItem = ({
 	}>;
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
-	isPathActive: (path: string, exactMatch: boolean) => boolean;
+	isPathActive: (path: string, matchChildren: boolean) => boolean;
 	extraText: number | null | undefined;
-	exactMatch: boolean;
+	matchChildren: boolean;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -436,7 +441,7 @@ const NavItem = ({
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
 						: "px-3 py-2 w-full",
-					isPathActive(href, exactMatch)
+					isPathActive(href, matchChildren)
 						? "bg-transparent pointer-events-none"
 						: "hover:bg-gray-2",
 					"flex overflow-hidden justify-start items-center tracking-tight rounded-xl outline-none",
