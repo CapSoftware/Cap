@@ -275,9 +275,39 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                if new_recording_flow {
-                    #[cfg(target_os = "macos")]
-                    crate::platform::set_window_level(window.as_ref().window(), 50);
+                #[cfg(target_os = "macos")]
+                {
+                    window
+                        .run_on_main_thread({
+                            let win = window.as_ref().window();
+                            move || unsafe {
+                                let ns_win =
+                                    win.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+
+                                // Hide all window buttons - using the correct constant names
+                                if let Some(button) = (*ns_win).standardWindowButton(
+                                    objc2_app_kit::NSWindowButton::CloseButton,
+                                ) {
+                                    button.setHidden(true);
+                                }
+                                if let Some(button) = (*ns_win).standardWindowButton(
+                                    objc2_app_kit::NSWindowButton::MiniaturizeButton,
+                                ) {
+                                    button.setHidden(true);
+                                }
+                                if let Some(button) = (*ns_win)
+                                    .standardWindowButton(objc2_app_kit::NSWindowButton::ZoomButton)
+                                {
+                                    button.setHidden(true);
+                                }
+                            }
+                        })
+                        .ok();
+
+                    // Set window level if needed
+                    if new_recording_flow {
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                    }
                 }
 
                 #[cfg(target_os = "macos")]
