@@ -1,9 +1,10 @@
 "use client";
 
 import type { Organisation } from "@cap/web-domain";
-import { useQuery } from "@tanstack/react-query";
+import { Effect } from "effect";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useEffectQuery } from "@/lib/EffectRuntime";
 import { useDashboardContext } from "../../Contexts";
 import type { AnalyticsRange, OrgAnalyticsResponse } from "../types";
 import Header from "./Header";
@@ -37,29 +38,38 @@ export function AnalyticsDashboard() {
 
 	const orgId = selectedOrgId || activeOrganization?.organization.id;
 
-	const query = useQuery<{ data: OrgAnalyticsResponse } | null>({
+	const query = useEffectQuery({
 		queryKey: ["dashboard-analytics", orgId, selectedSpaceId, range, capId],
-		queryFn: async () => {
-			if (!orgId) return null;
-			const url = new URL("/api/dashboard/analytics", window.location.origin);
-			url.searchParams.set("orgId", orgId);
-			url.searchParams.set("range", range);
-			if (selectedSpaceId) {
-				url.searchParams.set("spaceId", selectedSpaceId);
-			}
-			if (capId) {
-				url.searchParams.set("capId", capId);
-			}
-			const response = await fetch(url.toString(), { cache: "no-store" });
-			console.log("response", response);
-			if (!response.ok) throw new Error("Failed to load analytics");
-			return (await response.json()) as { data: OrgAnalyticsResponse };
-		},
+		queryFn: () =>
+			Effect.gen(function* () {
+				if (!orgId) return null;
+				const url = new URL("/api/dashboard/analytics", window.location.origin);
+				url.searchParams.set("orgId", orgId);
+				url.searchParams.set("range", range);
+				if (selectedSpaceId) {
+					url.searchParams.set("spaceId", selectedSpaceId);
+				}
+				if (capId) {
+					url.searchParams.set("capId", capId);
+				}
+				const response = yield* Effect.tryPromise({
+					try: () => fetch(url.toString(), { cache: "no-store" }),
+					catch: (cause: unknown) => cause as Error,
+				});
+				if (!response.ok) {
+					return yield* Effect.fail(new Error("Failed to load analytics"));
+				}
+				return yield* Effect.tryPromise({
+					try: () => response.json() as Promise<{ data: OrgAnalyticsResponse }>,
+					catch: (cause: unknown) => cause as Error,
+				});
+			}),
 		enabled: Boolean(orgId),
 		staleTime: 60 * 1000,
 	});
 
-	const analytics = query.data?.data;
+	const analytics = (query.data as { data: OrgAnalyticsResponse } | undefined)
+		?.data;
 
 	if (!orgId) {
 		return (

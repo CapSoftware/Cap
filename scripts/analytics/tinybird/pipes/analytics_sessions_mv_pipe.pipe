@@ -4,13 +4,14 @@ DESCRIPTION >
 SQL >
 	SELECT
 		tenant_id,
-		toDate(timestamp) AS date,
+		toDate(anyLast(timestamp)) AS date,
 		session_id,
-		coalesce(nullIf(browser, ''), 'unknown') AS browser,
-		coalesce(nullIf(device, ''), 'desktop') AS device,
-		coalesce(nullIf(os, ''), 'unknown') AS os
+		coalesce(anyLast(nullIf(browser, '')), 'unknown') AS browser,
+		coalesce(anyLast(nullIf(device, '')), 'desktop') AS device,
+		coalesce(anyLast(nullIf(os, '')), 'unknown') AS os
 	FROM analytics_events
 	WHERE action = 'page_hit'
+	GROUP BY tenant_id, session_id
 
 TYPE MATERIALIZED
 DATASOURCE analytics_sessions_mv

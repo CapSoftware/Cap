@@ -287,7 +287,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								key={item.name}
 								className="flex relative justify-center items-center mb-1.5 w-full"
 							>
-					{isPathActive(item.href, item.matchChildren ?? false) && (
+								{isPathActive(item.href, item.matchChildren ?? false) && (
 									<motion.div
 										animate={{
 											width: sidebarCollapsed ? 36 : "100%",

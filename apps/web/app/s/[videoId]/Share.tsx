@@ -119,21 +119,16 @@ const trackVideoView = (payload: {
 		}
 	}
 
-	const controller = new AbortController();
-
 	void fetch("/api/analytics/track", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: serializedBody,
-		signal: controller.signal,
 		keepalive: true,
 	}).catch((error) => {
 		if (error?.name !== "AbortError") {
 			console.warn("Failed to track analytics event", error);
 		}
 	});
-
-	return () => controller.abort();
 };
 
 interface ShareProps {
@@ -280,14 +275,11 @@ export const Share = ({
 			return;
 		}
 
-		const dispose = trackVideoView({
+		trackVideoView({
 			videoId: data.id,
 			orgId: data.orgId,
 			ownerId: data.owner.id,
 		});
-		return () => {
-			dispose?.();
-		};
 	}, [data.id, data.orgId, data.owner.id, viewerId]);
 
 	const shouldShowLoading = () => {
