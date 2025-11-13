@@ -16,6 +16,8 @@ export async function GET(request: NextRequest) {
 	const { searchParams } = new URL(request.url);
 	const requestedOrgId = searchParams.get("orgId");
 	const orgId = requestedOrgId ?? user.activeOrganizationId;
+	const spaceId = searchParams.get("spaceId") ?? undefined;
+	const capId = searchParams.get("capId") ?? undefined;
 
 	if (!orgId)
 		return Response.json({ error: "No active organization" }, { status: 400 });
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
 		: "7d";
 
 	try {
-		const data = await getOrgAnalyticsData(orgId, range);
+		const data = await getOrgAnalyticsData(orgId, range, spaceId, capId);
 		return Response.json({ data });
 	} catch (error) {
 		console.error("Failed to load analytics", error);

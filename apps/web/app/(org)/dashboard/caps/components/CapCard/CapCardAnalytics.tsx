@@ -9,6 +9,7 @@ import {
 	forwardRef,
 	type PropsWithChildren,
 } from "react";
+import Link from "next/link";
 import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardAnalyticsProps {
@@ -21,6 +22,7 @@ interface CapCardAnalyticsProps {
 
 export const CapCardAnalytics = Object.assign(
 	({
+		capId,
 		displayCount,
 		totalComments,
 		totalReactions,
@@ -30,20 +32,53 @@ export const CapCardAnalytics = Object.assign(
 			<CapCardAnalytics.Skeleton />
 		) : (
 			<Shell>
-				<Tooltip content={`${displayCount} unique views`}>
-					<IconItem icon={faEye}>
-						<span className="text-sm text-gray-12">{displayCount}</span>
-					</IconItem>
+				<Tooltip
+					content="View analytics"
+					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+					delayDuration={100}
+				>
+					<Link
+						href={`/dashboard/analytics?capId=${capId}`}
+						className="inline-flex cursor-pointer"
+					>
+						<IconItem icon={faEye}>
+							<span className="text-sm text-gray-12">
+								{displayCount}
+							</span>
+						</IconItem>
+					</Link>
 				</Tooltip>
-				<Tooltip content={`${totalComments} comments`}>
-					<IconItem icon={faComment}>
-						<span className="text-sm text-gray-12">{totalComments}</span>
-					</IconItem>
+				<Tooltip
+					content="View analytics"
+					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+					delayDuration={100}
+				>
+					<Link
+						href={`/dashboard/analytics?capId=${capId}`}
+						className="inline-flex cursor-pointer"
+					>
+						<IconItem icon={faComment}>
+							<span className="text-sm text-gray-12">
+								{totalComments}
+							</span>
+						</IconItem>
+					</Link>
 				</Tooltip>
-				<Tooltip content={`${totalReactions} reactions`}>
-					<IconItem icon={faSmile}>
-						<span className="text-sm text-gray-12">{totalReactions}</span>
-					</IconItem>
+				<Tooltip
+					content="View analytics"
+					className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+					delayDuration={100}
+				>
+					<Link
+						href={`/dashboard/analytics?capId=${capId}`}
+						className="inline-flex cursor-pointer"
+					>
+						<IconItem icon={faSmile}>
+							<span className="text-sm text-gray-12">
+								{totalReactions}
+							</span>
+						</IconItem>
+					</Link>
 				</Tooltip>
 			</Shell>
 		),

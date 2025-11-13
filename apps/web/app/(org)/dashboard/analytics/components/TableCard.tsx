@@ -1,6 +1,7 @@
+"use client";
+
 import {
   LogoBadge,
-  Select,
   Table,
   TableBody,
   TableCell,
@@ -11,8 +12,6 @@ import {
 import {
   faAppleWhole,
   faDesktop,
-  faDownLong,
-  faFilter,
   faMobileScreen,
   faTablet,
 } from "@fortawesome/free-solid-svg-icons";
@@ -20,8 +19,12 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import getUnicodeFlagIcon from "country-flag-icons/unicode";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 
-const countryCodeToIcon = (countryCode: string) => {
+const countryCodeToIcon = (countryCode: string | undefined | null) => {
+  if (!countryCode || countryCode.trim() === "") {
+    return null;
+  }
   return getUnicodeFlagIcon(countryCode.toUpperCase());
 };
 
@@ -30,7 +33,10 @@ const formatNumber = (value?: number | null) =>
 const formatPercentage = (value?: number | null) =>
   value == null ? "—" : `${Math.round(value * 100)}%`;
 const skeletonBar = (width = 48) => (
-  <div className="h-2 rounded-full bg-gray-5 animate-pulse" style={{ width }} />
+  <div
+    className="h-4 rounded bg-gray-4 animate-pulse"
+    style={{ width: `${width}px` }}
+  />
 );
 
 type BrowserType =
@@ -106,6 +112,7 @@ export interface CapRowData {
   comments?: number | null;
   reactions?: number | null;
   percentage: number;
+  id?: string;
 }
 
 export interface TableCardProps {
@@ -124,13 +131,14 @@ export interface TableCardProps {
 }
 
 const TableCard = ({
-  title,
+  title: _title,
   columns,
   rows,
   type,
   tableClassname,
   isLoading,
 }: TableCardProps) => {
+  const router = useRouter();
   const hasRows = rows.length > 0;
   const placeholders = Array.from({ length: 4 }, (_, index) => ({
     name: `placeholder-${index}`,
@@ -140,11 +148,18 @@ const TableCard = ({
     percentage: 0,
   })) as TableCardProps["rows"];
 
-  const displayRows = hasRows ? rows : placeholders;
+  const displayRows = isLoading || !hasRows ? placeholders : rows;
+  const showSkeletons = isLoading || !hasRows;
+
+  const handleCapNameClick = (capId: string | undefined) => {
+    if (capId && type === "cap") {
+      router.push(`/dashboard/analytics?capId=${capId}`);
+    }
+  };
 
   return (
-    <div className="p-5 w-full rounded-xl border bg-gray-2 border-gray-4">
-      <div className="flex flex-1 gap-2 justify-between items-center h-[48px]">
+    <div className="relative p-5 w-full rounded-xl border bg-gray-2 border-gray-4 min-h-[400px] max-h-[400px] overflow-y-auto">
+      {/* <div className="flex flex-1 gap-2 justify-between items-center h-[48px]">
         <p className="text-lg font-medium text-gray-12">{title}</p>
         <Select
           variant="light"
@@ -159,11 +174,11 @@ const TableCard = ({
           onValueChange={() => {}}
           size="sm"
         />
-      </div>
+      </div> */}
       <div className="flex flex-1 flex-col gap-4 justify-center">
         <div className="relative w-full">
           <Table className="w-full border-separate table-fixed border-spacing-y-2">
-            <TableHeader className="text-xs uppercase text-gray-11 opacity-70">
+            <TableHeader className="sticky top-0 z-10 bg-gray-2 text-xs uppercase text-gray-11 opacity-70">
               <TableRow>
                 {columns.map((column) => (
                   <TableHead className="px-3 text-left" key={column}>
@@ -179,39 +194,58 @@ const TableCard = ({
               )}
             >
               {displayRows.map((row, index) => {
-                const typedRow = row as {
-                  comments?: number | null;
-                  reactions?: number | null;
-                };
+                const capRow = type === "cap" ? (row as CapRowData) : null;
+                const uniqueKey = `${row.name ?? `row-${index}`}-${index}`;
+                const isCap = type === "cap";
+                const isClickable = isCap && capRow?.id && !showSkeletons;
                 return (
-                  <TableRow className="w-full" key={row.name ?? index}>
+                  <TableRow className="w-full" key={uniqueKey}>
                     <TableCell className="p-2.5 text-sm rounded-l-lg border-l border-y text-gray-11 bg-gray-3 border-gray-5">
                       <div className="flex gap-2 items-center min-w-0">
                         <span className="flex-shrink-0 fill-[var(--gray-12)]">
-                          {hasRows ? getIconForRow(row, type) : skeletonBar(16)}
+                          {showSkeletons ? (
+                            <div className="size-4 rounded bg-gray-4 animate-pulse" />
+                          ) : (
+                            getIconForRow(row, type)
+                          )}
                         </span>
-                        <span className="truncate">
-                          {hasRows ? row.name : ""}
-                        </span>
+                        {isClickable ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCapNameClick(capRow?.id)}
+                            className="truncate text-left hover:text-gray-12 transition-colors cursor-pointer"
+                            title={row.name}
+                          >
+                            {row.name}
+                          </button>
+                        ) : (
+                          <span
+                            className={clsx(
+                              "truncate",
+                              isCap && !showSkeletons && "cursor-default"
+                            )}
+                            title={
+                              isCap && !showSkeletons ? row.name : undefined
+                            }
+                          >
+                            {showSkeletons ? (
+                              <div className="h-4 w-24 rounded bg-gray-4 animate-pulse" />
+                            ) : (
+                              row.name
+                            )}
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="py-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
-                      {hasRows ? formatNumber(row.views) : skeletonBar()}
-                    </TableCell>
-                    <TableCell className="p-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
-                      {hasRows
-                        ? formatNumber(typedRow.comments)
-                        : skeletonBar()}
-                    </TableCell>
-                    <TableCell className="p-2.5 px-3 text-sm text-nowrap text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
-                      {hasRows
-                        ? formatNumber(typedRow.reactions)
-                        : skeletonBar()}
+                      {showSkeletons
+                        ? skeletonBar(48)
+                        : formatNumber(row.views)}
                     </TableCell>
                     <TableCell className="p-2.5 px-3 text-sm text-nowrap rounded-r-lg border-r text-gray-11 bg-gray-3 border-y border-gray-5 whitespace-nowrap">
-                      {hasRows
-                        ? formatPercentage(row.percentage)
-                        : skeletonBar(32)}
+                      {showSkeletons
+                        ? skeletonBar(40)
+                        : formatPercentage(row.percentage)}
                     </TableCell>
                   </TableRow>
                 );

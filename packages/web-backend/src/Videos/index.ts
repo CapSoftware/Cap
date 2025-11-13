@@ -3,7 +3,7 @@ import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { CurrentUser, type Folder, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Context, Effect, Option, pipe } from "effect";
+import { Array, Context, Effect, Exit, Option, pipe } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
@@ -16,6 +16,8 @@ import { VideosRepo } from "./VideosRepo.ts";
 const DEFAULT_ANALYTICS_RANGE_DAYS = 30;
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
+const formatDateTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
+const buildPathname = (videoId: Video.VideoId) => `/s/${videoId}`;
 
 type UploadProgressUpdateInput = Schema.Type<
 	typeof Video.UploadProgressUpdateInput
@@ -44,6 +46,135 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					Policy.withPublicPolicy(policy.canView(id)),
 					Effect.withSpan("Videos.getById"),
 				);
+
+		const getAnalyticsBulkInternal = Effect.fn("Videos.getAnalyticsBulk")(
+			function* (videoIds: ReadonlyArray<Video.VideoId>) {
+				if (videoIds.length === 0)
+					return [] as Array<Exit.Exit<{ count: number }, unknown>>;
+
+				const now = new Date();
+				const from = new Date(
+					now.getTime() - DEFAULT_ANALYTICS_RANGE_DAYS * 24 * 60 * 60 * 1000,
+				);
+
+				const videoExits = yield* Effect.forEach(
+					videoIds,
+					(videoId) =>
+						getByIdForViewing(videoId).pipe(
+							Effect.map((video) => video),
+							Effect.exit,
+						),
+					{ concurrency: 10 },
+				);
+
+				const successfulVideos: Array<{
+					index: number;
+					videoId: Video.VideoId;
+					video: Video.Video;
+				}> = [];
+
+				for (let index = 0; index < videoExits.length; index++) {
+					const exit = videoExits[index]!;
+					if (Exit.isSuccess(exit)) {
+						successfulVideos.push({
+							index,
+							videoId: videoIds[index]!,
+							video: exit.value,
+						});
+					}
+				}
+
+				const countsByPathname = new Map<string, number>();
+
+				const videosByOrg = new Map<
+					string,
+					Array<{ videoId: Video.VideoId; pathname: string }>
+				>();
+				for (const { video } of successfulVideos) {
+					const key = video.orgId ?? "";
+					if (!videosByOrg.has(key)) {
+						videosByOrg.set(key, []);
+					}
+					videosByOrg.get(key)!.push({
+						videoId: video.id,
+						pathname: buildPathname(video.id),
+					});
+				}
+
+				const runTinybirdQuery = <
+					Row extends { pathname?: string | null; views?: number }
+				>(
+					sql: string,
+				) =>
+					tinybird
+						.querySql<Row>(sql)
+						.pipe(
+							Effect.catchAll((error) => {
+								console.error("tinybird analytics query failed", {
+									sql,
+									error,
+								});
+								return Effect.succeed<{ data: Row[] }>({ data: [] });
+							}),
+							Effect.map((response) => response.data ?? []),
+						);
+
+				for (const [orgKey, entries] of videosByOrg) {
+					const pathnames = entries.map((entry) => entry.pathname);
+					if (pathnames.length === 0) continue;
+
+					const escapedPathnames = pathnames
+						.map((pathname) => `'${escapeSqlLiteral(pathname)}'`)
+						.join(", ");
+					const tenantCondition =
+						orgKey.length > 0
+							? `tenant_id = '${escapeSqlLiteral(orgKey)}' AND `
+							: "";
+
+					const aggregateSql = `
+						SELECT pathname, coalesce(uniqMerge(visits), 0) AS views
+						FROM analytics_pages_mv
+						WHERE ${tenantCondition}pathname IN (${escapedPathnames})
+							AND date BETWEEN toDate('${formatDate(from)}') AND toDate('${formatDate(now)}')
+						GROUP BY pathname
+					`;
+
+					const rawSql = `
+						SELECT coalesce(pathname, '') AS pathname, coalesce(uniq(session_id), 0) AS views
+						FROM analytics_events
+						WHERE ${tenantCondition}pathname IN (${escapedPathnames})
+							AND action = 'page_hit'
+							AND timestamp BETWEEN toDateTime('${formatDateTime(from)}') AND toDateTime('${formatDateTime(now)}')
+						GROUP BY pathname
+					`;
+
+					const aggregateRows = yield* runTinybirdQuery(aggregateSql);
+					const rows =
+						aggregateRows.length > 0 ? aggregateRows : yield* runTinybirdQuery(rawSql);
+
+					for (const row of rows) {
+						const pathname = row.pathname ?? "";
+						const value = Number(row.views ?? 0);
+						if (!pathname) continue;
+						countsByPathname.set(pathname, Number.isFinite(value) ? value : 0);
+					}
+				}
+
+				for (const { videoId } of successfulVideos) {
+					const pathname = buildPathname(videoId);
+					if (!countsByPathname.has(pathname)) {
+						countsByPathname.set(pathname, 0);
+					}
+				}
+
+				return videoExits.map((exit, index) =>
+					Exit.map(exit, () => ({
+						count:
+							countsByPathname.get(buildPathname(videoIds[index]!)) ?? 0,
+					})),
+				);
+			},
+		);
 
 		return {
 			/*
@@ -358,31 +489,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getAnalytics: Effect.fn("Videos.getAnalytics")(function* (
 				videoId: Video.VideoId,
 			) {
-				const maybeVideo = yield* repo
-					.getById(videoId)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
-				if (Option.isNone(maybeVideo))
-					return yield* Effect.fail(new Video.NotFoundError());
-				const [video] = maybeVideo.value;
-
-				const now = new Date();
-				const from = new Date(
-					now.getTime() - DEFAULT_ANALYTICS_RANGE_DAYS * 24 * 60 * 60 * 1000,
-				);
-				const pathname = `/s/${video.id}`;
-				const sql = `
-					SELECT coalesce(uniqMerge(visits), 0) AS views
-					FROM analytics_pages_mv
-					WHERE pathname = '${escapeSqlLiteral(pathname)}'
-						AND date >= toDate('${formatDate(from)}')
-						AND date <= toDate('${formatDate(now)}')
-				`;
-				const response = yield* tinybird
-					.querySql<{ views: number }>(sql)
-					.pipe(Effect.catchAll(() => Effect.succeed({ data: [] })));
-				const views = response.data[0]?.views ?? 0;
-				return { count: Number.isFinite(views) ? Number(views) : 0 };
+				const [result] = yield* getAnalyticsBulkInternal([videoId]);
+				if (!result)
+					return { count: 0 };
+				return yield* Exit.matchEffect(result, {
+					onSuccess: (value) => Effect.succeed(value),
+					onFailure: (error) => Effect.fail(error),
+					onDie: (cause) => Effect.die(cause),
+					onInterrupt: (fiberId) => Effect.interrupt(fiberId),
+				});
 			}),
+			getAnalyticsBulk: getAnalyticsBulkInternal,
 		};
 	}),
 	dependencies: [

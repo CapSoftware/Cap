@@ -11,6 +11,7 @@ const Tooltip = ({
 	position = "top",
 	kbd,
 	disable,
+	delayDuration,
 }: {
 	children: React.ReactNode;
 	content: string;
@@ -18,12 +19,13 @@ const Tooltip = ({
 	position?: "top" | "bottom" | "left" | "right";
 	kbd?: string[];
 	disable?: boolean;
+	delayDuration?: number;
 }) => {
 	if (disable) {
 		return <>{children}</>;
 	}
 	return (
-		<TooltipPrimitive.Root>
+		<TooltipPrimitive.Root delayDuration={delayDuration}>
 			<TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
 			<TooltipPrimitive.Portal>
 				<TooltipPrimitive.Content

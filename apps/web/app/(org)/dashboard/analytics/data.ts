@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { comments, videos } from "@cap/database/schema";
+import { comments, videos, spaceVideos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
 import { and, between, eq, inArray, sql } from "drizzle-orm";
 import { Effect } from "effect";
@@ -40,6 +40,14 @@ const RANGE_CONFIG: Record<AnalyticsRange, { hours: number; bucket: "hour" | "da
 const escapeLiteral = (value: string) => value.replace(/'/g, "''");
 const toDateString = (date: Date) => date.toISOString().slice(0, 10);
 const toDateTimeString = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
+
+const buildPathnameFilter = (spaceVideoIds?: VideoId[]): string => {
+	if (!spaceVideoIds || spaceVideoIds.length === 0) {
+		return "";
+	}
+	const pathnames = spaceVideoIds.map((id) => `'/s/${escapeLiteral(id)}'`).join(", ");
+	return `AND pathname IN (${pathnames})`;
+};
 
 const normalizeBucket = (input: string | null | undefined, bucket: "hour" | "day") => {
 	if (!input) return undefined;
@@ -100,9 +108,19 @@ const withTinybirdFallback = <Row>(
 		}),
 	);
 
+const getSpaceVideoIds = async (spaceId: string): Promise<VideoId[]> => {
+	const rows = await db()
+		.select({ videoId: spaceVideos.videoId })
+		.from(spaceVideos)
+		.where(eq(spaceVideos.spaceId, spaceId as any));
+	return rows.map((row) => row.videoId);
+};
+
 export const getOrgAnalyticsData = async (
 	orgId: string,
 	range: AnalyticsRange,
+	spaceId?: string,
+	capId?: string,
 ): Promise<OrgAnalyticsResponse> => {
 	const rangeConfig = RANGE_CONFIG[range];
 	const to = new Date();
@@ -110,10 +128,46 @@ export const getOrgAnalyticsData = async (
 	const buckets = buildBuckets(from, to, rangeConfig.bucket);
 	const typedOrgId = orgId as OrgId;
 
+	const spaceVideoIds = spaceId ? await getSpaceVideoIds(spaceId) : undefined;
+	const capVideoIds = capId ? [capId as VideoId] : undefined;
+	const videoIds = capVideoIds || spaceVideoIds;
+
+	if ((spaceId && spaceVideoIds && spaceVideoIds.length === 0) || (capId && !capVideoIds)) {
+		let capName: string | undefined;
+		if (capId) {
+			const capNames = await loadVideoNames([capId]);
+			capName = capNames.get(capId);
+		}
+		return {
+			counts: {
+				caps: 0,
+				views: 0,
+				comments: 0,
+				reactions: 0,
+			},
+			chart: buckets.map((bucket) => ({
+				bucket,
+				caps: 0,
+				views: 0,
+				comments: 0,
+				reactions: 0,
+			})),
+			breakdowns: {
+				countries: [],
+				cities: [],
+				browsers: [],
+				operatingSystems: [],
+				devices: [],
+				topCaps: [],
+			},
+			capName,
+		};
+	}
+
 	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
-		queryVideoSeries(typedOrgId, from, to, rangeConfig.bucket),
-		queryCommentsSeries(typedOrgId, from, to, "text", rangeConfig.bucket),
-		queryCommentsSeries(typedOrgId, from, to, "emoji", rangeConfig.bucket),
+		queryVideoSeries(typedOrgId, from, to, rangeConfig.bucket, videoIds),
+		queryCommentsSeries(typedOrgId, from, to, "text", rangeConfig.bucket, videoIds),
+		queryCommentsSeries(typedOrgId, from, to, "emoji", rangeConfig.bucket, videoIds),
 	]);
 
 	const tinybirdData = await runPromise(
@@ -128,19 +182,20 @@ export const getOrgAnalyticsData = async (
 				from,
 				to,
 				rangeConfig.bucket,
+				videoIds,
 			);
 			console.log("getOrgAnalyticsData - viewSeries:", JSON.stringify(viewSeries, null, 2));
 			
-			const countries = yield* queryCountries(tinybird, typedOrgId, from, to);
+			const countries = yield* queryCountries(tinybird, typedOrgId, from, to, videoIds);
 			console.log("getOrgAnalyticsData - countries:", JSON.stringify(countries, null, 2));
 			
-			const cities = yield* queryCities(tinybird, typedOrgId, from, to);
+			const cities = yield* queryCities(tinybird, typedOrgId, from, to, videoIds);
 			console.log("getOrgAnalyticsData - cities:", JSON.stringify(cities, null, 2));
 			
-			const browsers = yield* queryBrowsers(tinybird, typedOrgId, from, to);
+			const browsers = yield* queryBrowsers(tinybird, typedOrgId, from, to, videoIds);
 			console.log("getOrgAnalyticsData - browsers:", JSON.stringify(browsers, null, 2));
 			
-			const devices = yield* queryDevices(tinybird, typedOrgId, from, to);
+			const devices = yield* queryDevices(tinybird, typedOrgId, from, to, videoIds);
 			console.log("getOrgAnalyticsData - devices:", JSON.stringify(devices, null, 2));
 			
 			const operatingSystems = yield* queryOperatingSystems(
@@ -148,10 +203,11 @@ export const getOrgAnalyticsData = async (
 				typedOrgId,
 				from,
 				to,
+				videoIds,
 			);
 			console.log("getOrgAnalyticsData - operatingSystems:", JSON.stringify(operatingSystems, null, 2));
 			
-			const topCapsRaw = yield* queryTopCaps(tinybird, typedOrgId, from, to);
+			const topCapsRaw = capId ? [] : yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
 			console.log("getOrgAnalyticsData - topCapsRaw:", JSON.stringify(topCapsRaw, null, 2));
 			
 			return {
@@ -183,6 +239,12 @@ export const getOrgAnalyticsData = async (
 		tinybirdData.topCapsRaw.map((cap) => cap.videoId).filter(Boolean),
 	);
 
+	let capName: string | undefined;
+	if (capId) {
+		const capNames = await loadVideoNames([capId]);
+		capName = capNames.get(capId);
+	}
+
 	return {
 		counts: {
 			caps: totalCaps,
@@ -202,20 +264,23 @@ export const getOrgAnalyticsData = async (
 				totalViews,
 				(row) => row.name,
 			),
-			browsers: formatBreakdown(
+			browsers: normalizeAndAggregate(
 				tinybirdData.browsers,
 				totalViews,
 				(row) => row.name,
+				normalizeBrowserName,
 			),
-			operatingSystems: formatBreakdown(
+			operatingSystems: normalizeAndAggregate(
 				tinybirdData.operatingSystems,
 				totalViews,
 				(row) => row.name,
+				normalizeOSName,
 			),
-			devices: formatBreakdown(
+			devices: normalizeAndAggregate(
 				tinybirdData.devices,
 				totalViews,
 				(row) => row.name,
+				normalizeDeviceName,
 			),
 			topCaps: tinybirdData.topCapsRaw.map((row) => ({
 				id: row.videoId,
@@ -224,7 +289,113 @@ export const getOrgAnalyticsData = async (
 				percentage: totalViews > 0 ? row.views / totalViews : 0,
 			})),
 		},
+		capName,
 	};
+};
+
+const normalizeOSName = (name: string): string => {
+	if (!name || typeof name !== "string") return name || "Unknown";
+	const normalized = name.trim();
+	if (!normalized) return "Unknown";
+	const lower = normalized.toLowerCase();
+	
+	if (lower.includes("mac") || lower === "macos" || lower === "mac os" || lower === "darwin") {
+		return "macOS";
+	}
+	if (lower.includes("windows") || lower === "win") {
+		return "Windows";
+	}
+	if (lower.includes("linux")) {
+		return "Linux";
+	}
+	if (lower.includes("android")) {
+		return "Android";
+	}
+	if (lower.includes("ios") || lower === "iphone os") {
+		return "iOS";
+	}
+	if (lower.includes("ubuntu")) {
+		return "Ubuntu";
+	}
+	if (lower.includes("fedora")) {
+		return "Fedora";
+	}
+	
+	return normalized;
+};
+
+const normalizeDeviceName = (name: string): string => {
+	if (!name || typeof name !== "string") return name || "Unknown";
+	const normalized = name.trim();
+	if (!normalized) return "Unknown";
+	const lower = normalized.toLowerCase();
+	
+	if (lower === "desktop" || lower === "desktop computer" || lower === "pc") {
+		return "Desktop";
+	}
+	if (lower === "mobile" || lower === "smartphone" || lower === "phone") {
+		return "Mobile";
+	}
+	if (lower === "tablet" || lower === "ipad") {
+		return "Tablet";
+	}
+	
+	return normalized;
+};
+
+const normalizeBrowserName = (name: string): string => {
+	if (!name || typeof name !== "string") return name || "Unknown";
+	const normalized = name.trim();
+	if (!normalized) return "Unknown";
+	const lower = normalized.toLowerCase();
+	
+	if (lower.includes("chrome") && !lower.includes("chromium")) {
+		return "Chrome";
+	}
+	if (lower.includes("firefox")) {
+		return "Firefox";
+	}
+	if (lower.includes("safari")) {
+		return "Safari";
+	}
+	if (lower.includes("edge")) {
+		return "Edge";
+	}
+	if (lower.includes("opera")) {
+		return "Opera";
+	}
+	if (lower.includes("brave")) {
+		return "Brave";
+	}
+	if (lower.includes("internet explorer") || lower === "ie") {
+		return "Internet Explorer";
+	}
+	
+	return normalized;
+};
+
+const normalizeAndAggregate = <T extends { name: string; views: number }>(
+	rows: T[],
+	totalViews: number,
+	getName: (row: T) => string,
+	normalizeFn: (name: string) => string,
+): BreakdownRow[] => {
+	const aggregated = new Map<string, number>();
+	
+	for (const row of rows) {
+		const originalName = getName(row);
+		const normalizedName = normalizeFn(originalName);
+		const currentViews = aggregated.get(normalizedName) ?? 0;
+		aggregated.set(normalizedName, currentViews + row.views);
+	}
+	
+	return Array.from(aggregated.entries())
+		.map(([name, views]) => ({
+			name,
+			views,
+			percentage: totalViews > 0 ? views / totalViews : 0,
+		}))
+		.sort((a, b) => b.views - a.views);
 };
 
 const formatBreakdown = <T extends { name: string; views: number }>(
@@ -253,16 +424,26 @@ const queryVideoSeries = async (
 	from: Date,
 	to: Date,
 	bucket: "hour" | "day",
+	spaceVideoIds?: VideoId[],
 ): Promise<CountSeriesRow[]> => {
 	const bucketExpr =
 		bucket === "hour"
 			? sql<string>`DATE_FORMAT(${videos.createdAt}, '%Y-%m-%dT%H:00:00Z')`
 			: sql<string>`DATE_FORMAT(${videos.createdAt}, '%Y-%m-%dT00:00:00Z')`;
 
+	const conditions = [
+		eq(videos.orgId, orgId),
+		between(videos.createdAt, from, to),
+	];
+	
+	if (spaceVideoIds && spaceVideoIds.length > 0) {
+		conditions.push(inArray(videos.id, spaceVideoIds));
+	}
+
 	const rows = await db()
 		.select({ bucket: bucketExpr, count: sql<number>`COUNT(*)` })
 		.from(videos)
-		.where(and(eq(videos.orgId, orgId), between(videos.createdAt, from, to)))
+		.where(and(...conditions))
 		.groupBy(bucketExpr);
 
 	return rows
@@ -279,6 +460,7 @@ const queryCommentsSeries = async (
 	to: Date,
 	type: "text" | "emoji",
 	bucket: "hour" | "day",
+	spaceVideoIds?: VideoId[],
 ): Promise<CountSeriesRow[]> => {
 	const column = comments.createdAt;
 	const bucketExpr =
@@ -286,17 +468,21 @@ const queryCommentsSeries = async (
 			? sql<string>`DATE_FORMAT(${column}, '%Y-%m-%dT%H:00:00Z')`
 			: sql<string>`DATE_FORMAT(${column}, '%Y-%m-%dT00:00:00Z')`;
 
+	const conditions = [
+		eq(videos.orgId, orgId),
+		eq(comments.type, type),
+		between(comments.createdAt, from, to),
+	];
+	
+	if (spaceVideoIds && spaceVideoIds.length > 0) {
+		conditions.push(inArray(videos.id, spaceVideoIds));
+	}
+
 	const rows = await db()
 		.select({ bucket: bucketExpr, count: sql<number>`COUNT(*)` })
 		.from(comments)
 		.innerJoin(videos, eq(comments.videoId, videos.id))
-		.where(
-			and(
-				eq(videos.orgId, orgId),
-				eq(comments.type, type),
-				between(comments.createdAt, from, to),
-			),
-		)
+		.where(and(...conditions))
 		.groupBy(bucketExpr);
 
 	return rows
@@ -313,7 +499,9 @@ const queryViewSeries = (
 	from: Date,
 	to: Date,
 	bucket: "hour" | "day",
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const bucketFormatter = bucket === "hour" ? "%Y-%m-%dT%H:00:00Z" : "%Y-%m-%dT00:00:00Z";
 	const rawSql = `
 		SELECT
@@ -323,6 +511,7 @@ const queryViewSeries = (
 		WHERE action = 'page_hit'
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
+			${pathnameFilter}
 		GROUP BY bucket
 		ORDER BY bucket
 	`;
@@ -334,6 +523,7 @@ const queryViewSeries = (
 		FROM analytics_pages_mv
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
+			${pathnameFilter}
 		GROUP BY bucket
 		ORDER BY bucket
 	`;
@@ -363,7 +553,9 @@ const queryCountries = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			country as name,
@@ -372,6 +564,7 @@ const queryCountries = (
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
 			AND country != ''
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -386,6 +579,7 @@ const queryCountries = (
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
 			AND country != ''
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -410,7 +604,9 @@ const queryCities = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			country as country,
@@ -420,6 +616,7 @@ const queryCities = (
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
 			AND city != ''
+			${pathnameFilter}
 		GROUP BY country, city
 		ORDER BY views DESC
 		LIMIT 10
@@ -435,6 +632,7 @@ const queryCities = (
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
 			AND city != ''
+			${pathnameFilter}
 		GROUP BY country, city
 		ORDER BY views DESC
 		LIMIT 10
@@ -460,7 +658,9 @@ const queryBrowsers = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			browser as name,
@@ -468,6 +668,7 @@ const queryBrowsers = (
 		FROM analytics_sessions_mv
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -481,6 +682,7 @@ const queryBrowsers = (
 		WHERE action = 'page_hit'
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -505,7 +707,9 @@ const queryDevices = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			device as name,
@@ -513,6 +717,7 @@ const queryDevices = (
 		FROM analytics_sessions_mv
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -526,6 +731,7 @@ const queryDevices = (
 		WHERE action = 'page_hit'
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -550,7 +756,9 @@ const queryOperatingSystems = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			os as name,
@@ -558,6 +766,7 @@ const queryOperatingSystems = (
 		FROM analytics_sessions_mv
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -571,6 +780,7 @@ const queryOperatingSystems = (
 		WHERE action = 'page_hit'
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
+			${pathnameFilter}
 		GROUP BY name
 		ORDER BY views DESC
 		LIMIT 10
@@ -595,7 +805,9 @@ const queryTopCaps = (
 	orgId: OrgId,
 	from: Date,
 	to: Date,
+	spaceVideoIds?: VideoId[],
 ) => {
+	const pathnameFilter = buildPathnameFilter(spaceVideoIds);
 	const aggregatedSql = `
 		SELECT
 			pathname,
@@ -604,6 +816,7 @@ const queryTopCaps = (
 		WHERE tenant_id = '${escapeLiteral(orgId)}'
 			AND date BETWEEN toDate('${toDateString(from)}') AND toDate('${toDateString(to)}')
 			AND startsWith(pathname, '/s/')
+			${pathnameFilter}
 		GROUP BY pathname
 		ORDER BY views DESC
 		LIMIT 10
@@ -617,6 +830,7 @@ const queryTopCaps = (
 		WHERE action = 'page_hit'
 			AND tenant_id = '${escapeLiteral(orgId)}'
 			AND timestamp BETWEEN toDateTime('${toDateTimeString(from)}') AND toDateTime('${toDateTimeString(to)}')
+			${pathnameFilter}
 		GROUP BY pathname
 		HAVING startsWith(pathname, '/s/')
 		ORDER BY views DESC

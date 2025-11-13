@@ -109,29 +109,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 				),
 
 			VideosGetAnalytics: (videoIds) =>
-				Effect.all(
-					videoIds.map((id) =>
-						videos.getAnalytics(id).pipe(
-							Effect.catchTag(
-								"DatabaseError",
-								() => new InternalError({ type: "database" }),
-							),
-							Effect.catchTag(
-								"UnknownException",
-								() => new InternalError({ type: "unknown" }),
-							),
-							Effect.matchEffect({
-								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
-								onFailure: (e) =>
-									Schema.is(InternalError)(e)
-										? Effect.fail(e)
-										: Effect.succeed(Exit.fail(e)),
-							}),
-							Effect.map((v) => Unify.unify(v)),
-						),
+				videos.getAnalyticsBulk(videoIds).pipe(
+					Effect.map((results) =>
+						results.map((result) => Unify.unify(result)),
 					),
-					{ concurrency: 10 },
-				).pipe(
 					provideOptionalAuth,
 					Effect.catchTag(
 						"DatabaseError",

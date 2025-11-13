@@ -16,12 +16,12 @@ import { useUploadingStatus } from "../../../caps/UploadingContext";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
-	dubApiKeyEnabled: boolean;
+	analyticsEnabled: boolean;
 }
 
 export default function FolderVideosSection({
 	initialVideos,
-	dubApiKeyEnabled,
+	analyticsEnabled,
 }: FolderVideosSectionProps) {
 	const router = useRouter();
 	const { user } = useDashboardContext();
@@ -109,7 +109,7 @@ export default function FolderVideosSection({
 
 	const analyticsQuery = useVideosAnalyticsQuery(
 		initialVideos.map((video) => video.id),
-		dubApiKeyEnabled,
+		analyticsEnabled,
 	);
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();

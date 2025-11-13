@@ -55,13 +55,13 @@ export type VideoData = {
 export const Caps = ({
 	data,
 	count,
-	dubApiKeyEnabled,
+	analyticsEnabled,
 	folders,
 }: {
 	data: VideoData;
 	count: number;
 	folders: FolderDataType[];
-	dubApiKeyEnabled: boolean;
+	analyticsEnabled: boolean;
 }) => {
 	const router = useRouter();
 	const params = useSearchParams();
@@ -78,9 +78,10 @@ export const Caps = ({
 
 	const analyticsQuery = useVideosAnalyticsQuery(
 		data.map((video) => video.id),
-		dubApiKeyEnabled,
+		analyticsEnabled,
 	);
 	const analytics = analyticsQuery.data || {};
+	const isLoadingAnalytics = analyticsEnabled && analyticsQuery.isLoading;
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -279,7 +280,7 @@ export const Caps = ({
 										}
 									}}
 									userId={user?.id}
-									isLoadingAnalytics={analyticsQuery.isLoading}
+									isLoadingAnalytics={isLoadingAnalytics}
 									isSelected={selectedCaps.includes(video.id)}
 									anyCapSelected={anyCapSelected}
 									onSelectToggle={() => handleCapSelection(video.id)}

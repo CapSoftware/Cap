@@ -79,6 +79,7 @@ const toCapRow = (row: BreakdownRow & { id?: string }): CapRowData => ({
 	comments: null,
 	reactions: null,
 	percentage: row.percentage,
+	id: row.id,
 });
 
 const browserNameToSlug = (name: string): BrowserRowData["browser"] => {
@@ -102,10 +103,11 @@ const browserNameToSlug = (name: string): BrowserRowData["browser"] => {
 };
 
 const osNameToKey = (name: string): OSRowData["os"] => {
-	switch (name.toLowerCase()) {
-		case "macos":
-		case "ios":
-			return "ios";
+	const normalized = name.toLowerCase().trim();
+	if (normalized.includes("mac") || normalized === "ios") {
+		return "ios";
+	}
+	switch (normalized) {
 		case "linux":
 			return "linux";
 		case "ubuntu":
@@ -127,8 +129,6 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 						columns={[
 							"Country",
 							"Views",
-							"Comments",
-							"Reactions",
 							"Percentage",
 						]}
 						rows={data.countries.map(toCountryRow)}
@@ -137,7 +137,7 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 					/>
 					<TableCard
 						title="Cities"
-						columns={["City", "Views", "Comments", "Reactions", "Percentage"]}
+						columns={["City", "Views", "Percentage"]}
 						rows={data.cities.map(toCityRow)}
 						type="city"
 						isLoading={isLoading}
@@ -151,8 +151,6 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 						columns={[
 							"Browser",
 							"Views",
-							"Comments",
-							"Reactions",
 							"Percentage",
 						]}
 						rows={data.browsers.map(toBrowserRow)}
@@ -164,8 +162,6 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 						columns={[
 							"Operating System",
 							"Views",
-							"Comments",
-							"Reactions",
 							"Percentage",
 						]}
 						rows={data.operatingSystems.map(toOSRow)}
@@ -182,7 +178,7 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 				<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 					<TableCard
 						title="Device Type"
-						columns={["Device", "Views", "Comments", "Reactions", "Percentage"]}
+						columns={["Device", "Views", "Percentage"]}
 						rows={data.deviceTypes.map((device) => ({
 							device: deviceMap[device.name.toLowerCase()] ?? "desktop",
 							name: device.name,
@@ -205,7 +201,7 @@ export default function OtherStats({ data, isLoading }: OtherStatsProps) {
 					<div className="flex flex-col flex-1 gap-5 justify-center w-full">
 						<TableCard
 							title="Caps"
-							columns={["Cap", "Views", "Comments", "Reactions", "Percentage"]}
+							columns={["Name", "Views", "Percentage"]}
 							rows={data.topCaps.map(toCapRow)}
 							type="cap"
 							isLoading={isLoading}

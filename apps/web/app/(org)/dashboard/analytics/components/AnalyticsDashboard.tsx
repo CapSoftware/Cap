@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 
 import { useDashboardContext } from "../../Contexts";
 import type { AnalyticsRange, OrgAnalyticsResponse } from "../types";
 import Header from "./Header";
 import OtherStats from "./OtherStats";
 import StatsChart from "./StatsChart";
+import type { Organisation } from "@cap/web-domain";
 
 const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
   { value: "24h", label: "Last 24 hours" },
@@ -19,18 +21,37 @@ const formatNumber = (value: number) =>
   new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
 
 export function AnalyticsDashboard() {
-  const { activeOrganization } = useDashboardContext();
+  const searchParams = useSearchParams();
+  const capId = searchParams.get("capId");
+  const { activeOrganization, organizationData, spacesData } = useDashboardContext();
   const [range, setRange] = useState<AnalyticsRange>("7d");
-  const orgId = activeOrganization?.organization.id;
+  const [selectedOrgId, setSelectedOrgId] = useState<
+    Organisation.OrganisationId | null
+  >(null);
+  const [selectedSpaceId, setSelectedSpaceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeOrganization?.organization.id && !selectedOrgId) {
+      setSelectedOrgId(activeOrganization.organization.id);
+    }
+  }, [activeOrganization, selectedOrgId]);
+
+  const orgId = selectedOrgId || activeOrganization?.organization.id;
 
   const query = useQuery<{ data: OrgAnalyticsResponse } | null>({
-    queryKey: ["dashboard-analytics", orgId, range],
+    queryKey: ["dashboard-analytics", orgId, selectedSpaceId, range, capId],
     queryFn: async () => {
       if (!orgId) return null;
-      const response = await fetch(
-        `/api/dashboard/analytics?orgId=${orgId}&range=${range}`,
-        { cache: "no-store" }
-      );
+      const url = new URL("/api/dashboard/analytics", window.location.origin);
+      url.searchParams.set("orgId", orgId);
+      url.searchParams.set("range", range);
+      if (selectedSpaceId) {
+        url.searchParams.set("spaceId", selectedSpaceId);
+      }
+      if (capId) {
+        url.searchParams.set("capId", capId);
+      }
+      const response = await fetch(url.toString(), { cache: "no-store" });
       console.log("response", response);
       if (!response.ok) throw new Error("Failed to load analytics");
       return (await response.json()) as { data: OrgAnalyticsResponse };
@@ -43,7 +64,7 @@ export function AnalyticsDashboard() {
 
   if (!orgId) {
     return (
-      <div className="rounded-xl border border-gray-5 bg-white p-6 text-gray-11">
+      <div className="rounded-xl border border-gray-5 bg-gray-2 p-6 text-gray-11">
         Select or join an organization to view analytics.
       </div>
     );
@@ -56,7 +77,7 @@ export function AnalyticsDashboard() {
         browsers: analytics.breakdowns.browsers,
         operatingSystems: analytics.breakdowns.operatingSystems,
         deviceTypes: analytics.breakdowns.devices,
-        topCaps: analytics.breakdowns.topCaps,
+        topCaps: capId ? null : analytics.breakdowns.topCaps,
       }
     : {
         countries: [],
@@ -74,6 +95,16 @@ export function AnalyticsDashboard() {
         value={range}
         onChange={setRange}
         isLoading={query.isFetching}
+        organizations={organizationData}
+        activeOrganization={activeOrganization}
+        spacesData={spacesData}
+        selectedOrganizationId={selectedOrgId}
+        selectedSpaceId={selectedSpaceId}
+        onOrganizationChange={setSelectedOrgId}
+        onSpaceChange={setSelectedSpaceId}
+        hideCapsSelect={!!capId}
+        capId={capId}
+        capName={analytics?.capName ?? null}
       />
       <StatsChart
         counts={{
@@ -84,6 +115,7 @@ export function AnalyticsDashboard() {
         }}
         data={analytics?.chart ?? []}
         isLoading={query.isLoading}
+        capId={capId}
       />
       <OtherStats data={otherStats} isLoading={query.isLoading} />
     </div>

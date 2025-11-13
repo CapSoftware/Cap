@@ -3,44 +3,65 @@ import { Effect } from "effect";
 import { useEffectQuery } from "../EffectRuntime";
 import { AnalyticsRequest } from "../Requests/AnalyticsRequest";
 
+type AnalyticsDataLoader = Effect.Effect.Success<
+	typeof AnalyticsRequest.DataLoaderResolver
+>;
+
 export function useVideosAnalyticsQuery(
 	videoIds: Video.VideoId[],
-	dubApiKeyEnabled?: boolean,
+	analyticsEnabled = true,
 ) {
+	const uniqueVideoIds = Array.from(new Set<Video.VideoId>(videoIds));
+	const queryKey = [
+		"analytics",
+		Boolean(analyticsEnabled),
+		uniqueVideoIds.join("|"),
+	] as const;
+
+	const enabled = analyticsEnabled && uniqueVideoIds.length > 0;
+
 	return useEffectQuery({
-		queryKey: ["analytics", videoIds],
-		queryFn: Effect.fn(function* () {
-			if (!dubApiKeyEnabled) return {};
+		queryKey,
+		enabled,
+		queryFn: () => {
+			if (!analyticsEnabled || uniqueVideoIds.length === 0) {
+				return Effect.succeed<Record<Video.VideoId, number>>({});
+			}
 
-			const dataloader = yield* AnalyticsRequest.DataLoaderResolver;
-
-			const results = yield* Effect.all(
-				videoIds.map((videoId) =>
-					Effect.request(
-						new AnalyticsRequest.AnalyticsRequest({ videoId }),
-						dataloader,
+			return Effect.flatMap(
+				AnalyticsRequest.DataLoaderResolver,
+				(dataloader: AnalyticsDataLoader) =>
+					Effect.all(
+						uniqueVideoIds.map((videoId) =>
+							Effect.request(
+								new AnalyticsRequest.AnalyticsRequest({ videoId }),
+								dataloader,
+							).pipe(
+								Effect.catchAll((error: unknown) => {
+									console.warn(
+										`Failed to fetch analytics for video ${videoId}:`,
+										error,
+									);
+									return Effect.succeed({ count: 0 });
+								}),
+								Effect.map((result: { count: number }) => ({
+									videoId,
+									count: result.count,
+								})),
+							),
+						),
+						{ concurrency: "unbounded" },
 					).pipe(
-						Effect.catchAll((e) => {
-							console.warn(
-								`Failed to fetch analytics for video ${videoId}:`,
-								e,
-							);
-							return Effect.succeed({ count: 0 });
+						Effect.map((rows: Array<{ videoId: Video.VideoId; count: number }>) => {
+							const output: Partial<Record<Video.VideoId, number>> = {};
+							for (const row of rows) {
+								output[row.videoId] = row.count;
+							}
+							return output as Record<Video.VideoId, number>;
 						}),
-						Effect.map(({ count }) => ({ videoId, count })),
 					),
-				),
-				{ concurrency: "unbounded" },
 			);
-
-			return results.reduce(
-				(acc, current) => {
-					acc[current.videoId] = current.count;
-					return acc;
-				},
-				{} as Record<Video.VideoId, number>,
-			);
-		}),
+		},
 		refetchOnWindowFocus: false,
 		refetchOnMount: true,
 	});

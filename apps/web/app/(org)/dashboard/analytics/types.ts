@@ -29,4 +29,5 @@ export interface OrgAnalyticsResponse {
 		devices: BreakdownRow[];
 		topCaps: Array<BreakdownRow & { id: string }>;
 	};
+	capName?: string;
 }

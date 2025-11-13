@@ -53,12 +53,12 @@ export const SharedCaps = ({
 	organizationMembers,
 	currentUserId,
 	folders,
-	dubApiKeyEnabled,
+	analyticsEnabled,
 	organizationData,
 }: {
 	data: SharedVideoData;
 	count: number;
-	dubApiKeyEnabled: boolean;
+	analyticsEnabled: boolean;
 	spaceData?: SpaceData;
 	spaceId: Space.SpaceIdOrOrganisationId;
 	hideSharedWith?: boolean;
@@ -98,7 +98,7 @@ export const SharedCaps = ({
 
 	const analyticsQuery = useVideosAnalyticsQuery(
 		data.map((video) => video.id),
-		dubApiKeyEnabled,
+		analyticsEnabled,
 	);
 
 	const analytics = analyticsQuery.data || {};
