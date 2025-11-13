@@ -342,7 +342,7 @@ span,
 input,
 label,
 button {
-	@apply tracking-normal font-normal leading-[1.5rem];
+	@apply tracking-normal leading-[1.5rem];
 }
 
 a {

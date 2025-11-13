@@ -4,7 +4,6 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS, userIsPro } from "@cap/utils";
 import { ImageUploads } from "@cap/web-backend";
 import type { ImageUpload } from "@cap/web-domain";
-import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Effect } from "effect";
 import type { Metadata } from "next";
@@ -147,13 +146,6 @@ export default ({ children }: PropsWithChildren) =>
 							</AuthContextProvider>
 						</PostHogProvider>
 					</TooltipPrimitive.Provider>
-					{buildEnv.NEXT_PUBLIC_IS_CAP && (
-						<DubAnalytics
-							domainsConfig={{
-								refer: "go.cap.so",
-							}}
-						/>
-					)}
 				</body>
 			</html>
 		);

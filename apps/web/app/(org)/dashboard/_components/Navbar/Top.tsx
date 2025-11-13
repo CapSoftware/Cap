@@ -17,7 +17,7 @@ import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
 	cloneElement,
@@ -54,6 +54,7 @@ const Top = () => {
 	const queryClient = useQueryClient();
 
 	const pathname = usePathname();
+	const params = useParams();
 
 	const titles: Record<string, string> = {
 		"/dashboard/caps": "Caps",
@@ -64,13 +65,12 @@ const Top = () => {
 		"/dashboard/settings/account": "Account Settings",
 		"/dashboard/spaces": "Spaces",
 		"/dashboard/spaces/browse": "Browse Spaces",
+		"/dashboard/analytics": "Analytics",
+		[`/dashboard/folder/${params.id}`]: "Caps",
+		[`/dashboard/analytics/s/${params.id}`]: "Analytics: Cap video title",
 	};
 
-	const title = activeSpace
-		? activeSpace.name
-		: pathname.includes("/dashboard/folder")
-			? "Caps"
-			: titles[pathname] || "";
+	const title = activeSpace ? activeSpace.name : titles[pathname] || "";
 
 	const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
 		(e) => {

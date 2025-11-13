@@ -1,4 +1,4 @@
-import { InternalError, Video } from "@cap/web-domain";
+import { InternalError, Policy, Video } from "@cap/web-domain";
 import { Effect, Exit, Schema, Unify } from "effect";
 
 import { provideOptionalAuth } from "../Auth.ts";
@@ -109,29 +109,31 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 				),
 
 			VideosGetAnalytics: (videoIds) =>
-				Effect.all(
-					videoIds.map((id) =>
-						videos.getAnalytics(id).pipe(
-							Effect.catchTag(
-								"DatabaseError",
-								() => new InternalError({ type: "database" }),
-							),
-							Effect.catchTag(
-								"UnknownException",
-								() => new InternalError({ type: "unknown" }),
-							),
-							Effect.matchEffect({
-								onSuccess: (v) => Effect.succeed(Exit.succeed(v)),
-								onFailure: (e) =>
-									Schema.is(InternalError)(e)
-										? Effect.fail(e)
-										: Effect.succeed(Exit.fail(e)),
-							}),
-							Effect.map((v) => Unify.unify(v)),
-						),
+				videos.getAnalyticsBulk(videoIds).pipe(
+					Effect.map(
+						(results) =>
+							results.map((result) =>
+								Exit.mapError(
+									Exit.map(result, (v) => ({ count: v.count }) as const),
+									(error) => {
+										if (Schema.is(Video.NotFoundError)(error)) return error;
+										if (Schema.is(Policy.PolicyDeniedError)(error))
+											return error;
+										if (Schema.is(Video.VerifyVideoPasswordError)(error))
+											return error;
+										return error as
+											| Video.NotFoundError
+											| Policy.PolicyDeniedError
+											| Video.VerifyVideoPasswordError;
+									},
+								),
+							) as readonly Exit.Exit<
+								{ readonly count: number },
+								| Video.NotFoundError
+								| Policy.PolicyDeniedError
+								| Video.VerifyVideoPasswordError
+							>[],
 					),
-					{ concurrency: 10 },
-				).pipe(
 					provideOptionalAuth,
 					Effect.catchTag(
 						"DatabaseError",

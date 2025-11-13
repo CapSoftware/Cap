@@ -4,7 +4,11 @@ import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { type ImageUpload, User } from "@cap/web-domain";
-import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
+import {
+	faChartSimple,
+	faChevronDown,
+	faLock,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
@@ -17,6 +21,7 @@ import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDial
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
+import { Tooltip } from "@/components/Tooltip";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import type { VideoData } from "../types";
@@ -292,7 +297,27 @@ export const ShareHeader = ({
 								)}
 							</div>
 							{user !== null && (
-								<div className="hidden md:flex">
+								<div className="hidden md:flex gap-2">
+									{isOwner && (
+										<Tooltip
+											content="View analytics"
+											className="bg-gray-12 text-gray-1 border-gray-11 shadow-lg"
+											delayDuration={100}
+										>
+											<Button
+												variant="gray"
+												className="rounded-full flex items-center justify-center"
+												onClick={() => {
+													push(`/dashboard/analytics?capId=${data.id}`);
+												}}
+											>
+												<FontAwesomeIcon
+													className="size-4 text-gray-12"
+													icon={faChartSimple}
+												/>
+											</Button>
+										</Tooltip>
+									)}
 									<Button
 										onClick={() => {
 											push("/dashboard/caps?page=1");

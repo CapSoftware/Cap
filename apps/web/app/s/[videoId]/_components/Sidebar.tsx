@@ -83,9 +83,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 	) => {
 		const user = useCurrentUser();
 
+		const isOwner = Boolean(user?.id === data.owner.id);
 		const isOwnerOrMember = Boolean(
-			user?.id === data.owner.id ||
-				(user && data.organizationMembers?.includes(user.id)),
+			isOwner || (user && data.organizationMembers?.includes(user.id)),
 		);
 
 		const defaultTab = !(
@@ -156,6 +156,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								setOptimisticComments={setOptimisticComments}
 								handleCommentSuccess={handleCommentSuccess}
 								isOwnerOrMember={isOwnerOrMember}
+								isOwner={isOwner}
 								onSeek={onSeek}
 								videoId={data.id}
 							/>
