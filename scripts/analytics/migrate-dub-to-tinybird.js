@@ -18,6 +18,7 @@ const INGEST_CHUNK_SIZE = 5000;
 const DEFAULT_VIDEO_CONCURRENCY = Number(process.env.VIDEO_CONCURRENCY || 4);
 const DEFAULT_API_CONCURRENCY = Number(process.env.DUB_CONCURRENCY || 8);
 const DEFAULT_INGEST_CONCURRENCY = Number(process.env.INGEST_CONCURRENCY || 4);
+const DEFAULT_INGEST_RATE_LIMIT = Number(process.env.INGEST_RATE_LIMIT || 10);
 
 export const REGIONS = {
   "AF-BDS": "Badakhshān",
@@ -4080,6 +4081,7 @@ function usageAndExit(message, code = 1) {
       "  --dub-concurrency <n>     Max concurrent Dub API requests per process. Default: 8",
       "  --ingest-chunk <n>        Tinybird ingest chunk size. Default: 5000",
       "  --ingest-concurrency <n>  Max concurrent Tinybird ingest requests. Default: 4",
+      "  --ingest-rate-limit <n>  Tinybird requests per second. Default: 10",
       "",
       "By default, fetches all links from the specified domain and migrates analytics for each.",
       "The link key (slug) is used as the videoId.",
@@ -4109,6 +4111,7 @@ function parseArgs(argv) {
     apiConcurrency: DEFAULT_API_CONCURRENCY,
     ingestChunk: INGEST_CHUNK_SIZE,
     ingestConcurrency: DEFAULT_INGEST_CONCURRENCY,
+    ingestRateLimit: DEFAULT_INGEST_RATE_LIMIT,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -4151,6 +4154,9 @@ function parseArgs(argv) {
     } else if (a === "--ingest-concurrency") {
       const n = Number(argv[++i]);
       if (!Number.isNaN(n) && n > 0) args.ingestConcurrency = n;
+    } else if (a === "--ingest-rate-limit") {
+      const n = Number(argv[++i]);
+      if (!Number.isNaN(n) && n > 0) args.ingestRateLimit = n;
     }
     else usageAndExit(`Unknown argument: ${a}`);
   }
@@ -4238,6 +4244,109 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const tinybirdRateLimitState = {
+  lastRequestTime: 0,
+};
+
+function createTinybirdRateLimiter(requestsPerSecond) {
+  const minDelayMs = requestsPerSecond > 0 ? 1000 / requestsPerSecond : 0;
+  return {
+    minDelayMs,
+    async wait() {
+      const now = Date.now();
+      const timeSinceLastRequest = now - tinybirdRateLimitState.lastRequestTime;
+      if (timeSinceLastRequest < minDelayMs) {
+        const waitTime = minDelayMs - timeSinceLastRequest;
+        await sleep(waitTime);
+      }
+      tinybirdRateLimitState.lastRequestTime = Date.now();
+    },
+  };
+}
+
+const dubRateLimitState = {
+  limit: 3000,
+  remaining: 3000,
+  resetAt: Date.now() + 60000,
+  requests: [],
+};
+
+async function waitForRateLimit() {
+  const state = dubRateLimitState;
+  const now = Date.now();
+  
+  if (now >= state.resetAt) {
+    state.remaining = state.limit;
+    state.resetAt = now + 60000;
+    state.requests = [];
+  }
+  
+  state.requests = state.requests.filter((timestamp) => timestamp > now - 60000);
+  
+  if (state.requests.length >= state.limit) {
+    const oldestRequest = Math.min(...state.requests);
+    const waitTime = 60000 - (now - oldestRequest) + 100;
+    if (waitTime > 0) {
+      await sleep(waitTime);
+      return waitForRateLimit();
+    }
+  }
+  
+  if (state.remaining <= 0) {
+    const waitTime = state.resetAt - now + 100;
+    if (waitTime > 0) {
+      await sleep(waitTime);
+      return waitForRateLimit();
+    }
+  }
+  
+  state.requests.push(now);
+  if (state.remaining > 0) {
+    state.remaining--;
+  }
+}
+
+function updateRateLimitState(response) {
+  const state = dubRateLimitState;
+  const limitHeader = response.headers.get("x-ratelimit-limit");
+  const remainingHeader = response.headers.get("x-ratelimit-remaining");
+  const resetHeader = response.headers.get("x-ratelimit-reset");
+  
+  if (limitHeader) {
+    const limit = Number(limitHeader);
+    if (Number.isFinite(limit) && limit > 0) {
+      state.limit = limit;
+    }
+  }
+  
+  if (remainingHeader) {
+    const remaining = Number(remainingHeader);
+    if (Number.isFinite(remaining) && remaining >= 0) {
+      state.remaining = remaining;
+    }
+  }
+  
+  if (resetHeader) {
+    const resetTimestamp = Number(resetHeader);
+    if (Number.isFinite(resetTimestamp) && resetTimestamp > 0) {
+      let resetMs;
+      const now = Date.now();
+      if (resetTimestamp > now * 1000) {
+        resetMs = Math.floor(resetTimestamp / 1000);
+      } else if (resetTimestamp > now) {
+        resetMs = resetTimestamp;
+      } else if (resetTimestamp < 1e10) {
+        resetMs = resetTimestamp * 1000;
+      } else {
+        resetMs = Math.floor(resetTimestamp / 1000);
+      }
+      if (resetMs > now && resetMs < now + 86400000) {
+        state.resetAt = resetMs;
+      }
+    }
+  }
+}
+
 function normalizeDimensionField(value) {
   if (value === undefined || value === null) return "";
   const str = String(value).trim();
@@ -4319,9 +4428,14 @@ async function dubFetch(pathname, token, params = {}) {
   const url = `${DUB_API_URL}${pathname}${Object.keys(params).length ? `?${qs(params)}` : ""}`;
   const maxAttempts = 5;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await waitForRateLimit();
+    
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     });
+    
+    updateRateLimitState(response);
+    
     const text = await response.text();
     if (response.ok) {
       try {
@@ -4359,64 +4473,171 @@ async function dubListLinks({ token, domain, limit = 100, offset = 0 }) {
   return { links, hasMore };
 }
 
-async function dubFetchAllLinks({ token, domain }) {
+async function dubFetchAllLinks({ token, domain, maxLinks = null }) {
   const allLinks = [];
   let offset = 0;
   const limit = 100;
-  let hasMore = true;
 
-  while (hasMore) {
-    const { links, hasMore: more } = await dubListLinks({ token, domain, limit, offset });
+  while (true) {
+    const { links, hasMore } = await dubListLinks({ token, domain, limit, offset });
     allLinks.push(...links);
-    hasMore = more;
     offset += limit;
+    
+    if (maxLinks !== null && allLinks.length >= maxLinks) {
+      return allLinks.slice(0, maxLinks);
+    }
+    
     if (links.length < limit) break;
+    
+    if (!hasMore && maxLinks === null) break;
   }
 
   return allLinks;
 }
 
 async function dubRetrieveTimeseries({ token, domain, key, start, end, interval, timezone, city, country, region }) {
-  const params = {
-    event: "clicks",
-    groupBy: "timeseries",
-    domain,
-    key,
-    timezone: timezone || DEFAULT_TIMEZONE,
-    interval: start || end ? undefined : interval || DEFAULT_INTERVAL,
-    start: start || undefined,
-    end: end || undefined,
-    city: city || undefined,
-    country: country || undefined,
-    region: region || undefined,
-  };
-  const res = await dubFetch("/analytics", token, params);
-  let data = [];
-  if (Array.isArray(res)) {
-    data = res;
-  } else if (Array.isArray(res?.data)) {
-    data = res.data;
-  } else if (res && typeof res === "object") {
-    data = [res];
-  }
-  const rows = [];
-  for (const row of data) {
-    if (!row || typeof row !== "object") continue;
-    const t = row.start || row.timestamp || row.date || row.ts || row.time || row.d || row.t || row.startDate;
-    const c = row.count ?? row.clicks ?? row.value ?? row.total ?? row.n ?? 0;
-    if (!t) continue;
-    let tsStr;
-    if (typeof t === "string") {
-      tsStr = t;
-    } else if (typeof t === "number") {
-      tsStr = new Date(t).toISOString();
-    } else {
-      tsStr = String(t);
+  const allRows = [];
+  
+  if (start && end) {
+    const startDate = new Date(start);
+    const endDate = new Date(end);
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+      const dayStart = new Date(currentDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(currentDate);
+      dayEnd.setHours(23, 59, 59, 999);
+      
+      const dayStartISO = dayStart.toISOString();
+      const dayEndISO = dayEnd.toISOString();
+      
+      const params = {
+        event: "clicks",
+        groupBy: "timeseries",
+        domain,
+        key,
+        timezone: timezone || DEFAULT_TIMEZONE,
+        interval: "24h",
+        start: dayStartISO,
+        end: dayEndISO,
+        city: city || undefined,
+        country: country || undefined,
+        region: region || undefined,
+      };
+      
+      const res = await dubFetch("/analytics", token, params);
+      let data = [];
+      if (Array.isArray(res)) {
+        data = res;
+      } else if (Array.isArray(res?.data)) {
+        data = res.data;
+      } else if (res && typeof res === "object") {
+        data = [res];
+      }
+      
+      for (const row of data) {
+        if (!row || typeof row !== "object") continue;
+        const t = row.start || row.timestamp || row.date || row.ts || row.time || row.d || row.t || row.startDate;
+        const c = row.count ?? row.clicks ?? row.value ?? row.total ?? row.n ?? 0;
+        if (!t) continue;
+        
+        let tsStr;
+        if (typeof t === "string") {
+          tsStr = t;
+        } else if (typeof t === "number") {
+          tsStr = new Date(t).toISOString();
+        } else {
+          tsStr = String(t);
+        }
+        
+        if (!tsStr || tsStr === "undefined" || tsStr === "null" || tsStr === "Invalid Date") continue;
+        
+        if (tsStr.includes("+0000")) {
+          tsStr = tsStr.replace("+0000", "Z");
+        } else if (tsStr.match(/[+-]\d{4}$/)) {
+          const parsed = new Date(tsStr);
+          if (!Number.isNaN(parsed.getTime())) {
+            tsStr = parsed.toISOString();
+          }
+        } else if (!tsStr.includes("T") || !tsStr.includes(":")) {
+          const parsed = new Date(tsStr);
+          if (!Number.isNaN(parsed.getTime())) {
+            tsStr = parsed.toISOString();
+          }
+        }
+        
+        const count = Number(c) || 0;
+        if (count > 0) {
+          allRows.push({ timestamp: tsStr, count });
+        }
+      }
+      
+      currentDate.setDate(currentDate.getDate() + 1);
     }
-    if (!tsStr || tsStr === "undefined" || tsStr === "null" || tsStr === "Invalid Date") continue;
-    rows.push({ timestamp: tsStr, count: Number(c) || 0 });
+  } else {
+    const params = {
+      event: "clicks",
+      groupBy: "timeseries",
+      domain,
+      key,
+      timezone: timezone || DEFAULT_TIMEZONE,
+      interval: interval || DEFAULT_INTERVAL,
+      start: start || undefined,
+      end: end || undefined,
+      city: city || undefined,
+      country: country || undefined,
+      region: region || undefined,
+    };
+    const res = await dubFetch("/analytics", token, params);
+    let data = [];
+    if (Array.isArray(res)) {
+      data = res;
+    } else if (Array.isArray(res?.data)) {
+      data = res.data;
+    } else if (res && typeof res === "object") {
+      data = [res];
+    }
+    
+    for (const row of data) {
+      if (!row || typeof row !== "object") continue;
+      const t = row.start || row.timestamp || row.date || row.ts || row.time || row.d || row.t || row.startDate;
+      const c = row.count ?? row.clicks ?? row.value ?? row.total ?? row.n ?? 0;
+      if (!t) continue;
+      
+      let tsStr;
+      if (typeof t === "string") {
+        tsStr = t;
+      } else if (typeof t === "number") {
+        tsStr = new Date(t).toISOString();
+      } else {
+        tsStr = String(t);
+      }
+      
+      if (!tsStr || tsStr === "undefined" || tsStr === "null" || tsStr === "Invalid Date") continue;
+      
+      if (tsStr.includes("+0000")) {
+        tsStr = tsStr.replace("+0000", "Z");
+      } else if (tsStr.match(/[+-]\d{4}$/)) {
+        const parsed = new Date(tsStr);
+        if (!Number.isNaN(parsed.getTime())) {
+          tsStr = parsed.toISOString();
+        }
+      } else if (!tsStr.includes("T") || !tsStr.includes(":")) {
+        const parsed = new Date(tsStr);
+        if (!Number.isNaN(parsed.getTime())) {
+          tsStr = parsed.toISOString();
+        }
+      }
+      
+      const count = Number(c) || 0;
+      if (count > 0) {
+        allRows.push({ timestamp: tsStr, count });
+      }
+    }
   }
-  return rows.filter((r) => r.timestamp && r.timestamp !== "undefined" && r.timestamp !== "null");
+  
+  return allRows.filter((r) => r.timestamp && r.timestamp !== "undefined" && r.timestamp !== "null");
 }
 
 async function dubRetrieveBreakdown({ token, domain, key, start, end, interval, timezone, groupBy, city, country, region }) {
@@ -4487,11 +4708,12 @@ function dayMidpointIso(day) {
     }
   }
   try {
-    const d = new Date(dayStr);
+    const d = new Date(dayStr + "T00:00:00.000Z");
     if (!Number.isNaN(d.getTime())) {
       return d.toISOString().slice(0, 10) + "T12:00:00.000Z";
     }
-  } catch {}
+  } catch {
+  }
   return null;
 }
 
@@ -4505,28 +4727,73 @@ function toNdjson(rows) {
   return rows.map((r) => JSON.stringify(r)).join("\n");
 }
 
-async function tinybirdIngest({ host, token, datasource, ndjson }) {
-  const search = new URLSearchParams({ name: datasource, format: "ndjson" });
-  const url = `${host.replace(/\/$/, "")}/v0/events?${search.toString()}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/x-ndjson",
-      Accept: "application/json",
-    },
-    body: ndjson,
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    let message = text;
+async function tinybirdIngest({ host, token, datasource, ndjson, rateLimiter }) {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (rateLimiter) {
+      await rateLimiter.wait();
+    }
+    const search = new URLSearchParams({ name: datasource, format: "ndjson" });
+    const url = `${host.replace(/\/$/, "")}/v0/events?${search.toString()}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/x-ndjson",
+        Accept: "application/json",
+      },
+      body: ndjson,
+    });
+    const text = await response.text();
+    if (response.ok) {
+      try {
+        return text ? JSON.parse(text) : {};
+      } catch {
+        return {};
+      }
+    }
+    const status = response.status;
+    let responseData = null;
     try {
-      const payload = JSON.parse(text || "{}");
-      message = payload?.error || payload?.message || text;
+      responseData = text ? JSON.parse(text) : null;
     } catch {}
-    throw new Error(`Tinybird ingest failed (${response.status}): ${message}`);
+    
+    if (status === 429 && responseData && (responseData.quarantined || responseData.imported || responseData.success)) {
+      return responseData;
+    }
+    
+    const shouldRetry = status === 429 || (status >= 500 && status < 600);
+    if (!shouldRetry || attempt === maxAttempts) {
+      let message = text;
+      if (responseData) {
+        message = responseData?.error || responseData?.message || text;
+      }
+      throw new Error(`Tinybird ingest failed (${status}): ${message}`);
+    }
+    const retryAfter = response.headers.get("retry-after");
+    let waitTime;
+    if (retryAfter) {
+      const retryAfterNum = Number(retryAfter);
+      if (Number.isFinite(retryAfterNum) && retryAfterNum > 0) {
+        if (retryAfterNum < 86400) {
+          waitTime = retryAfterNum * 1000;
+        } else if (retryAfterNum < 86400000) {
+          waitTime = retryAfterNum;
+        } else {
+          waitTime = 60000;
+        }
+        if (waitTime > 60000) {
+          waitTime = 60000;
+        }
+      } else {
+        waitTime = Math.min(500 * 2 ** (attempt - 1), 60000);
+      }
+    } else {
+      waitTime = Math.min(500 * 2 ** (attempt - 1), 60000);
+    }
+    const jitter = Math.floor(Math.random() * 250);
+    await sleep(Math.min(waitTime + jitter, 60000));
   }
-  return text ? JSON.parse(text) : {};
 }
 
 async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window, limits, dryRun, apiConcurrency }) {
@@ -4542,8 +4809,24 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
   };
 
   const apiLimit = createLimiter(apiConcurrency || DEFAULT_API_CONCURRENCY);
-  const [timeseries, countries, cities, browsers, devices, os] = await Promise.all([
-    apiLimit(() => dubRetrieveTimeseries(baseArgs)),
+  
+  const timeseries = await apiLimit(() => dubRetrieveTimeseries(baseArgs));
+  
+  if (timeseries.length === 0) {
+    if (dryRun) {
+      return {
+        videoId,
+        orgId,
+        timeseriesPoints: 0,
+        citiesConsidered: 0,
+        plannedEvents: 0,
+        sample: [],
+      };
+    }
+    return { videoId, orgId, written: 0 };
+  }
+  
+  const [countries, cities, browsers, devices, os] = await Promise.all([
     apiLimit(() => dubRetrieveBreakdown({ ...baseArgs, groupBy: "countries" })),
     apiLimit(() => dubRetrieveBreakdown({ ...baseArgs, groupBy: "cities" })),
     apiLimit(() => dubRetrieveBreakdown({ ...baseArgs, groupBy: "browsers" })),
@@ -4561,8 +4844,11 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
     });
   const cityMetaMap = new Map(selectedCities.map((city) => [city.name, city]));
   
-  if (dryRun && timeseries.length > 0 && timeseries[0]) {
-    console.log(`  Sample timeseries entry:`, JSON.stringify(timeseries[0]));
+  if (dryRun && timeseries.length > 0) {
+    console.log(`  Sample timeseries entries (showing first 5):`);
+    timeseries.slice(0, 5).forEach((entry, idx) => {
+      console.log(`    [${idx}]:`, JSON.stringify(entry));
+    });
     if (countries.length > 0) console.log(`  Sample countries:`, JSON.stringify(countries.slice(0, 3)));
     if (browsers.length > 0) console.log(`  Sample browsers:`, JSON.stringify(browsers.slice(0, 3)));
   }
@@ -4792,15 +5078,48 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
 
   // Build rows per-city per-day with browser/device/OS distribution
   const rows = [];
+  const dayRowMap = new Map();
   for (const seriesItem of timeseries) {
     if (seriesItem.count <= 0) continue;
     const tsStr = String(seriesItem.timestamp);
     if (!tsStr || tsStr === "undefined" || tsStr === "null") continue;
-    const day = tsStr.slice(0, 10);
+    
+    let parsedDate;
+    let day;
+    let tsIso;
+    
+    if (tsStr.includes("T") && tsStr.includes(":")) {
+      parsedDate = new Date(tsStr);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        day = parsedDate.toISOString().slice(0, 10);
+        tsIso = `${day}T00:00:00.000Z`;
+      } else {
+        day = tsStr.slice(0, 10);
+        tsIso = dayMidpointIso(day);
+      }
+    } else {
+      day = tsStr.slice(0, 10);
+      const dateStrWithUTC = tsStr.includes("Z") || tsStr.match(/[+-]\d{2}:?\d{2}$/) ? tsStr : tsStr + "T00:00:00.000Z";
+      parsedDate = new Date(dateStrWithUTC);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        day = parsedDate.toISOString().slice(0, 10);
+        tsIso = `${day}T00:00:00.000Z`;
+      } else {
+        tsIso = dayMidpointIso(day);
+      }
+    }
+    
     if (!day || day.length < 10 || day === "undefined") continue;
-    const tsIso = dayMidpointIso(day);
     if (!tsIso) continue;
     const dayTotal = seriesItem.count;
+    let dayData = dayRowMap.get(day);
+    if (!dayData) {
+      dayData = { total: dayTotal, rows: [] };
+      dayRowMap.set(day, dayData);
+    } else {
+      dayData.total = Math.max(dayData.total, dayTotal);
+    }
+    const dayRows = dayData.rows;
 
     // Get browser/device/OS breakdowns for this day
     const dayBrowsers = [];
@@ -4870,7 +5189,7 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
         
         const sidPrefix = `mig:${videoId}:${day}:${cityName}:${browser.name}`;
         for (const sid of generateSessionIds(sidPrefix, browserAllocation)) {
-          rows.push({
+          dayRows.push({
             timestamp: tsIso,
             session_id: sid,
             tenant_id: orgId,
@@ -4896,7 +5215,7 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
         const defaultOS = dayOS[0]?.name || topOS[0]?.name || "unknown";
         const sidPrefix = `mig:${videoId}:${day}:${cityName}:${defaultBrowser}`;
         for (const sid of generateSessionIds(sidPrefix, browserRemainder)) {
-          rows.push({
+          dayRows.push({
             timestamp: tsIso,
             session_id: sid,
             tenant_id: orgId,
@@ -4924,7 +5243,7 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
       const defaultOS = dayOS[0]?.name || topOS[0]?.name || "unknown";
       const sidPrefix = `mig:${videoId}:${day}:__uncategorized__`;
       for (const sid of generateSessionIds(sidPrefix, remainder)) {
-        rows.push({
+        dayRows.push({
           timestamp: tsIso,
           session_id: sid,
           tenant_id: orgId,
@@ -4943,7 +5262,31 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
     }
   }
 
+  for (const [day, { total: dayTotal, rows: dayRows }] of dayRowMap.entries()) {
+    if (dayRows.length > dayTotal) {
+      const excess = dayRows.length - dayTotal;
+      console.log(`  Day ${day}: Capping rows from ${dayRows.length} to ${dayTotal} (removing ${excess} excess row(s))`);
+      dayRows.splice(dayTotal);
+    }
+    rows.push(...dayRows);
+  }
+
   const totalPlanned = rows.length;
+
+  const seen = new Map();
+  const deduplicatedRows = [];
+  for (const row of rows) {
+    const key = `${row.timestamp}|${row.session_id}|${row.video_id}`;
+    if (!seen.has(key)) {
+      seen.set(key, true);
+      deduplicatedRows.push(row);
+    }
+  }
+
+  const duplicatesRemoved = totalPlanned - deduplicatedRows.length;
+  if (duplicatesRemoved > 0) {
+    console.log(`  Removed ${duplicatesRemoved} duplicate row(s) (${totalPlanned} -> ${deduplicatedRows.length})`);
+  }
 
   if (dryRun) {
     return {
@@ -4951,17 +5294,20 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
       orgId,
       timeseriesPoints: timeseries.length,
       citiesConsidered: selectedCities.length,
-      plannedEvents: totalPlanned,
-      sample: rows.slice(0, Math.min(3, rows.length)),
+      plannedEvents: deduplicatedRows.length,
+      duplicatesRemoved,
+      sample: deduplicatedRows.slice(0, Math.min(3, deduplicatedRows.length)),
     };
   }
 
   let written = 0;
   const chunkSize = limits.ingestChunkSize || INGEST_CHUNK_SIZE;
   const ingestConcurrency = limits.ingestConcurrency || DEFAULT_INGEST_CONCURRENCY;
+  const ingestRateLimit = limits.ingestRateLimit || DEFAULT_INGEST_RATE_LIMIT;
+  const rateLimiter = createTinybirdRateLimiter(ingestRateLimit);
   const chunks = [];
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    chunks.push(rows.slice(i, i + chunkSize));
+  for (let i = 0; i < deduplicatedRows.length; i += chunkSize) {
+    chunks.push(deduplicatedRows.slice(i, i + chunkSize));
   }
   const ingestLimit = createLimiter(ingestConcurrency);
   const results = await Promise.all(
@@ -4973,6 +5319,7 @@ async function migrateVideo({ tokenDub, tb, domain, videoId, orgId = "", window,
           token: tb.token,
           datasource: TB_DATASOURCE,
           ndjson,
+          rateLimiter,
         });
         return chunk.length;
       })
@@ -4999,7 +5346,11 @@ async function main() {
 
   if (videoIds.length === 0) {
     console.log(`Fetching all links from domain: ${args.domain}...`);
-    const links = await dubFetchAllLinks({ token: dubToken, domain: args.domain });
+    const links = await dubFetchAllLinks({ 
+      token: dubToken, 
+      domain: args.domain,
+      maxLinks: args.limit || null
+    });
     videoIds = links.map((link) => link.key || link.id).filter(Boolean);
     console.log(`Found ${videoIds.length} links total`);
   }
@@ -5028,11 +5379,12 @@ async function main() {
 
   const limits = { maxCities: args.maxCities };
   const maxToProcess = args.limit && args.limit > 0 ? Math.min(args.limit, videoIds.length) : videoIds.length;
-  console.log(`Processing ${maxToProcess} video(s) with video concurrency=${args.videoConcurrency}, API concurrency=${args.apiConcurrency}...`);
+  console.log(`Processing ${maxToProcess} video(s) with video concurrency=${args.videoConcurrency}, API concurrency=${args.apiConcurrency}, ingest rate limit=${args.ingestRateLimit}/s...`);
   const extendedLimits = {
     ...limits,
     ingestChunkSize: args.ingestChunk,
     ingestConcurrency: args.ingestConcurrency,
+    ingestRateLimit: args.ingestRateLimit,
   };
   const videoLimiter = createLimiter(args.videoConcurrency);
   const tasks = videoIds.slice(0, maxToProcess).map((videoId, idx) =>

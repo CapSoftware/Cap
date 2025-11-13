@@ -250,7 +250,7 @@ export default function Header({
 
   return (
     <div className="flex gap-2 items-center">
-      {capId && capName && (
+      {capId && (
         <div className="flex items-center rounded-xl border border-gray-4 bg-gray-2 overflow-hidden">
           <button
             type="button"
@@ -260,9 +260,13 @@ export default function Header({
             <ArrowLeft className="size-4" />
           </button>
           <div className="flex items-center px-4 py-2.5">
-            <span className="text-sm font-semibold text-gray-12">
-              {capName}
-            </span>
+            {capName ? (
+              <span className="text-sm font-semibold text-gray-12">
+                {capName}
+              </span>
+            ) : (
+              <div className="h-4 w-32 rounded bg-gray-4 animate-pulse" />
+            )}
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@ import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import { CurrentUser, type Folder, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Context, Effect, Exit, Option, pipe } from "effect";
+import { Array, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
@@ -13,7 +13,7 @@ import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
 
-const DEFAULT_ANALYTICS_RANGE_DAYS = 30;
+const DEFAULT_ANALYTICS_RANGE_DAYS = 90;
 const escapeSqlLiteral = (value: string) => value.replace(/'/g, "''");
 const formatDate = (date: Date) => date.toISOString().slice(0, 10);
 const formatDateTime = (date: Date) => date.toISOString().slice(0, 19).replace("T", " ");
@@ -74,13 +74,18 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				}> = [];
 
 				for (let index = 0; index < videoExits.length; index++) {
-					const exit = videoExits[index]!;
+					const exit = videoExits[index];
+					if (!exit) continue;
 					if (Exit.isSuccess(exit)) {
-						successfulVideos.push({
-							index,
-							videoId: videoIds[index]!,
-							video: exit.value,
-						});
+						const maybeVideo = exit.value;
+						if (Option.isSome(maybeVideo)) {
+							const [video] = maybeVideo.value;
+							successfulVideos.push({
+								index,
+								videoId: videoIds[index] ?? "",
+								video,
+							});
+						}
 					}
 				}
 
@@ -95,10 +100,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					if (!videosByOrg.has(key)) {
 						videosByOrg.set(key, []);
 					}
-					videosByOrg.get(key)!.push({
-						videoId: video.id,
-						pathname: buildPathname(video.id),
-					});
+					const entries = videosByOrg.get(key);
+					if (entries) {
+						entries.push({
+							videoId: video.id,
+							pathname: buildPathname(video.id),
+						});
+					}
 				}
 
 				const runTinybirdQuery = <
@@ -170,7 +178,9 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				return videoExits.map((exit, index) =>
 					Exit.map(exit, () => ({
 						count:
-							countsByPathname.get(buildPathname(videoIds[index]!)) ?? 0,
+							countsByPathname.get(
+								buildPathname(videoIds[index] ?? ""),
+							) ?? 0,
 					})),
 				);
 			},
@@ -495,8 +505,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 				return yield* Exit.matchEffect(result, {
 					onSuccess: (value) => Effect.succeed(value),
 					onFailure: (error) => Effect.fail(error),
-					onDie: (cause) => Effect.die(cause),
-					onInterrupt: (fiberId) => Effect.interrupt(fiberId),
 				});
 			}),
 			getAnalyticsBulk: getAnalyticsBulkInternal,

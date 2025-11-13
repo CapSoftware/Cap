@@ -360,60 +360,47 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[51]",
 					)}
 				>
+					<CapCardButton
+						tooltipContent="Copy link"
+						onClick={(e) => {
+							e.stopPropagation();
+							copyLinkHandler();
+							toast.success("Link copied to clipboard");
+						}}
+						className="delay-0"
+						icon={
+							!copyPressed ? (
+								<FontAwesomeIcon
+									className="text-gray-12 size-4"
+									icon={faLink}
+								/>
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="24"
+									height="24"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="text-gray-12 size-5 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							)
+						}
+					/>
 					{isOwner && (
-						<>
-							<CapCardButton
-								tooltipContent="Share"
-								onClick={(e) => {
-									e.stopPropagation();
-									setIsSharingDialogOpen(true);
-								}}
-								className="delay-0"
-								icon={<FontAwesomeIcon icon={faShare} />}
-							/>
-							<CapCardButton
-								tooltipContent="Analytics"
-								onClick={(e) => {
-									e.stopPropagation();
-									router.push(`/dashboard/analytics/s/${cap.id}`);
-								}}
-								className="delay-0"
-								icon={<FontAwesomeIcon icon={faChartSimple} />}
-							/>
-						</>
-					)}
-
-					{!isOwner && (
 						<CapCardButton
-							tooltipContent="Copy link"
+							tooltipContent="Share"
 							onClick={(e) => {
 								e.stopPropagation();
-								copyLinkHandler();
+								setIsSharingDialogOpen(true);
 							}}
 							className="delay-0"
-							icon={
-								!copyPressed ? (
-									<FontAwesomeIcon
-										className="text-gray-12 size-4"
-										icon={faLink}
-									/>
-								) : (
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										width="24"
-										height="24"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										strokeWidth="2"
-										strokeLinecap="round"
-										strokeLinejoin="round"
-										className="text-gray-12 size-5 svgpathanimation"
-									>
-										<path d="M20 6 9 17l-5-5" />
-									</svg>
-								)
-							}
+							icon={<FontAwesomeIcon icon={faShare} />}
 						/>
 					)}
 
@@ -433,16 +420,28 @@ export const CapCard = ({
 							suppressHydrationWarning
 						>
 							{isOwner && (
-								<DropdownMenuItem
-									onClick={(e) => {
-										e.stopPropagation();
-										setIsSettingsDialogOpen(true);
-									}}
-									className="flex gap-2 items-center rounded-lg"
-								>
-									<FontAwesomeIcon className="size-3" icon={faGear} />
-									<p className="text-sm text-gray-12">Settings</p>
-								</DropdownMenuItem>
+								<>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											setIsSettingsDialogOpen(true);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faGear} />
+										<p className="text-sm text-gray-12">Settings</p>
+									</DropdownMenuItem>
+									<DropdownMenuItem
+										onClick={(e) => {
+											e.stopPropagation();
+											router.push(`/dashboard/analytics/s/${cap.id}`);
+										}}
+										className="flex gap-2 items-center rounded-lg"
+									>
+										<FontAwesomeIcon className="size-3" icon={faChartSimple} />
+										<p className="text-sm text-gray-12">View analytics</p>
+									</DropdownMenuItem>
+								</>
 							)}
 							<DropdownMenuItem
 								onClick={(e) => {
