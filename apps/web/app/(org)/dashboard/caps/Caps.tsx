@@ -80,8 +80,84 @@ export const Caps = ({
 		data.map((video) => video.id),
 		analyticsEnabled,
 	);
-	const analytics = analyticsQuery.data || {};
+	const analytics: Partial<Record<Video.VideoId, number>> =
+		analyticsQuery.data || {};
 	const isLoadingAnalytics = analyticsEnabled && analyticsQuery.isLoading;
+
+	const handleCapSelection = (capId: Video.VideoId) => {
+		setSelectedCaps((prev) => {
+			const newSelection = prev.includes(capId)
+				? prev.filter((id) => id !== capId)
+				: [...prev, capId];
+
+			previousCountRef.current = prev.length;
+
+			return newSelection;
+		});
+	};
+
+	const rpc = useRpcClient();
+
+	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
+		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
+			if (ids.length === 0) return { success: 0 };
+
+			const results = yield* Effect.all(
+				ids.map((id) => rpc.VideoDelete(id).pipe(Effect.exit)),
+				{ concurrency: 10 },
+			);
+
+			const successCount = results.filter(Exit.isSuccess).length;
+
+			const errorCount = ids.length - successCount;
+
+			if (successCount > 0 && errorCount > 0) {
+				return { success: successCount, error: errorCount };
+			} else if (successCount > 0) {
+				return { success: successCount };
+			} else {
+				return yield* Effect.fail(
+					new Error(
+						`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
+					),
+				);
+			}
+		}),
+		onMutate: (ids: Video.VideoId[]) => {
+			toast.loading(`Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`);
+		},
+		onSuccess: (data: { success: number; error?: number }) => {
+			setSelectedCaps([]);
+			router.refresh();
+			if (data.error) {
+				toast.success(
+					`Successfully deleted ${data.success} cap${
+						data.success === 1 ? "" : "s"
+					}, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"}`,
+				);
+			} else {
+				toast.success(
+					`Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"}`,
+				);
+			}
+		},
+		onError: (error: unknown) => {
+			const message =
+				error instanceof Error ? error.message : "An error occurred while deleting caps";
+			toast.error(message);
+		},
+	});
+
+	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
+		mutationFn: Effect.fn(function* (id: Video.VideoId) {
+			yield* rpc.VideoDelete(id);
+		}),
+		onSuccess: () => {
+			toast.success("Cap deleted successfully");
+			router.refresh();
+		},
+		onError: (_error: unknown) => toast.error("Failed to delete cap"),
+	});
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -123,7 +199,7 @@ export const Caps = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [selectedCaps.length, data]);
+	}, [selectedCaps, data, deleteCaps]);
 
 	useEffect(() => {
 		const handleDragStart = () => setIsDraggingCap(true);
@@ -137,82 +213,6 @@ export const Caps = ({
 			window.removeEventListener("dragend", handleDragEnd);
 		};
 	}, []);
-
-	const handleCapSelection = (capId: Video.VideoId) => {
-		setSelectedCaps((prev) => {
-			const newSelection = prev.includes(capId)
-				? prev.filter((id) => id !== capId)
-				: [...prev, capId];
-
-			previousCountRef.current = prev.length;
-
-			return newSelection;
-		});
-	};
-
-	const rpc = useRpcClient();
-
-	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
-		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
-			if (ids.length === 0) return;
-
-			const fiber = yield* Effect.gen(function* () {
-				const results = yield* Effect.all(
-					ids.map((id) => rpc.VideoDelete(id).pipe(Effect.exit)),
-					{ concurrency: 10 },
-				);
-
-				const successCount = results.filter(Exit.isSuccess).length;
-
-				const errorCount = ids.length - successCount;
-
-				if (successCount > 0 && errorCount > 0) {
-					return { success: successCount, error: errorCount };
-				} else if (successCount > 0) {
-					return { success: successCount };
-				} else {
-					return yield* Effect.fail(
-						new Error(
-							`Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`,
-						),
-					);
-				}
-			}).pipe(Effect.fork);
-
-			toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-				loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
-				success: (data) => {
-					if (data.error) {
-						return `Successfully deleted ${data.success} cap${
-							data.success === 1 ? "" : "s"
-						}, but failed to delete ${data.error} cap${
-							data.error === 1 ? "" : "s"
-						}`;
-					}
-					return `Successfully deleted ${data.success} cap${
-						data.success === 1 ? "" : "s"
-					}`;
-				},
-				error: (error) =>
-					error.message || "An error occurred while deleting caps",
-			});
-
-			return yield* fiber.await.pipe(Effect.flatten);
-		}),
-		onSuccess: () => {
-			setSelectedCaps([]);
-			router.refresh();
-		},
-	});
-
-	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
-		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
-		onSuccess: () => {
-			toast.success("Cap deleted successfully");
-			router.refresh();
-		},
-		onError: () => toast.error("Failed to delete cap"),
-	});
 
 	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
@@ -267,11 +267,12 @@ export const Caps = ({
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
 						{visibleVideos.map((video) => {
+							const videoAnalytics = analytics[video.id];
 							return (
 								<CapCard
 									key={video.id}
 									cap={video}
-									analytics={analytics[video.id] || 0}
+									analytics={videoAnalytics ?? 0}
 									onDelete={() => {
 										if (selectedCaps.length > 0) {
 											deleteCaps(selectedCaps);

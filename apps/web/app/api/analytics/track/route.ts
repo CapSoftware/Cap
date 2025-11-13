@@ -71,14 +71,23 @@ export async function POST(request: NextRequest) {
 	await runPromise(
 		Effect.gen(function* () {
 			const maybeUser = yield* Effect.serviceOption(CurrentUser);
-			const userId = Option.isSome(maybeUser)
-				? maybeUser.value.id
-				: null;
+			const userId = Option.match(maybeUser, {
+				onNone: () => null as string | null,
+				onSome: (user) => {
+					const currentUser = user as {
+						id: string;
+						email: string;
+						activeOrganizationId: string;
+						iconUrlOrKey: Option.Option<unknown>;
+					};
+					return currentUser.id;
+				},
+			});
 			if (userId && body.ownerId && userId === body.ownerId) {
 				return;
 			}
 
-			const tinybird = yield* Tinybird;
+			const tinybird = yield* Effect.service(Tinybird);
 			yield* tinybird.appendEvents([
 				{
 					timestamp: timestamp.toISOString(),
