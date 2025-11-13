@@ -62,7 +62,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 		{
 			name: "Analytics",
 			href: `/dashboard/analytics`,
-			ignoreParams: true,
+			exactMatch: true,
 			icon: <ChartLineIcon />,
 			subNav: [],
 		},
@@ -91,8 +91,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [openAIDialog, setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
-	const isPathActive = (path: string, ignoreParams: boolean = false) =>
-		ignoreParams ? pathname === path : pathname.includes(path);
+	const isPathActive = (path: string, exactMatch: boolean = false) =>
+		exactMatch ? pathname === path : pathname.includes(path);
 
 	const isDomainSetupVerified =
 		activeOrg?.organization.customDomain &&
@@ -282,7 +282,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								key={item.name}
 								className="flex relative justify-center items-center mb-1.5 w-full"
 							>
-								{isPathActive(item.href, item.ignoreParams) && (
+					{isPathActive(item.href, item.exactMatch ?? false) && (
 									<motion.div
 										animate={{
 											width: sidebarCollapsed ? 36 : "100%",
@@ -311,7 +311,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
 									extraText={item.extraText}
-									ignoreParams={item.ignoreParams ?? false}
+									exactMatch={item.exactMatch ?? false}
 								/>
 							</div>
 						))}
@@ -401,7 +401,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
-	ignoreParams,
+	exactMatch,
 	extraText,
 }: {
 	name: string;
@@ -413,9 +413,9 @@ const NavItem = ({
 	}>;
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
-	isPathActive: (path: string, ignoreParams: boolean) => boolean;
+	isPathActive: (path: string, exactMatch: boolean) => boolean;
 	extraText: number | null | undefined;
-	ignoreParams: boolean;
+	exactMatch: boolean;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -436,7 +436,7 @@ const NavItem = ({
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
 						: "px-3 py-2 w-full",
-					isPathActive(href, ignoreParams)
+					isPathActive(href, exactMatch)
 						? "bg-transparent pointer-events-none"
 						: "hover:bg-gray-2",
 					"flex overflow-hidden justify-start items-center tracking-tight rounded-xl outline-none",
