@@ -36,7 +36,7 @@ import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
+import { CapIcon, ChartLineIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
 import CapAIBox from "./CapAIBox";
 import SpacesList from "./SpacesList";
@@ -57,6 +57,13 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			href: `/dashboard/caps`,
 			extraText: userCapsCount,
 			icon: <CapIcon />,
+			subNav: [],
+		},
+		{
+			name: "Analytics",
+			href: `/dashboard/analytics`,
+			matchChildren: true,
+			icon: <ChartLineIcon />,
 			subNav: [],
 		},
 		{
@@ -84,12 +91,14 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [openAIDialog, setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
-	const isPathActive = (path: string) => {
-		if (path === "/dashboard/caps") {
-			return pathname === "/dashboard/caps";
+	const isPathActive = (path: string, matchChildren: boolean = false) => {
+		if (matchChildren) {
+			return pathname === path || pathname.startsWith(`${path}/`);
 		}
-		return pathname === path || pathname.startsWith(`${path}/`);
+
+		return pathname === path;
 	};
+
 	const isDomainSetupVerified =
 		activeOrg?.organization.customDomain &&
 		activeOrg?.organization.domainVerified;
@@ -278,7 +287,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								key={item.name}
 								className="flex relative justify-center items-center mb-1.5 w-full"
 							>
-								{isPathActive(item.href) && (
+								{isPathActive(item.href, item.matchChildren ?? false) && (
 									<motion.div
 										animate={{
 											width: sidebarCollapsed ? 36 : "100%",
@@ -307,6 +316,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 									toggleMobileNav={toggleMobileNav}
 									isPathActive={isPathActive}
 									extraText={item.extraText}
+									matchChildren={item.matchChildren ?? false}
 								/>
 							</div>
 						))}
@@ -396,6 +406,7 @@ const NavItem = ({
 	sidebarCollapsed,
 	toggleMobileNav,
 	isPathActive,
+	matchChildren,
 	extraText,
 }: {
 	name: string;
@@ -407,8 +418,9 @@ const NavItem = ({
 	}>;
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
-	isPathActive: (path: string) => boolean;
+	isPathActive: (path: string, matchChildren: boolean) => boolean;
 	extraText: number | null | undefined;
+	matchChildren: boolean;
 }) => {
 	const iconRef = useRef<CogIconHandle>(null);
 	return (
@@ -429,7 +441,7 @@ const NavItem = ({
 					sidebarCollapsed
 						? "flex justify-center items-center px-0 w-full size-9"
 						: "px-3 py-2 w-full",
-					isPathActive(href)
+					isPathActive(href, matchChildren)
 						? "bg-transparent pointer-events-none"
 						: "hover:bg-gray-2",
 					"flex overflow-hidden justify-start items-center tracking-tight rounded-xl outline-none",
