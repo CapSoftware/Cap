@@ -1,7 +1,8 @@
 import { db } from "@cap/database";
 import { comments, spaceVideos, videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
-import { and, between, eq, inArray, sql } from "drizzle-orm";
+import { and, between, eq, inArray } from "drizzle-orm";
+import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 
 import { runPromise } from "@/lib/server";
@@ -133,7 +134,7 @@ const fallbackIfEmpty = <Row>(
 ) =>
 	fallback
 		? primary.pipe(
-				Effect.flatMap((rows) =>
+				Effect.flatMap((rows: Row[]) =>
 					rows.length > 0 ? Effect.succeed(rows) : fallback,
 				),
 			)
@@ -143,11 +144,11 @@ const withTinybirdFallback = <Row>(
 	effect: Effect.Effect<unknown, unknown, never>,
 ) =>
 	effect.pipe(
-		Effect.catchAll((e) => {
+		Effect.catchAll((e: unknown) => {
 			console.error("tinybird query error", e);
 			return Effect.succeed<{ data: Row[] }>({ data: [] as Row[] });
 		}),
-		Effect.map((res) => {
+		Effect.map((res: unknown) => {
 			const response = res as { data?: unknown[] };
 			const data = response.data ?? [];
 			return data.filter((item): item is Row =>
@@ -312,27 +313,27 @@ export const getOrgAnalyticsData = async (
 	);
 
 	const totalViews = tinybirdData.viewSeries.reduce(
-		(sum, row) => sum + row.views,
+		(sum: number, row: ViewSeriesRow) => sum + row.views,
 		0,
 	);
-	const totalCaps = capsSeries.reduce((sum, row) => sum + row.count, 0);
-	const totalComments = commentSeries.reduce((sum, row) => sum + row.count, 0);
+	const totalCaps = capsSeries.reduce((sum: number, row: CountSeriesRow) => sum + row.count, 0);
+	const totalComments = commentSeries.reduce((sum: number, row: CountSeriesRow) => sum + row.count, 0);
 	const totalReactions = reactionSeries.reduce(
-		(sum, row) => sum + row.count,
+		(sum: number, row: CountSeriesRow) => sum + row.count,
 		0,
 	);
 
 	const chartData = buckets.map((bucket) => ({
 		bucket,
-		caps: capsSeries.find((row) => row.bucket === bucket)?.count ?? 0,
+		caps: capsSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
 		views:
-			tinybirdData.viewSeries.find((row) => row.bucket === bucket)?.views ?? 0,
-		comments: commentSeries.find((row) => row.bucket === bucket)?.count ?? 0,
-		reactions: reactionSeries.find((row) => row.bucket === bucket)?.count ?? 0,
+			tinybirdData.viewSeries.find((row: ViewSeriesRow) => row.bucket === bucket)?.views ?? 0,
+		comments: commentSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
+		reactions: reactionSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ?? 0,
 	}));
 
 	const videoNames = await loadVideoNames(
-		tinybirdData.topCapsRaw.map((cap) => cap.videoId).filter(Boolean),
+		tinybirdData.topCapsRaw.map((cap: TopCapRow) => cap.videoId).filter(Boolean),
 	);
 
 	let capName: string | undefined;
@@ -378,7 +379,7 @@ export const getOrgAnalyticsData = async (
 				(row) => row.name,
 				normalizeDeviceName,
 			),
-			topCaps: tinybirdData.topCapsRaw.map((row) => ({
+			topCaps: tinybirdData.topCapsRaw.map((row: TopCapRow) => ({
 				id: row.videoId,
 				name: videoNames.get(row.videoId) ?? row.videoId,
 				views: row.views,
@@ -594,8 +595,10 @@ const queryCommentsSeries = async (
 		.filter((row): row is CountSeriesRow => Boolean(row.bucket));
 };
 
+type TinybirdService = Effect.Effect.Success<typeof Tinybird>;
+
 const queryViewSeries = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -641,8 +644,8 @@ const queryViewSeries = (
 				);
 
 	return effect.pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				bucket: row.bucket,
 				views: Number(row.views) || 0,
 			})),
@@ -651,7 +654,7 @@ const queryViewSeries = (
 };
 
 const queryCountries = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -692,8 +695,8 @@ const queryCountries = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -702,7 +705,7 @@ const queryCountries = (
 };
 
 const queryCities = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -745,8 +748,8 @@ const queryCities = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.city,
 				subtitle: row.country,
 				views: Number(row.views) || 0,
@@ -756,7 +759,7 @@ const queryCities = (
 };
 
 const queryBrowsers = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -795,8 +798,8 @@ const queryBrowsers = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -805,7 +808,7 @@ const queryBrowsers = (
 };
 
 const queryDevices = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -844,8 +847,8 @@ const queryDevices = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -854,7 +857,7 @@ const queryDevices = (
 };
 
 const queryOperatingSystems = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -893,8 +896,8 @@ const queryOperatingSystems = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -903,7 +906,7 @@ const queryOperatingSystems = (
 };
 
 const queryTopCaps = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -944,13 +947,13 @@ const queryTopCaps = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
+		Effect.map((rows: Row[]) =>
 			rows
-				.map((row) => ({
+				.map((row: Row) => ({
 					videoId: row.pathname?.split("/s/")[1] ?? row.pathname,
 					views: Number(row.views) || 0,
 				}))
-				.filter((row): row is TopCapRow => Boolean(row.videoId)),
+				.filter((row: { videoId: string; views: number }): row is TopCapRow => Boolean(row.videoId)),
 		),
 	);
 };
