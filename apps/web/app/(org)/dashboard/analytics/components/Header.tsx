@@ -41,10 +41,16 @@ const DATE_RANGE_OPTIONS = [
 	{ value: "30d", label: "Last 30 days" },
 	{ value: "wtd", label: "Week to date" },
 	{ value: "mtd", label: "Month to date" },
+	{ value: "lifetime", label: "Lifetime" },
 ] as const;
 
 const mapToBackendRange = (value: string): AnalyticsRange => {
-	if (value === "24h" || value === "7d" || value === "30d") {
+	if (
+		value === "24h" ||
+		value === "7d" ||
+		value === "30d" ||
+		value === "lifetime"
+	) {
 		return value as AnalyticsRange;
 	}
 	if (value === "today" || value === "yesterday") {
@@ -81,6 +87,7 @@ const getDisplayValue = (
 			return lastUISelection;
 		}
 	}
+	if (backendValue === "lifetime") return "lifetime";
 	if (backendValue === "24h") return "24h";
 	if (backendValue === "7d") return "7d";
 	if (backendValue === "30d") return "30d";
@@ -119,6 +126,8 @@ export default function Header({
 				setLastUISelection("7d");
 			} else if (value === "30d") {
 				setLastUISelection("30d");
+			} else if (value === "lifetime") {
+				setLastUISelection("lifetime");
 			}
 		}
 	}, [value, lastUISelection]);

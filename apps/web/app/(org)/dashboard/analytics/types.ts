@@ -1,4 +1,4 @@
-export type AnalyticsRange = "24h" | "7d" | "30d";
+export type AnalyticsRange = "24h" | "7d" | "30d" | "lifetime";
 
 export interface BreakdownRow {
 	name: string;

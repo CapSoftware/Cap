@@ -15,6 +15,8 @@ import type {
 type VideoRow = typeof videos.$inferSelect;
 type OrgId = VideoRow["orgId"];
 type VideoId = VideoRow["id"];
+type SpaceVideoRow = typeof spaceVideos.$inferSelect;
+type SpaceOrOrgId = SpaceVideoRow["spaceId"];
 
 type CountSeriesRow = { bucket: string; count: number };
 type ViewSeriesRow = { bucket: string; views: number };
@@ -31,14 +33,18 @@ type TinybirdAnalyticsData = {
 	topCapsRaw: TopCapRow[];
 };
 
-const RANGE_CONFIG: Record<
-	AnalyticsRange,
+type RollingAnalyticsRange = Exclude<AnalyticsRange, "lifetime">;
+
+const ROLLING_RANGE_CONFIG: Record<
+	RollingAnalyticsRange,
 	{ hours: number; bucket: "hour" | "day" }
 > = {
 	"24h": { hours: 24, bucket: "hour" },
 	"7d": { hours: 7 * 24, bucket: "day" },
 	"30d": { hours: 30 * 24, bucket: "day" },
 };
+
+const LIFETIME_FALLBACK_DAYS = 30;
 
 const escapeLiteral = (value: string) => value.replace(/'/g, "''");
 const toDateString = (date: Date) => date.toISOString().slice(0, 10);
@@ -80,6 +86,47 @@ const buildBuckets = (from: Date, to: Date, bucket: "hour" | "day") => {
 	return buckets;
 };
 
+const getLifetimeRangeStart = async (
+	orgId: OrgId,
+	videoIds?: VideoId[],
+): Promise<Date | undefined> => {
+	const whereClause = videoIds && videoIds.length > 0
+		? and(eq(videos.orgId, orgId), inArray(videos.id, videoIds))
+		: eq(videos.orgId, orgId);
+
+	const rows = await db()
+		.select({ minCreatedAt: sql<Date>`MIN(${videos.createdAt})` })
+		.from(videos)
+		.where(whereClause)
+		.limit(1);
+
+	const candidate = rows[0]?.minCreatedAt;
+	if (!candidate) return undefined;
+	return candidate instanceof Date ? candidate : new Date(candidate);
+};
+
+const resolveRangeBounds = async (
+	range: AnalyticsRange,
+	orgId: OrgId,
+	videoIds?: VideoId[],
+): Promise<{ from: Date; to: Date; bucket: "hour" | "day" }> => {
+	const to = new Date();
+
+	if (range === "lifetime") {
+		const lifetimeStart = await getLifetimeRangeStart(orgId, videoIds);
+		const fallbackFrom = new Date(
+			to.getTime() - LIFETIME_FALLBACK_DAYS * 24 * 60 * 60 * 1000,
+		);
+		const from =
+			lifetimeStart && lifetimeStart < to ? lifetimeStart : fallbackFrom;
+		return { from, to, bucket: "day" };
+	}
+
+	const config = ROLLING_RANGE_CONFIG[range];
+	const from = new Date(to.getTime() - config.hours * 60 * 60 * 1000);
+	return { from, to, bucket: config.bucket };
+};
+
 const fallbackIfEmpty = <Row>(
 	primary: Effect.Effect<Row[], never, never>,
 	fallback?: Effect.Effect<Row[], never, never>,
@@ -101,27 +148,21 @@ const withTinybirdFallback = <Row>(
 			return Effect.succeed<{ data: Row[] }>({ data: [] as Row[] });
 		}),
 		Effect.map((res) => {
-			console.log("tinybird raw response", JSON.stringify(res, null, 2));
-			const response = res as { data: unknown[] };
+			const response = res as { data?: unknown[] };
 			const data = response.data ?? [];
-			console.log("tinybird data array", JSON.stringify(data, null, 2));
-			const filtered = data.filter((item): item is Row => {
-				const isObject = typeof item === "object" && item !== null;
-				if (!isObject) {
-					console.log("filtered out non-object item", typeof item, item);
-				}
-				return isObject;
-			}) as Row[];
-			console.log("tinybird filtered rows", JSON.stringify(filtered, null, 2));
-			return filtered;
+			return data.filter((item): item is Row =>
+				typeof item === "object" && item !== null,
+			) as Row[];
 		}),
 	);
 
-const getSpaceVideoIds = async (spaceId: string): Promise<VideoId[]> => {
+const getSpaceVideoIds = async (
+	spaceId: SpaceOrOrgId,
+): Promise<VideoId[]> => {
 	const rows = await db()
 		.select({ videoId: spaceVideos.videoId })
 		.from(spaceVideos)
-		.where(eq(spaceVideos.spaceId, spaceId as any));
+		.where(eq(spaceVideos.spaceId, spaceId));
 	return rows.map((row) => row.videoId);
 };
 
@@ -131,15 +172,20 @@ export const getOrgAnalyticsData = async (
 	spaceId?: string,
 	capId?: string,
 ): Promise<OrgAnalyticsResponse> => {
-	const rangeConfig = RANGE_CONFIG[range];
-	const to = new Date();
-	const from = new Date(to.getTime() - rangeConfig.hours * 60 * 60 * 1000);
-	const buckets = buildBuckets(from, to, rangeConfig.bucket);
 	const typedOrgId = orgId as OrgId;
 
-	const spaceVideoIds = spaceId ? await getSpaceVideoIds(spaceId) : undefined;
+	const spaceVideoIds = spaceId
+		? await getSpaceVideoIds(spaceId as SpaceOrOrgId)
+		: undefined;
 	const capVideoIds = capId ? [capId as VideoId] : undefined;
 	const videoIds = capVideoIds || spaceVideoIds;
+
+	const { from, to, bucket } = await resolveRangeBounds(
+		range,
+		typedOrgId,
+		videoIds,
+	);
+	const buckets = buildBuckets(from, to, bucket);
 
 	if (
 		(spaceId && spaceVideoIds && spaceVideoIds.length === 0) ||
@@ -177,13 +223,13 @@ export const getOrgAnalyticsData = async (
 	}
 
 	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
-		queryVideoSeries(typedOrgId, from, to, rangeConfig.bucket, videoIds),
+		queryVideoSeries(typedOrgId, from, to, bucket, videoIds),
 		queryCommentsSeries(
 			typedOrgId,
 			from,
 			to,
 			"text",
-			rangeConfig.bucket,
+			bucket,
 			videoIds,
 		),
 		queryCommentsSeries(
@@ -191,33 +237,22 @@ export const getOrgAnalyticsData = async (
 			from,
 			to,
 			"emoji",
-			rangeConfig.bucket,
+			bucket,
 			videoIds,
 		),
 	]);
 
-	const tinybirdData = await runPromise(
-		Effect.gen(function* () {
-			const tinybird = yield* Tinybird;
-			console.log("getOrgAnalyticsData - orgId:", orgId, "range:", range);
-			console.log(
-				"getOrgAnalyticsData - from:",
-				from.toISOString(),
-				"to:",
-				to.toISOString(),
-			);
+		const tinybirdData = await runPromise(
+			Effect.gen(function* () {
+				const tinybird = yield* Tinybird;
 
 			const viewSeries = yield* queryViewSeries(
 				tinybird,
 				typedOrgId,
 				from,
 				to,
-				rangeConfig.bucket,
+				bucket,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - viewSeries:",
-				JSON.stringify(viewSeries, null, 2),
 			);
 
 			const countries = yield* queryCountries(
@@ -227,10 +262,6 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - countries:",
-				JSON.stringify(countries, null, 2),
-			);
 
 			const cities = yield* queryCities(
 				tinybird,
@@ -238,10 +269,6 @@ export const getOrgAnalyticsData = async (
 				from,
 				to,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - cities:",
-				JSON.stringify(cities, null, 2),
 			);
 
 			const browsers = yield* queryBrowsers(
@@ -251,10 +278,6 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - browsers:",
-				JSON.stringify(browsers, null, 2),
-			);
 
 			const devices = yield* queryDevices(
 				tinybird,
@@ -262,10 +285,6 @@ export const getOrgAnalyticsData = async (
 				from,
 				to,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - devices:",
-				JSON.stringify(devices, null, 2),
 			);
 
 			const operatingSystems = yield* queryOperatingSystems(
@@ -275,18 +294,10 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - operatingSystems:",
-				JSON.stringify(operatingSystems, null, 2),
-			);
 
 			const topCapsRaw = capId
 				? []
 				: yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
-			console.log(
-				"getOrgAnalyticsData - topCapsRaw:",
-				JSON.stringify(topCapsRaw, null, 2),
-			);
 
 			return {
 				viewSeries,

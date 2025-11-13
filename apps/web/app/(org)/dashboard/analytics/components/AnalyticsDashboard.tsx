@@ -15,6 +15,7 @@ const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
 	{ value: "24h", label: "Last 24 hours" },
 	{ value: "7d", label: "Last 7 days" },
 	{ value: "30d", label: "Last 30 days" },
+	{ value: "lifetime", label: "Lifetime" },
 ];
 
 const formatNumber = (value: number) =>
