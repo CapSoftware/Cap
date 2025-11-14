@@ -1,22 +1,12 @@
 import { Button } from "@cap/ui-solid";
 import { createWritableMemo } from "@solid-primitives/memo";
-import {
-	isPermissionGranted,
-	requestPermission,
-} from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import {
-	createEffect,
-	createMemo,
-	createResource,
-	For,
-	type ParentProps,
-	Show,
-} from "solid-js";
+import { createEffect, createMemo, createResource, For, type ParentProps, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
@@ -36,7 +26,13 @@ import {
 } from "~/utils/tauri";
 import IconLucidePlus from "~icons/lucide/plus";
 import IconLucideX from "~icons/lucide/x";
+import IconCapChevronDown from "~icons/cap/chevron-down";
 import { SettingItem, ToggleSettingItem } from "./Setting";
+import { CloseIcon, RestartIcon, DoubleArrowSwitcher } from "~/icons";
+import { createWorkspacesQuery, createOptionsQuery } from "~/utils/queries";
+import { SignInButton } from "~/components/SignInButton";
+import { trackEvent } from "~/utils/analytics";
+import { createSignInMutation } from "~/utils/auth";
 
 const getExclusionPrimaryLabel = (entry: WindowExclusion) =>
 	entry.ownerName ?? entry.windowTitle ?? entry.bundleIdentifier ?? "Unknown";
@@ -74,11 +70,10 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	custom_cursor_capture2: true,
 	excludedWindows: [],
 	instantModeMaxResolution: 1920,
+	defaultWorkspaceId: undefined,
 });
 
-const deriveInitialSettings = (
-	store: GeneralSettingsStore | null,
-): ExtendedGeneralSettingsStore => {
+const deriveInitialSettings = (store: GeneralSettingsStore | null): ExtendedGeneralSettingsStore => {
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
@@ -108,10 +103,7 @@ export default function GeneralSettings() {
 	);
 }
 
-function AppearanceSection(props: {
-	currentTheme: AppTheme;
-	onThemeChange: (theme: AppTheme) => void;
-}) {
+function AppearanceSection(props: { currentTheme: AppTheme; onThemeChange: (theme: AppTheme) => void }) {
 	const options = [
 		{ id: "system", name: "System", preview: themePreviewAuto },
 		{ id: "light", name: "Light", preview: themePreviewLight },
@@ -122,14 +114,9 @@ function AppearanceSection(props: {
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">General</h2>
-				<p class="text-sm text-gray-10">
-					General settings of your Cap application.
-				</p>
+				<p class="text-sm text-gray-10">General settings of your Cap application.</p>
 			</div>
-			<div
-				class="flex justify-start items-center text-gray-12"
-				onContextMenu={(e) => e.preventDefault()}
-			>
+			<div class="flex justify-start items-center text-gray-12" onContextMenu={(e) => e.preventDefault()}>
 				<div class="flex flex-col gap-3">
 					<p class="text-sm text-gray-12">Appearance</p>
 					<div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
@@ -145,20 +132,14 @@ function AppearanceSection(props: {
 										class={cx(
 											`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
 											{
-												"ring-2 ring-gray-12 ring-offset-2":
-													props.currentTheme === theme.id,
-												"group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
-													props.currentTheme !== theme.id,
-											},
+												"ring-2 ring-gray-12 ring-offset-2": props.currentTheme === theme.id,
+												"group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5": props.currentTheme !== theme.id,
+											}
 										)}
 										aria-label={`Select theme: ${theme.name}`}
 									>
 										<div class="flex justify-center items-center w-full h-full">
-											<img
-												draggable={false}
-												src={theme.preview}
-												alt={`Preview of ${theme.name} theme`}
-											/>
+											<img draggable={false} src={theme.preview} alt={`Preview of ${theme.name} theme`} />
 										</div>
 									</div>
 									<span
@@ -180,9 +161,9 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
-	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
-		deriveInitialSettings(props.initialStore),
-	);
+	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(deriveInitialSettings(props.initialStore));
+	const auth = authStore.createQuery();
+	const { setOptions: setRecordingOptions } = createOptionsQuery();
 
 	createEffect(() => {
 		setSettings(reconcile(deriveInitialSettings(props.initialStore)));
@@ -196,34 +177,29 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		},
 		{
 			initialValue: [] as CaptureWindow[],
-		},
+		}
 	);
 
-	const handleChange = async <K extends keyof typeof settings>(
-		key: K,
-		value: (typeof settings)[K],
-	) => {
+	const handleChange = async <K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
 		setSettings(key as keyof GeneralSettingsStore, value);
 		generalSettingsStore.set({ [key]: value });
+
+		// Update recording options to reflect the new default immediately
+		if (key === "defaultWorkspaceId") {
+			setRecordingOptions("workspaceId", value as string | null | undefined);
+		}
 	};
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
 
-	const matchesExclusion = (
-		exclusion: WindowExclusion,
-		window: CaptureWindow,
-	) => {
-		const bundleMatch = exclusion.bundleIdentifier
-			? window.bundle_identifier === exclusion.bundleIdentifier
-			: false;
+	const matchesExclusion = (exclusion: WindowExclusion, window: CaptureWindow) => {
+		const bundleMatch = exclusion.bundleIdentifier ? window.bundle_identifier === exclusion.bundleIdentifier : false;
 		if (bundleMatch) return true;
 
-		const ownerMatch = exclusion.ownerName
-			? window.owner_name === exclusion.ownerName
-			: false;
+		const ownerMatch = exclusion.ownerName ? window.owner_name === exclusion.ownerName : false;
 
 		if (exclusion.ownerName && exclusion.windowTitle) {
 			return ownerMatch && window.name === exclusion.windowTitle;
@@ -311,13 +287,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		await applyExcludedWindows(defaults);
 	};
 
+	const signIn = createSignInMutation();
+
+	const handleAuth = async () => {
+		if (auth.data) {
+			trackEvent("user_signed_out", { platform: "desktop" });
+			authStore.set(undefined);
+		}
+	};
+
 	// Helper function to render select dropdown for recording behaviors
 	const SelectSettingItem = <
-		T extends
-			| MainWindowRecordingStartBehaviour
-			| PostStudioRecordingBehaviour
-			| PostDeletionBehaviour
-			| number,
+		T extends MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | PostDeletionBehaviour | number
 	>(props: {
 		label: string;
 		description: string;
@@ -329,7 +310,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<SettingItem label={props.label} description={props.description}>
 				<button
 					type="button"
-					class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
+					class="flex flex-row gap-1 text-md text-white bg-gray-3 items-center px-2.5 py-1.5 rounded-[8px] border border-white/5 bg-white/[0.03] hover:bg-white/5"
 					onClick={async () => {
 						const currentValue = props.value;
 						const items = props.options.map((option) =>
@@ -337,7 +318,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								text: option.text,
 								checked: currentValue === option.value,
 								action: () => props.onChange(option.value),
-							}),
+							})
 						);
 						const menu = await Menu.new({
 							items: await Promise.all(items),
@@ -348,9 +329,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				>
 					{(() => {
 						const currentValue = props.value;
-						const option = props.options.find(
-							(opt) => opt.value === currentValue,
-						);
+						const option = props.options.find((opt) => opt.value === currentValue);
 						return option ? option.text : currentValue;
 					})()}
 					<IconCapChevronDown class="size-4" />
@@ -359,30 +338,105 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		);
 	};
 
+	// Workspace selection
+	const workspaces = createWorkspacesQuery();
+	const selectedWorkspace = createMemo(() => {
+		const workspacesList = workspaces();
+		if (!settings.defaultWorkspaceId && workspacesList.length > 0) {
+			return workspacesList[0];
+		}
+		return workspacesList.find((w) => w.id === settings.defaultWorkspaceId) ?? workspacesList[0];
+	});
+
+	const WorkspaceSelectSettingItem = () => {
+		const workspacesList = workspaces();
+
+		if (!auth.data || workspacesList.length === 0) {
+			return null;
+		}
+
+		return (
+			<SettingItem label="Default Workspace" description="">
+				<button
+					type="button"
+					class="flex items-center gap-1.5 px-2.5 h-8 rounded-[8px] border border-white/5 bg-white/[0.03] hover:bg-white/5 text-md transition-colors"
+					onClick={async () => {
+						const items = await Promise.all(
+							workspacesList.map((workspace) =>
+								CheckMenuItem.new({
+									text: workspace.name,
+									action: () => handleChange("defaultWorkspaceId", workspace.id),
+									checked: selectedWorkspace()?.id === workspace.id,
+								})
+							)
+						);
+						const menu = await Menu.new({ items });
+						await menu.popup();
+						await menu.close();
+					}}
+				>
+					<Show when={selectedWorkspace()?.avatarUrl}>
+						<img src={selectedWorkspace()?.avatarUrl ?? ""} alt="" class="size-4 rounded-full object-cover" />
+					</Show>
+					<span class="text-white">{selectedWorkspace()?.name ?? "Select workspace"}</span>
+					<DoubleArrowSwitcher class="size-3 text-gray-11" />
+				</button>
+			</SettingItem>
+		);
+	};
+
+	const AccountSettingItem = () => {
+		return (
+			<SettingItem label="Account" description="">
+				{false ? (
+					<button
+						onClick={handleAuth}
+						class="flex flex-row items-center justify-center h-8 px-2 rounded-[8px] text-white border border-white/5 bg-white/[0.03] hover:bg-white/5"
+					>
+						<p class="text-md px-1">Log Out</p>
+					</button>
+				) : (
+					<button
+						class={`flex flex-row items-center justify-center h-8 px-2 rounded-[8px] text-white border border-white/5 ${
+							signIn.isPending ? "bg-white/[0.03] hover:bg-white/5" : "bg-blue-9 hover:bg-blue-10"
+						}`}
+						onClick={() => {
+							if (signIn.isPending) {
+								signIn.variables.abort();
+								signIn.reset();
+							} else {
+								signIn.mutate(new AbortController());
+							}
+						}}
+					>
+						{signIn.isPending ? "Cancel Sign In" : "Sign In"}
+					</button>
+				)}
+			</SettingItem>
+		);
+	};
+
 	return (
 		<div class="flex flex-col h-full custom-scroll">
-			<div class="p-4 space-y-6">
-				<AppearanceSection
+			<div class="p-0 space-y-4">
+				{/* <AppearanceSection
 					currentTheme={settings.theme ?? "system"}
 					onThemeChange={(newTheme) => {
 						setSettings("theme", newTheme);
 						generalSettingsStore.set({ theme: newTheme });
 					}}
-				/>
+				/> */}
 
-				<SettingGroup
-					title="Cap Pro"
-					titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg"
-				>
+				{/* <SettingGroup title="Cap Pro" titleStyling="bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg">
 					<ToggleSettingItem
 						label="Automatically open shareable links"
 						description="Whether Cap should automatically open instant recordings in your browser"
 						value={!settings.disableAutoOpenLinks}
 						onChange={(v) => handleChange("disableAutoOpenLinks", !v)}
 					/>
-				</SettingGroup>
+				</SettingGroup> */}
 
-				{ostype === "macos" && (
+				{/* {ostype === "macos" && (
 					<SettingGroup title="App">
 						<ToggleSettingItem
 							label="Always show dock icon"
@@ -399,15 +453,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									// Check current permission state
 									console.log("Checking notification permission status");
 									const permissionGranted = await isPermissionGranted();
-									console.log(
-										`Current permission status: ${permissionGranted}`,
-									);
+									console.log(`Current permission status: ${permissionGranted}`);
 
 									if (!permissionGranted) {
 										// Request permission if not granted
-										console.log(
-											"Permission not granted, requesting permission",
-										);
+										console.log("Permission not granted, requesting permission");
 										const permission = await requestPermission();
 										console.log(`Permission request result: ${permission}`);
 										if (permission !== "granted") {
@@ -421,24 +471,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							}}
 						/>
 					</SettingGroup>
-				)}
+				)} */}
 
-				<SettingGroup title="Recording">
-					<SelectSettingItem
-						label="Instant mode max resolution"
-						description="Choose the maximum resolution for Instant Mode recordings."
-						value={settings.instantModeMaxResolution ?? 1920}
-						onChange={(value) =>
-							handleChange("instantModeMaxResolution", value)
-						}
-						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
-							text: option.label,
-							value: option.value,
-						}))}
-					/>
+				<SettingGroup title="">
+					<AccountSettingItem />
+					<Show when={auth.data && workspaces().length > 0}>
+						<WorkspaceSelectSettingItem />
+					</Show>
+				</SettingGroup>
+
+				<SettingGroup title="">
 					<SelectSettingItem
 						label="Recording countdown"
-						description="Countdown before recording starts"
+						description=""
 						value={settings.recordingCountdown ?? 0}
 						onChange={(value) => handleChange("recordingCountdown", value)}
 						options={[
@@ -449,24 +494,30 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						]}
 					/>
 					<SelectSettingItem
+						label="Video Resolution"
+						description=""
+						value={settings.instantModeMaxResolution ?? 1920}
+						onChange={(value) => handleChange("instantModeMaxResolution", value)}
+						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
+							text: option.label,
+							value: option.value,
+						}))}
+					/>
+					{/* <SelectSettingItem
 						label="Main window recording start behaviour"
 						description="The main window recording start behaviour"
 						value={settings.mainWindowRecordingStartBehaviour ?? "close"}
-						onChange={(value) =>
-							handleChange("mainWindowRecordingStartBehaviour", value)
-						}
+						onChange={(value) => handleChange("mainWindowRecordingStartBehaviour", value)}
 						options={[
 							{ text: "Close", value: "close" },
 							{ text: "Minimise", value: "minimise" },
 						]}
-					/>
-					<SelectSettingItem
+					/> */}
+					{/* <SelectSettingItem
 						label="Studio recording finish behaviour"
 						description="The studio recording finish behaviour"
 						value={settings.postStudioRecordingBehaviour ?? "openEditor"}
-						onChange={(value) =>
-							handleChange("postStudioRecordingBehaviour", value)
-						}
+						onChange={(value) => handleChange("postStudioRecordingBehaviour", value)}
 						options={[
 							{ text: "Open editor", value: "openEditor" },
 							{
@@ -474,8 +525,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								value: "showOverlay",
 							},
 						]}
-					/>
-					<SelectSettingItem
+					/> */}
+					{/* <SelectSettingItem
 						label="After deleting recording behaviour"
 						description="Should Cap reopen after deleting an in progress recording?"
 						value={settings.postDeletionBehaviour ?? "doNothing"}
@@ -487,15 +538,13 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								value: "reopenRecordingWindow",
 							},
 						]}
-					/>
-					<ToggleSettingItem
+					/> */}
+					{/* <ToggleSettingItem
 						label="Delete instant mode recordings after upload"
 						description="After finishing an instant recording, should Cap will delete it from your device?"
 						value={settings.deleteInstantRecordingsAfterUpload ?? false}
-						onChange={(v) =>
-							handleChange("deleteInstantRecordingsAfterUpload", v)
-						}
-					/>
+						onChange={(v) => handleChange("deleteInstantRecordingsAfterUpload", v)}
+					/> */}
 				</SettingGroup>
 
 				<ExcludedWindowsCard
@@ -509,7 +558,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					isWindows={ostype === "windows"}
 				/>
 
-				<ServerURLSetting
+				{/* <ServerURLSetting
 					value={settings.serverUrl ?? "https://cap.so"}
 					onChange={async (v) => {
 						const url = new URL(v);
@@ -517,7 +566,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 						if (
 							!(await confirm(
-								`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
+								`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`
 							))
 						)
 							return;
@@ -526,31 +575,29 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						await commands.setServerUrl(origin);
 						handleChange("serverUrl", origin);
 					}}
-				/>
+				/> */}
 			</div>
 		</div>
 	);
 }
 
-function SettingGroup(
-	props: ParentProps<{ title: string; titleStyling?: string }>,
-) {
+function SettingGroup(props: ParentProps<{ title: string; titleStyling?: string }>) {
 	return (
 		<div>
-			<h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>
-				{props.title}
-			</h3>
-			<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+			{props.title && <h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>{props.title}</h3>}
+			<div
+				class="px-4 rounded-xl border divide-y divide-gray-3 bg-white/5"
+				style={{
+					"box-shadow": "0 1px 2px 0 rgba(255,255,255,0.05) inset",
+				}}
+			>
 				{props.children}
 			</div>
 		</div>
 	);
 }
 
-function ServerURLSetting(props: {
-	value: string;
-	onChange: (v: string) => void;
-}) {
+function ServerURLSetting(props: { value: string; onChange: (v: string) => void }) {
 	const [value, setValue] = createWritableMemo(() => props.value);
 
 	return (
@@ -562,11 +609,7 @@ function ServerURLSetting(props: {
 					description="This setting should only be changed if you are self hosting your own instance of Cap Web."
 				>
 					<div class="flex flex-col gap-2 items-end">
-						<Input
-							class="bg-gray-3"
-							value={value()}
-							onInput={(e) => setValue(e.currentTarget.value)}
-						/>
+						<Input class="bg-gray-3" value={value()} onInput={(e) => setValue(e.currentTarget.value)} />
 						<Button
 							size="sm"
 							class="mt-2"
@@ -628,8 +671,8 @@ function ExcludedWindowsCard(props: {
 						action: () => {
 							void props.onAdd(window);
 						},
-					}),
-				),
+					})
+				)
 			);
 
 			const menu = await Menu.new({ items });
@@ -650,77 +693,69 @@ function ExcludedWindowsCard(props: {
 	};
 
 	return (
-		<div class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-xl border border-gray-3 bg-gray-2">
+		<div
+			class="flex flex-col gap-3 px-4 py-3 mt-6 rounded-[16px] bg-white/5"
+			style={{
+				"box-shadow": "0 1px 2px 0 rgba(255,255,255,0.05) inset",
+			}}
+		>
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 				<div class="flex flex-col gap-1">
-					<p class="text-sm text-gray-12">Excluded Windows</p>
-					<p class="text-xs text-gray-10">
-						Choose which windows Cap hides from your recordings.
-					</p>
+					<p class="text-sm text-white">Excluded Windows</p>
+					<p class="text-xs text-white/80">Choose which windows Inflight hides in your recording</p>
 					<Show when={props.isWindows}>
-						<p class="text-xs text-gray-9">
-							<span class="font-medium text-gray-11">Note:</span> Only Cap
-							related windows can be excluded on Windows due to technical
-							limitations.
+						<p class="text-xs text-white/80">
+							<span class="font-medium text-gray-11">Note:</span> Only Inflight related windows can be excluded on
+							Windows due to technical limitations.
 						</p>
 					</Show>
 				</div>
 				<div class="flex gap-2">
-					<Button
-						variant="gray"
-						size="sm"
+					<button
 						disabled={props.isLoading}
 						onClick={() => {
 							if (props.isLoading) return;
 							void props.onReset();
 						}}
+						class="flex items-center justify-center gap-0 size-6 rounded-[6px] border border-white/5 bg-white/[0.03] hover:bg-white/5 group"
+						style={{ "box-shadow": "0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))" }}
 					>
-						Reset to Default
-					</Button>
-					<Button
-						variant="dark"
-						size="sm"
+						<RestartIcon class="size-4 text-neutral-300 group-hover:text-white" />
+					</button>
+					<button
 						disabled={!canAdd()}
 						onClick={(e) => void handleAddClick(e)}
-						class="flex items-center gap-2"
+						class="flex items-center gap-0 px-1 h-6 rounded-[6px] bg-white"
 					>
-						<IconLucidePlus class="size-4" />
-						Add
-					</Button>
+						<IconLucidePlus class="size-4 text-neutral-900" />
+						<span class="text-sm text-neutral-900 px-1">Add</span>
+					</button>
 				</div>
 			</div>
 			<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
-				<Show
-					when={hasExclusions()}
-					fallback={
-						<p class="text-xs text-gray-10">
-							No windows are currently excluded.
-						</p>
-					}
-				>
+				<Show when={hasExclusions()} fallback={<p class="text-xs text-gray-10">No windows are currently excluded.</p>}>
 					<div class="flex flex-wrap gap-2">
 						<For each={props.excludedWindows}>
 							{(entry, index) => (
-								<div class="group flex items-center gap-2 rounded-full border border-gray-4 bg-gray-3 px-3 py-1.5">
-									<div class="flex flex-col leading-tight">
-										<span class="text-sm text-gray-12">
-											{getExclusionPrimaryLabel(entry)}
-										</span>
+								<div
+									class="group flex items-center justify-between gap-1 px-2 py-1.5 rounded-[8px] border border-white/5 bg-white/[0.03]"
+									style={{
+										"box-shadow": "0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+									}}
+								>
+									<div class="flex flex-col leading-tight px-1">
+										<span class="text-sm text-white">{getExclusionPrimaryLabel(entry)}</span>
 										<Show when={getExclusionSecondaryLabel(entry)}>
-											{(label) => (
-												<span class="text-[0.65rem] text-gray-9">
-													{label()}
-												</span>
-											)}
+											{(label) => <span class="text-[0.65rem] text-gray-9">{label()}</span>}
 										</Show>
 									</div>
 									<button
 										type="button"
-										class="flex items-center justify-center rounded-full bg-gray-4/70 text-gray-11 transition-colors hover:bg-gray-5 hover:text-gray-12 size-6"
+										class="flex items-center justify-center size-4"
 										onClick={() => void props.onRemove(index())}
 										aria-label="Remove excluded window"
 									>
-										<IconLucideX class="size-3" />
+										<CloseIcon class="size-4 text-white/30 hover:text-white" />
 									</button>
 								</div>
 							)}

@@ -81,7 +81,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(
                 app,
                 "version",
-                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                format!("Inflight v{}", env!("CARGO_PKG_VERSION")),
                 false,
                 None::<&str>,
             )?,

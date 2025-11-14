@@ -120,6 +120,8 @@ pub struct GeneralSettingsStore {
     pub delete_instant_recordings_after_upload: bool,
     #[serde(default = "default_instant_mode_max_resolution")]
     pub instant_mode_max_resolution: u32,
+    #[serde(default)]
+    pub default_workspace_id: Option<String>,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -184,6 +186,7 @@ impl Default for GeneralSettingsStore {
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,
+            default_workspace_id: None,
         }
     }
 }

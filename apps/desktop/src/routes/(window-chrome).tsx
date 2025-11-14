@@ -29,19 +29,23 @@ export default function (props: RouteSectionProps) {
 		unlistenResize?.();
 	});
 
+	const isSettings = location.pathname.startsWith("/settings");
+
 	return (
 		<WindowChromeContext>
 			<div
-				class="flex overflow-hidden flex-col w-screen h-screen max-h-screen p-1"
+				class={cx(
+					"flex overflow-hidden flex-col w-screen h-screen max-h-screen rounded-[20px] border border-white/10",
+					isSettings ? "pt-4 px-4" : "p-1"
+				)}
 				style={{
-					"border-radius": "20px",
-					border: "1px solid rgba(255, 255, 255, 0.10)",
 					background: "rgba(9, 10, 11, 1)",
 					// "box-shadow":
 					// 	"0 1px 1px -0.5px rgba(0, 0, 0, 0.16), 0 3px 3px -1.5px rgba(0, 0, 0, 0.16), 0 6px 6px -3px rgba(0, 0, 0, 0.16), 0 12px 12px -6px rgba(0, 0, 0, 0.16), 0 24px 24px -12px rgba(0, 0, 0, 0.16)",
 					// "backdrop-filter": "blur(15px)",
 					// "-webkit-backdrop-filter": "blur(15px)", // For Safari/WebKit
 				}}
+				data-tauri-drag-region
 			>
 				<Header />
 
@@ -85,9 +89,15 @@ function Header() {
 
 	const isWindows = ostype() === "windows";
 
+	const isSettings = location.pathname.startsWith("/settings");
+
 	return (
 		<header
-			class={cx("flex items-center space-x-1 h-10 select-none shrink-0", isWindows ? "flex-row" : "flex-row")}
+			class={cx(
+				"flex items-center space-x-1 select-none shrink-0",
+				isWindows ? "flex-row" : "flex-row",
+				isSettings ? "h-5" : "h-10"
+			)}
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
