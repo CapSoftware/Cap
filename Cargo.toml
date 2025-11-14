@@ -57,6 +57,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "async",
     "dispatch",
 ], default-features = false }
+objc2 = "0.6.1"
 
 windows = "0.60.0"
 windows-core = "0.60"

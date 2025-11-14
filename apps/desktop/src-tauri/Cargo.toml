@@ -116,16 +116,18 @@ workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24.0"
-core-foundation = "0.10.0"
-objc2-app-kit = { version = "0.3.0", features = [
+objc2.workspace = true
+dispatch2 = "0.3.0"
+block2 = "0.6.1"
+objc2-foundation = "0.3.2"
+objc2-application-services = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
+objc2-app-kit = { version = "0.3.2", features = [
     "NSWindow",
     "NSResponder",
     "NSHapticFeedback",
 ] }
-cocoa = "0.26.0"
-objc = "0.2.7"
-swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 cidre = { workspace = true }
 
