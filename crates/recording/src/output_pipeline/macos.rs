@@ -5,7 +5,6 @@ use crate::{
 use anyhow::anyhow;
 use cap_enc_avfoundation::QueueFrameError;
 use cap_media_info::{AudioInfo, VideoInfo};
-use retry::{OperationResult, delay::Fixed};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
@@ -77,16 +76,18 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             mp4.resume();
         }
 
-        retry::retry(Fixed::from_millis(3).take(3), || {
+        loop {
             match mp4.queue_video_frame(frame.sample_buf.clone(), timestamp) {
-                Ok(v) => OperationResult::Ok(v),
+                Ok(()) => break,
                 Err(QueueFrameError::NotReadyForMore) => {
-                    OperationResult::Retry(QueueFrameError::NotReadyForMore)
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
                 }
-                Err(e) => OperationResult::Err(e),
+                Err(e) => return Err(anyhow!("send_video_frame/{e}")),
             }
-        })
-        .map_err(|e| anyhow!("send_video_frame/{e}"))
+        }
+
+        Ok(())
     }
 }
 
@@ -94,15 +95,17 @@ impl AudioMuxer for AVFoundationMp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
         let mut mp4 = self.0.lock().map_err(|e| anyhow!("{e}"))?;
 
-        retry::retry(Fixed::from_millis(3).take(3), || {
+        loop {
             match mp4.queue_audio_frame(&frame.inner, timestamp) {
-                Ok(v) => OperationResult::Ok(v),
+                Ok(()) => break,
                 Err(QueueFrameError::NotReadyForMore) => {
-                    OperationResult::Retry(QueueFrameError::NotReadyForMore)
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
                 }
-                Err(e) => OperationResult::Err(e),
+                Err(e) => return Err(anyhow!("send_audio_frame/{e}")),
             }
-        })
-        .map_err(|e| anyhow!("send_audio_frame/{e}"))
+        }
+
+        Ok(())
     }
 }
