@@ -179,10 +179,26 @@ impl Muxer for WindowsMuxer {
 
                 let encoder = match encoder {
                     Ok(encoder) => {
+                        let mut output_guard = match output.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => {
+                                error!("Failed to lock output mutex for write_header: {}", poisoned);
+                                let _ = ready_tx.send(Err(anyhow!("Failed to lock output for header")));
+                                return Err(anyhow!("Failed to lock output for header"));
+                            }
+                        };
+
+                        if let Err(e) = output_guard.write_header() {
+                            error!("Failed to write header: {:#}", e);
+                            let _ = ready_tx.send(Err(anyhow!("write_header: {e}")));
+                            return Err(anyhow!("write_header: {e}"));
+                        }
+
                         if ready_tx.send(Ok(())).is_err() {
                             error!("Failed to send ready signal - receiver dropped");
                             return Ok(());
                         }
+
                         encoder
                     }
                     Err(e) => {
@@ -226,7 +242,13 @@ impl Muxer for WindowsMuxer {
                             .context("run native encoder")
                     }
                     either::Right(mut encoder) => {
-                        while let Ok(Some((frame, time))) = video_rx.recv() {
+                        use scap_ffmpeg::AsFFmpeg;
+
+                        while let Ok(message) = video_rx.recv() {
+                            let Some((frame, time)) = message else {
+                                break;
+                            };
+
                             let Ok(mut output) = output.lock() else {
                                 continue;
                             };
@@ -236,8 +258,6 @@ impl Muxer for WindowsMuxer {
                             // } else {
                             //     mp4.resume();
                             // }
-
-                            use scap_ffmpeg::AsFFmpeg;
 
                             frame
                                 .as_ffmpeg()
@@ -249,6 +269,17 @@ impl Muxer for WindowsMuxer {
                                 })?;
                         }
 
+                        let mut output_guard = output
+                            .lock()
+                            .map_err(|poisoned| {
+                                anyhow!(
+                                    "ScreenSoftwareEncoder: failed to lock output mutex during flush: {}",
+                                    poisoned
+                                )
+                            })?;
+
+                        encoder.flush(&mut output_guard).context("flush_encoder")?;
+
                         Ok(())
                     }
                 }
@@ -259,7 +290,7 @@ impl Muxer for WindowsMuxer {
             .await
             .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        // write_header is performed inside the encoder thread after all streams are added
 
         Ok(Self {
             video_tx,

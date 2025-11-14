@@ -16,7 +16,7 @@ use tracing::{error, info, warn};
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
     editor,
-    editor_instance::SegmentMedia,
+    editor_instance::Segment,
     segments::get_audio_segments,
 };
 
@@ -30,7 +30,7 @@ pub struct Playback {
     pub render_constants: Arc<RenderVideoConstants>,
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
-    pub segment_medias: Arc<Vec<SegmentMedia>>,
+    pub segments: Arc<Vec<Segment>>,
 }
 
 #[derive(Clone, Copy)]
@@ -80,7 +80,7 @@ impl Playback {
             };
 
             AudioPlayback {
-                segments: get_audio_segments(&self.segment_medias),
+                segments: get_audio_segments(&self.segments),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
                 project: self.project.clone(),
@@ -111,25 +111,22 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let Some((segment_time, segment)) = project.get_segment_time(playback_time) else {
+                let Some((segment_time, segment_i)) = project.get_segment_time(playback_time)
+                else {
                     break;
                 };
 
-                let Some(segment_media) = self.segment_medias.get(segment.recording_clip as usize)
-                else {
-                    continue;
-                };
-
+                let segment = &self.segments[segment_i as usize];
                 let clip_offsets = project
                     .clips
                     .iter()
-                    .find(|v| v.index == segment.recording_clip)
+                    .find(|v| v.index == segment_i)
                     .map(|v| v.offsets)
                     .unwrap_or_default();
 
                 let data = tokio::select! {
                     _ = stop_rx.changed() => break 'playback,
-                    data = segment_media
+                    data = segment
                         .decoders
                         .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => data,
                 };
@@ -141,12 +138,12 @@ impl Playback {
                         frame_number,
                         fps,
                         resolution_base,
-                        &segment_media.cursor,
+                        &segment.cursor,
                         &segment_frames,
                     );
 
                     self.renderer
-                        .render_frame(segment_frames, uniforms, segment_media.cursor.clone())
+                        .render_frame(segment_frames, uniforms, segment.cursor.clone())
                         .await;
                 }
 

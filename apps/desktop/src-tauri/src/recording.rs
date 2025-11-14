@@ -1404,11 +1404,23 @@ fn project_config_from_recording(
         .segments
         .iter()
         .enumerate()
-        .map(|(i, segment)| TimelineSegment {
-            recording_clip: i as u32,
-            start: 0.0,
-            end: segment.duration(),
-            timescale: 1.0,
+        .map(|(i, segment)| {
+            let mut duration = segment.duration();
+
+            if !duration.is_finite() || duration <= 0.0 {
+                warn!(
+                    segment_index = i,
+                    duration, "Segment duration was invalid; clamping to zero"
+                );
+                duration = 0.0;
+            }
+
+            TimelineSegment {
+                recording_segment: i as u32,
+                start: 0.0,
+                end: duration,
+                timescale: 1.0,
+            }
         })
         .collect::<Vec<_>>();
 

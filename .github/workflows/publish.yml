@@ -8,6 +8,20 @@ on:
         description: "Discord Interaction ID"
         required: false
         type: string
+      windowsTarget:
+        description: "Windows build target"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - x64
+          - arm64
+      buildMac:
+        description: "Build macOS installers"
+        required: false
+        default: true
+        type: boolean
 
 env:
   CN_APPLICATION: cap/cap
@@ -38,12 +52,13 @@ jobs:
 
       - name: Create tag
         id: create_tag
-        if: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
         uses: actions/github-script@v7
         with:
           script: |
-            const tag = "cap-v${{ steps.read_version.outputs.value }}";
+            const version = "${{ steps.read_version.outputs.value }}";
+            const tag = `cap-v${version}`;
             const tagRef = `tags/${tag}`;
+            const appCargoToml = "${{ env.APP_CARGO_TOML }}";
 
             const TAG_EXISTED = "tag_existed";
             const TAG_NAME = "tag_name";
@@ -60,25 +75,30 @@ jobs:
                   repo: context.repo.repo,
                 });
 
-                tagExisted = true;
-                core.notice(`Release skipped as tag '${tag}' already exists. Update the version in '${{ env.APP_CARGO_TOML }}' before starting another release.`);
+                core.notice(
+                  `Release skipped as tag '${tag}' already exists. Update the version in '${appCargoToml}' before starting another release.`,
+                );
               } catch (error) {
-                if ("status" in error && error.status === 404) tagExisted = false;
-                else throw error;
+                if ("status" in error && error.status === 404) {
+                  tagExisted = false;
+                } else {
+                  throw error;
+                }
               }
 
-             	core.setOutput(TAG_EXISTED, tagExisted);
+              core.setOutput(TAG_EXISTED, tagExisted);
 
-              if (!tagExisted)
+              if (!tagExisted) {
                 await github.rest.git.createRef({
                   ref: `refs/${tagRef}`,
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   sha: context.sha,
                 });
+              }
             }
 
-            main();
+            await main();
 
       - name: Create draft CN release
         id: create_cn_release
@@ -106,26 +126,31 @@ jobs:
               const token = await core.getIDToken("cap-discord-bot");
               const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
 
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-ready",
-                  tag: "${{ steps.create_tag.outputs.tag_name }}",
-                  version: "${{ steps.read_version.outputs.value }}",
-                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
-                  interactionId: "${{ inputs.interactionId }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
+              const resp = await fetch(
+                "https://cap-discord-bot.brendonovich.workers.dev/github-workflow",
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    type: "release-ready",
+                    tag: "${{ steps.create_tag.outputs.tag_name }}",
+                    version: "${{ steps.read_version.outputs.value }}",
+                    releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
+                    interactionId: "${{ inputs.interactionId }}",
+                    cnReleaseId,
+                  }),
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                  },
+                },
+              );
 
-              if(resp.status !== 200) throw new Error(await resp.text());
+              if (resp.status !== 200) {
+                throw new Error(await resp.text());
+              }
             }
 
-            main();
+            await main();
 
   build:
     needs: draft
@@ -139,43 +164,60 @@ jobs:
         settings:
           - target: x86_64-apple-darwin
             runner: macos-latest-xlarge
+            platform: macos
+            arch: x64
           - target: aarch64-apple-darwin
             runner: macos-latest-xlarge
+            platform: macos
+            arch: arm64
           - target: x86_64-pc-windows-msvc
-            runner: windows-latest
+            runner: windows-latest-l
+            platform: windows
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest-l
+            platform: windows
+            arch: arm64
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+      RUN_BUILD: ${{ (matrix.settings.platform == 'macos' && inputs.buildMac) || (matrix.settings.platform == 'windows' && (inputs.windowsTarget == 'all' || inputs.windowsTarget == matrix.settings.arch)) }}
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
+        if: ${{ env.RUN_BUILD == 'true' }}
         uses: actions/checkout@v4
 
       - name: Create API Key File
+        if: ${{ env.RUN_BUILD == 'true' }}
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
       - uses: apple-actions/import-codesign-certs@v2
-        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
+        if: ${{ env.RUN_BUILD == 'true' && matrix.settings.runner == 'macos-latest-xlarge' }}
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
-        if: ${{ matrix.settings.runner == 'macos-latest-xlarge' }}
+        if: ${{ env.RUN_BUILD == 'true' && matrix.settings.runner == 'macos-latest-xlarge' }}
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
+        if: ${{ env.RUN_BUILD == 'true' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-rust-cache
+        if: ${{ env.RUN_BUILD == 'true' }}
         with:
           target: ${{ matrix.settings.target }}
 
       - uses: ./.github/actions/setup-js
+        if: ${{ env.RUN_BUILD == 'true' }}
 
       - name: Create .env file in root
+        if: ${{ env.RUN_BUILD == 'true' }}
         run: |
           echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
           echo "VITE_ENVIRONMENT=production" >> .env
@@ -188,6 +230,7 @@ jobs:
           echo 'RUST_TARGET_TRIPLE=${{ matrix.settings.target }}' >> .env
 
       - name: Build app
+        if: ${{ env.RUN_BUILD == 'true' }}
         working-directory: apps/desktop
         run: |
           pnpm -w cap-setup
@@ -255,6 +298,7 @@ jobs:
       #     Get-ChildItem -Path $bundleDir -Filter *.exe | ForEach-Object { Write-Host "  - $($_.Name)" }
 
       - name: Upload assets
+        if: ${{ env.RUN_BUILD == 'true' }}
         uses: crabnebula-dev/cloud-release@v0
         with:
           working-directory: apps/desktop
@@ -264,9 +308,10 @@ jobs:
           TAURI_BUNDLE_PATH: ../..
 
       - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
+        if: ${{ env.RUN_BUILD == 'true' }}
 
       - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ env.RUN_BUILD == 'true' && runner.os == 'macOS' }}
         shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -274,7 +319,7 @@ jobs:
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
 
       - name: Upload debug symbols to Sentry
-        if: ${{ runner.os == 'Windows' }}
+        if: ${{ env.RUN_BUILD == 'true' && runner.os == 'Windows' }}
         shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -297,22 +342,27 @@ jobs:
               const token = await core.getIDToken("cap-discord-bot");
               const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
 
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-done",
-                  interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ needs.draft.outputs.version }}",
-                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
+              const resp = await fetch(
+                "https://cap-discord-bot.brendonovich.workers.dev/github-workflow",
+                {
+                  method: "POST",
+                  body: JSON.stringify({
+                    type: "release-done",
+                    interactionId: "${{ inputs.interactionId }}",
+                    version: "${{ needs.draft.outputs.version }}",
+                    releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
+                    cnReleaseId,
+                  }),
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                  },
+                },
+              );
 
-              if(resp.status !== 200) throw new Error(await resp.text());
+              if (resp.status !== 200) {
+                throw new Error(await resp.text());
+              }
             }
 
-            main();
+            await main();

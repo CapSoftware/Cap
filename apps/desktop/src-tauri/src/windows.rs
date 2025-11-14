@@ -578,7 +578,6 @@ impl ShowCapWindow {
                     .maximized(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .resizable(false)
                     .always_on_top(true)
                     .content_protected(should_protect)
                     .skip_taskbar(true)
@@ -609,7 +608,7 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 crate::platform::set_window_level(
                     window.as_ref().window(),
-                    objc2_app_kit::NSPopUpMenuWindowLevel,
+                    objc2_app_kit::NSScreenSaverWindowLevel,
                 );
 
                 // Hide the main window if the target monitor is the same

@@ -33,7 +33,6 @@ import {
 	type CaptureDisplay,
 	type CaptureWindow,
 	commands,
-	events,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
@@ -566,7 +565,6 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { Transition } from "solid-transition-group";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore, generalSettingsStore } from "~/store";
-import { createTauriEventListener } from "~/utils/createEventListener";
 import { handleRecordingResult } from "~/utils/recording";
 import { apiClient } from "~/utils/web-api";
 import { WindowChromeHeader } from "./Context";
@@ -640,10 +638,14 @@ function AreaSelectButton(props: {
 		});
 	}
 
-	createTauriEventListener(
-		events.setCaptureAreaPending(getCurrentWebviewWindow()),
-		(pending) => setAreaSelection("pending", pending),
-	);
+	onMount(async () => {
+		const unlistenCaptureAreaWindow =
+			await getCurrentWebviewWindow().listen<boolean>(
+				"cap-window://capture-area/state/pending",
+				(event) => setAreaSelection("pending", event.payload),
+			);
+		onCleanup(unlistenCaptureAreaWindow);
+	});
 
 	return (
 		<Tooltip

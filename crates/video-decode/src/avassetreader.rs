@@ -16,13 +16,11 @@ pub struct AVAssetReaderDecoder {
     tokio_handle: TokioHandle,
     track_output: R<av::AssetReaderTrackOutput>,
     reader: R<av::AssetReader>,
-    width: u32,
-    height: u32,
 }
 
 impl AVAssetReaderDecoder {
     pub fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
-        let (pixel_format, width, height) = {
+        let pixel_format = {
             let input = ffmpeg::format::input(&path).unwrap();
 
             let input_stream = input
@@ -37,15 +35,11 @@ impl AVAssetReaderDecoder {
                 .video()
                 .map_err(|e| format!("video decoder / {e}"))?;
 
-            (
-                pixel_to_pixel_format(decoder.format()),
-                decoder.width(),
-                decoder.height(),
-            )
+            pixel_to_pixel_format(decoder.format())
         };
 
         let (track_output, reader) =
-            Self::get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format, width, height)?;
+            Self::get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format)?;
 
         Ok(Self {
             path,
@@ -53,8 +47,6 @@ impl AVAssetReaderDecoder {
             tokio_handle,
             track_output,
             reader,
-            width,
-            height,
         })
     }
 
@@ -65,8 +57,6 @@ impl AVAssetReaderDecoder {
             requested_time,
             &self.tokio_handle,
             self.pixel_format,
-            self.width,
-            self.height,
         )?;
 
         Ok(())
@@ -77,8 +67,6 @@ impl AVAssetReaderDecoder {
         time: f32,
         handle: &TokioHandle,
         pixel_format: cv::PixelFormat,
-        width: u32,
-        height: u32,
     ) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
         let asset = av::UrlAsset::with_url(
             &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
@@ -105,16 +93,8 @@ impl AVAssetReaderDecoder {
         let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
             &track,
             Some(&ns::Dictionary::with_keys_values(
-                &[
-                    cv::pixel_buffer::keys::pixel_format().as_ns(),
-                    cv::pixel_buffer::keys::width().as_ns(),
-                    cv::pixel_buffer::keys::height().as_ns(),
-                ],
-                &[
-                    pixel_format.to_cf_number().as_ns().as_id_ref(),
-                    ns::Number::with_u32(width).as_id_ref(),
-                    ns::Number::with_u32(height).as_id_ref(),
-                ],
+                &[cv::pixel_buffer::keys::pixel_format().as_ns()],
+                &[pixel_format.to_cf_number().as_ns().as_id_ref()],
             )),
         )
         .map_err(|e| format!("asset.reader_track_output{{{pixel_format:?}}}): {e}"))?;

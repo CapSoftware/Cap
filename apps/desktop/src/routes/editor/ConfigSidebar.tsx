@@ -356,7 +356,7 @@ export function ConfigSidebar() {
 	return (
 		<KTabs
 			value={editorState.timeline.selection ? undefined : state.selectedTab}
-			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 bg-gray-1 dark:bg-gray-2 border border-gray-3"
+			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 relative bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
 			<KTabs.List class="flex overflow-hidden sticky top-0 z-[60] flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
 				<For
@@ -430,17 +430,11 @@ export function ConfigSidebar() {
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
-				class="custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
-				classList={{
-					hidden: !!editorState.timeline.selection,
-				}}
+				class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
 			>
 				<BackgroundConfig scrollRef={scrollRef} />
 				<CameraConfig scrollRef={scrollRef} />
-				<KTabs.Content
-					value="audio"
-					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
-				>
+				<KTabs.Content value="audio" class="flex flex-col gap-6">
 					<Field
 						name="Audio Controls"
 						icon={<IconLucideVolume2 class="size-4" />}
@@ -556,10 +550,7 @@ export function ConfigSidebar() {
 						</Field>
 					)}
 				</KTabs.Content>
-				<KTabs.Content
-					value="cursor"
-					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
-				>
+				<KTabs.Content value="cursor" class="flex flex-col gap-6">
 					<Field
 						name="Cursor"
 						icon={<IconCapCursor />}
@@ -753,7 +744,7 @@ export function ConfigSidebar() {
             </RadioGroup>
           </Field> */}
 				</KTabs.Content>
-				<KTabs.Content value="hotkeys" class="flex flex-1 p-4 min-h-0">
+				<KTabs.Content value="hotkeys">
 					<Field name="Hotkeys" icon={<IconCapHotkeys />}>
 						<ComingSoonTooltip>
 							<Subfield name="Show hotkeys">
@@ -762,26 +753,18 @@ export function ConfigSidebar() {
 						</ComingSoonTooltip>
 					</Field>
 				</KTabs.Content>
-				<KTabs.Content
-					value="captions"
-					class="flex flex-col flex-1 gap-6 p-4 min-h-0"
-				>
+				<KTabs.Content value="captions" class="flex flex-col gap-6">
 					<CaptionsTab />
 				</KTabs.Content>
 			</div>
-			<div
-				style={{
-					"--margin-top-scroll": "5px",
-				}}
-				class="custom-scroll p-4 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50"
-				classList={{
-					hidden: !editorState.timeline.selection,
-					"animate-in slide-in-from-bottom-2 fade-in":
-						!!editorState.timeline.selection,
-				}}
-			>
-				<Show when={editorState.timeline.selection}>
-					{(selection) => (
+			<Show when={editorState.timeline.selection}>
+				{(selection) => (
+					<div
+						style={{
+							"--margin-top-scroll": "5px",
+						}}
+						class="absolute custom-scroll p-5 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
+					>
 						<Suspense>
 							<Show
 								when={(() => {
@@ -1001,9 +984,9 @@ export function ConfigSidebar() {
 								)}
 							</Show>
 						</Suspense>
-					)}
-				</Show>
-			</div>
+					</div>
+				)}
+			</Show>
 		</KTabs>
 	);
 }
@@ -1175,10 +1158,12 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 		},
 	};
 
-	const hapticsEnabled = ostype() === "macos";
+	const generalSettings = generalSettingsStore.createQuery();
+	const hapticsEnabled = () =>
+		generalSettings.data?.hapticsEnabled && ostype() === "macos";
 
 	return (
-		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6 p-4">
+		<KTabs.Content value={TAB_IDS.background} class="flex flex-col gap-6">
 			<Field icon={<IconCapImage class="size-4" />} name="Background Image">
 				<KTabs
 					value={project.background.source.type}
@@ -1667,110 +1652,112 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								const angle = () => source().angle ?? 90;
 
 								return (
-									<div class="flex flex-col gap-3">
-										<div class="flex gap-5 h-10">
-											<RgbInput
-												value={source().from}
-												onChange={(from) => {
-													backgrounds.gradient.from = from;
-													setProject("background", "source", {
-														type: "gradient",
-														from,
-													});
-												}}
-											/>
-											<RgbInput
-												value={source().to}
-												onChange={(to) => {
-													backgrounds.gradient.to = to;
-													setProject("background", "source", {
-														type: "gradient",
-														to,
-													});
-												}}
-											/>
-											<div
-												class="flex relative flex-col items-center p-1 ml-auto rounded-full border bg-gray-1 border-gray-3 size-10 cursor-ns-resize shrink-0"
-												style={{ transform: `rotate(${angle()}deg)` }}
-												onMouseDown={(downEvent) => {
-													const start = angle();
-													const resumeHistory = projectHistory.pause();
+									<>
+										<div class="flex flex-col gap-3">
+											<div class="flex gap-5 h-10">
+												<RgbInput
+													value={source().from}
+													onChange={(from) => {
+														backgrounds.gradient.from = from;
+														setProject("background", "source", {
+															type: "gradient",
+															from,
+														});
+													}}
+												/>
+												<RgbInput
+													value={source().to}
+													onChange={(to) => {
+														backgrounds.gradient.to = to;
+														setProject("background", "source", {
+															type: "gradient",
+															to,
+														});
+													}}
+												/>
+												<div
+													class="flex relative flex-col items-center p-1 ml-auto rounded-full border bg-gray-1 border-gray-3 size-10 cursor-ns-resize shrink-0"
+													style={{ transform: `rotate(${angle()}deg)` }}
+													onMouseDown={(downEvent) => {
+														const start = angle();
+														const resumeHistory = projectHistory.pause();
 
-													createRoot((dispose) =>
-														createEventListenerMap(window, {
-															mouseup: () => dispose(),
-															mousemove: (moveEvent) => {
-																const rawNewAngle =
-																	Math.round(
-																		start +
-																			(downEvent.clientY - moveEvent.clientY),
-																	) % max;
-																const newAngle = moveEvent.shiftKey
-																	? rawNewAngle
-																	: Math.round(rawNewAngle / 45) * 45;
+														createRoot((dispose) =>
+															createEventListenerMap(window, {
+																mouseup: () => dispose(),
+																mousemove: (moveEvent) => {
+																	const rawNewAngle =
+																		Math.round(
+																			start +
+																				(downEvent.clientY - moveEvent.clientY),
+																		) % max;
+																	const newAngle = moveEvent.shiftKey
+																		? rawNewAngle
+																		: Math.round(rawNewAngle / 45) * 45;
 
-																if (
-																	!moveEvent.shiftKey &&
-																	hapticsEnabled &&
-																	project.background.source.type ===
-																		"gradient" &&
-																	project.background.source.angle !== newAngle
-																) {
-																	commands.performHapticFeedback(
-																		"alignment",
-																		"now",
-																	);
-																}
+																	if (
+																		!moveEvent.shiftKey &&
+																		hapticsEnabled() &&
+																		project.background.source.type ===
+																			"gradient" &&
+																		project.background.source.angle !== newAngle
+																	) {
+																		commands.performHapticFeedback(
+																			"Alignment",
+																			"Now",
+																		);
+																	}
 
-																setProject("background", "source", {
-																	type: "gradient",
-																	angle:
-																		newAngle < 0 ? newAngle + max : newAngle,
-																});
-															},
-														}),
-													);
-												}}
-											>
-												<div class="bg-blue-9 rounded-full size-1.5" />
+																	setProject("background", "source", {
+																		type: "gradient",
+																		angle:
+																			newAngle < 0 ? newAngle + max : newAngle,
+																	});
+																},
+															}),
+														);
+													}}
+												>
+													<div class="bg-blue-9 rounded-full size-1.5" />
+												</div>
+											</div>
+											<div class="flex flex-wrap gap-2">
+												<For each={BACKGROUND_GRADIENTS}>
+													{(gradient) => (
+														<label class="relative">
+															<input
+																type="radio"
+																class="sr-only peer"
+																name="colorPicker"
+																onChange={(e) => {
+																	if (e.target.checked) {
+																		backgrounds.gradient = {
+																			type: "gradient",
+																			from: gradient.from,
+																			to: gradient.to,
+																		};
+																		setProject(
+																			"background",
+																			"source",
+																			backgrounds.gradient,
+																		);
+																	}
+																}}
+															/>
+															<div
+																class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
+																style={{
+																	background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
+																		",",
+																	)}), rgb(${gradient.to.join(",")}))`,
+																}}
+															/>
+														</label>
+													)}
+												</For>
 											</div>
 										</div>
-										<div class="flex flex-wrap gap-2">
-											<For each={BACKGROUND_GRADIENTS}>
-												{(gradient) => (
-													<label class="relative">
-														<input
-															type="radio"
-															class="sr-only peer"
-															name="colorPicker"
-															onChange={(e) => {
-																if (e.target.checked) {
-																	backgrounds.gradient = {
-																		type: "gradient",
-																		from: gradient.from,
-																		to: gradient.to,
-																	};
-																	setProject(
-																		"background",
-																		"source",
-																		backgrounds.gradient,
-																	);
-																}
-															}}
-														/>
-														<div
-															class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
-															style={{
-																background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
-																	",",
-																)}), rgb(${gradient.to.join(",")}))`,
-															}}
-														/>
-													</label>
-												)}
-											</For>
-										</div>
-									</div>
+									</>
 								);
 							}}
 						</Show>
@@ -1843,17 +1830,6 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								opacity: 50.0,
 							};
 
-							if (props.scrollRef && enabled) {
-								setTimeout(
-									() =>
-										props.scrollRef.scrollTo({
-											top: props.scrollRef.scrollHeight,
-											behavior: "smooth",
-										}),
-									100,
-								);
-							}
-
 							setProject("background", "border", {
 								...prev,
 								enabled,
@@ -1862,71 +1838,64 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					/>
 				}
 			/>
-			<KCollapsible open={project.background.border?.enabled ?? false}>
-				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
-					<div class="flex flex-col gap-6 pb-6">
-						<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
-							<Slider
-								value={[project.background.border?.width ?? 5.0]}
-								onChange={(v) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										width: v[0],
-									})
-								}
-								minValue={1}
-								maxValue={20}
-								step={0.1}
-								formatTooltip="px"
-							/>
-						</Field>
-						<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
-							<RgbInput
-								value={project.background.border?.color ?? [0, 0, 0]}
-								onChange={(color) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										color,
-									})
-								}
-							/>
-						</Field>
-						<Field
-							name="Border Opacity"
-							icon={<IconCapShadow class="size-4" />}
-						>
-							<Slider
-								value={[project.background.border?.opacity ?? 50.0]}
-								onChange={(v) =>
-									setProject("background", "border", {
-										...(project.background.border ?? {
-											enabled: true,
-											width: 5.0,
-											color: [0, 0, 0],
-											opacity: 50.0,
-										}),
-										opacity: v[0],
-									})
-								}
-								minValue={0}
-								maxValue={100}
-								step={0.1}
-								formatTooltip="%"
-							/>
-						</Field>
-					</div>
-				</KCollapsible.Content>
-			</KCollapsible>
+			<Show when={project.background.border?.enabled}>
+				<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[project.background.border?.width ?? 5.0]}
+						onChange={(v) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								width: v[0],
+							})
+						}
+						minValue={1}
+						maxValue={20}
+						step={0.1}
+						formatTooltip="px"
+					/>
+				</Field>
+				<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
+					<RgbInput
+						value={project.background.border?.color ?? [0, 0, 0]}
+						onChange={(color) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								color,
+							})
+						}
+					/>
+				</Field>
+				<Field name="Border Opacity" icon={<IconCapShadow class="size-4" />}>
+					<Slider
+						value={[project.background.border?.opacity ?? 50.0]}
+						onChange={(v) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								opacity: v[0],
+							})
+						}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+				</Field>
+			</Show>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<Slider
 					value={[project.background.shadow!]}
@@ -1948,7 +1917,6 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					step={0.1}
 					formatTooltip="%"
 				/>
-
 				<ShadowSettings
 					scrollRef={props.scrollRef}
 					size={{
@@ -2786,41 +2754,7 @@ function ClipSegmentConfig(props: {
 				</EditorButton>
 			</div>
 
-			<div class="space-y-0.5">
-				<h3 class="font-medium text-gray-12">Segment Settings</h3>
-				<p class="text-gray-11">
-					These settings apply to only the selected segment
-				</p>
-			</div>
-
-			<Field name="Speed" icon={<IconLucideFastForward class="size-4" />}>
-				<p class="text-gray-11 -mt-3">
-					Modifying speed will mute this segment's audio.
-				</p>
-
-				<KRadioGroup
-					class="flex flex-row gap-1.5 -mt-1"
-					value={props.segment.timescale.toString()}
-					onChange={(v) => {
-						projectActions.setClipSegmentTimescale(
-							props.segmentIndex,
-							parseFloat(v),
-						);
-					}}
-				>
-					<For each={[0.25, 0.5, 1, 1.5, 2, 4, 8]}>
-						{(mult) => (
-							<KRadioGroup.Item value={mult.toString()}>
-								<KRadioGroup.ItemControl class="px-2 py-1 text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md ui-checked:bg-gray-3 ui-checked:border-gray-4 ui-checked:text-gray-12">
-									{mult}x
-								</KRadioGroup.ItemControl>
-							</KRadioGroup.Item>
-						)}
-					</For>
-				</KRadioGroup>
-			</Field>
-
-			<div class="space-y-0.5 pt-2">
+			<div class="space-y-1">
 				<h3 class="font-medium text-gray-12">Clip Settings</h3>
 				<p class="text-gray-11">
 					These settings apply to all segments for the current clip

@@ -112,7 +112,7 @@ export function Header() {
 					}}
 					tooltipText="Captions"
 					leftIcon={<IconCapCaptions class="w-5" />}
-					comingSoon={true}
+					comingSoon={!editorState.timeline.selection}
 				/>
 				<EditorButton
 					onClick={() => {
@@ -120,7 +120,7 @@ export function Header() {
 					}}
 					tooltipText="Performance"
 					leftIcon={<IconCapGauge class="w-[18px]" />}
-					comingSoon={true}
+					comingSoon={!editorState.timeline.selection}
 				/>
 			</div>
 

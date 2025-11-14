@@ -1,7 +1,7 @@
 pub mod gif;
 pub mod mp4;
 
-use cap_editor::SegmentMedia;
+use cap_editor::Segment;
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
@@ -124,7 +124,7 @@ pub struct ExporterBase {
     studio_meta: StudioRecordingMeta,
     recordings: Arc<ProjectRecordingsMeta>,
     render_constants: Arc<RenderVideoConstants>,
-    segments: Vec<SegmentMedia>,
+    segments: Vec<Segment>,
     output_path: PathBuf,
 }
 

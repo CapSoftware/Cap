@@ -32,7 +32,7 @@ futures-executor = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-task = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-getrandom = { version = "0.2", default-features = false, features = ["js", "rdrand", "std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["js", "rdrand", "std"] }
 gif = { version = "0.13" }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
@@ -81,7 +81,7 @@ clang-sys = { version = "1", default-features = false, features = ["clang_11_0",
 either = { version = "1", features = ["use_std"] }
 flate2 = { version = "1", features = ["zlib-rs"] }
 form_urlencoded = { version = "1" }
-getrandom = { version = "0.2", default-features = false, features = ["js", "rdrand", "std"] }
+getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2", default-features = false, features = ["js", "rdrand", "std"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13" }
@@ -114,5 +114,113 @@ syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "vis
 tauri-utils = { version = "2", default-features = false, features = ["build", "compression", "resources"] }
 thiserror = { version = "2" }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
+
+[target.aarch64-apple-darwin.dependencies]
+block2 = { version = "0.6" }
+core-foundation = { version = "0.9" }
+core-foundation-sys = { version = "0.8" }
+dispatch2 = { version = "0.3" }
+futures-io = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+half = { version = "2", features = ["num-traits"] }
+hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "server", "service"] }
+indexmap = { version = "2" }
+libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+objc = { version = "0.2", default-features = false, features = ["exception"] }
+objc2 = { version = "0.6", features = ["disable-encoding-assertions", "exception"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFArray", "CFBase", "CFCGTypes", "CFData", "CFDate", "CFDictionary", "CFError", "CFRunLoop", "CFString", "CFURL", "CFUserNotification", "objc2", "std"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGColor", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGEventTypes", "CGFont", "CGImage", "CGPath", "objc2", "std"] }
+objc2-core-image = { version = "0.3", default-features = false, features = ["CIBarcodeDescriptor", "CIColor", "CIContext", "CIFilter", "CIImage"] }
+objc2-foundation = { version = "0.3" }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CADisplayLink", "CALayer", "CAMediaTiming", "CAMediaTimingFunction"] }
+once_cell = { version = "1" }
+rustix = { version = "1", features = ["event", "fs", "pipe", "process", "system", "time"] }
+scopeguard = { version = "1" }
+swift-rs = { version = "1", features = ["build"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+
+[target.aarch64-apple-darwin.build-dependencies]
+deranged = { version = "0.5", features = ["powerfmt", "serde"] }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+indexmap = { version = "2" }
+libc = { version = "0.2", default-features = false, features = ["extra_traits"] }
+scopeguard = { version = "1" }
+swift-rs = { version = "1", features = ["build"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing", "serde"] }
+
+[target.x86_64-pc-windows-msvc.dependencies]
+concurrent-queue = { version = "2" }
+crossbeam-utils = { version = "0.8" }
+futures-io = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+half = { version = "2", features = ["num-traits"] }
+hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "server", "service"] }
+indexmap = { version = "2" }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+once_cell = { version = "1" }
+smallvec = { version = "1", default-features = false, features = ["union"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+winapi = { version = "0.3", default-features = false, features = ["consoleapi", "handleapi", "impl-default", "libloaderapi", "memoryapi", "processenv", "processthreadsapi", "psapi", "synchapi", "winbase", "wincon", "winerror", "winuser"] }
+windows-332723e2a07a5e2a = { package = "windows", version = "0.58", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Direct3D_Dxc", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_OpenGL", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
+windows-4db8c43aad08e7ae = { package = "windows", version = "0.60", features = ["Foundation_Collections", "Foundation_Metadata", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Media_Core", "Media_MediaProperties", "Media_Transcoding", "Security_Authorization_AppCapabilityAccess", "Storage_Search", "Storage_Streams", "System", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_DirectShow", "Win32_Media_DxMediaObjects", "Win32_Media_KernelStreaming", "Win32_Media_MediaFoundation", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_System_Diagnostics_Debug", "Win32_System_Ole", "Win32_System_Performance", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-core-4db8c43aad08e7ae = { package = "windows-core", version = "0.60" }
+windows-core-d4189bed749088b6 = { package = "windows-core", version = "0.61" }
+windows-result = { version = "0.3" }
+windows-strings = { version = "0.4", default-features = false, features = ["std"] }
+windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-b21d60becc0929df = { package = "windows-sys", version = "0.52", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Time", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+
+[target.x86_64-pc-windows-msvc.build-dependencies]
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+indexmap = { version = "2" }
+once_cell = { version = "1" }
+smallvec = { version = "1", default-features = false, features = ["union"] }
+windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Time", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+
+[target.aarch64-pc-windows-msvc.dependencies]
+concurrent-queue = { version = "2" }
+crossbeam-utils = { version = "0.8" }
+futures-io = { version = "0.3" }
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+half = { version = "2", features = ["num-traits"] }
+hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "server", "service"] }
+indexmap = { version = "2" }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+once_cell = { version = "1" }
+smallvec = { version = "1", default-features = false, features = ["union"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
+winapi = { version = "0.3", default-features = false, features = ["consoleapi", "handleapi", "impl-default", "libloaderapi", "memoryapi", "processenv", "processthreadsapi", "psapi", "synchapi", "winbase", "wincon", "winerror", "winuser"] }
+windows-332723e2a07a5e2a = { package = "windows", version = "0.58", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Direct3D_Dxc", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Graphics_OpenGL", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
+windows-4db8c43aad08e7ae = { package = "windows", version = "0.60", features = ["Foundation_Collections", "Foundation_Metadata", "Graphics_Capture", "Graphics_DirectX_Direct3D11", "Media_Core", "Media_MediaProperties", "Media_Transcoding", "Security_Authorization_AppCapabilityAccess", "Storage_Search", "Storage_Streams", "System", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dwm", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_Media_DirectShow", "Win32_Media_DxMediaObjects", "Win32_Media_KernelStreaming", "Win32_Media_MediaFoundation", "Win32_Storage_FileSystem", "Win32_System_Com_StructuredStorage", "Win32_System_Diagnostics_Debug", "Win32_System_Ole", "Win32_System_Performance", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-core-4db8c43aad08e7ae = { package = "windows-core", version = "0.60" }
+windows-core-d4189bed749088b6 = { package = "windows-core", version = "0.61" }
+windows-result = { version = "0.3" }
+windows-strings = { version = "0.4", default-features = false, features = ["std"] }
+windows-sys-4db8c43aad08e7ae = { package = "windows-sys", version = "0.60", features = ["Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-b21d60becc0929df = { package = "windows-sys", version = "0.52", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Time", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
+
+[target.aarch64-pc-windows-msvc.build-dependencies]
+getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
+indexmap = { version = "2" }
+once_cell = { version = "1" }
+smallvec = { version = "1", default-features = false, features = ["union"] }
+windows-sys-73dcd821b1037cfd = { package = "windows-sys", version = "0.59", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Time", "Win32_System_WindowsProgramming", "Win32_UI_Controls", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys-c8eced492e86ede7 = { package = "windows-sys", version = "0.48", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Time", "Win32_UI_Shell"] }
+windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Globalization", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_Debug", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Shell"] }
 
 ### END HAKARI SECTION

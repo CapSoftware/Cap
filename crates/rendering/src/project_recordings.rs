@@ -33,13 +33,81 @@ impl Video {
                 .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
             let rate = stream.avg_frame_rate();
-            let fps = rate.numerator() as f64 / rate.denominator() as f64;
+            let mut fps = if rate.denominator() != 0 && rate.numerator() != 0 {
+                rate.numerator() as f64 / rate.denominator() as f64
+            } else {
+                0.0
+            };
+
+            if fps <= 0.0 {
+                let r_rate = stream.rate();
+                if r_rate.denominator() != 0 && r_rate.numerator() != 0 {
+                    fps = r_rate.numerator() as f64 / r_rate.denominator() as f64;
+                }
+            }
+
+            let container_duration = input.duration();
+            let mut duration = if container_duration > 0 && container_duration != i64::MIN {
+                container_duration as f64 / 1_000_000.0
+            } else {
+                0.0
+            };
+
+            if duration <= 0.0 {
+                let stream_duration = stream.duration();
+                if stream_duration > 0 && stream_duration != i64::MIN {
+                    let time_base = stream.time_base();
+                    duration = (stream_duration as f64 * time_base.numerator() as f64)
+                        / time_base.denominator() as f64;
+                }
+            }
+
+            if duration <= 0.0 {
+                let mut last_ts: i64 = -1;
+                for (s, packet) in input.packets() {
+                    if s.index() == stream.index() {
+                        if let Some(pts) = packet.pts() {
+                            if pts > last_ts {
+                                last_ts = pts;
+                            }
+                        } else if let Some(dts) = packet.dts() {
+                            if dts > last_ts {
+                                last_ts = dts;
+                            }
+                        }
+                    }
+                }
+
+                if last_ts >= 0 {
+                    let tb = stream.time_base();
+                    duration = (last_ts as f64 * tb.numerator() as f64) / tb.denominator() as f64;
+                }
+            }
+
+            if duration <= 0.0 {
+                let frames = stream.frames();
+                if frames > 0 && fps > 0.0 {
+                    duration = frames as f64 / fps;
+                }
+            }
+
+            if !duration.is_finite() || duration <= 0.0 {
+                tracing::warn!(
+                    ?path,
+                    container_duration,
+                    stream_duration = stream.duration(),
+                    frames = stream.frames(),
+                    fps,
+                    "Failed to determine video duration; defaulting to zero"
+                );
+                duration = 0.0;
+            }
 
             Ok(Video {
                 width: video_decoder.width(),
                 height: video_decoder.height(),
-                duration: input.duration() as f64 / 1_000_000.0,
-                fps: fps.round() as u32,
+                duration,
+                fps: if fps > 0.0 { fps.round() as u32 } else { 0 },
                 start_time,
             })
         }

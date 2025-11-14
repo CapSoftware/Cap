@@ -1,44 +1,41 @@
 import { Button } from "@cap/ui-solid";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { createElementSize } from "@solid-primitives/resize-observer";
-import { createScheduled, debounce } from "@solid-primitives/scheduled";
+import { makeBroadcastChannel } from "@solid-primitives/broadcast-channel";
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
+import { createWritableMemo } from "@solid-primitives/memo";
 import { useSearchParams } from "@solidjs/router";
-import { useQuery } from "@tanstack/solid-query";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { createQuery, useMutation } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
+import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
+import { cx } from "cva";
 import {
-	CheckMenuItem,
-	Menu,
-	MenuItem,
-	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import {
+	type ComponentProps,
+	createEffect,
 	createMemo,
+	createRoot,
 	createSignal,
+	For,
+	type JSX,
 	Match,
 	mergeProps,
 	onCleanup,
+	onMount,
 	Show,
 	Suspense,
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import {
-	CROP_ZERO,
-	type CropBounds,
-	Cropper,
-	type CropperRef,
-	createCropOptionsMenuItems,
-	type Ratio,
-} from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
+import { handleRecordingResult } from "~/utils/recording";
 import {
 	commands,
 	type DisplayId,
 	events,
+	Organization,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
@@ -47,7 +44,18 @@ import {
 	useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
 
-const MIN_SIZE = { width: 150, height: 150 };
+const MIN_WIDTH = 200;
+const MIN_HEIGHT = 100;
+
+const EMPTY_BOUNDS = () => ({
+	position: { x: 0, y: 0 },
+	size: { width: 0, height: 0 },
+});
+
+const DEFAULT_BOUNDS = {
+	position: { x: 100, y: 100 },
+	size: { width: 400, height: 300 },
+};
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -87,8 +95,8 @@ function Inner() {
 		displayId: DisplayId;
 		isHoveredDisplay: string;
 	}>();
+	const isHoveredDisplay = params.isHoveredDisplay === "true";
 	const [options, setOptions] = useOptions();
-
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
 	const [targetUnderCursor, setTargetUnderCursor] =
@@ -102,7 +110,7 @@ function Inner() {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const windowIcon = useQuery(() => ({
+	const windowIcon = createQuery(() => ({
 		queryKey: ["windowIcon", targetUnderCursor.window?.id],
 		queryFn: async () => {
 			if (!targetUnderCursor.window?.id) return null;
@@ -114,7 +122,7 @@ function Inner() {
 		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
 	}));
 
-	const displayInformation = useQuery(() => ({
+	const displayInformation = createQuery(() => ({
 		queryKey: ["displayId", params.displayId],
 		queryFn: async () => {
 			if (!params.displayId) return null;
@@ -129,12 +137,19 @@ function Inner() {
 		enabled: params.displayId !== undefined && options.targetMode === "display",
 	}));
 
-	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
+	const [bounds, setBounds] = createStore(
+		structuredClone(isHoveredDisplay ? DEFAULT_BOUNDS : EMPTY_BOUNDS()),
+	);
 
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
-		CropBounds | undefined
-	>(undefined);
+	const { postMessage, onMessage } = makeBroadcastChannel<{ type: "reset" }>(
+		"target_select_overlay",
+	);
+	createEventListener(window, "mousedown", () =>
+		postMessage({ type: "reset" }),
+	);
+	onMessage(() => setBounds(EMPTY_BOUNDS()));
 
+	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
 		setOptions("targetMode", null);
 		commands.closeTargetSelectOverlays();
@@ -147,10 +162,10 @@ function Inner() {
 
 	return (
 		<Switch>
-			<Match when={options.targetMode === "display" && params.displayId}>
-				{(displayId) => (
+			<Match when={options.targetMode === "display"}>
+				{(_) => (
 					<div
-						data-over={targetUnderCursor.display_id === displayId()}
+						data-over={targetUnderCursor.display_id === params.displayId}
 						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
 						<div class="absolute inset-0 bg-black/50 -z-10" />
@@ -186,7 +201,7 @@ function Inner() {
 
 						<RecordingControls
 							setToggleModeSelect={setToggleModeSelect}
-							target={{ variant: "display", id: displayId() }}
+							target={{ variant: "display", id: params.displayId! }}
 						/>
 						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 					</div>
@@ -235,6 +250,7 @@ function Inner() {
 									</span>
 								</div>
 								<RecordingControls
+									setToggleModeSelect={setToggleModeSelect}
 									target={{
 										variant: "window",
 										id: windowUnderCursor.id,
@@ -245,12 +261,7 @@ function Inner() {
 									variant="dark"
 									size="sm"
 									onClick={() => {
-										setInitialAreaBounds({
-											x: windowUnderCursor.bounds.position.x,
-											y: windowUnderCursor.bounds.position.y,
-											width: windowUnderCursor.bounds.size.width,
-											height: windowUnderCursor.bounds.size.height,
-										});
+										setBounds(windowUnderCursor.bounds);
 										setOptions({
 											targetMode: "area",
 										});
@@ -267,166 +278,571 @@ function Inner() {
 					)}
 				</Show>
 			</Match>
-			<Match when={options.targetMode === "area" && params.displayId}>
-				{(displayId) => {
+			<Match when={options.targetMode === "area"}>
+				{(_) => {
+					const [state, setState] = createSignal<
+						"creating" | "dragging" | undefined
+					>();
+
+					// Initialize hasArea based on whether bounds have meaningful dimensions
+					const [hasArea, setHasArea] = createWritableMemo(
+						() => bounds.size.width > 0 && bounds.size.height > 0,
+					);
+					// Track whether the controls should be placed above the selection to avoid window bottom overflow
 					let controlsEl: HTMLDivElement | undefined;
-					let cropperRef: CropperRef | undefined;
 
-					const [aspect, setAspect] = createSignal<Ratio | null>(null);
-					const [snapToRatioEnabled, setSnapToRatioEnabled] =
-						createSignal(true);
+					const [controlsHeight, setControlsHeight] = createSignal<
+						number | undefined
+					>(undefined);
+					const [controlsWidth, setControlsWidth] = createSignal<
+						number | undefined
+					>(undefined);
 
-					const scheduled = createScheduled((fn) => debounce(fn, 30));
+					// Determine the best placement for controls
+					const controlsPlacement = createMemo(() => {
+						const top = bounds.position.y;
+						const left = bounds.position.x;
+						const width = bounds.size.width;
+						const height = bounds.size.height;
+						// Measure controls dimensions (fallback if not yet mounted)
+						const ctrlH = controlsHeight() ?? 64;
+						const ctrlW = controlsWidth() ?? 300;
+						const margin = 16;
 
-					const isValid = createMemo((p: boolean = true) => {
-						const b = crop();
-						return scheduled()
-							? b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height
-							: p;
-					});
+						// Check if selection spans full height (or nearly full height)
+						const isFullHeight = height >= window.innerHeight * 0.9;
 
-					async function showCropOptionsMenu(e: UIEvent) {
-						e.preventDefault();
-						const items = [
-							{
-								text: "Reset selection",
-								action: () => {
-									cropperRef?.reset();
-									setAspect(null);
-								},
-							},
-							await PredefinedMenuItem.new({
-								item: "Separator",
-							}),
-							...createCropOptionsMenuItems({
-								aspect: aspect(),
-								snapToRatioEnabled: snapToRatioEnabled(),
-								onAspectSet: setAspect,
-								onSnapToRatioSet: setSnapToRatioEnabled,
-							}),
-						];
-						const menu = await Menu.new({ items });
-						await menu.popup();
-						await menu.close();
-					}
+						if (isFullHeight) {
+							// Try to place on the right side
+							const rightSpace = window.innerWidth - (left + width);
+							if (rightSpace >= ctrlW + margin)
+								return { position: "right" as const };
 
-					// Spacing rules:
-					// Prefer below the crop (smaller margin)
-					// If no space below, place above the crop (larger top margin)
-					// Otherwise, place inside at the top of the crop (small inner margin)
-					const macos = ostype() === "macos";
-					const SIDE_MARGIN = 16;
-					const MARGIN_BELOW = 16;
-					const MARGIN_TOP_OUTSIDE = 16;
-					const MARGIN_TOP_INSIDE = macos ? 40 : 28;
-					const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
+							// Try to place on the left side
+							if (left >= ctrlW + margin) return { position: "left" as const };
 
-					const controlsSize = createElementSize(() => controlsEl);
-					const [controllerInside, _setControllerInside] = createSignal(false);
-
-					// This is required due to the use of a ResizeObserver within the createElementSize function
-					// Otherwise there will be an infinite loop: ResizeObserver loop completed with undelivered notifications.
-					let raf: number | null = null;
-					function setControllerInside(value: boolean) {
-						if (raf) cancelAnimationFrame(raf);
-						raf = requestAnimationFrame(() => _setControllerInside(value));
-					}
-					onCleanup(() => {
-						if (raf) cancelAnimationFrame(raf);
-					});
-
-					const controlsStyle = createMemo(() => {
-						const bounds = crop();
-						const size = controlsSize;
-						if (!size?.width || !size?.height) return undefined;
-
-						if (size.width === 0 || bounds.width === 0) {
-							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
+							// Fall back to inside at the bottom
+							return { position: "inside-bottom" as const };
 						}
 
-						const centerX = bounds.x + bounds.width / 2;
-						let finalY: number;
+						// For non-full-height selections, use original logic
+						const wouldOverflow =
+							top + height + margin + ctrlH > window.innerHeight;
+						return { position: wouldOverflow ? "above" : "below" } as const;
+					});
 
-						// Try below the crop
-						const belowY = bounds.y + bounds.height + MARGIN_BELOW;
-						if (belowY + size.height <= window.innerHeight) {
-							finalY = belowY;
-							setControllerInside(false);
-						} else {
-							// Try above the crop with a larger top margin
-							const aboveY = bounds.y - size.height - MARGIN_TOP_OUTSIDE;
-							if (aboveY >= TOP_SAFE_MARGIN) {
-								finalY = aboveY;
-								setControllerInside(false);
-							} else {
-								// Default to inside
-								finalY = bounds.y + MARGIN_TOP_INSIDE;
-								setControllerInside(true);
-							}
-						}
+					onMount(() => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
+					createEventListener(window, "resize", () => {
+						setControlsHeight(controlsEl?.offsetHeight);
+						setControlsWidth(controlsEl?.offsetWidth);
+					});
 
-						const finalX = Math.max(
-							SIDE_MARGIN,
-							Math.min(
-								centerX - size.width / 2,
-								window.innerWidth - size.width - SIDE_MARGIN,
-							),
-						);
+					function createOnMouseDown(
+						onDrag: (
+							startBounds: typeof bounds,
+							delta: { x: number; y: number },
+						) => void,
+					) {
+						return (downEvent: MouseEvent) => {
+							const startBounds = {
+								position: { ...bounds.position },
+								size: { ...bounds.size },
+							};
 
-						return {
-							transform: `translate(${finalX}px, ${finalY}px)`,
+							let animationFrame: number | null = null;
+
+							createRoot((dispose) => {
+								createEventListenerMap(window, {
+									mouseup: () => {
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+										dispose();
+									},
+									mousemove: (moveEvent) => {
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+
+										animationFrame = requestAnimationFrame(() => {
+											onDrag(startBounds, {
+												x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
+												y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
+											});
+										});
+									},
+								});
+							});
 						};
-					});
+					}
+
+					function ResizeHandles() {
+						return (
+							<>
+								{/* Top Left Button */}
+								<ResizeHandle
+									class="cursor-nw-resize"
+									style={{
+										left: `${bounds.position.x + 1}px`,
+										top: `${bounds.position.y + 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const width = startBounds.size.width - delta.x;
+											const limitedWidth = Math.max(width, MIN_WIDTH);
+
+											const height = startBounds.size.height - delta.y;
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
+
+											setBounds({
+												position: {
+													x:
+														startBounds.position.x +
+														delta.x -
+														(limitedWidth - width),
+													y:
+														startBounds.position.y +
+														delta.y -
+														(limitedHeight - height),
+												},
+												size: {
+													width: limitedWidth,
+													height: limitedHeight,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Top Right Button */}
+								<ResizeHandle
+									class="cursor-ne-resize"
+									style={{
+										left: `${bounds.position.x + bounds.size.width - 1}px`,
+										top: `${bounds.position.y + 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const width = startBounds.size.width + delta.x;
+											const limitedWidth = Math.max(width, MIN_WIDTH);
+
+											const height = startBounds.size.height - delta.y;
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
+
+											setBounds({
+												position: {
+													x: startBounds.position.x,
+													y:
+														startBounds.position.y +
+														delta.y -
+														(limitedHeight - height),
+												},
+												size: {
+													width: limitedWidth,
+													height: limitedHeight,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Bottom Left Button */}
+								<ResizeHandle
+									class="cursor-sw-resize"
+									style={{
+										left: `${bounds.position.x + 1}px`,
+										top: `${bounds.position.y + bounds.size.height - 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const width = startBounds.size.width - delta.x;
+											const limitedWidth = Math.max(width, MIN_WIDTH);
+
+											const height = startBounds.size.height + delta.y;
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
+
+											setBounds({
+												position: {
+													x:
+														startBounds.position.x +
+														delta.x -
+														(limitedWidth - width),
+													y: startBounds.position.y,
+												},
+												size: {
+													width: limitedWidth,
+													height: limitedHeight,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Bottom Right Button */}
+								<ResizeHandle
+									class="cursor-se-resize"
+									style={{
+										left: `${bounds.position.x + bounds.size.width - 1}px`,
+										top: `${bounds.position.y + bounds.size.height - 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const width = startBounds.size.width + delta.x;
+											const limitedWidth = Math.max(width, MIN_WIDTH);
+
+											const height = startBounds.size.height + delta.y;
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
+
+											setBounds({
+												position: {
+													x: startBounds.position.x,
+													y: startBounds.position.y,
+												},
+												size: {
+													width: limitedWidth,
+													height: limitedHeight,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Top Edge Button */}
+								<ResizeHandle
+									class="cursor-n-resize"
+									style={{
+										left: `${bounds.position.x + bounds.size.width / 2}px`,
+										top: `${bounds.position.y + 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const height = startBounds.size.height - delta.y;
+											const limitedHeight = Math.max(height, MIN_HEIGHT);
+
+											setBounds({
+												position: {
+													x: startBounds.position.x,
+													y:
+														startBounds.position.y +
+														delta.y -
+														(limitedHeight - height),
+												},
+												size: {
+													width: startBounds.size.width,
+													height: limitedHeight,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Right Edge Button */}
+								<ResizeHandle
+									class="cursor-e-resize"
+									style={{
+										left: `${bounds.position.x + bounds.size.width - 1}px`,
+										top: `${bounds.position.y + bounds.size.height / 2}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											setBounds({
+												position: {
+													x: startBounds.position.x,
+													y: startBounds.position.y,
+												},
+												size: {
+													width: Math.max(
+														MIN_WIDTH,
+														startBounds.size.width + delta.x,
+													),
+													height: startBounds.size.height,
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Bottom Edge Button */}
+								<ResizeHandle
+									class="cursor-s-resize"
+									style={{
+										left: `${bounds.position.x + bounds.size.width / 2}px`,
+										top: `${bounds.position.y + bounds.size.height - 1}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											setBounds({
+												position: {
+													x: startBounds.position.x,
+													y: startBounds.position.y,
+												},
+												size: {
+													width: startBounds.size.width,
+													height: Math.max(
+														MIN_HEIGHT,
+														startBounds.size.height + delta.y,
+													),
+												},
+											});
+										})(e);
+									}}
+								/>
+
+								{/* Left Edge Button */}
+								<ResizeHandle
+									class="cursor-w-resize"
+									style={{
+										left: `${bounds.position.x + 1}px`,
+										top: `${bounds.position.y + bounds.size.height / 2}px`,
+									}}
+									onMouseDown={(e) => {
+										e.stopPropagation();
+										createOnMouseDown((startBounds, delta) => {
+											const width = startBounds.size.width - delta.x;
+											const limitedWidth = Math.max(MIN_WIDTH, width);
+
+											setBounds({
+												position: {
+													x:
+														startBounds.position.x +
+														delta.x -
+														(limitedWidth - width),
+													y: startBounds.position.y,
+												},
+												size: {
+													width: limitedWidth,
+													height: startBounds.size.height,
+												},
+											});
+										})(e);
+									}}
+								/>
+							</>
+						);
+					}
+
+					function Occluders() {
+						return (
+							<>
+								{/* Left */}
+								<div
+									class="absolute top-0 bottom-0 left-0 bg-black/50"
+									style={{ width: `${bounds.position.x}px` }}
+								/>
+								{/* Right */}
+								<div
+									class="absolute top-0 right-0 bottom-0 bg-black/50"
+									style={{
+										width: `${
+											window.innerWidth -
+											(bounds.size.width + bounds.position.x)
+										}px`,
+									}}
+								/>
+								{/* Top center */}
+								<div
+									class="absolute top-0 bg-black/50"
+									style={{
+										left: `${bounds.position.x}px`,
+										width: `${bounds.size.width}px`,
+										height: `${bounds.position.y}px`,
+									}}
+								/>
+								{/* Bottom center */}
+								<div
+									class="absolute bottom-0 bg-black/50"
+									style={{
+										left: `${bounds.position.x}px`,
+										width: `${bounds.size.width}px`,
+										height: `${
+											window.innerHeight -
+											(bounds.size.height + bounds.position.y)
+										}px`,
+									}}
+								/>
+							</>
+						);
+					}
 
 					return (
-						<div class="fixed w-screen h-screen">
-							<div
-								ref={controlsEl}
-								class="fixed z-50 transition-opacity"
-								style={controlsStyle()}
-							>
-								<Show
-									when={isValid()}
-									fallback={
-										<div>
-											<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
-												<p>Minimum size is 150 x 150</p>
-												<small>
-													<code>
-														{crop().width} x {crop().height}
-													</code>{" "}
-													is too small
-												</small>
-											</div>
-										</div>
-									}
-								>
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: displayId(),
-											bounds: {
-												position: { x: crop().x, y: crop().y },
-												size: { width: crop().width, height: crop().height },
-											},
-										}}
-										showBackground={controllerInside()}
-									/>
-									<ShowCapFreeWarning
-										isInstantMode={options.mode === "instant"}
-									/>
-								</Show>
-							</div>
+						<div
+							class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair"
+							onMouseDown={(downEvent) => {
+								// Start creating a new area
+								downEvent.preventDefault();
+								postMessage({ type: "reset" });
+								setState("creating");
+								setHasArea(false);
 
-							<Cropper
-								ref={cropperRef}
-								onCropChange={setCrop}
-								initialCrop={initialAreaBounds()}
-								showBounds={isValid()}
-								aspectRatio={aspect() ?? undefined}
-								snapToRatioEnabled={snapToRatioEnabled()}
-								onContextMenu={(e) => showCropOptionsMenu(e)}
-							/>
+								const startX = downEvent.clientX;
+								const startY = downEvent.clientY;
+
+								setBounds({
+									position: { x: startX, y: startY },
+									size: { width: 0, height: 0 },
+								});
+
+								createRoot((dispose) => {
+									createEventListenerMap(window, {
+										mousemove: (moveEvent) => {
+											const width = Math.abs(moveEvent.clientX - startX);
+											const height = Math.abs(moveEvent.clientY - startY);
+											const x = Math.min(startX, moveEvent.clientX);
+											const y = Math.min(startY, moveEvent.clientY);
+
+											setBounds({
+												position: { x, y },
+												size: { width, height },
+											});
+										},
+										mouseup: () => {
+											setState(undefined);
+											// Only set hasArea if we created a meaningful area
+											if (bounds.size.width > 10 && bounds.size.height > 10) {
+												setHasArea(true);
+											} else {
+												// Reset to no area if too small
+												setBounds(EMPTY_BOUNDS());
+											}
+											dispose();
+										},
+									});
+								});
+							}}
+						>
+							<Occluders />
+
+							<Show when={hasArea()}>
+								<div
+									class={cx(
+										"flex absolute flex-col items-center",
+										state() === "dragging" ? "cursor-grabbing" : "cursor-grab",
+									)}
+									style={{
+										width: `${bounds.size.width}px`,
+										height: `${bounds.size.height}px`,
+										left: `${bounds.position.x}px`,
+										top: `${bounds.position.y}px`,
+									}}
+									onMouseDown={(downEvent) => {
+										downEvent.stopPropagation();
+										setState("dragging");
+										const startPosition = { ...bounds.position };
+
+										createRoot((dispose) => {
+											createEventListenerMap(window, {
+												mousemove: (moveEvent) => {
+													const newPosition = {
+														x:
+															startPosition.x +
+															moveEvent.clientX -
+															downEvent.clientX,
+														y:
+															startPosition.y +
+															moveEvent.clientY -
+															downEvent.clientY,
+													};
+
+													if (newPosition.x < 0) newPosition.x = 0;
+													if (newPosition.y < 0) newPosition.y = 0;
+													if (
+														newPosition.x + bounds.size.width >
+														window.innerWidth
+													)
+														newPosition.x =
+															window.innerWidth - bounds.size.width;
+													if (
+														newPosition.y + bounds.size.height >
+														window.innerHeight
+													)
+														newPosition.y =
+															window.innerHeight - bounds.size.height;
+
+													setBounds("position", newPosition);
+												},
+												mouseup: () => {
+													setState(undefined);
+													dispose();
+												},
+											});
+										});
+									}}
+								>
+									<div
+										ref={controlsEl}
+										class={cx(
+											"flex absolute flex-col items-center m-2",
+											controlsPlacement().position === "above" && "bottom-full",
+											controlsPlacement().position === "below" && "top-full",
+											controlsPlacement().position === "right" &&
+												"left-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "left" &&
+												"right-full top-1/2 -translate-y-1/2",
+											controlsPlacement().position === "inside-bottom" &&
+												"bottom-2 left-1/2 -translate-x-1/2",
+										)}
+										style={{
+											width:
+												controlsPlacement().position === "right" ||
+												controlsPlacement().position === "left"
+													? "auto"
+													: controlsPlacement().position === "inside-bottom"
+														? "auto"
+														: `${bounds.size.width}px`,
+										}}
+									>
+										<RecordingControls
+											target={{
+												variant: "area",
+												screen: params.displayId!,
+												bounds,
+											}}
+											setToggleModeSelect={setToggleModeSelect}
+											showBackground={
+												controlsPlacement().position === "inside-bottom"
+											}
+										/>
+										<ShowCapFreeWarning
+											isInstantMode={options.mode === "instant"}
+										/>
+									</div>
+								</div>
+
+								<ResizeHandles />
+							</Show>
+
+							<Show when={state() === "creating"}>
+								<div
+									class="absolute border-2 border-blue-500 bg-blue-500/20 pointer-events-none"
+									style={{
+										left: `${bounds.position.x}px`,
+										top: `${bounds.position.y}px`,
+										width: `${bounds.size.width}px`,
+										height: `${bounds.size.height}px`,
+									}}
+								/>
+							</Show>
+
+							<Show when={!state()}>
+								<Show when={!hasArea()}>
+									<p class="z-10 text-xl pointer-events-none text-white">
+										Click and drag to select area
+									</p>
+								</Show>
+								<Show when={hasArea()}>
+									<Show when={controlsPlacement().position !== "inside-bottom"}>
+										<p class="z-10 text-xl pointer-events-none text-white absolute bottom-4">
+											Click and drag to create new area
+										</p>
+									</Show>
+								</Show>
+							</Show>
 						</div>
 					);
 				}}
@@ -441,9 +857,15 @@ function RecordingControls(props: {
 	showBackground?: boolean;
 }) {
 	const auth = authStore.createQuery();
-	const { setOptions, rawOptions } = useRecordingOptions();
+	const [options, setOptions] = useOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
+
+	const isAreaTooSmall = () => {
+		if (props.target.variant !== "area") return false;
+		const { width, height } = props.target.bounds.size;
+		return width < MIN_WIDTH || height < MIN_HEIGHT;
+	};
 
 	const menuModes = async () =>
 		await Menu.new({
@@ -453,64 +875,82 @@ function RecordingControls(props: {
 					action: () => {
 						setOptions("mode", "studio");
 					},
-					checked: rawOptions.mode === "studio",
+					checked: options.mode === "studio",
 				}),
 				await CheckMenuItem.new({
 					text: "Instant Mode",
 					action: () => {
 						setOptions("mode", "instant");
 					},
-					checked: rawOptions.mode === "instant",
+					checked: options.mode === "instant",
 				}),
 			],
 		});
 
-	const countdownItems = async () => [
-		await CheckMenuItem.new({
-			text: "Off",
-			action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
-			checked:
-				!generalSetings.data?.recordingCountdown ||
-				generalSetings.data?.recordingCountdown === 0,
-		}),
-		await CheckMenuItem.new({
-			text: "3 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
-			checked: generalSetings.data?.recordingCountdown === 3,
-		}),
-		await CheckMenuItem.new({
-			text: "5 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
-			checked: generalSetings.data?.recordingCountdown === 5,
-		}),
-		await CheckMenuItem.new({
-			text: "10 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
-			checked: generalSetings.data?.recordingCountdown === 10,
-		}),
-	];
+	const countdownMenu = async () =>
+		await Submenu.new({
+			text: "Recording Countdown",
+			items: [
+				await CheckMenuItem.new({
+					text: "Off",
+					action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
+					checked:
+						!generalSetings.data?.recordingCountdown ||
+						generalSetings.data?.recordingCountdown === 0,
+				}),
+				await CheckMenuItem.new({
+					text: "3 seconds",
+					action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
+					checked: generalSetings.data?.recordingCountdown === 3,
+				}),
+				await CheckMenuItem.new({
+					text: "5 seconds",
+					action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
+					checked: generalSetings.data?.recordingCountdown === 5,
+				}),
+				await CheckMenuItem.new({
+					text: "10 seconds",
+					action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
+					checked: generalSetings.data?.recordingCountdown === 10,
+				}),
+			],
+		});
 
 	const preRecordingMenu = async () => {
-		return await Menu.new({
-			items: [
-				await MenuItem.new({
-					text: "Recording Countdown",
-					enabled: false,
-				}),
-				...(await countdownItems()),
-			],
-		});
+		return await Menu.new({ items: [await countdownMenu()] });
 	};
 
-	function showMenu(menu: Promise<Menu>, e: UIEvent) {
-		e.stopPropagation();
-		const rect = (e.target as HTMLDivElement).getBoundingClientRect();
-		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
-	}
+	const startRecording = useMutation(() => ({
+		mutationFn: () =>
+			handleRecordingResult(
+				commands.startRecording({
+					capture_target: props.target,
+					mode: options.mode,
+					capture_system_audio: options.captureSystemAudio,
+					organization_id: options.organizationId ?? null,
+				}),
+				setOptions,
+			),
+	}));
 
 	return (
-		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 shadow-sm border-gray-4">
+		<Show
+			when={!isAreaTooSmall()}
+			fallback={
+				<div class="flex flex-col gap-2 items-center p-2 my-2.5 rounded-xl border w-52 bg-red-500/80 border-red-500/60 text-white">
+					<div class="flex gap-2 items-center">
+						<IconCapInfo class="will-change-transform size-4" />
+						<p class="text-sm font-medium">Area Too Small</p>
+					</div>
+					<p class="text-xs text-center tabular-nums">
+						Selection must be at least {MIN_WIDTH}x{MIN_HEIGHT} pixels
+						{props.target.variant === "area" &&
+							` (currently ${props.target.bounds.size.width}x${props.target.bounds.size.height})`}
+					</p>
+				</div>
+			}
+		>
+			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
 				<div
 					onClick={() => {
 						setOptions("targetMode", null);
@@ -521,72 +961,131 @@ function RecordingControls(props: {
 					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
 				</div>
 				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+					data-inactive={
+						(options.mode === "instant" && !auth.data) ||
+						startRecording.isPending
+					}
+					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 text-white group data-[inactive='true']:bg-blue-8 data-[inactive='true']:text-white/80"
 					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
+						if (options.mode === "instant" && !auth.data) {
 							emit("start-sign-in");
 							return;
 						}
+						if (startRecording.isPending) return;
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
+						startRecording.mutate();
 					}}
 				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
-						{rawOptions.mode === "studio" ? (
+					<div
+						class={cx(
+							"flex items-center py-1 pl-4 transition-colors",
+							!startRecording.isPending && "hover:bg-blue-10",
+						)}
+					>
+						{options.mode === "studio" ? (
 							<IconCapFilmCut class="size-4" />
 						) : (
 							<IconCapInstant class="size-4" />
 						)}
 						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
+							<span class="text-sm font-medium text-nowrap">
+								{options.mode === "instant" && !auth.data
 									? "Sign In To Use"
 									: "Start Recording"}
 							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
+							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 font-light -mt-0.5 opacity-90">
+								{`${capitalize(options.mode)} Mode`}
 							</span>
 						</div>
 					</div>
 					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
-						onMouseDown={(e) => showMenu(menuModes(), e)}
-						onClick={(e) => showMenu(menuModes(), e)}
+						class={cx(
+							"pl-2.5 transition-colors pr-3 py-1.5 flex items-center",
+							!startRecording.isPending && "group-hover:bg-blue-10",
+						)}
+						onClick={(e) => {
+							e.stopPropagation();
+							menuModes().then((menu) => menu.popup());
+						}}
 					>
-						<IconCapCaretDown class="pointer-events-none focus:rotate-90" />
+						<IconCapCaretDown class="focus:rotate-90" />
 					</div>
 				</div>
 				<div
+					onClick={(e) => {
+						e.stopPropagation();
+						preRecordingMenu().then((menu) => menu.popup());
+					}}
 					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-					onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-					onClick={(e) => showMenu(preRecordingMenu(), e)}
 				>
-					<IconCapGear class="pointer-events-none will-change-transform size-5" />
+					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
-			<div class="flex justify-center items-center w-full">
-				<div
+			<div class="flex flex-col items-center gap-2">
+				<button
 					onClick={() => props.setToggleModeSelect?.(true)}
-					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
+					class="cursor-pointer flex gap-1 items-center transition-all duration-200 relative z-20"
 					classList={{
-						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
+						"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10 hover:bg-black/50 hover:opacity-80":
 							props.showBackground,
 						"hover:opacity-60": !props.showBackground,
 					}}
 				>
 					<IconCapInfo class="opacity-70 will-change-transform size-3" />
-					<p class="text-sm text-white drop-shadow-md">
+					<p class="text-sm text-white">
 						<span class="opacity-70">What is </span>
-						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+						<span class="font-medium">{capitalize(options.mode)} Mode</span>?
 					</p>
-				</div>
+				</button>
+				<OrganizationSelect />
 			</div>
-		</>
+		</Show>
+	);
+}
+
+function OrganizationSelect(props: { showBackground?: boolean }) {
+	const organisations = createOrganizationsQuery();
+	const [options, setOptions] = useOptions();
+
+	return (
+		<Show when={organisations().length > 1}>
+			<button
+				class="flex gap-1 items-center mb-5 group hover:opacity-60 transition-opacity duration-200"
+				classList={{
+					"bg-black/40 p-2 rounded-lg backdrop-blur-sm border border-white/10":
+						props.showBackground,
+				}}
+				onClick={async () => {
+					const menu = await Menu.new({
+						items: await Promise.all(
+							organisations().map((org) =>
+								CheckMenuItem.new({
+									text: org.name,
+									action: () => {
+										setOptions("organizationId", org.id);
+									},
+									checked: options.organizationId === org.id,
+								}),
+							),
+						),
+					});
+					menu.popup();
+				}}
+			>
+				<div class="text-sm text-white flex flex-row">
+					<span class="opacity-70">Organization:</span>
+					<span class="ml-1 flex flex-row ">
+						{
+							(
+								organisations().find((o) => o.id === options.organizationId) ??
+								organisations()[0]
+							)?.name
+						}
+						<IconCapChevronDown />
+					</span>
+				</div>
+			</button>
+		</Show>
 	);
 }
 
@@ -596,7 +1095,7 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	return (
 		<Suspense>
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
+				<p class="text-sm text-center text-white max-w-64">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
 						class="underline"
@@ -607,5 +1106,22 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 				</p>
 			</Show>
 		</Suspense>
+	);
+}
+
+function ResizeHandle(
+	props: Omit<ComponentProps<"button">, "style"> & {
+		style?: JSX.CSSProperties;
+	},
+) {
+	return (
+		<button
+			{...props}
+			class={cx(
+				"size-3 bg-black rounded-full absolute border-[1.2px] border-white",
+				props.class,
+			)}
+			style={{ ...props.style, transform: "translate(-50%, -50%)" }}
+		/>
 	);
 }

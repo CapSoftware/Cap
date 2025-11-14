@@ -99,7 +99,7 @@ export const PricingPage = () => {
 								className="text-red-500 size-3.5"
 								icon={faHeart}
 							/>
-							<p className="font-medium text-gray-12">Loved by 20k+ users</p>
+							<p className="font-medium text-gray-12">Loved by 15k+ users</p>
 						</motion.div>
 					</motion.div>
 

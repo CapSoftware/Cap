@@ -196,7 +196,7 @@ pub async fn render_video_to_channel(
     sender: mpsc::Sender<(RenderedFrame, u32)>,
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
-    render_segments: Vec<RenderSegment>,
+    segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
     recordings: &ProjectRecordingsMeta,
@@ -220,25 +220,21 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let Some((segment_time, segment)) =
+        let Some((segment_time, segment_i)) =
             project.get_segment_time(frame_number as f64 / fps as f64)
         else {
             break;
         };
 
-        let clip_config = project
-            .clips
-            .iter()
-            .find(|v| v.index == segment.recording_clip);
+        let segment = &segments[segment_i as usize];
+        let clip_config = project.clips.iter().find(|v| v.index == segment_i);
 
         let frame_number = {
             let prev = frame_number;
             std::mem::replace(&mut frame_number, prev + 1)
         };
 
-        let render_segment = &render_segments[segment.recording_clip as usize];
-
-        if let Some(segment_frames) = render_segment
+        if let Some(segment_frames) = segment
             .decoders
             .get_frames(
                 segment_time as f32,
@@ -253,17 +249,12 @@ pub async fn render_video_to_channel(
                 frame_number,
                 fps,
                 resolution_base,
-                &render_segment.cursor,
+                &segment.cursor,
                 &segment_frames,
             );
 
             let frame = frame_renderer
-                .render(
-                    segment_frames,
-                    uniforms,
-                    &render_segment.cursor,
-                    &mut layers,
-                )
+                .render(segment_frames, uniforms, &segment.cursor, &mut layers)
                 .await?;
 
             if frame.width == 0 || frame.height == 0 {

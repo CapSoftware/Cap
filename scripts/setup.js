@@ -90,29 +90,33 @@ async function main() {
 		}
 		console.log("Copied ffmpeg dylibs to target/debug");
 	} else if (process.platform === "win32") {
-		const FFMPEG_VERSION = "7.1";
-		const FFMPEG_ZIP_NAME = `ffmpeg-${FFMPEG_VERSION}-full_build-shared`;
-		const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/${FFMPEG_VERSION}/${FFMPEG_ZIP_NAME}.zip`;
+		const FFMPEG_RELEASE_TAG = "latest";
+		const ffmpegAssets = {
+			aarch64: "ffmpeg-n7.1-latest-winarm64-gpl-shared-7.1.zip",
+			x86_64: "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
+		};
+		const ffmpegZipName = ffmpegAssets[arch] ?? ffmpegAssets.x86_64;
+		const ffmpegExtractedDir = ffmpegZipName.replace(/\.zip$/, "");
+		const ffmpegZipUrl = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE_TAG}/${ffmpegZipName}`;
 
 		await fs.mkdir(targetDir, { recursive: true });
 
 		let downloadedFfmpeg = false;
-		const ffmpegZip = `ffmpeg-${FFMPEG_VERSION}.zip`;
-		const ffmpegZipPath = path.join(targetDir, ffmpegZip);
+		const ffmpegZipPath = path.join(targetDir, ffmpegZipName);
 		if (!(await fileExists(ffmpegZipPath))) {
-			const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
+			const ffmpegZipBytes = await fetch(ffmpegZipUrl)
 				.then((r) => r.blob())
 				.then((b) => b.arrayBuffer());
 			await fs.writeFile(ffmpegZipPath, Buffer.from(ffmpegZipBytes));
-			console.log(`Downloaded ${ffmpegZip}`);
+			console.log(`Downloaded ${ffmpegZipName}`);
 			downloadedFfmpeg = true;
-		} else console.log(`Using cached ${ffmpegZip}`);
+		} else console.log(`Using cached ${ffmpegZipName}`);
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
 			await execFile("tar", ["xf", ffmpegZipPath, "-C", targetDir]);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
-			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
+			await fs.rename(path.join(targetDir, ffmpegExtractedDir), ffmpegDir);
 			console.log("Extracted ffmpeg");
 		} else console.log("Using cached ffmpeg");
 
@@ -147,10 +151,10 @@ async function main() {
 		);
 		console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
 
-		const { stdout: vcInstallDir } = await exec(
-			'$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
-			{ shell: "powershell.exe" },
-		);
+		const vsWhereCommand = `$(& "\${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)`;
+		const { stdout: vcInstallDir } = await exec(vsWhereCommand, {
+			shell: "powershell.exe",
+		});
 
 		const libclangPath = path.join(
 			vcInstallDir.trim(),

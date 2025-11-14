@@ -43,27 +43,6 @@
 			"when": 1761711605408,
 			"tag": "0005_video-org-id-required",
 			"breakpoints": true
-		},
-		{
-			"idx": 6,
-			"version": "5",
-			"when": 1762410865419,
-			"tag": "0006_hesitant_stone_men",
-			"breakpoints": true
-		},
-		{
-			"idx": 7,
-			"version": "5",
-			"when": 1762428551824,
-			"tag": "0007_public_toxin",
-			"breakpoints": true
-		},
-		{
-			"idx": 8,
-			"version": "5",
-			"when": 1762428905323,
-			"tag": "0008_fat_ender_wiggin",
-			"breakpoints": true
 		}
 	]
 }

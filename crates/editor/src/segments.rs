@@ -1,9 +1,9 @@
 use crate::{
-    SegmentMedia,
+    Segment,
     audio::{AudioSegment, AudioSegmentTrack},
 };
 
-pub fn get_audio_segments(segments: &[SegmentMedia]) -> Vec<AudioSegment> {
+pub fn get_audio_segments(segments: &[Segment]) -> Vec<AudioSegment> {
     segments
         .iter()
         .map(|s| AudioSegment {

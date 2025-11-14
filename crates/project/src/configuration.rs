@@ -506,8 +506,8 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
-    #[serde(default, rename = "recordingSegment")]
-    pub recording_clip: u32,
+    #[serde(default)]
+    pub recording_segment: u32,
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -572,14 +572,14 @@ pub struct TimelineConfiguration {
 }
 
 impl TimelineConfiguration {
-    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         let mut accum_duration = 0.0;
 
         for segment in self.segments.iter() {
             if frame_time < accum_duration + segment.duration() {
                 return segment
                     .interpolate_time(frame_time - accum_duration)
-                    .map(|t| (t, segment));
+                    .map(|t| (t, segment.recording_segment));
             }
 
             accum_duration += segment.duration();
@@ -708,10 +708,11 @@ impl ProjectConfiguration {
         Ok(())
     }
 
-    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, &TimelineSegment)> {
+    pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         self.timeline
             .as_ref()
-            .and_then(|t| t.get_segment_time(frame_time))
+            .map(|t| t.get_segment_time(frame_time))
+            .unwrap_or(Some((frame_time, 0)))
     }
 }
 

@@ -5,5 +5,5 @@ mod playback;
 mod segments;
 
 pub use audio::AudioRenderer;
-pub use editor_instance::{EditorInstance, EditorState, SegmentMedia, create_segments};
+pub use editor_instance::{EditorInstance, EditorState, Segment, create_segments};
 pub use segments::get_audio_segments;

@@ -164,7 +164,12 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
         )
       `,
 			ownerName: users.name,
-			effectiveDate: videos.effectiveCreatedAt,
+			effectiveDate: sql<string>`
+        COALESCE(
+          JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
+          ${videos.createdAt}
+        )
+      `,
 			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
@@ -193,7 +198,12 @@ export default async function CapsPage(props: PageProps<"/dashboard/caps">) {
 			videos.orgId,
 			users.name,
 		)
-		.orderBy(desc(videos.effectiveCreatedAt))
+		.orderBy(
+			desc(sql`COALESCE(
+      JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
+      ${videos.createdAt}
+    )`),
+		)
 		.limit(limit)
 		.offset(offset);
 
