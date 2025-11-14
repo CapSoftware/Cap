@@ -317,6 +317,13 @@ pub struct StartRecordingInputs {
     pub organization_id: Option<String>,
 }
 
+#[derive(Deserialize, Type, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingInputKind {
+    Microphone,
+    Camera,
+}
+
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
 #[serde(tag = "variant")]
 pub enum RecordingEvent {
@@ -324,6 +331,8 @@ pub enum RecordingEvent {
     Started,
     Stopped,
     Failed { error: String },
+    InputLost { input: RecordingInputKind },
+    InputRestored { input: RecordingInputKind },
 }
 
 #[derive(Serialize, Type)]
@@ -538,6 +547,8 @@ pub async fn start_recording(
                 Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                 Err(e) => return Err(anyhow!(e.to_string())),
             };
+
+            state.camera_in_use = camera_feed.is_some();
 
             #[cfg(target_os = "macos")]
             let mut shareable_content =
@@ -964,6 +975,8 @@ async fn handle_recording_end(
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
     app.clear_current_recording();
+    app.disconnected_inputs.clear();
+    app.camera_in_use = false;
 
     let res = match recording {
         // we delay reporting errors here so that everything else happens first

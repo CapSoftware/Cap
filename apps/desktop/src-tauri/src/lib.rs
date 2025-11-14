@@ -56,19 +56,20 @@ use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
-use recording::InProgressRecording;
+use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     future::Future,
     marker::PhantomData,
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -112,9 +113,12 @@ pub struct App {
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
     mic_meter_sender: flume::Sender<microphone::MicrophoneSamples>,
     selected_mic_label: Option<String>,
+    selected_camera_id: Option<DeviceOrModelID>,
+    camera_in_use: bool,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
     logs_dir: PathBuf,
+    disconnected_inputs: HashSet<RecordingInputKind>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -177,7 +181,7 @@ impl App {
         let (error_tx, error_rx) = flume::bounded(1);
         let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
 
-        spawn_mic_error_logger(error_rx);
+        spawn_mic_error_handler(self.handle.clone(), error_rx);
 
         mic_feed
             .ask(microphone::AddSender(self.mic_meter_sender.clone()))
@@ -185,11 +189,23 @@ impl App {
             .map_err(|e| e.to_string())?;
 
         if let Some(label) = self.selected_mic_label.clone() {
-            let ready = mic_feed
-                .ask(microphone::SetInput { label })
-                .await
-                .map_err(|e| e.to_string())?;
-            ready.await.map_err(|e| e.to_string())?;
+            match mic_feed.ask(microphone::SetInput { label }).await {
+                Ok(ready) => {
+                    if let Err(err) = ready.await {
+                        if matches!(err, microphone::SetInputError::DeviceNotFound) {
+                            warn!("Selected microphone not available while restarting feed");
+                        } else {
+                            return Err(err.to_string());
+                        }
+                    }
+                }
+                Err(kameo::error::SendError::HandlerError(
+                    microphone::SetInputError::DeviceNotFound,
+                )) => {
+                    warn!("Selected microphone not available while restarting feed");
+                }
+                Err(err) => return Err(err.to_string()),
+            }
         }
 
         self.mic_feed = mic_feed;
@@ -230,6 +246,66 @@ impl App {
     pub fn is_recording_active_or_pending(&self) -> bool {
         !matches!(self.recording_state, RecordingState::None)
     }
+
+    async fn handle_input_disconnect(&mut self, kind: RecordingInputKind) -> Result<(), String> {
+        if !self.disconnected_inputs.insert(kind) {
+            return Ok(());
+        }
+
+        if let Some(recording) = self.current_recording_mut() {
+            recording.pause().await.map_err(|e| e.to_string())?;
+        }
+
+        let (title, body) = match kind {
+            RecordingInputKind::Microphone => (
+                "Microphone disconnected",
+                "Recording paused. Reconnect your microphone, then resume or stop the recording.",
+            ),
+            RecordingInputKind::Camera => (
+                "Camera disconnected",
+                "Recording paused. Reconnect your camera, then resume or stop the recording.",
+            ),
+        };
+
+        let _ = NewNotification {
+            title: title.to_string(),
+            body: body.to_string(),
+            is_error: true,
+        }
+        .emit(&self.handle);
+
+        let _ = RecordingEvent::InputLost { input: kind }.emit(&self.handle);
+
+        Ok(())
+    }
+
+    async fn handle_input_restored(&mut self, kind: RecordingInputKind) -> Result<(), String> {
+        if !self.disconnected_inputs.remove(&kind) {
+            return Ok(());
+        }
+
+        if matches!(kind, RecordingInputKind::Microphone) {
+            self.ensure_selected_mic_ready().await.ok();
+        }
+
+        let _ = RecordingEvent::InputRestored { input: kind }.emit(&self.handle);
+
+        Ok(())
+    }
+
+    async fn ensure_selected_mic_ready(&mut self) -> Result<(), String> {
+        if let Some(label) = self.selected_mic_label.clone() {
+            let ready = self
+                .mic_feed
+                .ask(feeds::microphone::SetInput { label })
+                .await
+                .map_err(|e| e.to_string())?;
+
+            ready.await.map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -261,6 +337,16 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
     {
         let mut app = state.write().await;
         app.selected_mic_label = desired_label;
+        let cleared = app
+            .disconnected_inputs
+            .remove(&RecordingInputKind::Microphone);
+
+        if cleared {
+            let _ = RecordingEvent::InputRestored {
+                input: RecordingInputKind::Microphone,
+            }
+            .emit(&app.handle);
+        }
     }
 
     Ok(())
@@ -282,7 +368,7 @@ async fn set_camera_input(
 ) -> Result<(), String> {
     let camera_feed = state.read().await.camera_feed.clone();
 
-    match id {
+    match &id {
         None => {
             camera_feed
                 .ask(feeds::camera::RemoveInput)
@@ -297,7 +383,7 @@ async fn set_camera_input(
                 .ok();
 
             camera_feed
-                .ask(feeds::camera::SetInput { id })
+                .ask(feeds::camera::SetInput { id: id.clone() })
                 .await
                 .map_err(|e| e.to_string())?
                 .await
@@ -305,17 +391,152 @@ async fn set_camera_input(
         }
     }
 
+    {
+        let mut app = state.write().await;
+        app.selected_camera_id = id;
+        let cleared = app.disconnected_inputs.remove(&RecordingInputKind::Camera);
+
+        if cleared {
+            let _ = RecordingEvent::InputRestored {
+                input: RecordingInputKind::Camera,
+            }
+            .emit(&app.handle);
+        }
+    }
+
     Ok(())
 }
 
-fn spawn_mic_error_logger(error_rx: flume::Receiver<StreamError>) {
+fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<StreamError>) {
     tokio::spawn(async move {
-        let Ok(err) = error_rx.recv_async().await else {
-            return;
-        };
+        let state = app_handle.state::<ArcLock<App>>();
+        let state = state.inner().clone();
 
-        error!("Mic feed actor error: {err}");
+        let mut error_rx = error_rx;
+
+        while let Ok(err) = error_rx.recv_async().await {
+            error!("Mic feed actor error: {err}");
+
+            let mut app = state.write().await;
+
+            if let Err(handle_err) = app
+                .handle_input_disconnect(RecordingInputKind::Microphone)
+                .await
+            {
+                warn!("Failed to pause recording after mic disconnect: {handle_err}");
+            }
+
+            if let Err(restart_err) = app.restart_mic_feed().await {
+                warn!("Failed to restart microphone feed: {restart_err}");
+            }
+        }
     });
+}
+
+fn spawn_device_watchers(app_handle: AppHandle) {
+    spawn_microphone_watcher(app_handle.clone());
+    spawn_camera_watcher(app_handle);
+}
+
+fn spawn_microphone_watcher(app_handle: AppHandle) {
+    tokio::spawn(async move {
+        let state = app_handle.state::<ArcLock<App>>();
+        let state = state.inner().clone();
+
+        loop {
+            let (should_check, label, is_marked) = {
+                let guard = state.read().await;
+                (
+                    matches!(guard.recording_state, RecordingState::Active(_)),
+                    guard.selected_mic_label.clone(),
+                    guard
+                        .disconnected_inputs
+                        .contains(&RecordingInputKind::Microphone),
+                )
+            };
+
+            if should_check {
+                if let Some(label) = label {
+                    let available = microphone::MicrophoneFeed::list().contains_key(&label);
+
+                    if !available && !is_marked {
+                        let mut app = state.write().await;
+                        if let Err(err) = app
+                            .handle_input_disconnect(RecordingInputKind::Microphone)
+                            .await
+                        {
+                            warn!("Failed to handle mic disconnect: {err}");
+                        }
+                    } else if available && is_marked {
+                        let mut app = state.write().await;
+                        if let Err(err) = app
+                            .handle_input_restored(RecordingInputKind::Microphone)
+                            .await
+                        {
+                            warn!("Failed to handle mic reconnection: {err}");
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+fn spawn_camera_watcher(app_handle: AppHandle) {
+    tokio::spawn(async move {
+        let state = app_handle.state::<ArcLock<App>>();
+        let state = state.inner().clone();
+
+        loop {
+            let (should_check, camera_id, is_marked) = {
+                let guard = state.read().await;
+                (
+                    matches!(guard.recording_state, RecordingState::Active(_))
+                        && guard.camera_in_use,
+                    guard.selected_camera_id.clone(),
+                    guard
+                        .disconnected_inputs
+                        .contains(&RecordingInputKind::Camera),
+                )
+            };
+
+            if should_check {
+                if let Some(id) = camera_id {
+                    let available = is_camera_available(&id);
+
+                    if !available && !is_marked {
+                        let mut app = state.write().await;
+                        if let Err(err) = app
+                            .handle_input_disconnect(RecordingInputKind::Camera)
+                            .await
+                        {
+                            warn!("Failed to handle camera disconnect: {err}");
+                        }
+                    } else if available && is_marked {
+                        let mut app = state.write().await;
+                        if let Err(err) =
+                            app.handle_input_restored(RecordingInputKind::Camera).await
+                        {
+                            warn!("Failed to handle camera reconnection: {err}");
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+fn is_camera_available(id: &DeviceOrModelID) -> bool {
+    cap_camera::list_cameras().any(|info| match id {
+        DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
+        DeviceOrModelID::ModelID(model_id) => {
+            info.model_id().is_some_and(|existing| existing == model_id)
+        }
+    })
 }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
@@ -1998,12 +2219,10 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
     let camera_feed = CameraFeed::spawn(CameraFeed::default());
     let _ = camera_feed.ask(feeds::camera::AddSender(camera_tx)).await;
 
+    let (mic_error_tx, mic_error_rx) = flume::bounded(1);
+
     let mic_feed = {
-        let (error_tx, error_rx) = flume::bounded(1);
-
-        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
-
-        spawn_mic_error_logger(error_rx);
+        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(mic_error_tx));
 
         if let Err(err) = mic_feed
             .ask(feeds::microphone::AddSender(mic_samples_tx))
@@ -2182,15 +2401,21 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     mic_feed,
                     mic_meter_sender,
                     selected_mic_label: None,
+                    selected_camera_id: None,
+                    camera_in_use: false,
                     camera_feed,
                     server_url,
                     logs_dir: logs_dir.clone(),
+                    disconnected_inputs: HashSet::new(),
                 })));
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
                 )));
             }
+
+            spawn_mic_error_handler(app.clone(), mic_error_rx);
+            spawn_device_watchers(app.clone());
 
             tokio::spawn(check_notification_permissions(app.clone()));
 

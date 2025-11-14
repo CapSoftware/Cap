@@ -76,6 +76,7 @@ declare global {
   const IconHugeiconsEaseCurveControlPoints: typeof import('~icons/hugeicons/ease-curve-control-points.jsx')['default']
   const IconIcBaselineMonitor: typeof import("~icons/ic/baseline-monitor.jsx")["default"]
   const IconIcRoundSearch: typeof import("~icons/ic/round-search.jsx")["default"]
+  const IconLucideAlertTriangle: typeof import('~icons/lucide/alert-triangle.jsx')['default']
   const IconLucideBell: typeof import('~icons/lucide/bell.jsx')['default']
   const IconLucideBug: typeof import('~icons/lucide/bug.jsx')['default']
   const IconLucideCamera: typeof import("~icons/lucide/camera.jsx")["default"]

@@ -20,6 +20,7 @@ import {
 	createOptionsQuery,
 } from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
+import type { RecordingInputKind } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 
 type State =
@@ -27,6 +28,8 @@ type State =
 	| { variant: "recording" }
 	| { variant: "paused" }
 	| { variant: "stopped" };
+
+type RecordingInputState = Record<RecordingInputKind, boolean>;
 
 declare global {
 	interface Window {
@@ -53,6 +56,11 @@ export default function () {
 	const auth = authStore.createQuery();
 
 	const audioLevel = createAudioInputLevel();
+	const [disconnectedInputs, setDisconnectedInputs] =
+		createStore<RecordingInputState>({ microphone: false, camera: false });
+
+	const hasDisconnectedInput = () =>
+		disconnectedInputs.microphone || disconnectedInputs.camera;
 
 	const [pauseResumes, setPauseResumes] = createStore<
 		| []
@@ -63,15 +71,33 @@ export default function () {
 	>([]);
 
 	createTauriEventListener(events.recordingEvent, (payload) => {
-		if (payload.variant === "Countdown") {
-			setState((s) => {
-				if (s.variant === "countdown") return { ...s, current: payload.value };
+		switch (payload.variant) {
+			case "Countdown":
+				setState((s) => {
+					if (s.variant === "countdown")
+						return { ...s, current: payload.value };
 
-				return s;
-			});
-		} else if (payload.variant === "Started") {
-			setState({ variant: "recording" });
-			setStart(Date.now());
+					return s;
+				});
+				break;
+			case "Started":
+				setDisconnectedInputs({ microphone: false, camera: false });
+				setState({ variant: "recording" });
+				setStart(Date.now());
+				break;
+			case "InputLost": {
+				const wasDisconnected = hasDisconnectedInput();
+				setDisconnectedInputs(payload.input, () => true);
+				if (!wasDisconnected && state().variant === "recording") {
+					setPauseResumes((a) => [...a, { pause: Date.now() }]);
+				}
+				setState({ variant: "paused" });
+				setTime(Date.now());
+				break;
+			}
+			case "InputRestored":
+				setDisconnectedInputs(payload.input, () => false);
+				break;
 		}
 	});
 
@@ -218,72 +244,77 @@ export default function () {
 					</div>
 				)}
 			</Show>
-			<div class="flex flex-row justify-between p-[0.25rem] flex-1">
-				<button
-					disabled={stopRecording.isPending}
-					class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
-					type="button"
-					onClick={() => stopRecording.mutate()}
-				>
-					<IconCapStopCircle />
-					<span class="font-[500] text-[0.875rem] tabular-nums">
-						<Show
-							when={isMaxRecordingLimitEnabled()}
-							fallback={formatTime(adjustedTime() / 1000)}
-						>
-							{formatTime(remainingRecordingTime() / 1000)}
-						</Show>
-					</span>
-				</button>
+			<div class="flex flex-col flex-1 gap-2 p-[0.25rem]">
+				<Show when={hasDisconnectedInput()}>
+					<DisconnectedNotice inputs={disconnectedInputs} />
+				</Show>
+				<div class="flex flex-row justify-between flex-1">
+					<button
+						disabled={stopRecording.isPending}
+						class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
+						type="button"
+						onClick={() => stopRecording.mutate()}
+					>
+						<IconCapStopCircle />
+						<span class="font-[500] text-[0.875rem] tabular-nums">
+							<Show
+								when={isMaxRecordingLimitEnabled()}
+								fallback={formatTime(adjustedTime() / 1000)}
+							>
+								{formatTime(remainingRecordingTime() / 1000)}
+							</Show>
+						</span>
+					</button>
 
-				<div class="flex gap-1 items-center">
-					<div class="flex relative justify-center items-center w-8 h-8">
-						{optionsQuery.rawOptions.micName != null ? (
-							<>
-								<IconCapMicrophone class="size-5 text-gray-12" />
-								<div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
-									<div
-										class="absolute inset-0 transition-transform duration-100 bg-blue-9"
-										style={{
-											transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
-										}}
-									/>
-								</div>
-							</>
-						) : (
-							<IconLucideMicOff
-								class="text-gray-7 size-5"
-								data-tauri-drag-region
-							/>
-						)}
-					</div>
-
-					{(currentRecording.data?.mode === "studio" ||
-						ostype() === "macos") && (
-						<ActionButton
-							disabled={togglePause.isPending}
-							onClick={() => togglePause.mutate()}
-						>
-							{state().variant === "paused" ? (
-								<IconCapPlayCircle />
+					<div class="flex gap-1 items-center">
+						<div class="flex relative justify-center items-center w-8 h-8">
+							{optionsQuery.rawOptions.micName != null ? (
+								<>
+									<IconCapMicrophone class="size-5 text-gray-12" />
+									<div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
+										<div
+											class="absolute inset-0 transition-transform duration-100 bg-blue-9"
+											style={{
+												transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
+											}}
+										/>
+									</div>
+								</>
 							) : (
-								<IconCapPauseCircle />
+								<IconLucideMicOff
+									class="text-gray-7 size-5"
+									data-tauri-drag-region
+								/>
 							)}
-						</ActionButton>
-					)}
+						</div>
 
-					<ActionButton
-						disabled={restartRecording.isPending}
-						onClick={() => restartRecording.mutate()}
-					>
-						<IconCapRestart />
-					</ActionButton>
-					<ActionButton
-						disabled={deleteRecording.isPending}
-						onClick={() => deleteRecording.mutate()}
-					>
-						<IconCapTrash />
-					</ActionButton>
+						{(currentRecording.data?.mode === "studio" ||
+							ostype() === "macos") && (
+							<ActionButton
+								disabled={togglePause.isPending || hasDisconnectedInput()}
+								onClick={() => togglePause.mutate()}
+							>
+								{state().variant === "paused" ? (
+									<IconCapPlayCircle />
+								) : (
+									<IconCapPauseCircle />
+								)}
+							</ActionButton>
+						)}
+
+						<ActionButton
+							disabled={restartRecording.isPending}
+							onClick={() => restartRecording.mutate()}
+						>
+							<IconCapRestart />
+						</ActionButton>
+						<ActionButton
+							disabled={deleteRecording.isPending}
+							onClick={() => deleteRecording.mutate()}
+						>
+							<IconCapTrash />
+						</ActionButton>
+					</div>
 				</div>
 			</div>
 			<div
@@ -309,6 +340,37 @@ function ActionButton(props: ComponentProps<"button">) {
 			)}
 			type="button"
 		/>
+	);
+}
+
+function DisconnectedNotice(props: { inputs: RecordingInputState }) {
+	const affectedInputs = () => {
+		const list: string[] = [];
+		if (props.inputs.microphone) list.push("microphone");
+		if (props.inputs.camera) list.push("camera");
+		return list;
+	};
+
+	const deviceLabel = () => {
+		const list = affectedInputs();
+		if (list.length === 0) return "";
+		if (list.length === 1) return `${list[0]} disconnected`;
+		return `${list.join(" and ")} disconnected`;
+	};
+
+	const instructionLabel = () =>
+		affectedInputs().length > 1 ? "these devices" : "this device";
+
+	return (
+		<div class="flex gap-2 rounded-lg border border-amber-6 bg-amber-3 px-3 py-2 text-amber-12 text-[0.75rem]">
+			<IconLucideAlertTriangle class="size-4 mt-0.5 text-amber-11" />
+			<div class="flex flex-col gap-1 leading-tight">
+				<span class="font-medium">Recording paused — {deviceLabel()}.</span>
+				<span class="text-amber-12/80">
+					Reconnect {instructionLabel()} and then resume or stop the recording.
+				</span>
+			</div>
+		</div>
 	);
 }
 
