@@ -34,7 +34,7 @@ const DEFAULT_TRAFFIC_LIGHTS_INSET_WITH_TOOLBAR: LogicalPosition<f64> =
     LogicalPosition::new(20.0, 30.0);
 
 #[derive(Clone, Deserialize, Type)]
-pub enum CapWindowId {
+pub enum CapWindowDef {
     // Contains onboarding + permissions
     Setup,
     Main,
@@ -51,7 +51,7 @@ pub enum CapWindowId {
     Debug,
 }
 
-impl FromStr for CapWindowId {
+impl FromStr for CapWindowDef {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -90,7 +90,7 @@ impl FromStr for CapWindowId {
     }
 }
 
-impl std::fmt::Display for CapWindowId {
+impl std::fmt::Display for CapWindowDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Setup => write!(f, "setup"),
@@ -114,27 +114,27 @@ impl std::fmt::Display for CapWindowId {
     }
 }
 
-impl CapWindowId {
+impl CapWindowDef {
     pub fn label(&self) -> String {
         self.to_string()
     }
 
-    pub fn title(&self) -> String {
+    pub const fn title(&self) -> &str {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
-            Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::RecordingControls => "Cap Recording Controls".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::ModeSelect => "Cap Mode Selection".to_string(),
-            Self::Camera => "Cap Camera".to_string(),
-            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
-            _ => "Cap".to_string(),
+            Self::Setup => "Cap Setup",
+            Self::Settings => "Cap Settings",
+            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder",
+            Self::CaptureArea => "Cap Capture Area",
+            Self::RecordingControls => "Cap Recording Controls",
+            Self::Editor { .. } => "Cap Editor",
+            Self::ModeSelect => "Cap Mode Selection",
+            Self::Camera => "Cap Camera",
+            Self::RecordingsOverlay => "Cap Recordings Overlay",
+            _ => "Cap",
         }
     }
 
-    pub fn activates_dock(&self) -> bool {
+    pub const fn activates_dock(&self) -> bool {
         matches!(
             self,
             Self::Setup
@@ -151,7 +151,34 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
-    pub fn min_size(&self) -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    pub const fn has_toolbar(&self) -> bool {
+        matches!(self, Self::Editor { .. } | Self::Settings { .. })
+    }
+
+    #[cfg(target_os = "macos")]
+    pub const fn undecorated(&self) -> bool {
+        matches!(
+            self,
+            Self::Camera
+                | Self::WindowCaptureOccluder { .. }
+                | Self::CaptureArea
+                | Self::RecordingsOverlay
+                | Self::TargetSelectOverlay { .. }
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    pub const fn disables_window_buttons(&self) -> bool {
+        matches!(self, Self::RecordingControls)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub const fn disables_fullscreen(&self) -> bool {
+        matches!(self, Self::Settings)
+    }
+
+    pub const fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
@@ -166,7 +193,7 @@ impl CapWindowId {
 }
 
 #[derive(Debug, Clone, Type, Deserialize)]
-pub enum ShowCapWindow {
+pub enum CapWindow {
     Setup,
     Main {
         init_target_mode: Option<RecordingTargetMode>,
@@ -195,7 +222,7 @@ pub enum ShowCapWindow {
     ModeSelect,
 }
 
-impl ShowCapWindow {
+impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
@@ -210,12 +237,11 @@ impl ShowCapWindow {
             }
         }
 
-        if let Some(window) = self.id(app).get(app) {
+        if let Some(window) = self.def(app).get(app) {
             window.set_focus().ok();
             return Ok(window);
         }
 
-        let _id = self.id(app);
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -239,7 +265,7 @@ impl ShowCapWindow {
                     .map(|s| s.enable_new_recording_flow)
                     .unwrap_or_default();
 
-                let title = CapWindowId::Main.title();
+                let title = CapWindowDef::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let window = self
@@ -291,10 +317,11 @@ impl ShowCapWindow {
                     .map(|d| d.id())
                     == Some(display.id());
 
-                let title = CapWindowId::TargetSelectOverlay {
+                let title = CapWindowDef::TargetSelectOverlay {
                     display_id: display_id.clone(),
                 }
-                .title();
+                .title()
+                .to_string();
                 let should_protect = should_protect_window(app, &title);
 
                 let mut window_builder = self
@@ -366,12 +393,12 @@ impl ShowCapWindow {
             Self::Settings { page } => {
                 // Hide main window and target select overlays when settings window opens
                 for (label, window) in app.webview_windows() {
-                    if let Ok(id) = CapWindowId::from_str(&label)
+                    if let Ok(id) = CapWindowDef::from_str(&label)
                         && matches!(
                             id,
-                            CapWindowId::TargetSelectOverlay { .. }
-                                | CapWindowId::Main
-                                | CapWindowId::Camera
+                            CapWindowDef::TargetSelectOverlay { .. }
+                                | CapWindowDef::Main
+                                | CapWindowDef::Camera
                         )
                     {
                         let _ = window.hide();
@@ -388,7 +415,7 @@ impl ShowCapWindow {
                 .build()?
             }
             Self::Editor { .. } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
 
@@ -400,7 +427,7 @@ impl ShowCapWindow {
             }
             Self::Upgrade => {
                 // Hide main window when upgrade window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.hide();
                 }
 
@@ -417,7 +444,7 @@ impl ShowCapWindow {
             }
             Self::ModeSelect => {
                 // Hide main window when mode select window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.hide();
                 }
 
@@ -448,7 +475,7 @@ impl ShowCapWindow {
 
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
                         error!("Unable to initialize camera preview as one already exists!");
-                        if let Some(window) = CapWindowId::Camera.get(app) {
+                        if let Some(window) = CapWindowDef::Camera.get(app) {
                             window.show().ok();
                         }
                         return Err(anyhow!(
@@ -517,10 +544,11 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let title = CapWindowId::WindowCaptureOccluder {
+                let title = CapWindowDef::WindowCaptureOccluder {
                     screen_id: screen_id.clone(),
                 }
-                .title();
+                .title()
+                .to_string();
                 let should_protect = should_protect_window(app, &title);
 
                 #[cfg(target_os = "macos")]
@@ -557,7 +585,7 @@ impl ShowCapWindow {
                 window
             }
             Self::CaptureArea { screen_id } => {
-                let title = CapWindowId::CaptureArea.title();
+                let title = CapWindowDef::CaptureArea.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let mut window_builder = self
@@ -600,7 +628,7 @@ impl ShowCapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app)
+                if let Some(main_window) = CapWindowDef::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
                     && let Ok(scale_factor) = main_window.scale_factor()
@@ -615,7 +643,7 @@ impl ShowCapWindow {
                 let width = 250.0;
                 let height = 40.0;
 
-                let title = CapWindowId::RecordingControls.title();
+                let title = CapWindowDef::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let window = self
@@ -648,7 +676,7 @@ impl ShowCapWindow {
                 window
             }
             Self::RecordingsOverlay => {
-                let title = CapWindowId::RecordingsOverlay.title();
+                let title = CapWindowDef::RecordingsOverlay.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let window = self
@@ -714,15 +742,15 @@ impl ShowCapWindow {
         app: &'a AppHandle<Wry>,
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
-        let id = self.id(app);
+        let def = self.def(app);
 
-        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
-            .title(id.title())
+        let mut builder = WebviewWindow::builder(app, def.label(), WebviewUrl::App(url.into()))
+            .title(def.title())
             .visible(false)
             .accept_first_mouse(true)
             .shadow(true);
 
-        if let Some(min) = id.min_size() {
+        if let Some(min) = def.min_size() {
             builder = builder
                 .inner_size(min.0, min.1)
                 .min_inner_size(min.0, min.1);
@@ -736,31 +764,29 @@ impl ShowCapWindow {
         builder
     }
 
-    pub fn id(&self, app: &AppHandle) -> CapWindowId {
+    pub fn def(&self, app: &AppHandle) -> CapWindowDef {
         match self {
-            ShowCapWindow::Setup => CapWindowId::Setup,
-            ShowCapWindow::Main { .. } => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_path } => {
+            CapWindow::Setup => CapWindowDef::Setup,
+            CapWindow::Main { .. } => CapWindowDef::Main,
+            CapWindow::Settings { .. } => CapWindowDef::Settings,
+            CapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
-                CapWindowId::Editor { id }
+                CapWindowDef::Editor { id }
             }
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::TargetSelectOverlay { display_id } => CapWindowId::TargetSelectOverlay {
+            CapWindow::RecordingsOverlay => CapWindowDef::RecordingsOverlay,
+            CapWindow::TargetSelectOverlay { display_id } => CapWindowDef::TargetSelectOverlay {
                 display_id: display_id.clone(),
             },
-            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
-                CapWindowId::WindowCaptureOccluder {
-                    screen_id: screen_id.clone(),
-                }
-            }
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            CapWindow::WindowCaptureOccluder { screen_id } => CapWindowDef::WindowCaptureOccluder {
+                screen_id: screen_id.clone(),
+            },
+            CapWindow::CaptureArea { .. } => CapWindowDef::CaptureArea,
+            CapWindow::Camera => CapWindowDef::Camera,
+            CapWindow::InProgressRecording { .. } => CapWindowDef::RecordingControls,
+            CapWindow::Upgrade => CapWindowDef::Upgrade,
+            CapWindow::ModeSelect => CapWindowDef::ModeSelect,
         }
     }
 }
@@ -773,7 +799,7 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
         AppTheme::System => None,
         AppTheme::Light => Some(tauri::Theme::Light),
         AppTheme::Dark => Some(tauri::Theme::Dark),
-    })
+    });
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
@@ -794,7 +820,7 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 #[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowId::from_str(&label) {
+        if let Ok(id) = CapWindowDef::from_str(&label) {
             let title = id.title();
             window
                 .set_content_protected(should_protect_window(&app, &title))

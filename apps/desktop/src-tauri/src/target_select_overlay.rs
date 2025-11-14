@@ -8,7 +8,7 @@ use std::{
 use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 
-use crate::windows::{CapWindowId, ShowCapWindow};
+use crate::windows::{CapWindowDef, CapWindow};
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
@@ -54,7 +54,7 @@ pub async fn open_target_select_overlays(
         .map(|d| d.id())
         .collect::<Vec<_>>();
     for display_id in displays {
-        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
+        let _ = CapWindow::TargetSelectOverlay { display_id }
             .show(&app)
             .await;
     }
@@ -115,7 +115,7 @@ pub async fn open_target_select_overlays(
 #[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
+        if let Ok(CapWindowDef::TargetSelectOverlay { .. }) = CapWindowDef::from_str(&id) {
             let _ = window.close();
         }
     }
@@ -227,8 +227,8 @@ impl WindowFocusManager {
             tokio::spawn(async move {
                 let app = window.app_handle();
                 loop {
-                    let cap_main = CapWindowId::Main.get(app);
-                    let cap_settings = CapWindowId::Settings.get(app);
+                    let cap_main = CapWindowDef::Main.get(app);
+                    let cap_settings = CapWindowDef::Settings.get(app);
 
                     let has_cap_main = cap_main
                         .as_ref()
