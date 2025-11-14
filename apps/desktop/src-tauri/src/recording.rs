@@ -9,6 +9,8 @@ use cap_project::{
     cursor::CursorEvents,
 };
 use cap_recording::feeds::camera::CameraFeedLock;
+#[cfg(target_os = "macos")]
+use cap_recording::sources::screen_capture::SourceError;
 use cap_recording::{
     RecordingMode,
     feeds::{camera, microphone},
@@ -98,6 +100,58 @@ unsafe impl Send for SendableShareableContent {}
 
 #[cfg(target_os = "macos")]
 unsafe impl Sync for SendableShareableContent {}
+
+#[cfg(target_os = "macos")]
+async fn acquire_shareable_content_for_target(
+    capture_target: &ScreenCaptureTarget,
+) -> anyhow::Result<SendableShareableContent> {
+    let mut refreshed = false;
+
+    loop {
+        let shareable_content = SendableShareableContent(
+            crate::platform::get_shareable_content()
+                .await
+                .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
+                .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
+        );
+
+        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
+            .await
+        {
+            return Ok(shareable_content);
+        }
+
+        if refreshed {
+            return Err(anyhow!("GetShareableContent/DisplayMissing"));
+        }
+
+        crate::platform::refresh_shareable_content()
+            .await
+            .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
+        refreshed = true;
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn shareable_content_missing_target_display(
+    capture_target: &ScreenCaptureTarget,
+    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+) -> bool {
+    match capture_target.display() {
+        Some(display) => display
+            .raw_handle()
+            .as_sc(shareable_content)
+            .await
+            .is_none(),
+        None => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_shareable_content_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<SourceError>()
+        .is_some_and(|source_error| matches!(source_error, SourceError::AsContentFilter))
+}
 
 impl InProgressRecording {
     pub fn capture_target(&self) -> &ScreenCaptureTarget {
@@ -486,12 +540,8 @@ pub async fn start_recording(
             };
 
             #[cfg(target_os = "macos")]
-            let shareable_content = SendableShareableContent(
-                crate::platform::get_shareable_content()
-                    .await
-                    .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
-                    .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
-            );
+            let mut shareable_content =
+                acquire_shareable_content_for_target(&inputs.capture_target).await?;
 
             let common = InProgressRecordingCommon {
                 target_name,
@@ -625,6 +675,12 @@ pub async fn start_recording(
                         let done_fut = actor.done_fut();
                         state.set_current_recording(actor);
                         break done_fut;
+                    }
+                    #[cfg(target_os = "macos")]
+                    Err(err) if is_shareable_content_error(&err) => {
+                        shareable_content =
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
+                        continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
                         mic_restart_attempts += 1;
