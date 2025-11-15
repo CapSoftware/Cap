@@ -118,7 +118,7 @@ workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 dispatch2 = "0.3.0"
-block2 = "0.6.1"
+block2 = "0.6.2"
 objc2-foundation = "0.3.2"
 objc2-application-services = "0.3.2"
 objc2-core-foundation = "0.3.2"
