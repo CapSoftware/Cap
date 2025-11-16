@@ -677,17 +677,6 @@ function Page() {
 								<SettingsIcon class="text-neutral-300 size-4 group-hover:text-white" />
 							</button>
 						</Tooltip>
-						{import.meta.env.DEV && (
-							<button
-								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
-								class="flex justify-center items-center"
-							>
-								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
-							</button>
-						)}
 						{/* <Tooltip content={<span>Previous Recordings</span>}>
 							<button
 								type="button"

@@ -388,7 +388,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	const AccountSettingItem = () => {
 		return (
 			<SettingItem label="Account" description="">
-				{false ? (
+				{auth.data ? (
 					<button
 						onClick={handleAuth}
 						class="flex flex-row items-center justify-center h-8 px-2 rounded-[8px] text-white border border-white/5 bg-white/[0.03] hover:bg-white/5"
