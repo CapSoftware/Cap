@@ -34,21 +34,37 @@ impl PauseTracker {
         }
     }
 
-    fn adjust(&mut self, timestamp: Duration) -> Option<Duration> {
+    fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
         if self.flag.load(Ordering::Relaxed) {
             if self.paused_at.is_none() {
                 self.paused_at = Some(timestamp);
             }
-            return None;
+            return Ok(None);
         }
 
         if let Some(start) = self.paused_at.take() {
-            if let Some(delta) = timestamp.checked_sub(start) {
-                self.offset = self.offset.checked_add(delta).unwrap_or(Duration::MAX);
-            }
+            let delta = timestamp.checked_sub(start).ok_or_else(|| {
+                anyhow!(
+                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
+                )
+            })?;
+
+            self.offset = self.offset.checked_add(delta).ok_or_else(|| {
+                anyhow!(
+                    "Pause offset overflow (offset={:?}, delta={delta:?})",
+                    self.offset
+                )
+            })?;
         }
 
-        Some(timestamp.checked_sub(self.offset).unwrap_or(Duration::ZERO))
+        let adjusted = timestamp.checked_sub(self.offset).ok_or_else(|| {
+            anyhow!(
+                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
+                self.offset
+            )
+        })?;
+
+        Ok(Some(adjusted))
     }
 }
 
@@ -328,7 +344,7 @@ impl VideoMuxer for WindowsMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp) {
+        if let Some(timestamp) = self.pause.adjust(timestamp)? {
             self.video_tx.send(Some((frame.frame, timestamp)))?;
         }
 
@@ -338,7 +354,7 @@ impl VideoMuxer for WindowsMuxer {
 
 impl AudioMuxer for WindowsMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp) {
+        if let Some(timestamp) = self.pause.adjust(timestamp)? {
             if let Some(encoder) = self.audio_encoder.as_mut()
                 && let Ok(mut output) = self.output.lock()
             {
