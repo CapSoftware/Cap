@@ -150,6 +150,14 @@ impl CapWindowDef {
         )
     }
 
+    #[cfg(target_os = "macos")]
+    pub const fn pre_solarium_traffic_lights_position(&self) -> LogicalPosition<f64> {
+        match self {
+            Self::Editor { .. } => LogicalPosition::new(20.0, 32.0),
+            _ => LogicalPosition::new(12.0, 20.0),
+        }
+    }
+
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
@@ -695,19 +703,27 @@ impl CapWindow {
         };
 
         #[cfg(target_os = "macos")]
-        {
-            if def.disables_window_buttons() {
-                window.set_window_buttons_visible(false);
-            }
+        let _ = window.run_on_main_thread({
+            let window = window.clone();
+            move || {
+                if def.disables_window_buttons() {
+                    window.set_traffic_lights_visible(false);
+                }
 
-            if def.disables_fullscreen() {
-                window.disable_fullscreen();
-            }
+                let nswindow = window.objc2_nswindow();
 
-            if let Some(level) = def.window_level() {
-                window.set_level(level);
+                if def.disables_fullscreen() {
+                    nswindow.setCollectionBehavior(
+                        nswindow.collectionBehavior()
+                            | objc2_app_kit::NSWindowCollectionBehavior::FullScreenNone,
+                    );
+                }
+
+                if let Some(level) = def.window_level() {
+                    nswindow.setLevel(level)
+                }
             }
-        }
+        });
 
         Ok(window)
     }
@@ -739,7 +755,8 @@ impl CapWindow {
         } else {
             builder = builder
                 .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay);
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .traffic_light_position(def.pre_solarium_traffic_lights_position());
         }
 
         #[cfg(windows)]
