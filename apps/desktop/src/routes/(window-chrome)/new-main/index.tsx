@@ -302,22 +302,24 @@ function Page() {
 	const isRecording = () => !!currentRecording.data;
 	const auth = authStore.createQuery();
 
-	let hasHiddenMainWindowForPicker = false;
+	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
+		createSignal(false);
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
-		if (pickerActive && !hasHiddenMainWindowForPicker) {
-			hasHiddenMainWindowForPicker = true;
+		const hasHidden = hasHiddenMainWindowForPicker();
+		if (pickerActive && !hasHidden) {
+			setHasHiddenMainWindowForPicker(true);
 			void getCurrentWindow().hide();
-		} else if (!pickerActive && hasHiddenMainWindowForPicker) {
-			hasHiddenMainWindowForPicker = false;
+		} else if (!pickerActive && hasHidden) {
+			setHasHiddenMainWindowForPicker(false);
 			const currentWindow = getCurrentWindow();
 			void currentWindow.show();
 			void currentWindow.setFocus();
 		}
 	});
 	onCleanup(() => {
-		if (!hasHiddenMainWindowForPicker) return;
-		hasHiddenMainWindowForPicker = false;
+		if (!hasHiddenMainWindowForPicker()) return;
+		setHasHiddenMainWindowForPicker(false);
 		void getCurrentWindow().show();
 	});
 
