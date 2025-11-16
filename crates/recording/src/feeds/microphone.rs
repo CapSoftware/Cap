@@ -806,13 +806,13 @@ impl Message<LockedInputReconnected> for MicrophoneFeed {
         msg: LockedInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state {
-            if inner.label == msg.label {
-                inner.id = msg.id;
-                inner.config = msg.config;
-                inner.buffer_size_frames = msg.buffer_size_frames;
-                inner.done_tx = msg.done_tx;
-            }
+        if let State::Locked { inner } = &mut self.state
+            && inner.label == msg.label
+        {
+            inner.id = msg.id;
+            inner.config = msg.config;
+            inner.buffer_size_frames = msg.buffer_size_frames;
+            inner.done_tx = msg.done_tx;
         }
     }
 }

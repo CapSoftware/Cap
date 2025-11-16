@@ -669,12 +669,12 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         msg: LockedCameraInputReconnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Locked { inner } = &mut self.state {
-            if inner.id == msg.id {
-                inner.camera_info = msg.camera_info;
-                inner.video_info = msg.video_info;
-                inner.done_tx = msg.done_tx;
-            }
+        if let State::Locked { inner } = &mut self.state
+            && inner.id == msg.id
+        {
+            inner.camera_info = msg.camera_info;
+            inner.video_info = msg.video_info;
+            inner.done_tx = msg.done_tx;
         }
     }
 }
