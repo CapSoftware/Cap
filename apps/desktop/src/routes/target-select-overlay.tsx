@@ -33,7 +33,7 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
-import SelectionHint from "~/components/SelectionHint";
+import SelectionHint from "~/components/selection-hint";
 import { authStore, generalSettingsStore } from "~/store";
 import {
 	createCameraMutation,

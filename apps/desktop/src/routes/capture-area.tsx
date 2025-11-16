@@ -19,7 +19,7 @@ import {
 	createCropOptionsMenuItems,
 	type Ratio,
 } from "~/components/Cropper";
-import SelectionHint from "~/components/SelectionHint";
+import SelectionHint from "~/components/selection-hint";
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";
@@ -173,7 +173,7 @@ export default function CaptureArea() {
 	}
 
 	return (
-		<div class="overflow-hidden w-screen h-screen fixed relative">
+		<div class="overflow-hidden w-screen h-screen fixed">
 			<div class="flex fixed z-50 justify-center items-center w-full">
 				<Transition
 					appear
