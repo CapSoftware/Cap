@@ -61,6 +61,7 @@ impl OpenState {
         {
             self.attached = Some(AttachedState {
                 id: data.id,
+                label: data.label.clone(),
                 config: data.config.clone(),
                 buffer_size_frames: data.buffer_size_frames,
                 done_tx: data.done_tx,
@@ -76,8 +77,8 @@ struct ConnectingState {
 }
 
 struct AttachedState {
-    #[allow(dead_code)]
     id: u32,
+    label: String,
     config: SupportedStreamConfig,
     buffer_size_frames: Option<u32>,
     done_tx: mpsc::SyncSender<()>,
@@ -281,9 +282,18 @@ pub struct Lock;
 
 struct InputConnected {
     id: u32,
+    label: String,
     config: SupportedStreamConfig,
     buffer_size_frames: Option<u32>,
     done_tx: SyncSender<()>,
+}
+
+struct LockedInputReconnected {
+    id: u32,
+    label: String,
+    config: SupportedStreamConfig,
+    buffer_size_frames: Option<u32>,
+    done_tx: mpsc::SyncSender<()>,
 }
 
 struct InputConnectFailed {
@@ -320,175 +330,327 @@ impl Message<SetInput> for MicrophoneFeed {
     async fn handle(&mut self, msg: SetInput, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("MicrophoneFeed.SetInput('{}')", &msg.label);
 
-        let state = self.state.try_as_open()?;
+        match &mut self.state {
+            State::Open(state) => {
+                let id = self.input_id_counter;
+                self.input_id_counter += 1;
 
-        let id = self.input_id_counter;
-        self.input_id_counter += 1;
-
-        let Some((device, config)) = Self::list().swap_remove(&msg.label) else {
-            return Err(SetInputError::DeviceNotFound);
-        };
-
-        let sample_format = config.sample_format();
-        let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
-
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
-        let (done_tx, done_rx) = mpsc::sync_channel(0);
-
-        let actor_ref = ctx.actor_ref();
-        let ready = {
-            let config_for_ready = config.clone();
-            ready_rx
-                .map(move |v| {
-                    let config = config_for_ready.clone();
-                    v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .and_then(|inner| inner)
-                        .map(|buffer_size| (config, buffer_size))
-                })
-                .shared()
-        };
-        let error_sender = self.error_sender.clone();
-
-        state.connecting = Some(ConnectingState {
-            id,
-            ready: {
-                let done_tx = done_tx.clone();
-                ready
-                    .clone()
-                    .map(move |v| {
-                        v.map(|(config, buffer_size_frames)| InputConnected {
-                            id,
-                            config,
-                            buffer_size_frames,
-                            done_tx,
-                        })
-                    })
-                    .boxed()
-            },
-        });
-
-        std::thread::spawn({
-            let config = config.clone();
-            let stream_config = stream_config.clone();
-            let device_name_for_log = device.name().ok();
-            move || {
-                // Log all configs for debugging
-                if let Some(ref name) = device_name_for_log {
-                    info!("Device '{}' available configs:", name);
-                    for config in device.supported_input_configs().into_iter().flatten() {
-                        info!(
-                            "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
-                            config.sample_format(),
-                            config.min_sample_rate().0,
-                            config.max_sample_rate().0,
-                            config.sample_format().sample_size()
-                        );
-                    }
-                }
-
-                let buffer_size_description = match &stream_config.buffer_size {
-                    BufferSize::Default => "default".to_string(),
-                    BufferSize::Fixed(frames) => format!(
-                        "{} frames (~{:.1}ms)",
-                        frames,
-                        (*frames as f64 / config.sample_rate().0 as f64) * 1000.0
-                    ),
+                let label = msg.label.clone();
+                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                    return Err(SetInputError::DeviceNotFound);
                 };
 
-                info!(
-                    "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}, buffer_size={}",
-                    device_name_for_log,
-                    config.sample_rate().0,
-                    config.channels(),
-                    sample_format,
-                    buffer_size_description
-                );
+                let sample_format = config.sample_format();
+                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
 
-                let stream = match device.build_input_stream_raw(
-                    &stream_config,
-                    sample_format,
-                    {
-                        let actor_ref = actor_ref.clone();
-                        let mut callback_count = 0u64;
-                        move |data, info| {
-                            if callback_count == 0 {
+                let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
+                let (done_tx, done_rx) = mpsc::sync_channel(0);
+
+                let actor_ref = ctx.actor_ref();
+                let ready = {
+                    let config_for_ready = config.clone();
+                    ready_rx
+                        .map(move |v| {
+                            let config = config_for_ready.clone();
+                            v.map_err(|_| SetInputError::BuildStreamCrashed)
+                                .and_then(|inner| inner)
+                                .map(|buffer_size| (config, buffer_size))
+                        })
+                        .shared()
+                };
+                let error_sender = self.error_sender.clone();
+
+                state.connecting = Some(ConnectingState {
+                    id,
+                    ready: {
+                        let done_tx = done_tx.clone();
+                        ready
+                            .clone()
+                            .map({
+                                let label = label.clone();
+                                move |v| {
+                                    let label = label.clone();
+                                    v.map(|(config, buffer_size_frames)| InputConnected {
+                                        id,
+                                        label,
+                                        config,
+                                        buffer_size_frames,
+                                        done_tx,
+                                    })
+                                }
+                            })
+                            .boxed()
+                    },
+                });
+
+                std::thread::spawn({
+                    let config = config.clone();
+                    let stream_config = stream_config.clone();
+                    let device_name_for_log = device.name().ok();
+                    move || {
+                        if let Some(ref name) = device_name_for_log {
+                            info!("Device '{}' available configs:", name);
+                            for config in device.supported_input_configs().into_iter().flatten() {
                                 info!(
-                                    "🎤 First audio callback - data size: {} bytes, format: {:?}",
-                                    data.bytes().len(),
-                                    data.sample_format()
+                                    "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
+                                    config.sample_format(),
+                                    config.min_sample_rate().0,
+                                    config.max_sample_rate().0,
+                                    config.sample_format().sample_size()
                                 );
                             }
-                            callback_count += 1;
-
-                            let _ = actor_ref
-                                .tell(MicrophoneSamples {
-                                    data: data.bytes().to_vec(),
-                                    format: data.sample_format(),
-                                    info: info.clone(),
-                                    timestamp: Timestamp::from_cpal(info.timestamp().capture),
-                                })
-                                .try_send();
                         }
-                    },
-                    move |e| {
-                        error!("Microphone stream error: {e}");
 
-                        let _ = error_sender.send(e).is_err();
-                        actor_ref.kill();
-                    },
-                    None,
-                ) {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
-                        return;
+                        let buffer_size_description = match &stream_config.buffer_size {
+                            BufferSize::Default => "default".to_string(),
+                            BufferSize::Fixed(frames) => format!(
+                                "{} frames (~{:.1}ms)",
+                                frames,
+                                (*frames as f64 / config.sample_rate().0 as f64) * 1000.0
+                            ),
+                        };
+
+                        info!(
+                            "🎤 Building stream for '{:?}' with config: rate={}, channels={}, format={:?}, buffer_size={}",
+                            device_name_for_log,
+                            config.sample_rate().0,
+                            config.channels(),
+                            sample_format,
+                            buffer_size_description
+                        );
+
+                        let stream = match device.build_input_stream_raw(
+                            &stream_config,
+                            sample_format,
+                            {
+                                let actor_ref = actor_ref.clone();
+                                let mut callback_count = 0u64;
+                                move |data, info| {
+                                    if callback_count == 0 {
+                                        info!(
+                                            "🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                            data.bytes().len(),
+                                            data.sample_format()
+                                        );
+                                    }
+                                    callback_count += 1;
+
+                                    let _ = actor_ref
+                                        .tell(MicrophoneSamples {
+                                            data: data.bytes().to_vec(),
+                                            format: data.sample_format(),
+                                            info: info.clone(),
+                                            timestamp: Timestamp::from_cpal(info.timestamp().capture),
+                                        })
+                                        .try_send();
+                                }
+                            },
+                            move |e| {
+                                error!("Microphone stream error: {e}");
+
+                                let _ = error_sender.send(e).is_err();
+                            },
+                            None,
+                        ) {
+                            Ok(stream) => stream,
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
+                                return;
+                            }
+                        };
+
+                        if let Err(e) = stream.play() {
+                            let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
+                            return;
+                        }
+
+                        let _ = ready_tx.send(Ok(buffer_size_frames));
+
+                        match done_rx.recv() {
+                            Ok(_) => info!("Microphone actor shut down, ending stream"),
+                            Err(_) => info!("Microphone actor unreachable, ending stream"),
+                        }
                     }
+                });
+
+                tokio::spawn({
+                    let ready = ready.clone();
+                    let actor = ctx.actor_ref();
+                    let done_tx = done_tx;
+                    let label = label.clone();
+                    async move {
+                        match ready.await {
+                            Ok((config, buffer_size_frames)) => {
+                                let _ = actor
+                                    .tell(InputConnected {
+                                        id,
+                                        label,
+                                        config,
+                                        buffer_size_frames,
+                                        done_tx,
+                                    })
+                                    .await;
+                            }
+                            Err(_) => {
+                                let _ = actor.tell(InputConnectFailed { id }).await;
+                            }
+                        }
+                    }
+                });
+
+                let ready_for_return = ready.clone().map(|result| result.map(|(config, _)| config));
+
+                Ok(ready_for_return.boxed())
+            }
+            State::Locked { inner } => {
+                if inner.label != msg.label {
+                    return Err(SetInputError::Locked(FeedLockedError));
+                }
+
+                let label = msg.label.clone();
+                let Some((device, config)) = Self::list().swap_remove(&label) else {
+                    return Err(SetInputError::DeviceNotFound);
                 };
 
-                if let Err(e) = stream.play() {
-                    let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
-                    return;
-                }
+                let sample_format = config.sample_format();
+                let (stream_config, buffer_size_frames) = stream_config_with_latency(&config);
 
-                let _ = ready_tx.send(Ok(buffer_size_frames));
+                let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
+                let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-                match done_rx.recv() {
-                    Ok(_) => {
-                        info!("Microphone actor shut down, ending stream");
+                let actor_ref = ctx.actor_ref();
+                let ready = {
+                    let config_for_ready = config.clone();
+                    ready_rx
+                        .map(move |v| {
+                            let config = config_for_ready.clone();
+                            v.map_err(|_| SetInputError::BuildStreamCrashed)
+                                .and_then(|inner| inner)
+                                .map(|buffer_size| (config, buffer_size))
+                        })
+                        .shared()
+                };
+                let error_sender = self.error_sender.clone();
+
+                let new_id = self.input_id_counter;
+                self.input_id_counter += 1;
+
+                let _ = inner.done_tx.send(());
+
+                std::thread::spawn({
+                    let config = config.clone();
+                    let stream_config = stream_config.clone();
+                    let device_name_for_log = device.name().ok();
+                    move || {
+                        if let Some(ref name) = device_name_for_log {
+                            info!("Device '{}' available configs:", name);
+                            for config in device.supported_input_configs().into_iter().flatten() {
+                                info!(
+                                    "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
+                                    config.sample_format(),
+                                    config.min_sample_rate().0,
+                                    config.max_sample_rate().0,
+                                    config.sample_format().sample_size()
+                                );
+                            }
+                        }
+
+                        let buffer_size_description = match &stream_config.buffer_size {
+                            BufferSize::Default => "default".to_string(),
+                            BufferSize::Fixed(frames) => format!(
+                                "{} frames (~{:.1}ms)",
+                                frames,
+                                (*frames as f64 / config.sample_rate().0 as f64) * 1000.0
+                            ),
+                        };
+
+                        info!(
+                            "🎤 Rebuilding stream for '{:?}' with config: rate={}, channels={}, format={:?}, buffer_size={}",
+                            device_name_for_log,
+                            config.sample_rate().0,
+                            config.channels(),
+                            sample_format,
+                            buffer_size_description
+                        );
+
+                        let stream = match device.build_input_stream_raw(
+                            &stream_config,
+                            sample_format,
+                            {
+                                let actor_ref = actor_ref.clone();
+                                let mut callback_count = 0u64;
+                                move |data, info| {
+                                    if callback_count == 0 {
+                                        info!(
+                                            "🎤 First audio callback - data size: {} bytes, format: {:?}",
+                                            data.bytes().len(),
+                                            data.sample_format()
+                                        );
+                                    }
+                                    callback_count += 1;
+
+                                    let _ = actor_ref
+                                        .tell(MicrophoneSamples {
+                                            data: data.bytes().to_vec(),
+                                            format: data.sample_format(),
+                                            info: info.clone(),
+                                            timestamp: Timestamp::from_cpal(info.timestamp().capture),
+                                        })
+                                        .try_send();
+                                }
+                            },
+                            move |e| {
+                                error!("Microphone stream error: {e}");
+                                let _ = error_sender.send(e).is_err();
+                            },
+                            None,
+                        ) {
+                            Ok(stream) => stream,
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
+                                return;
+                            }
+                        };
+
+                        if let Err(e) = stream.play() {
+                            let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
+                            return;
+                        }
+
+                        let _ = ready_tx.send(Ok(buffer_size_frames));
+
+                        match done_rx.recv() {
+                            Ok(_) => info!("Microphone actor shut down, ending stream"),
+                            Err(_) => info!("Microphone actor unreachable, ending stream"),
+                        }
                     }
-                    Err(_) => {
-                        info!("Microphone actor unreachable, ending stream");
+                });
+
+                tokio::spawn({
+                    let ready = ready.clone();
+                    let actor = ctx.actor_ref();
+                    let done_tx = done_tx.clone();
+                    let label = label.clone();
+                    async move {
+                        if let Ok((config, buffer_size_frames)) = ready.await {
+                            let _ = actor
+                                .tell(LockedInputReconnected {
+                                    id: new_id,
+                                    label,
+                                    config,
+                                    buffer_size_frames,
+                                    done_tx,
+                                })
+                                .await;
+                        }
                     }
-                }
+                });
+
+                let ready_for_return = ready.clone().map(|result| result.map(|(config, _)| config));
+
+                Ok(ready_for_return.boxed())
             }
-        });
-
-        tokio::spawn({
-            let ready = ready.clone();
-            let actor = ctx.actor_ref();
-            let done_tx = done_tx;
-            async move {
-                match ready.await {
-                    Ok((config, buffer_size_frames)) => {
-                        let _ = actor
-                            .tell(InputConnected {
-                                id,
-                                config,
-                                buffer_size_frames,
-                                done_tx,
-                            })
-                            .await;
-                    }
-                    Err(_) => {
-                        let _ = actor.tell(InputConnectFailed { id }).await;
-                    }
-                }
-            }
-        });
-
-        let ready_for_return = ready.clone().map(|result| result.map(|(config, _)| config));
-
-        Ok(ready_for_return.boxed())
+        }
     }
 }
 
@@ -633,6 +795,25 @@ impl Message<InputConnectFailed> for MicrophoneFeed {
         }
 
         Ok(())
+    }
+}
+
+impl Message<LockedInputReconnected> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: LockedInputReconnected,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if let State::Locked { inner } = &mut self.state {
+            if inner.label == msg.label {
+                inner.id = msg.id;
+                inner.config = msg.config;
+                inner.buffer_size_frames = msg.buffer_size_frames;
+                inner.done_tx = msg.done_tx;
+            }
+        }
     }
 }
 

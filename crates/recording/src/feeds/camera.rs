@@ -173,6 +173,13 @@ struct InputConnectFailed {
     id: DeviceOrModelID,
 }
 
+struct LockedCameraInputReconnected {
+    id: DeviceOrModelID,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
+    done_tx: SyncSender<()>,
+}
+
 struct NewFrame(FFmpegVideoFrame);
 
 struct Unlock;
@@ -325,72 +332,141 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
-        let state = self.state.try_as_open()?;
+        match &mut self.state {
+            State::Open(state) => {
+                let (ready_tx, ready_rx) =
+                    oneshot::channel::<Result<InputConnected, SetInputError>>();
+                let (done_tx, done_rx) = std::sync::mpsc::sync_channel(0);
 
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(0);
+                let ready = ready_rx
+                    .map(|v| {
+                        v.map_err(|_| SetInputError::BuildStreamCrashed)
+                            .and_then(|v| v)
+                    })
+                    .shared();
 
-        let ready = ready_rx
-            .map(|v| {
-                v.map_err(|_| SetInputError::BuildStreamCrashed)
-                    .and_then(|v| v)
-            })
-            .shared();
+                state.connecting = Some(ConnectingState {
+                    id: msg.id.clone(),
+                    ready: ready.clone().boxed(),
+                });
 
-        state.connecting = Some(ConnectingState {
-            id: msg.id.clone(),
-            ready: ready.clone().boxed(),
-        });
+                let id = msg.id.clone();
+                let actor_ref = ctx.actor_ref();
+                let new_frame_recipient = actor_ref.clone().recipient();
 
-        let id = msg.id.clone();
-        let actor_ref = ctx.actor_ref();
-        let new_frame_recipient = actor_ref.clone().recipient();
+                let rt = Runtime::new().expect("Failed to get Tokio runtime!");
+                std::thread::spawn(move || {
+                    LocalSet::new().block_on(&rt, async move {
+                        let handle = match setup_camera(&id, new_frame_recipient).await {
+                            Ok(r) => {
+                                let _ = ready_tx.send(Ok(InputConnected {
+                                    camera_info: r.camera_info.clone(),
+                                    video_info: r.video_info,
+                                    done_tx: done_tx.clone(),
+                                }));
 
-        let rt = Runtime::new().expect("Failed to get Tokio runtime!");
-        std::thread::spawn(move || {
-            LocalSet::new().block_on(&rt, async move {
-                let handle = match setup_camera(&id, new_frame_recipient).await {
-                    Ok(r) => {
-                        let _ = ready_tx.send(Ok(InputConnected {
-                            camera_info: r.camera_info.clone(),
-                            video_info: r.video_info,
-                            done_tx: done_tx.clone(),
-                        }));
+                                let _ = actor_ref
+                                    .ask(InputConnected {
+                                        camera_info: r.camera_info.clone(),
+                                        video_info: r.video_info,
+                                        done_tx: done_tx.clone(),
+                                    })
+                                    .await;
 
-                        let _ = actor_ref
-                            .ask(InputConnected {
-                                camera_info: r.camera_info.clone(),
-                                video_info: r.video_info,
-                                done_tx: done_tx.clone(),
-                            })
-                            .await;
+                                r.handle
+                            }
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(e.clone()));
 
-                        r.handle
-                    }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(e.clone()));
+                                let _ = actor_ref.tell(InputConnectFailed { id }).await;
 
-                        let _ = actor_ref.tell(InputConnectFailed { id }).await;
+                                return;
+                            }
+                        };
 
-                        return;
-                    }
-                };
+                        trace!("Waiting for camera to be done");
 
-                trace!("Waiting for camera to be done");
+                        let _ = done_rx.recv();
 
-                let _ = done_rx.recv();
+                        trace!("Stoppping capture of {:?}", &id);
 
-                trace!("Stoppping capture of {:?}", &id);
+                        let _ = handle.stop_capturing();
 
-                let _ = handle.stop_capturing();
+                        info!("Stopped capture of {:?}", &id);
+                    })
+                });
 
-                info!("Stopped capture of {:?}", &id);
-            })
-        });
+                Ok(ready
+                    .map(|v| v.map(|v| (v.camera_info, v.video_info)))
+                    .boxed())
+            }
+            State::Locked { inner } => {
+                if inner.id != msg.id {
+                    return Err(SetInputError::Locked(FeedLockedError));
+                }
 
-        Ok(ready
-            .map(|v| v.map(|v| (v.camera_info, v.video_info)))
-            .boxed())
+                let (ready_tx, ready_rx) =
+                    oneshot::channel::<Result<InputConnected, SetInputError>>();
+                let (done_tx, done_rx) = std::sync::mpsc::sync_channel(0);
+
+                let ready = ready_rx
+                    .map(|v| {
+                        v.map_err(|_| SetInputError::BuildStreamCrashed)
+                            .and_then(|v| v)
+                    })
+                    .shared();
+
+                let id = msg.id.clone();
+                let actor_ref = ctx.actor_ref();
+                let new_frame_recipient = actor_ref.clone().recipient();
+
+                let _ = inner.done_tx.send(());
+
+                let rt = Runtime::new().expect("Failed to get Tokio runtime!");
+                std::thread::spawn(move || {
+                    LocalSet::new().block_on(&rt, async move {
+                        let handle = match setup_camera(&id, new_frame_recipient).await {
+                            Ok(r) => {
+                                let _ = ready_tx.send(Ok(InputConnected {
+                                    camera_info: r.camera_info.clone(),
+                                    video_info: r.video_info,
+                                    done_tx: done_tx.clone(),
+                                }));
+
+                                let _ = actor_ref
+                                    .tell(LockedCameraInputReconnected {
+                                        id: id.clone(),
+                                        camera_info: r.camera_info.clone(),
+                                        video_info: r.video_info,
+                                        done_tx: done_tx.clone(),
+                                    })
+                                    .await;
+
+                                r.handle
+                            }
+                            Err(e) => {
+                                let _ = ready_tx.send(Err(e.clone()));
+                                return;
+                            }
+                        };
+
+                        trace!("Waiting for camera to be done");
+
+                        let _ = done_rx.recv();
+
+                        trace!("Stoppping capture of {:?}", &id);
+
+                        let _ = handle.stop_capturing();
+
+                        info!("Stopped capture of {:?}", &id);
+                    })
+                });
+
+                Ok(ready
+                    .map(|v| v.map(|v| (v.camera_info, v.video_info)))
+                    .boxed())
+            }
+        }
     }
 }
 
@@ -582,6 +658,24 @@ impl Message<InputConnectFailed> for CameraFeed {
         }
 
         Ok(())
+    }
+}
+
+impl Message<LockedCameraInputReconnected> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: LockedCameraInputReconnected,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if let State::Locked { inner } = &mut self.state {
+            if inner.id == msg.id {
+                inner.camera_info = msg.camera_info;
+                inner.video_info = msg.video_info;
+                inner.done_tx = msg.done_tx;
+            }
+        }
     }
 }
 

@@ -284,8 +284,13 @@ impl App {
             return Ok(());
         }
 
-        if matches!(kind, RecordingInputKind::Microphone) {
-            self.ensure_selected_mic_ready().await.ok();
+        match kind {
+            RecordingInputKind::Microphone => {
+                self.ensure_selected_mic_ready().await.ok();
+            }
+            RecordingInputKind::Camera => {
+                self.ensure_selected_camera_ready().await.ok();
+            }
         }
 
         let _ = RecordingEvent::InputRestored { input: kind }.emit(&self.handle);
@@ -306,13 +311,43 @@ impl App {
 
         Ok(())
     }
+
+    async fn ensure_selected_camera_ready(&mut self) -> Result<(), String> {
+        if let Some(id) = self.selected_camera_id.clone() {
+            let ready = self
+                .camera_feed
+                .ask(feeds::camera::SetInput { id: id.clone() })
+                .await
+                .map_err(|e| e.to_string())?;
+
+            ready.await.map_err(|e| e.to_string())?;
+        }
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    let mic_feed = state.read().await.mic_feed.clone();
+    let (mic_feed, studio_handle, current_label) = {
+        let app = state.read().await;
+        let handle = match app.current_recording() {
+            Some(InProgressRecording::Studio { handle, .. }) => Some(handle.clone()),
+            _ => None,
+        };
+        (app.mic_feed.clone(), handle, app.selected_mic_label.clone())
+    };
+
+    if label == current_label {
+        return Ok(());
+    }
+
+    if let Some(handle) = &studio_handle {
+        handle.set_mic_feed(None).await.map_err(|e| e.to_string())?;
+    }
+
     let desired_label = label.clone();
 
     match desired_label.as_ref() {
@@ -329,6 +364,19 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
                 })
                 .await
                 .map_err(|e| e.to_string())?
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    if let Some(handle) = studio_handle {
+        if desired_label.is_some() {
+            let mic_lock = mic_feed
+                .ask(microphone::Lock)
+                .await
+                .map_err(|e| e.to_string())?;
+            handle
+                .set_mic_feed(Some(Arc::new(mic_lock)))
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -361,12 +409,32 @@ async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app_handle, state))]
+#[allow(unused_mut)]
 async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    let camera_feed = state.read().await.camera_feed.clone();
+    let app = state.read().await;
+    let camera_feed = app.camera_feed.clone();
+    let studio_handle = match app.current_recording() {
+        Some(InProgressRecording::Studio { handle, .. }) => Some(handle.clone()),
+        _ => None,
+    };
+    let current_id = app.selected_camera_id.clone();
+    let camera_in_use = app.camera_in_use;
+    drop(app);
+
+    if id == current_id && camera_in_use {
+        return Ok(());
+    }
+
+    if let Some(handle) = &studio_handle {
+        handle
+            .set_camera_feed(None)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     match &id {
         None => {
@@ -391,9 +459,23 @@ async fn set_camera_input(
         }
     }
 
+    if let Some(handle) = studio_handle {
+        if id.is_some() {
+            let camera_lock = camera_feed
+                .ask(feeds::camera::Lock)
+                .await
+                .map_err(|e| e.to_string())?;
+            handle
+                .set_camera_feed(Some(Arc::new(camera_lock)))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     {
-        let mut app = state.write().await;
+        let app = &mut *state.write().await;
         app.selected_camera_id = id;
+        app.camera_in_use = app.selected_camera_id.is_some();
         let cleared = app.disconnected_inputs.remove(&RecordingInputKind::Camera);
 
         if cleared {
@@ -412,7 +494,7 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
         let state = app_handle.state::<ArcLock<App>>();
         let state = state.inner().clone();
 
-        let mut error_rx = error_rx;
+        let error_rx = error_rx;
 
         while let Ok(err) = error_rx.recv_async().await {
             error!("Mic feed actor error: {err}");
@@ -426,8 +508,8 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
                 warn!("Failed to pause recording after mic disconnect: {handle_err}");
             }
 
-            if let Err(restart_err) = app.restart_mic_feed().await {
-                warn!("Failed to restart microphone feed: {restart_err}");
+            if let Err(restart_err) = app.ensure_selected_mic_ready().await {
+                warn!("Failed to restart microphone input: {restart_err}");
             }
         }
     });
