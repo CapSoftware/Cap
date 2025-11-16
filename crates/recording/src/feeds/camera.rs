@@ -661,10 +661,10 @@ impl Message<Lock> for CameraFeed {
             let ready = &mut connecting.ready;
             let data = ready.await?;
 
-            if state.handle_input_connected(data, id) {
-                if let Some(attached) = &mut state.attached {
-                    attached.finalize_pending_release();
-                }
+            if state.handle_input_connected(data, id)
+                && let Some(attached) = &mut state.attached
+            {
+                attached.finalize_pending_release();
             }
         }
 
@@ -711,12 +711,11 @@ impl Message<InputConnected> for CameraFeed {
             let ready = &mut connecting.ready;
             let res = ready.await;
 
-            if let Ok(data) = res {
-                if state.handle_input_connected(data, id) {
-                    if let Some(attached) = &mut state.attached {
-                        attached.finalize_pending_release();
-                    }
-                }
+            if let Ok(data) = res
+                && state.handle_input_connected(data, id)
+                && let Some(attached) = &mut state.attached
+            {
+                attached.finalize_pending_release();
             }
         }
 
@@ -787,10 +786,10 @@ impl Message<FinalizePendingRelease> for CameraFeed {
     ) -> Self::Reply {
         match &mut self.state {
             State::Open(OpenState { attached, .. }) => {
-                if let Some(attached) = attached {
-                    if attached.id == msg.id {
-                        attached.finalize_pending_release();
-                    }
+                if let Some(attached) = attached
+                    && attached.id == msg.id
+                {
+                    attached.finalize_pending_release();
                 }
             }
             State::Locked { inner } => {
