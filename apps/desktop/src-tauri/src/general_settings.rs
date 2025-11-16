@@ -257,7 +257,9 @@ pub fn init(app: &AppHandle) {
         store.recording_picker_preference_set = true;
     }
 
-    store.save(app).unwrap();
+    if let Err(e) = store.save(app) {
+        error!("Failed to save general settings: {}", e);
+    }
 
     println!("GeneralSettingsState managed");
 }
