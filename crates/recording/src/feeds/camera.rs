@@ -289,22 +289,43 @@ fn spawn_camera_setup(
                             let _ = actor_ref.ask(ready_payload).await;
                         }
                         CameraSetupFlow::Locked => {
-                            if actor_ref
-                                .tell(LockedCameraInputReconnected {
+                            let reconnect_result = actor_ref
+                                .ask(LockedCameraInputReconnected {
                                     id: id.clone(),
                                     camera_info,
                                     video_info,
                                     done_tx: done_tx_thread.clone(),
                                 })
-                                .await
-                                .is_err()
-                            {
-                                let _ =
-                                    ready_tx_thread.send(Err(SetInputError::BuildStreamCrashed));
-                                let _ = handle.stop_capturing();
-                                return;
+                                .await;
+
+                            match reconnect_result {
+                                Ok(true) => {
+                                    let _ = ready_tx_thread.send(Ok(ready_payload));
+                                    let _ = actor_ref
+                                        .tell(FinalizePendingRelease { id: id.clone() })
+                                        .await;
+                                }
+                                Ok(false) => {
+                                    warn!(
+                                        "Locked camera state changed before reconnecting {:?}",
+                                        id
+                                    );
+                                    let _ = ready_tx_thread
+                                        .send(Err(SetInputError::BuildStreamCrashed));
+                                    let _ = handle.stop_capturing();
+                                    return;
+                                }
+                                Err(err) => {
+                                    error!(
+                                        ?err,
+                                        "Failed to update locked camera state for {:?}", id
+                                    );
+                                    let _ = ready_tx_thread
+                                        .send(Err(SetInputError::BuildStreamCrashed));
+                                    let _ = handle.stop_capturing();
+                                    return;
+                                }
                             }
-                            let _ = ready_tx_thread.send(Ok(ready_payload));
                         }
                     }
 
@@ -510,8 +531,6 @@ impl Message<SetInput> for CameraFeed {
                 if inner.id != msg.id {
                     return Err(SetInputError::Locked(FeedLockedError));
                 }
-
-                let _ = inner.done_tx.send(());
 
                 let actor_ref = ctx.actor_ref();
                 let new_frame_recipient = actor_ref.clone().recipient();
