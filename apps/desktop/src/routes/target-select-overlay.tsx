@@ -290,6 +290,17 @@ function Inner() {
 									left: `${windowUnderCursor.bounds.position.x}px`,
 									top: `${windowUnderCursor.bounds.position.y}px`,
 								}}
+								onClick={() => {
+									setOptions(
+										"captureTarget",
+										reconcile({
+											variant: "window",
+											id: windowUnderCursor.id,
+										}),
+									);
+									setOptions("targetMode", null);
+									commands.closeTargetSelectOverlays();
+								}}
 							>
 								<div class="flex flex-col justify-center items-center text-white">
 									<div class="w-24 h-24">
@@ -312,17 +323,20 @@ function Inner() {
 										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
 									</span>
 								</div>
-								<RecordingControls
-									target={{
-										variant: "window",
-										id: windowUnderCursor.id,
-									}}
-								/>
+								<div onClick={(e) => e.stopPropagation()}>
+									<RecordingControls
+										target={{
+											variant: "window",
+											id: windowUnderCursor.id,
+										}}
+									/>
+								</div>
 
 								<Button
 									variant="dark"
 									size="sm"
-									onClick={() => {
+									onClick={(e) => {
+										e.stopPropagation();
 										setInitialAreaBounds({
 											x: windowUnderCursor.bounds.position.x,
 											y: windowUnderCursor.bounds.position.y,

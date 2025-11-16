@@ -401,7 +401,7 @@ function Page() {
 			reconcile({ variant: "display", id: target.id }),
 		);
 		setOptions("targetMode", "display");
-		commands.openTargetSelectOverlays(rawOptions.captureTarget);
+		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
 		setDisplayMenuOpen(false);
 		displayTriggerRef?.focus();
 	};
@@ -412,7 +412,7 @@ function Page() {
 			reconcile({ variant: "window", id: target.id }),
 		);
 		setOptions("targetMode", "window");
-		commands.openTargetSelectOverlays(rawOptions.captureTarget);
+		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
@@ -586,7 +586,7 @@ function Page() {
 		if (isRecording()) return;
 		const nextMode = rawOptions.targetMode === mode ? null : mode;
 		setOptions("targetMode", nextMode);
-		if (nextMode) commands.openTargetSelectOverlays(rawOptions.captureTarget);
+		if (nextMode) commands.openTargetSelectOverlays(null);
 		else commands.closeTargetSelectOverlays();
 	};
 
