@@ -1,683 +1,828 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
-import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
+import { createEffect } from "solid-js";
 import {
-	CheckMenuItem,
-	Menu,
-	MenuItem,
-	PredefinedMenuItem,
+  CheckMenuItem,
+  Menu,
+  MenuItem,
+  PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
-	createMemo,
-	createSignal,
-	Match,
-	mergeProps,
-	onCleanup,
-	Show,
-	Suspense,
-	Switch,
+  createMemo,
+  createSignal,
+  Match,
+  mergeProps,
+  onCleanup,
+  Show,
+  Suspense,
+  Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
-	CROP_ZERO,
-	type CropBounds,
-	Cropper,
-	type CropperRef,
-	createCropOptionsMenuItems,
-	type Ratio,
+  CROP_ZERO,
+  type CropBounds,
+  Cropper,
+  type CropperRef,
+  createCropOptionsMenuItems,
+  type Ratio,
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import {
-	createCameraMutation,
-	createOptionsQuery,
-	createOrganizationsQuery,
-	listAudioDevices,
-	listVideoDevices,
+  createCameraMutation,
+  createOptionsQuery,
+  createOrganizationsQuery,
+  listAudioDevices,
+  listVideoDevices,
 } from "~/utils/queries";
 import {
-	type CameraInfo,
-	commands,
-	type DeviceOrModelID,
-	type DisplayId,
-	events,
-	type ScreenCaptureTarget,
-	type TargetUnderCursor,
+  type CameraInfo,
+  commands,
+  type DeviceOrModelID,
+  type DisplayId,
+  events,
+  type ScreenCaptureTarget,
+  type TargetUnderCursor,
 } from "~/utils/tauri";
 import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
 import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
 import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
+  RecordingOptionsProvider,
+  useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
 
 const MIN_SIZE = { width: 150, height: 150 };
 
 const capitalize = (str: string) => {
-	return str.charAt(0).toUpperCase() + str.slice(1);
+  return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
-	if (!id) return undefined;
-	return cameras.find((camera) =>
-		"DeviceID" in id
-			? camera.device_id === id.DeviceID
-			: camera.model_id === id.ModelID,
-	);
+  if (!id) return undefined;
+  return cameras.find((camera) =>
+    "DeviceID" in id
+      ? camera.device_id === id.DeviceID
+      : camera.model_id === id.ModelID
+  );
 };
 
 export default function () {
-	return (
-		<RecordingOptionsProvider>
-			<Inner />
-		</RecordingOptionsProvider>
-	);
+  return (
+    <RecordingOptionsProvider>
+      <Inner />
+    </RecordingOptionsProvider>
+  );
 }
 
 function useOptions() {
-	const { rawOptions: _rawOptions, setOptions } = createOptionsQuery();
+  const { rawOptions: _rawOptions, setOptions } = createOptionsQuery();
 
-	const organizations = createOrganizationsQuery();
-	const options = mergeProps(_rawOptions, () => {
-		const ret: Partial<typeof _rawOptions> = {};
+  const organizations = createOrganizationsQuery();
+  const options = mergeProps(_rawOptions, () => {
+    const ret: Partial<typeof _rawOptions> = {};
 
-		if (
-			(!_rawOptions.organizationId && organizations().length > 0) ||
-			(_rawOptions.organizationId &&
-				organizations().every((o) => o.id !== _rawOptions.organizationId) &&
-				organizations().length > 0)
-		)
-			ret.organizationId = organizations()[0]?.id;
+    if (
+      (!_rawOptions.organizationId && organizations().length > 0) ||
+      (_rawOptions.organizationId &&
+        organizations().every((o) => o.id !== _rawOptions.organizationId) &&
+        organizations().length > 0)
+    )
+      ret.organizationId = organizations()[0]?.id;
 
-		return ret;
-	});
+    return ret;
+  });
 
-	return [options, setOptions] as const;
+  return [options, setOptions] as const;
 }
 
 function Inner() {
-	const [params] = useSearchParams<{
-		displayId: DisplayId;
-		isHoveredDisplay: string;
-	}>();
-	const [options, setOptions] = useOptions();
+  const [params] = useSearchParams<{
+    displayId: DisplayId;
+    isHoveredDisplay: string;
+  }>();
+  const [options, setOptions] = useOptions();
 
-	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
+  const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
-	const [targetUnderCursor, setTargetUnderCursor] =
-		createStore<TargetUnderCursor>({
-			display_id: null,
-			window: null,
-		});
+  const [targetUnderCursor, setTargetUnderCursor] =
+    createStore<TargetUnderCursor>({
+      display_id: null,
+      window: null,
+    });
 
-	const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
-		setTargetUnderCursor(reconcile(event.payload));
-	});
-	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
+  const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
+    setTargetUnderCursor(reconcile(event.payload));
+  });
+  onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const windowIcon = useQuery(() => ({
-		queryKey: ["windowIcon", targetUnderCursor.window?.id],
-		queryFn: async () => {
-			if (!targetUnderCursor.window?.id) return null;
-			return await commands.getWindowIcon(
-				targetUnderCursor.window.id.toString(),
-			);
-		},
-		enabled: !!targetUnderCursor.window?.id,
-		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
-	}));
+  const windowIcon = useQuery(() => ({
+    queryKey: ["windowIcon", targetUnderCursor.window?.id],
+    queryFn: async () => {
+      if (!targetUnderCursor.window?.id) return null;
+      return await commands.getWindowIcon(
+        targetUnderCursor.window.id.toString()
+      );
+    },
+    enabled: !!targetUnderCursor.window?.id,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  }));
 
-	const displayInformation = useQuery(() => ({
-		queryKey: ["displayId", params.displayId],
-		queryFn: async () => {
-			if (!params.displayId) return null;
-			try {
-				const info = await commands.displayInformation(params.displayId);
-				return info;
-			} catch (error) {
-				console.error("Failed to fetch screen information:", error);
-				return null;
-			}
-		},
-		enabled: params.displayId !== undefined && options.targetMode === "display",
-	}));
+  const displayInformation = useQuery(() => ({
+    queryKey: ["displayId", params.displayId],
+    queryFn: async () => {
+      if (!params.displayId) return null;
+      try {
+        const info = await commands.displayInformation(params.displayId);
+        return info;
+      } catch (error) {
+        console.error("Failed to fetch screen information:", error);
+        return null;
+      }
+    },
+    enabled: params.displayId !== undefined && options.targetMode === "display",
+  }));
 
-	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
+  const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
+  type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
+  const [pendingAreaTarget, setPendingAreaTarget] =
+    createSignal<AreaTarget | null>(null);
 
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
-		CropBounds | undefined
-	>(undefined);
+  createEffect(() => {
+    const target = options.captureTarget;
+    if (
+      target.variant === "area" &&
+      params.displayId &&
+      target.screen === params.displayId
+    ) {
+      setPendingAreaTarget({
+        variant: "area",
+        screen: target.screen,
+        bounds: {
+          position: {
+            x: target.bounds.position.x,
+            y: target.bounds.position.y,
+          },
+          size: {
+            width: target.bounds.size.width,
+            height: target.bounds.size.height,
+          },
+        },
+      });
+    }
+  });
 
-	const unsubOnEscapePress = events.onEscapePress.listen(() => {
-		setOptions("targetMode", null);
-		commands.closeTargetSelectOverlays();
-	});
-	onCleanup(() => unsubOnEscapePress.then((f) => f()));
+  createEffect((prevMode: "display" | "window" | "area" | null | undefined) => {
+    const mode = options.targetMode ?? null;
+    if (prevMode === "area" && mode !== "area") {
+      const target = pendingAreaTarget();
+      if (target) {
+        setOptions(
+          "captureTarget",
+          reconcile({
+            variant: "area",
+            screen: target.screen,
+            bounds: {
+              position: {
+                x: target.bounds.position.x,
+                y: target.bounds.position.y,
+              },
+              size: {
+                width: target.bounds.size.width,
+                height: target.bounds.size.height,
+              },
+            },
+          })
+        );
+      }
+      setPendingAreaTarget(null);
+    }
+    return mode;
+  });
 
-	// This prevents browser keyboard shortcuts from firing.
-	// Eg. on Windows Ctrl+P would open the print dialog without this
-	createEventListener(document, "keydown", (e) => e.preventDefault());
+  const [initialAreaBounds, setInitialAreaBounds] = createSignal<
+    CropBounds | undefined
+  >(undefined);
 
-	return (
-		<Switch>
-			<Match when={options.targetMode === "display" && params.displayId}>
-				{(displayId) => (
-					<div
-						data-over={targetUnderCursor.display_id === displayId()}
-						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
-					>
-						<div class="absolute inset-0 bg-black/70 -z-10" />
+  createEffect(() => {
+    const target = options.captureTarget;
+    if (target.variant !== "area") return;
+    if (!params.displayId || target.screen !== params.displayId) return;
+    if (initialAreaBounds() !== undefined) return;
+    setInitialAreaBounds({
+      x: target.bounds.position.x,
+      y: target.bounds.position.y,
+      width: target.bounds.size.width,
+      height: target.bounds.size.height,
+    });
+  });
 
-						<Show when={displayInformation.data} keyed>
-							{(display) => (
-								<div class="flex flex-col items-center text-white">
-									<IconCapMonitor class="size-20 mb-3" />
-									<span class="mb-2 text-3xl font-semibold">
-										{display.name || "Monitor"}
-									</span>
-									<Show when={display.physical_size}>
-										{(size) => (
-											<span class="mb-2 text-xs">
-												{`${size().width}x${size().height} · ${
-													display.refresh_rate
-												}FPS`}
-											</span>
-										)}
-									</Show>
-								</div>
-							)}
-						</Show>
+  const unsubOnEscapePress = events.onEscapePress.listen(() => {
+    setOptions("targetMode", null);
+    commands.closeTargetSelectOverlays();
+  });
+  onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
-						<Show when={toggleModeSelect()}>
-							{/* Transparent overlay to capture outside clicks */}
-							<div
-								class="absolute inset-0 z-10"
-								onClick={() => setToggleModeSelect(false)}
-							/>
-							<ModeSelect
-								standalone
-								onClose={() => setToggleModeSelect(false)}
-							/>
-						</Show>
+  // This prevents browser keyboard shortcuts from firing.
+  // Eg. on Windows Ctrl+P would open the print dialog without this
+  createEventListener(document, "keydown", (e) => e.preventDefault());
 
-						<RecordingControls
-							setToggleModeSelect={setToggleModeSelect}
-							target={{ variant: "display", id: displayId() }}
-						/>
-						<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
-					</div>
-				)}
-			</Match>
-			<Match
-				when={
-					options.targetMode === "window" &&
-					targetUnderCursor.display_id === params.displayId
-				}
-			>
-				<Show when={targetUnderCursor.window} keyed>
-					{(windowUnderCursor) => (
-						<div
-							data-over={targetUnderCursor.display_id === params.displayId}
-							class="relative w-screen h-screen bg-black/70"
-						>
-							<div
-								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
-								style={{
-									width: `${windowUnderCursor.bounds.size.width}px`,
-									height: `${windowUnderCursor.bounds.size.height}px`,
-									left: `${windowUnderCursor.bounds.position.x}px`,
-									top: `${windowUnderCursor.bounds.position.y}px`,
-								}}
-							>
-								<div class="flex flex-col justify-center items-center text-white">
-									<div class="w-24 h-24">
-										<Suspense>
-											<Show when={windowIcon.data}>
-												{(icon) => (
-													<img
-														src={icon()}
-														alt={`${windowUnderCursor.app_name} icon`}
-														class="mb-3 w-full h-full rounded-lg animate-in fade-in"
-													/>
-												)}
-											</Show>
-										</Suspense>
-									</div>
-									<span class="mb-2 text-3xl font-semibold">
-										{windowUnderCursor.app_name}
-									</span>
-									<span class="mb-2 text-xs">
-										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
-									</span>
-								</div>
-								<RecordingControls
-									target={{
-										variant: "window",
-										id: windowUnderCursor.id,
-									}}
-								/>
+  return (
+    <Switch>
+      <Match when={options.targetMode === "display" && params.displayId}>
+        {(displayId) => (
+          <div
+            data-over={targetUnderCursor.display_id === displayId()}
+            class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
+          >
+            <div class="absolute inset-0 bg-black/70 -z-10" />
 
-								<Button
-									variant="dark"
-									size="sm"
-									onClick={() => {
-										setInitialAreaBounds({
-											x: windowUnderCursor.bounds.position.x,
-											y: windowUnderCursor.bounds.position.y,
-											width: windowUnderCursor.bounds.size.width,
-											height: windowUnderCursor.bounds.size.height,
-										});
-										setOptions({
-											targetMode: "area",
-										});
-										commands.openTargetSelectOverlays(null);
-									}}
-								>
-									Adjust recording area
-								</Button>
-								<ShowCapFreeWarning
-									isInstantMode={options.mode === "instant"}
-								/>
-							</div>
-						</div>
-					)}
-				</Show>
-			</Match>
-			<Match when={options.targetMode === "area" && params.displayId}>
-				{(displayId) => {
-					let controlsEl: HTMLDivElement | undefined;
-					let cropperRef: CropperRef | undefined;
+            <Show when={displayInformation.data} keyed>
+              {(display) => (
+                <div class="flex flex-col items-center text-white">
+                  <IconCapMonitor class="size-20 mb-3" />
+                  <span class="mb-2 text-3xl font-semibold">
+                    {display.name || "Monitor"}
+                  </span>
+                  <Show when={display.physical_size}>
+                    {(size) => (
+                      <span class="mb-2 text-xs">
+                        {`${size().width}x${size().height} · ${
+                          display.refresh_rate
+                        }FPS`}
+                      </span>
+                    )}
+                  </Show>
+                </div>
+              )}
+            </Show>
 
-					const [aspect, setAspect] = createSignal<Ratio | null>(null);
-					const [snapToRatioEnabled, setSnapToRatioEnabled] =
-						createSignal(true);
+            <Show when={toggleModeSelect()}>
+              {/* Transparent overlay to capture outside clicks */}
+              <div
+                class="absolute inset-0 z-10"
+                onClick={() => setToggleModeSelect(false)}
+              />
+              <ModeSelect
+                standalone
+                onClose={() => setToggleModeSelect(false)}
+              />
+            </Show>
 
-					const scheduled = createScheduled((fn) => debounce(fn, 30));
+            <RecordingControls
+              setToggleModeSelect={setToggleModeSelect}
+              target={{ variant: "display", id: displayId() }}
+            />
+            <ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
+          </div>
+        )}
+      </Match>
+      <Match
+        when={
+          options.targetMode === "window" &&
+          targetUnderCursor.display_id === params.displayId
+        }
+      >
+        <Show when={targetUnderCursor.window} keyed>
+          {(windowUnderCursor) => (
+            <div
+              data-over={targetUnderCursor.display_id === params.displayId}
+              class="relative w-screen h-screen bg-black/70"
+            >
+              <div
+                class="flex absolute flex-col justify-center items-center bg-blue-600/40"
+                style={{
+                  width: `${windowUnderCursor.bounds.size.width}px`,
+                  height: `${windowUnderCursor.bounds.size.height}px`,
+                  left: `${windowUnderCursor.bounds.position.x}px`,
+                  top: `${windowUnderCursor.bounds.position.y}px`,
+                }}
+              >
+                <div class="flex flex-col justify-center items-center text-white">
+                  <div class="w-24 h-24">
+                    <Suspense>
+                      <Show when={windowIcon.data}>
+                        {(icon) => (
+                          <img
+                            src={icon()}
+                            alt={`${windowUnderCursor.app_name} icon`}
+                            class="mb-3 w-full h-full rounded-lg animate-in fade-in"
+                          />
+                        )}
+                      </Show>
+                    </Suspense>
+                  </div>
+                  <span class="mb-2 text-3xl font-semibold">
+                    {windowUnderCursor.app_name}
+                  </span>
+                  <span class="mb-2 text-xs">
+                    {`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
+                  </span>
+                </div>
+                <RecordingControls
+                  target={{
+                    variant: "window",
+                    id: windowUnderCursor.id,
+                  }}
+                />
 
-					const isValid = createMemo((p: boolean = true) => {
-						const b = crop();
-						return scheduled()
-							? b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height
-							: p;
-					});
+                <Button
+                  variant="dark"
+                  size="sm"
+                  onClick={() => {
+                    setInitialAreaBounds({
+                      x: windowUnderCursor.bounds.position.x,
+                      y: windowUnderCursor.bounds.position.y,
+                      width: windowUnderCursor.bounds.size.width,
+                      height: windowUnderCursor.bounds.size.height,
+                    });
+                    const screenId = params.displayId;
+                    if (screenId) {
+                      setPendingAreaTarget({
+                        variant: "area",
+                        screen: screenId,
+                        bounds: {
+                          position: {
+                            x: windowUnderCursor.bounds.position.x,
+                            y: windowUnderCursor.bounds.position.y,
+                          },
+                          size: {
+                            width: windowUnderCursor.bounds.size.width,
+                            height: windowUnderCursor.bounds.size.height,
+                          },
+                        },
+                      });
+                    }
+                    setOptions({
+                      targetMode: "area",
+                    });
+                    commands.openTargetSelectOverlays(null);
+                  }}
+                >
+                  Adjust recording area
+                </Button>
+                <ShowCapFreeWarning
+                  isInstantMode={options.mode === "instant"}
+                />
+              </div>
+            </div>
+          )}
+        </Show>
+      </Match>
+      <Match when={options.targetMode === "area" && params.displayId}>
+        {(displayId) => {
+          let controlsEl: HTMLDivElement | undefined;
+          let cropperRef: CropperRef | undefined;
 
-					async function showCropOptionsMenu(e: UIEvent) {
-						e.preventDefault();
-						const items = [
-							{
-								text: "Reset selection",
-								action: () => {
-									cropperRef?.reset();
-									setAspect(null);
-								},
-							},
-							await PredefinedMenuItem.new({
-								item: "Separator",
-							}),
-							...createCropOptionsMenuItems({
-								aspect: aspect(),
-								snapToRatioEnabled: snapToRatioEnabled(),
-								onAspectSet: setAspect,
-								onSnapToRatioSet: setSnapToRatioEnabled,
-							}),
-						];
-						const menu = await Menu.new({ items });
-						await menu.popup();
-						await menu.close();
-					}
+          const [aspect, setAspect] = createSignal<Ratio | null>(null);
+          const [snapToRatioEnabled, setSnapToRatioEnabled] =
+            createSignal(true);
+          const [isInteracting, setIsInteracting] = createSignal(false);
+          const [committedCrop, setCommittedCrop] =
+            createSignal<CropBounds>(CROP_ZERO);
 
-					// Spacing rules:
-					// Prefer below the crop (smaller margin)
-					// If no space below, place above the crop (larger top margin)
-					// Otherwise, place inside at the top of the crop (small inner margin)
-					const macos = ostype() === "macos";
-					const SIDE_MARGIN = 16;
-					const MARGIN_BELOW = 16;
-					const MARGIN_TOP_OUTSIDE = 16;
-					const MARGIN_TOP_INSIDE = macos ? 40 : 28;
-					const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
+          const isValid = createMemo(() => {
+            const b = crop();
+            return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+          });
+          const committedIsValid = createMemo(() => {
+            const b = committedCrop();
+            return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+          });
 
-					const controlsSize = createElementSize(() => controlsEl);
-					const [controllerInside, _setControllerInside] = createSignal(false);
+          createEffect(() => {
+            if (isInteracting()) return;
+            setCommittedCrop(crop());
+          });
 
-					// This is required due to the use of a ResizeObserver within the createElementSize function
-					// Otherwise there will be an infinite loop: ResizeObserver loop completed with undelivered notifications.
-					let raf: number | null = null;
-					function setControllerInside(value: boolean) {
-						if (raf) cancelAnimationFrame(raf);
-						raf = requestAnimationFrame(() => _setControllerInside(value));
-					}
-					onCleanup(() => {
-						if (raf) cancelAnimationFrame(raf);
-					});
+          async function showCropOptionsMenu(e: UIEvent) {
+            e.preventDefault();
+            const items = [
+              {
+                text: "Reset selection",
+                action: () => {
+                  cropperRef?.reset();
+                  setAspect(null);
+                  setPendingAreaTarget(null);
+                },
+              },
+              await PredefinedMenuItem.new({
+                item: "Separator",
+              }),
+              ...createCropOptionsMenuItems({
+                aspect: aspect(),
+                snapToRatioEnabled: snapToRatioEnabled(),
+                onAspectSet: setAspect,
+                onSnapToRatioSet: setSnapToRatioEnabled,
+              }),
+            ];
+            const menu = await Menu.new({ items });
+            await menu.popup();
+            await menu.close();
+          }
 
-					const controlsStyle = createMemo(() => {
-						const bounds = crop();
-						const size = controlsSize;
-						if (!size?.width || !size?.height) return undefined;
+          // Spacing rules:
+          // Prefer below the crop (smaller margin)
+          // If no space below, place above the crop (larger top margin)
+          // Otherwise, place inside at the top of the crop (small inner margin)
+          const macos = ostype() === "macos";
+          const SIDE_MARGIN = 16;
+          const MARGIN_BELOW = 16;
+          const MARGIN_TOP_OUTSIDE = 16;
+          const MARGIN_TOP_INSIDE = macos ? 40 : 28;
+          const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
 
-						if (size.width === 0 || bounds.width === 0) {
-							return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
-						}
+          const controlsSize = createElementSize(() => controlsEl);
+          const [controllerInside, _setControllerInside] = createSignal(false);
 
-						const centerX = bounds.x + bounds.width / 2;
-						let finalY: number;
+          // This is required due to the use of a ResizeObserver within the createElementSize function
+          // Otherwise there will be an infinite loop: ResizeObserver loop completed with undelivered notifications.
+          let raf: number | null = null;
+          function setControllerInside(value: boolean) {
+            if (raf) cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(() => _setControllerInside(value));
+          }
+          onCleanup(() => {
+            if (raf) cancelAnimationFrame(raf);
+          });
 
-						// Try below the crop
-						const belowY = bounds.y + bounds.height + MARGIN_BELOW;
-						if (belowY + size.height <= window.innerHeight) {
-							finalY = belowY;
-							setControllerInside(false);
-						} else {
-							// Try above the crop with a larger top margin
-							const aboveY = bounds.y - size.height - MARGIN_TOP_OUTSIDE;
-							if (aboveY >= TOP_SAFE_MARGIN) {
-								finalY = aboveY;
-								setControllerInside(false);
-							} else {
-								// Default to inside
-								finalY = bounds.y + MARGIN_TOP_INSIDE;
-								setControllerInside(true);
-							}
-						}
+          const controlsStyle = createMemo(() => {
+            const bounds = crop();
+            const size = controlsSize;
+            if (!size?.width || !size?.height) return undefined;
 
-						const finalX = Math.max(
-							SIDE_MARGIN,
-							Math.min(
-								centerX - size.width / 2,
-								window.innerWidth - size.width - SIDE_MARGIN,
-							),
-						);
+            if (size.width === 0 || bounds.width === 0) {
+              return { transform: "translate(-1000px, -1000px)" }; // Hide off-screen initially
+            }
 
-						return {
-							transform: `translate(${finalX}px, ${finalY}px)`,
-						};
-					});
+            const centerX = bounds.x + bounds.width / 2;
+            let finalY: number;
 
-					return (
-						<div class="fixed w-screen h-screen bg-black/70">
-							<div
-								ref={controlsEl}
-								class="fixed z-50 transition-opacity"
-								style={controlsStyle()}
-							>
-								<Show
-									when={isValid()}
-									fallback={
-										<div>
-											<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
-												<p>Minimum size is 150 x 150</p>
-												<small>
-													<code>
-														{crop().width} x {crop().height}
-													</code>{" "}
-													is too small
-												</small>
-											</div>
-										</div>
-									}
-								>
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: displayId(),
-											bounds: {
-												position: { x: crop().x, y: crop().y },
-												size: { width: crop().width, height: crop().height },
-											},
-										}}
-										showBackground={controllerInside()}
-									/>
-									<ShowCapFreeWarning
-										isInstantMode={options.mode === "instant"}
-									/>
-								</Show>
-							</div>
+            // Try below the crop
+            const belowY = bounds.y + bounds.height + MARGIN_BELOW;
+            if (belowY + size.height <= window.innerHeight) {
+              finalY = belowY;
+              setControllerInside(false);
+            } else {
+              // Try above the crop with a larger top margin
+              const aboveY = bounds.y - size.height - MARGIN_TOP_OUTSIDE;
+              if (aboveY >= TOP_SAFE_MARGIN) {
+                finalY = aboveY;
+                setControllerInside(false);
+              } else {
+                // Default to inside
+                finalY = bounds.y + MARGIN_TOP_INSIDE;
+                setControllerInside(true);
+              }
+            }
 
-							<Cropper
-								ref={cropperRef}
-								onCropChange={setCrop}
-								initialCrop={initialAreaBounds()}
-								showBounds={isValid()}
-								aspectRatio={aspect() ?? undefined}
-								snapToRatioEnabled={snapToRatioEnabled()}
-								onContextMenu={(e) => showCropOptionsMenu(e)}
-							/>
-						</div>
-					);
-				}}
-			</Match>
-		</Switch>
-	);
+            const finalX = Math.max(
+              SIDE_MARGIN,
+              Math.min(
+                centerX - size.width / 2,
+                window.innerWidth - size.width - SIDE_MARGIN
+              )
+            );
+
+            return {
+              transform: `translate(${finalX}px, ${finalY}px)`,
+            };
+          });
+
+          createEffect(() => {
+            if (isInteracting()) return;
+            if (!committedIsValid()) return;
+            const screenId = displayId();
+            if (!screenId) return;
+            const bounds = committedCrop();
+            setPendingAreaTarget({
+              variant: "area",
+              screen: screenId,
+              bounds: {
+                position: { x: bounds.x, y: bounds.y },
+                size: { width: bounds.width, height: bounds.height },
+              },
+            });
+          });
+
+          return (
+            <div class="fixed w-screen h-screen bg-black/70">
+              <div
+                ref={controlsEl}
+                class="fixed z-50 transition-opacity"
+                style={controlsStyle()}
+              >
+                <div class="flex flex-col items-center">
+                  <RecordingControls
+                    target={{
+                      variant: "area",
+                      screen: displayId(),
+                      bounds: {
+                        position: {
+                          x: committedCrop().x,
+                          y: committedCrop().y,
+                        },
+                        size: {
+                          width: committedCrop().width,
+                          height: committedCrop().height,
+                        },
+                      },
+                    }}
+                    disabled={!isValid()}
+                    showBackground={controllerInside()}
+                  />
+                  <Show when={!isValid()}>
+                    <div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
+                      <p>Minimum size is 150 x 150</p>
+                      <small>
+                        <code>
+                          {crop().width} x {crop().height}
+                        </code>{" "}
+                        is too small
+                      </small>
+                    </div>
+                  </Show>
+                  <Show when={isValid()}>
+                    <ShowCapFreeWarning
+                      isInstantMode={options.mode === "instant"}
+                    />
+                  </Show>
+                </div>
+              </div>
+
+              <Cropper
+                ref={cropperRef}
+                onInteraction={setIsInteracting}
+                onCropChange={setCrop}
+                initialCrop={initialAreaBounds()}
+                showBounds={isValid()}
+                aspectRatio={aspect() ?? undefined}
+                snapToRatioEnabled={snapToRatioEnabled()}
+                onContextMenu={(e) => showCropOptionsMenu(e)}
+              />
+            </div>
+          );
+        }}
+      </Match>
+    </Switch>
+  );
 }
 
 function RecordingControls(props: {
-	target: ScreenCaptureTarget;
-	setToggleModeSelect?: (value: boolean) => void;
-	showBackground?: boolean;
+  target: ScreenCaptureTarget;
+  setToggleModeSelect?: (value: boolean) => void;
+  showBackground?: boolean;
+  disabled?: boolean;
 }) {
-	const auth = authStore.createQuery();
-	const { setOptions, rawOptions } = useRecordingOptions();
+  const auth = authStore.createQuery();
+  const { setOptions, rawOptions } = useRecordingOptions();
 
-	const generalSetings = generalSettingsStore.createQuery();
-	const cameras = useQuery(() => listVideoDevices);
-	const mics = useQuery(() => listAudioDevices);
-	const setMicInput = createMutation(() => ({
-		mutationFn: async (name: string | null) => {
-			await commands.setMicInput(name);
-			setOptions("micName", name);
-		},
-	}));
-	const setCamera = createCameraMutation();
+  const generalSetings = generalSettingsStore.createQuery();
+  const cameras = useQuery(() => listVideoDevices);
+  const mics = useQuery(() => listAudioDevices);
+  const setMicInput = createMutation(() => ({
+    mutationFn: async (name: string | null) => {
+      await commands.setMicInput(name);
+      setOptions("micName", name);
+    },
+  }));
+  const setCamera = createCameraMutation();
 
-	const selectedCamera = createMemo(() => {
-		if (!rawOptions.cameraID) return null;
-		return findCamera(cameras.data ?? [], rawOptions.cameraID) ?? null;
-	});
+  const selectedCamera = createMemo(() => {
+    if (!rawOptions.cameraID) return null;
+    return findCamera(cameras.data ?? [], rawOptions.cameraID) ?? null;
+  });
 
-	const selectedMicName = createMemo(() => {
-		if (!rawOptions.micName) return null;
-		return (
-			(mics.data ?? []).find((name) => name === rawOptions.micName) ?? null
-		);
-	});
+  const selectedMicName = createMemo(() => {
+    if (!rawOptions.micName) return null;
+    return (
+      (mics.data ?? []).find((name) => name === rawOptions.micName) ?? null
+    );
+  });
 
-	const menuModes = async () =>
-		await Menu.new({
-			items: [
-				await CheckMenuItem.new({
-					text: "Studio Mode",
-					action: () => {
-						setOptions("mode", "studio");
-					},
-					checked: rawOptions.mode === "studio",
-				}),
-				await CheckMenuItem.new({
-					text: "Instant Mode",
-					action: () => {
-						setOptions("mode", "instant");
-					},
-					checked: rawOptions.mode === "instant",
-				}),
-			],
-		});
+  const menuModes = async () =>
+    await Menu.new({
+      items: [
+        await CheckMenuItem.new({
+          text: "Studio Mode",
+          action: () => {
+            setOptions("mode", "studio");
+          },
+          checked: rawOptions.mode === "studio",
+        }),
+        await CheckMenuItem.new({
+          text: "Instant Mode",
+          action: () => {
+            setOptions("mode", "instant");
+          },
+          checked: rawOptions.mode === "instant",
+        }),
+      ],
+    });
 
-	const countdownItems = async () => [
-		await CheckMenuItem.new({
-			text: "Off",
-			action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
-			checked:
-				!generalSetings.data?.recordingCountdown ||
-				generalSetings.data?.recordingCountdown === 0,
-		}),
-		await CheckMenuItem.new({
-			text: "3 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
-			checked: generalSetings.data?.recordingCountdown === 3,
-		}),
-		await CheckMenuItem.new({
-			text: "5 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
-			checked: generalSetings.data?.recordingCountdown === 5,
-		}),
-		await CheckMenuItem.new({
-			text: "10 seconds",
-			action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
-			checked: generalSetings.data?.recordingCountdown === 10,
-		}),
-	];
+  const countdownItems = async () => [
+    await CheckMenuItem.new({
+      text: "Off",
+      action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
+      checked:
+        !generalSetings.data?.recordingCountdown ||
+        generalSetings.data?.recordingCountdown === 0,
+    }),
+    await CheckMenuItem.new({
+      text: "3 seconds",
+      action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
+      checked: generalSetings.data?.recordingCountdown === 3,
+    }),
+    await CheckMenuItem.new({
+      text: "5 seconds",
+      action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
+      checked: generalSetings.data?.recordingCountdown === 5,
+    }),
+    await CheckMenuItem.new({
+      text: "10 seconds",
+      action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
+      checked: generalSetings.data?.recordingCountdown === 10,
+    }),
+  ];
 
-	const preRecordingMenu = async () => {
-		return await Menu.new({
-			items: [
-				await MenuItem.new({
-					text: "Recording Countdown",
-					enabled: false,
-				}),
-				...(await countdownItems()),
-			],
-		});
-	};
+  const preRecordingMenu = async () => {
+    return await Menu.new({
+      items: [
+        await MenuItem.new({
+          text: "Recording Countdown",
+          enabled: false,
+        }),
+        ...(await countdownItems()),
+      ],
+    });
+  };
 
-	function showMenu(menu: Promise<Menu>, e: UIEvent) {
-		e.stopPropagation();
-		const rect = (e.target as HTMLDivElement).getBoundingClientRect();
-		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
-	}
+  function showMenu(menu: Promise<Menu>, e: UIEvent) {
+    e.stopPropagation();
+    const rect = (e.target as HTMLDivElement).getBoundingClientRect();
+    menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
+  }
 
-	return (
-		<>
-			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[22rem] max-w-[90vw]">
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
-					<div class="flex gap-2.5 items-center">
-						<div
-							onClick={() => {
-								setOptions("targetMode", null);
-								commands.closeTargetSelectOverlays();
-							}}
-							class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-						>
-							<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-						</div>
-						<div
-							data-inactive={rawOptions.mode === "instant" && !auth.data}
-							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
-							onClick={() => {
-								if (rawOptions.mode === "instant" && !auth.data) {
-									emit("start-sign-in");
-									return;
-								}
+  const startDisabled = () => !!props.disabled;
 
-								commands.startRecording({
-									capture_target: props.target,
-									mode: rawOptions.mode,
-									capture_system_audio: rawOptions.captureSystemAudio,
-								});
-							}}
-						>
-							<div class="flex flex-1 items-center py-1 pl-4 transition-colors hover:bg-white/10 min-w-0">
-								{rawOptions.mode === "studio" ? (
-									<IconCapFilmCut class="size-4 flex-shrink-0" />
-								) : (
-									<IconCapInstant class="size-4 flex-shrink-0" />
-								)}
-								<div class="flex flex-col mr-2 ml-3 min-w-0">
-									<span class="text-[0.95rem] font-medium text-white text-nowrap">
-										{rawOptions.mode === "instant" && !auth.data
-											? "Sign In To Use"
-											: "Start Recording"}
-									</span>
-									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
-										{`${capitalize(rawOptions.mode)} Mode`}
-									</span>
-								</div>
-							</div>
-							<div
-								class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
-								onMouseDown={(e) => showMenu(menuModes(), e)}
-								onClick={(e) => showMenu(menuModes(), e)}
-							>
-								<IconCapCaretDown class="pointer-events-none" />
-							</div>
-						</div>
-						<div
-							class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-							onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-							onClick={(e) => showMenu(preRecordingMenu(), e)}
-						>
-							<IconCapGear class="pointer-events-none will-change-transform size-5" />
-						</div>
-					</div>
-				</div>
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
-					<div class="grid grid-cols-2 gap-2 w-full">
-						<CameraSelect
-							disabled={cameras.isPending}
-							options={cameras.data ?? []}
-							value={selectedCamera() ?? null}
-							onChange={(camera) => {
-								if (!camera) setCamera.mutate(null);
-								else if (camera.model_id)
-									setCamera.mutate({ ModelID: camera.model_id });
-								else setCamera.mutate({ DeviceID: camera.device_id });
-							}}
-						/>
-						<MicrophoneSelect
-							disabled={mics.isPending}
-							options={mics.isPending ? [] : (mics.data ?? [])}
-							value={
-								mics.isPending
-									? (rawOptions.micName ?? null)
-									: selectedMicName()
-							}
-							onChange={(value) => setMicInput.mutate(value)}
-						/>
-					</div>
-				</div>
-			</div>
-			<div class="flex justify-center items-center w-full">
-				<div
-					onClick={() => props.setToggleModeSelect?.(true)}
-					class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
-					classList={{
-						"bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
-							props.showBackground,
-						"hover:opacity-60": !props.showBackground,
-					}}
-				>
-					<IconCapInfo class="opacity-70 will-change-transform size-3" />
-					<p class="text-sm text-white drop-shadow-md">
-						<span class="opacity-70">What is </span>
-						<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
-					</p>
-				</div>
-			</div>
-		</>
-	);
+  return (
+    <>
+      <div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[22rem] max-w-[90vw]">
+        <div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+          <div class="flex gap-2.5 items-center">
+            <div
+              onClick={() => {
+                setOptions("targetMode", null);
+                commands.closeTargetSelectOverlays();
+              }}
+              class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+            >
+              <IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+            </div>
+            <div
+              data-inactive={rawOptions.mode === "instant" && !auth.data}
+              data-disabled={startDisabled()}
+              class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
+              onClick={() => {
+                if (rawOptions.mode === "instant" && !auth.data) {
+                  emit("start-sign-in");
+                  return;
+                }
+                if (startDisabled()) return;
+
+                if (props.target.variant === "area") {
+                  setOptions(
+                    "captureTarget",
+                    reconcile({
+                      variant: "area",
+                      screen: props.target.screen,
+                      bounds: {
+                        position: {
+                          x: props.target.bounds.position.x,
+                          y: props.target.bounds.position.y,
+                        },
+                        size: {
+                          width: props.target.bounds.size.width,
+                          height: props.target.bounds.size.height,
+                        },
+                      },
+                    })
+                  );
+                }
+
+                commands.startRecording({
+                  capture_target: props.target,
+                  mode: rawOptions.mode,
+                  capture_system_audio: rawOptions.captureSystemAudio,
+                });
+              }}
+            >
+              <div
+                class="flex flex-1 items-center py-1 pl-4 transition-colors hover:bg-white/10 min-w-0"
+                classList={{
+                  "opacity-60 cursor-not-allowed hover:bg-transparent":
+                    startDisabled(),
+                }}
+              >
+                {rawOptions.mode === "studio" ? (
+                  <IconCapFilmCut class="size-4 flex-shrink-0" />
+                ) : (
+                  <IconCapInstant class="size-4 flex-shrink-0" />
+                )}
+                <div class="flex flex-col mr-2 ml-3 min-w-0">
+                  <span class="text-[0.95rem] font-medium text-white text-nowrap">
+                    {rawOptions.mode === "instant" && !auth.data
+                      ? "Sign In To Use"
+                      : "Start Recording"}
+                  </span>
+                  <span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
+                    {`${capitalize(rawOptions.mode)} Mode`}
+                  </span>
+                </div>
+              </div>
+              <div
+                class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
+                onMouseDown={(e) => showMenu(menuModes(), e)}
+                onClick={(e) => showMenu(menuModes(), e)}
+              >
+                <IconCapCaretDown class="pointer-events-none" />
+              </div>
+            </div>
+            <div
+              class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+              onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
+              onClick={(e) => showMenu(preRecordingMenu(), e)}
+            >
+              <IconCapGear class="pointer-events-none will-change-transform size-5" />
+            </div>
+          </div>
+        </div>
+        <div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+          <div class="grid grid-cols-2 gap-2 w-full">
+            <CameraSelect
+              disabled={cameras.isPending}
+              options={cameras.data ?? []}
+              value={selectedCamera() ?? null}
+              onChange={(camera) => {
+                if (!camera) setCamera.mutate(null);
+                else if (camera.model_id)
+                  setCamera.mutate({ ModelID: camera.model_id });
+                else setCamera.mutate({ DeviceID: camera.device_id });
+              }}
+            />
+            <MicrophoneSelect
+              disabled={mics.isPending}
+              options={mics.isPending ? [] : mics.data ?? []}
+              value={
+                mics.isPending ? rawOptions.micName ?? null : selectedMicName()
+              }
+              onChange={(value) => setMicInput.mutate(value)}
+            />
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-center items-center w-full">
+        <div
+          onClick={() => props.setToggleModeSelect?.(true)}
+          class="flex gap-1 justify-center items-center self-center mb-5 transition-opacity duration-200 w-fit hover:opacity-60"
+          classList={{
+            "bg-black/50 p-2 rounded-lg border border-white/10 hover:bg-black/50 hover:opacity-80":
+              props.showBackground,
+            "hover:opacity-60": !props.showBackground,
+          }}
+        >
+          <IconCapInfo class="opacity-70 will-change-transform size-3" />
+          <p class="text-sm text-white drop-shadow-md">
+            <span class="opacity-70">What is </span>
+            <span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+          </p>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
-	const auth = authStore.createQuery();
+  const auth = authStore.createQuery();
 
-	return (
-		<Suspense>
-			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
-					Instant Mode recordings are limited to 5 mins,{" "}
-					<button
-						class="underline"
-						onClick={() => commands.showWindow("Upgrade")}
-					>
-						Upgrade to Pro
-					</button>
-				</p>
-			</Show>
-		</Suspense>
-	);
+  return (
+    <Suspense>
+      <Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
+        <p class="text-sm text-center max-w-64">
+          Instant Mode recordings are limited to 5 mins,{" "}
+          <button
+            class="underline"
+            onClick={() => commands.showWindow("Upgrade")}
+          >
+            Upgrade to Pro
+          </button>
+        </p>
+      </Show>
+    </Suspense>
+  );
 }
