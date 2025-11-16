@@ -625,8 +625,8 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let width = 250.0;
-                let height = 40.0;
+                let width = 320.0;
+                let height = 150.0;
 
                 let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);

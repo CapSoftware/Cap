@@ -10,7 +10,7 @@ use crate::{
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
-use anyhow::{Context as _, anyhow};
+use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
@@ -221,6 +221,52 @@ impl Message<Cancel> for Actor {
     }
 }
 
+struct SetMicFeed {
+    mic_feed: Option<Arc<MicrophoneFeedLock>>,
+}
+
+impl Message<SetMicFeed> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(&mut self, msg: SetMicFeed, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        match self.state.as_ref() {
+            Some(ActorState::Recording { .. }) => {
+                bail!("Pause the recording before changing microphone input")
+            }
+            Some(ActorState::Paused { .. }) => {
+                self.segment_factory.set_mic_feed(msg.mic_feed);
+                Ok(())
+            }
+            None => Err(anyhow!("Recording no longer active")),
+        }
+    }
+}
+
+struct SetCameraFeed {
+    camera_feed: Option<Arc<CameraFeedLock>>,
+}
+
+impl Message<SetCameraFeed> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: SetCameraFeed,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match self.state.as_ref() {
+            Some(ActorState::Recording { .. }) => {
+                bail!("Pause the recording before changing camera input")
+            }
+            Some(ActorState::Paused { .. }) => {
+                self.segment_factory.set_camera_feed(msg.camera_feed);
+                Ok(())
+            }
+            None => Err(anyhow!("Recording no longer active")),
+        }
+    }
+}
+
 pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
@@ -349,6 +395,20 @@ impl ActorHandle {
 
     pub async fn cancel(&self) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(Cancel).await?)
+    }
+
+    pub async fn set_mic_feed(
+        &self,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    ) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(SetMicFeed { mic_feed }).await?)
+    }
+
+    pub async fn set_camera_feed(
+        &self,
+        camera_feed: Option<Arc<CameraFeedLock>>,
+    ) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
     }
 }
 
@@ -654,6 +714,14 @@ impl SegmentPipelineFactory {
         pipeline.spawn_watcher(self.completion_tx.clone());
 
         Ok(pipeline)
+    }
+
+    pub fn set_mic_feed(&mut self, mic_feed: Option<Arc<MicrophoneFeedLock>>) {
+        self.base_inputs.mic_feed = mic_feed;
+    }
+
+    pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
+        self.base_inputs.camera_feed = camera_feed;
     }
 }
 

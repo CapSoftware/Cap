@@ -100,8 +100,7 @@ impl AudioMixerBuilder {
                 &ffmpeg::filter::find("aresample").expect("Failed to find aresample filter"),
                 &format!("resample{i}"),
                 &format!(
-                    "out_sample_rate={}:out_sample_fmt={}:out_chlayout=0x{:x}",
-                    target_rate, target_sample_fmt, target_channel_layout_bits
+                    "out_sample_rate={target_rate}:out_sample_fmt={target_sample_fmt}:out_chlayout=0x{target_channel_layout_bits:x}"
                 ),
             )?;
 
@@ -118,8 +117,7 @@ impl AudioMixerBuilder {
         )?;
 
         let aformat_args = format!(
-            "sample_fmts={}:sample_rates={}:channel_layouts=0x{:x}",
-            target_sample_fmt, target_rate, target_channel_layout_bits
+            "sample_fmts={target_sample_fmt}:sample_rates={target_rate}:channel_layouts=0x{target_channel_layout_bits:x}"
         );
 
         let mut aformat = filter_graph.add(

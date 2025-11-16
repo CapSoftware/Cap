@@ -8,7 +8,11 @@ use std::{
 use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 
-use crate::windows::{CapWindowId, ShowCapWindow};
+use crate::{
+    general_settings,
+    window_exclusion::WindowExclusion,
+    windows::{CapWindowId, ShowCapWindow},
+};
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
@@ -59,6 +63,13 @@ pub async fn open_target_select_overlays(
             .await;
     }
 
+    let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map_or_else(general_settings::default_excluded_windows, |settings| {
+            settings.excluded_windows
+        });
+
     let handle = tokio::spawn({
         let app = app.clone();
 
@@ -77,6 +88,10 @@ pub async fn open_target_select_overlays(
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
                         window: window.and_then(|w| {
+                            if should_skip_window(&w, &window_exclusions) {
+                                return None;
+                            }
+
                             Some(WindowUnderCursor {
                                 id: w.id(),
                                 bounds: w.display_relative_logical_bounds()?,
@@ -108,6 +123,29 @@ pub async fn open_target_select_overlays(
     }
 
     Ok(())
+}
+
+fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
+    if exclusions.is_empty() {
+        return false;
+    }
+
+    let owner_name = window.owner_name();
+    let window_title = window.name();
+
+    #[cfg(target_os = "macos")]
+    let bundle_identifier = window.raw_handle().bundle_identifier();
+
+    #[cfg(not(target_os = "macos"))]
+    let bundle_identifier = None::<&str>;
+
+    exclusions.iter().any(|entry| {
+        entry.matches(
+            bundle_identifier.as_deref(),
+            owner_name.as_deref(),
+            window_title.as_deref(),
+        )
+    })
 }
 
 #[specta::specta]

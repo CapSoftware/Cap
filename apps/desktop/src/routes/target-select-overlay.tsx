@@ -1,9 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
-import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
-import { useQuery } from "@tanstack/solid-query";
+import { createMutation, useQuery } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -14,6 +13,7 @@ import {
 } from "@tauri-apps/api/menu";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	Match,
@@ -33,15 +33,26 @@ import {
 	type Ratio,
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
+import SelectionHint from "~/components/selection-hint";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
 import {
+	createCameraMutation,
+	createOptionsQuery,
+	createOrganizationsQuery,
+	listAudioDevices,
+	listVideoDevices,
+} from "~/utils/queries";
+import {
+	type CameraInfo,
 	commands,
+	type DeviceOrModelID,
 	type DisplayId,
 	events,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
+import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
@@ -51,6 +62,15 @@ const MIN_SIZE = { width: 150, height: 150 };
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
+};
+
+const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
+	if (!id) return undefined;
+	return cameras.find((camera) =>
+		"DeviceID" in id
+			? camera.device_id === id.DeviceID
+			: camera.model_id === id.ModelID,
+	);
 };
 
 export default function () {
@@ -130,10 +150,65 @@ function Inner() {
 	}));
 
 	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
-
+	type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
+	const [pendingAreaTarget, setPendingAreaTarget] =
+		createSignal<AreaTarget | null>(null);
 	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
 		CropBounds | undefined
 	>(undefined);
+
+	createEffect(() => {
+		const target = options.captureTarget;
+		if (
+			target.variant === "area" &&
+			params.displayId &&
+			target.screen === params.displayId
+		) {
+			setPendingAreaTarget({
+				variant: "area",
+				screen: target.screen,
+				bounds: {
+					position: {
+						x: target.bounds.position.x,
+						y: target.bounds.position.y,
+					},
+					size: {
+						width: target.bounds.size.width,
+						height: target.bounds.size.height,
+					},
+				},
+			});
+		}
+	});
+
+	createEffect((prevMode: "display" | "window" | "area" | null | undefined) => {
+		const mode = options.targetMode ?? null;
+		if (prevMode === "area" && mode !== "area") {
+			const target = pendingAreaTarget();
+			if (target) {
+				setOptions(
+					"captureTarget",
+					reconcile({
+						variant: "area",
+						screen: target.screen,
+						bounds: {
+							position: {
+								x: target.bounds.position.x,
+								y: target.bounds.position.y,
+							},
+							size: {
+								width: target.bounds.size.width,
+								height: target.bounds.size.height,
+							},
+						},
+					}),
+				);
+			}
+			setPendingAreaTarget(null);
+			setInitialAreaBounds(undefined);
+		}
+		return mode;
+	});
 
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
 		setOptions("targetMode", null);
@@ -153,22 +228,25 @@ function Inner() {
 						data-over={targetUnderCursor.display_id === displayId()}
 						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
-						<div class="absolute inset-0 bg-black/50 -z-10" />
+						<div class="absolute inset-0 bg-black/60 -z-10" />
 
 						<Show when={displayInformation.data} keyed>
 							{(display) => (
-								<>
-									<span class="mb-2 text-3xl font-semibold text-white">
+								<div class="flex flex-col items-center text-white">
+									<IconCapMonitor class="size-20 mb-3" />
+									<span class="mb-2 text-3xl font-semibold">
 										{display.name || "Monitor"}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
-											<span class="mb-2 text-xs text-white">
-												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
+											<span class="mb-2 text-xs">
+												{`${size().width}x${size().height} · ${
+													display.refresh_rate
+												}FPS`}
 											</span>
 										)}
 									</Show>
-								</>
+								</div>
 							)}
 						</Show>
 
@@ -202,7 +280,7 @@ function Inner() {
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
-							class="relative w-screen h-screen bg-black/50"
+							class="relative w-screen h-screen bg-black/70"
 						>
 							<div
 								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
@@ -212,9 +290,20 @@ function Inner() {
 									left: `${windowUnderCursor.bounds.position.x}px`,
 									top: `${windowUnderCursor.bounds.position.y}px`,
 								}}
+								onClick={() => {
+									setOptions(
+										"captureTarget",
+										reconcile({
+											variant: "window",
+											id: windowUnderCursor.id,
+										}),
+									);
+									setOptions("targetMode", null);
+									commands.closeTargetSelectOverlays();
+								}}
 							>
 								<div class="flex flex-col justify-center items-center text-white">
-									<div class="w-32 h-32">
+									<div class="w-24 h-24">
 										<Suspense>
 											<Show when={windowIcon.data}>
 												{(icon) => (
@@ -234,23 +323,43 @@ function Inner() {
 										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
 									</span>
 								</div>
-								<RecordingControls
-									target={{
-										variant: "window",
-										id: windowUnderCursor.id,
-									}}
-								/>
+								<div onClick={(e) => e.stopPropagation()}>
+									<RecordingControls
+										target={{
+											variant: "window",
+											id: windowUnderCursor.id,
+										}}
+									/>
+								</div>
 
 								<Button
 									variant="dark"
 									size="sm"
-									onClick={() => {
+									onClick={(e) => {
+										e.stopPropagation();
 										setInitialAreaBounds({
 											x: windowUnderCursor.bounds.position.x,
 											y: windowUnderCursor.bounds.position.y,
 											width: windowUnderCursor.bounds.size.width,
 											height: windowUnderCursor.bounds.size.height,
 										});
+										const screenId = params.displayId;
+										if (screenId) {
+											setPendingAreaTarget({
+												variant: "area",
+												screen: screenId,
+												bounds: {
+													position: {
+														x: windowUnderCursor.bounds.position.x,
+														y: windowUnderCursor.bounds.position.y,
+													},
+													size: {
+														width: windowUnderCursor.bounds.size.width,
+														height: windowUnderCursor.bounds.size.height,
+													},
+												},
+											});
+										}
 										setOptions({
 											targetMode: "area",
 										});
@@ -275,14 +384,27 @@ function Inner() {
 					const [aspect, setAspect] = createSignal<Ratio | null>(null);
 					const [snapToRatioEnabled, setSnapToRatioEnabled] =
 						createSignal(true);
+					const [isInteracting, setIsInteracting] = createSignal(false);
+					const [committedCrop, setCommittedCrop] =
+						createSignal<CropBounds>(CROP_ZERO);
+					const shouldShowSelectionHint = createMemo(() => {
+						if (initialAreaBounds() !== undefined) return false;
+						const bounds = crop();
+						return bounds.width <= 1 && bounds.height <= 1 && !isInteracting();
+					});
 
-					const scheduled = createScheduled((fn) => debounce(fn, 30));
-
-					const isValid = createMemo((p: boolean = true) => {
+					const isValid = createMemo(() => {
 						const b = crop();
-						return scheduled()
-							? b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height
-							: p;
+						return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+					});
+					const committedIsValid = createMemo(() => {
+						const b = committedCrop();
+						return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+					});
+
+					createEffect(() => {
+						if (isInteracting()) return;
+						setCommittedCrop(crop());
 					});
 
 					async function showCropOptionsMenu(e: UIEvent) {
@@ -293,6 +415,7 @@ function Inner() {
 								action: () => {
 									cropperRef?.reset();
 									setAspect(null);
+									setPendingAreaTarget(null);
 								},
 							},
 							await PredefinedMenuItem.new({
@@ -378,50 +501,74 @@ function Inner() {
 						};
 					});
 
+					createEffect(() => {
+						if (isInteracting()) return;
+						if (!committedIsValid()) return;
+						const screenId = displayId();
+						if (!screenId) return;
+						const bounds = committedCrop();
+						setPendingAreaTarget({
+							variant: "area",
+							screen: screenId,
+							bounds: {
+								position: { x: bounds.x, y: bounds.y },
+								size: { width: bounds.width, height: bounds.height },
+							},
+						});
+					});
+
 					return (
-						<div class="fixed w-screen h-screen">
+						<div class="fixed w-screen h-screen bg-black/60 relative">
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
 								style={controlsStyle()}
 							>
-								<Show
-									when={isValid()}
-									fallback={
-										<div>
-											<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
-												<p>Minimum size is 150 x 150</p>
-												<small>
-													<code>
-														{crop().width} x {crop().height}
-													</code>{" "}
-													is too small
-												</small>
-											</div>
-										</div>
-									}
-								>
+								<div class="flex flex-col items-center">
 									<RecordingControls
 										target={{
 											variant: "area",
 											screen: displayId(),
 											bounds: {
-												position: { x: crop().x, y: crop().y },
-												size: { width: crop().width, height: crop().height },
+												position: {
+													x: committedCrop().x,
+													y: committedCrop().y,
+												},
+												size: {
+													width: committedCrop().width,
+													height: committedCrop().height,
+												},
 											},
 										}}
+										disabled={!isValid()}
 										showBackground={controllerInside()}
 									/>
-									<ShowCapFreeWarning
-										isInstantMode={options.mode === "instant"}
-									/>
-								</Show>
+									<Show when={!isValid()}>
+										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
+											<p>Minimum size is 150 x 150</p>
+											<small>
+												<code>
+													{crop().width} x {crop().height}
+												</code>{" "}
+												is too small
+											</small>
+										</div>
+									</Show>
+									<Show when={isValid()}>
+										<ShowCapFreeWarning
+											isInstantMode={options.mode === "instant"}
+										/>
+									</Show>
+								</div>
 							</div>
+
+							<SelectionHint show={shouldShowSelectionHint()} />
 
 							<Cropper
 								ref={cropperRef}
+								onInteraction={setIsInteracting}
 								onCropChange={setCrop}
-								initialCrop={initialAreaBounds()}
+								initialCrop={() => initialAreaBounds() ?? CROP_ZERO}
 								showBounds={isValid()}
 								aspectRatio={aspect() ?? undefined}
 								snapToRatioEnabled={snapToRatioEnabled()}
@@ -439,11 +586,33 @@ function RecordingControls(props: {
 	target: ScreenCaptureTarget;
 	setToggleModeSelect?: (value: boolean) => void;
 	showBackground?: boolean;
+	disabled?: boolean;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
+	const cameras = useQuery(() => listVideoDevices);
+	const mics = useQuery(() => listAudioDevices);
+	const setMicInput = createMutation(() => ({
+		mutationFn: async (name: string | null) => {
+			await commands.setMicInput(name);
+			setOptions("micName", name);
+		},
+	}));
+	const setCamera = createCameraMutation();
+
+	const selectedCamera = createMemo(() => {
+		if (!rawOptions.cameraID) return null;
+		return findCamera(cameras.data ?? [], rawOptions.cameraID) ?? null;
+	});
+
+	const selectedMicName = createMemo(() => {
+		if (!rawOptions.micName) return null;
+		return (
+			(mics.data ?? []).find((name) => name === rawOptions.micName) ?? null
+		);
+	});
 
 	const menuModes = async () =>
 		await Menu.new({
@@ -508,65 +677,124 @@ function RecordingControls(props: {
 		menu.then((menu) => menu.popup(new LogicalPosition(rect.x, rect.y + 40)));
 	}
 
+	const startDisabled = () => !!props.disabled;
+
 	return (
 		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 shadow-sm border-gray-4">
-				<div
-					onClick={() => {
-						setOptions("targetMode", null);
-						commands.closeTargetSelectOverlays();
-					}}
-					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-				</div>
-				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
-					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
-							emit("start-sign-in");
-							return;
-						}
+			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[22rem] max-w-[90vw]">
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+					<div class="flex gap-2.5 items-center">
+						<div
+							onClick={() => {
+								setOptions("targetMode", null);
+								commands.closeTargetSelectOverlays();
+							}}
+							class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+						>
+							<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+						</div>
+						<div
+							data-inactive={rawOptions.mode === "instant" && !auth.data}
+							data-disabled={startDisabled()}
+							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
+							onClick={() => {
+								if (rawOptions.mode === "instant" && !auth.data) {
+									emit("start-sign-in");
+									return;
+								}
+								if (startDisabled()) return;
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
-					}}
-				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
-						{rawOptions.mode === "studio" ? (
-							<IconCapFilmCut class="size-4" />
-						) : (
-							<IconCapInstant class="size-4" />
-						)}
-						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
-									? "Sign In To Use"
-									: "Start Recording"}
-							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
-							</span>
+								if (props.target.variant === "area") {
+									setOptions(
+										"captureTarget",
+										reconcile({
+											variant: "area",
+											screen: props.target.screen,
+											bounds: {
+												position: {
+													x: props.target.bounds.position.x,
+													y: props.target.bounds.position.y,
+												},
+												size: {
+													width: props.target.bounds.size.width,
+													height: props.target.bounds.size.height,
+												},
+											},
+										}),
+									);
+								}
+
+								commands.startRecording({
+									capture_target: props.target,
+									mode: rawOptions.mode,
+									capture_system_audio: rawOptions.captureSystemAudio,
+								});
+							}}
+						>
+							<div
+								class="flex flex-1 items-center py-1 pl-4 transition-colors hover:bg-white/10 min-w-0"
+								classList={{
+									"opacity-60 cursor-not-allowed hover:bg-transparent":
+										startDisabled(),
+								}}
+							>
+								{rawOptions.mode === "studio" ? (
+									<IconCapFilmCut class="size-4 flex-shrink-0" />
+								) : (
+									<IconCapInstant class="size-4 flex-shrink-0" />
+								)}
+								<div class="flex flex-col mr-2 ml-3 min-w-0">
+									<span class="text-[0.95rem] font-medium text-white text-nowrap">
+										{rawOptions.mode === "instant" && !auth.data
+											? "Sign In To Use"
+											: "Start Recording"}
+									</span>
+									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
+										{`${capitalize(rawOptions.mode)} Mode`}
+									</span>
+								</div>
+							</div>
+							<div
+								class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
+								onMouseDown={(e) => showMenu(menuModes(), e)}
+								onClick={(e) => showMenu(menuModes(), e)}
+							>
+								<IconCapCaretDown class="pointer-events-none" />
+							</div>
+						</div>
+						<div
+							class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+							onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
+							onClick={(e) => showMenu(preRecordingMenu(), e)}
+						>
+							<IconCapGear class="pointer-events-none will-change-transform size-5" />
 						</div>
 					</div>
-					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
-						onMouseDown={(e) => showMenu(menuModes(), e)}
-						onClick={(e) => showMenu(menuModes(), e)}
-					>
-						<IconCapCaretDown class="pointer-events-none focus:rotate-90" />
-					</div>
 				</div>
-				<div
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-					onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-					onClick={(e) => showMenu(preRecordingMenu(), e)}
-				>
-					<IconCapGear class="pointer-events-none will-change-transform size-5" />
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+					<div class="grid grid-cols-2 gap-2 w-full">
+						<CameraSelect
+							disabled={cameras.isPending}
+							options={cameras.data ?? []}
+							value={selectedCamera() ?? null}
+							onChange={(camera) => {
+								if (!camera) setCamera.mutate(null);
+								else if (camera.model_id)
+									setCamera.mutate({ ModelID: camera.model_id });
+								else setCamera.mutate({ DeviceID: camera.device_id });
+							}}
+						/>
+						<MicrophoneSelect
+							disabled={mics.isPending}
+							options={mics.isPending ? [] : (mics.data ?? [])}
+							value={
+								mics.isPending
+									? (rawOptions.micName ?? null)
+									: selectedMicName()
+							}
+							onChange={(value) => setMicInput.mutate(value)}
+						/>
+					</div>
 				</div>
 			</div>
 			<div class="flex justify-center items-center w-full">

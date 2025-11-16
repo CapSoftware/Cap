@@ -113,6 +113,8 @@ pub struct GeneralSettingsStore {
     )]
     pub enable_new_recording_flow: bool,
     #[serde(default)]
+    pub recording_picker_preference_set: bool,
+    #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
@@ -128,7 +130,7 @@ fn default_enable_native_camera_preview() -> bool {
 }
 
 fn default_enable_new_recording_flow() -> bool {
-    cfg!(debug_assertions)
+    true
 }
 
 fn no(_: &bool) -> bool {
@@ -180,6 +182,7 @@ impl Default for GeneralSettingsStore {
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
+            recording_picker_preference_set: false,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
@@ -240,7 +243,7 @@ impl GeneralSettingsStore {
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
 
-    let store = match GeneralSettingsStore::get(app) {
+    let mut store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
         Err(e) => {
@@ -249,7 +252,14 @@ pub fn init(app: &AppHandle) {
         }
     };
 
-    store.save(app).unwrap();
+    if !store.recording_picker_preference_set {
+        store.enable_new_recording_flow = true;
+        store.recording_picker_preference_set = true;
+    }
+
+    if let Err(e) = store.save(app) {
+        error!("Failed to save general settings: {}", e);
+    }
 
     println!("GeneralSettingsState managed");
 }
