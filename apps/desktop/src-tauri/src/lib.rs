@@ -444,18 +444,18 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            ShowCapWindow::Camera
-                .show(&app_handle)
-                .await
-                .map_err(|err| error!("Failed to show camera preview window: {err}"))
-                .ok();
-
             camera_feed
                 .ask(feeds::camera::SetInput { id: id.clone() })
                 .await
                 .map_err(|e| e.to_string())?
                 .await
                 .map_err(|e| e.to_string())?;
+
+            ShowCapWindow::Camera
+                .show(&app_handle)
+                .await
+                .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                .ok();
         }
     }
 
