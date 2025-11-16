@@ -3,7 +3,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { createScheduled, debounce } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
-import { useQuery } from "@tanstack/solid-query";
+import { createMutation, useQuery } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
 import {
@@ -34,14 +34,24 @@ import {
 } from "~/components/Cropper";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery, createOrganizationsQuery } from "~/utils/queries";
 import {
+	createCameraMutation,
+	createOptionsQuery,
+	createOrganizationsQuery,
+	listAudioDevices,
+	listVideoDevices,
+} from "~/utils/queries";
+import {
+	type CameraInfo,
 	commands,
+	type DeviceOrModelID,
 	type DisplayId,
 	events,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
+import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
@@ -51,6 +61,15 @@ const MIN_SIZE = { width: 150, height: 150 };
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
+};
+
+const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
+	if (!id) return undefined;
+	return cameras.find((camera) =>
+		"DeviceID" in id
+			? camera.device_id === id.DeviceID
+			: camera.model_id === id.ModelID,
+	);
 };
 
 export default function () {
@@ -153,22 +172,23 @@ function Inner() {
 						data-over={targetUnderCursor.display_id === displayId()}
 						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
-						<div class="absolute inset-0 bg-black/50 -z-10" />
+						<div class="absolute inset-0 bg-black/70 -z-10" />
 
 						<Show when={displayInformation.data} keyed>
 							{(display) => (
-								<>
-									<span class="mb-2 text-3xl font-semibold text-white">
+								<div class="flex flex-col items-center text-white">
+									<IconCapMonitor class="size-20 mb-3" />
+									<span class="mb-2 text-3xl font-semibold">
 										{display.name || "Monitor"}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
-											<span class="mb-2 text-xs text-white">
+											<span class="mb-2 text-xs">
 												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
 											</span>
 										)}
 									</Show>
-								</>
+								</div>
 							)}
 						</Show>
 
@@ -202,7 +222,7 @@ function Inner() {
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
-							class="relative w-screen h-screen bg-black/50"
+							class="relative w-screen h-screen bg-black/70"
 						>
 							<div
 								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
@@ -214,7 +234,7 @@ function Inner() {
 								}}
 							>
 								<div class="flex flex-col justify-center items-center text-white">
-									<div class="w-32 h-32">
+									<div class="w-24 h-24">
 										<Suspense>
 											<Show when={windowIcon.data}>
 												{(icon) => (
@@ -379,7 +399,7 @@ function Inner() {
 					});
 
 					return (
-						<div class="fixed w-screen h-screen">
+						<div class="fixed w-screen h-screen bg-black/70">
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
@@ -444,6 +464,27 @@ function RecordingControls(props: {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
+	const cameras = useQuery(() => listVideoDevices);
+	const mics = useQuery(() => listAudioDevices);
+	const setMicInput = createMutation(() => ({
+		mutationFn: async (name: string | null) => {
+			await commands.setMicInput(name);
+			setOptions("micName", name);
+		},
+	}));
+	const setCamera = createCameraMutation();
+
+	const selectedCamera = createMemo(() => {
+		if (!rawOptions.cameraID) return null;
+		return findCamera(cameras.data ?? [], rawOptions.cameraID) ?? null;
+	});
+
+	const selectedMicName = createMemo(() => {
+		if (!rawOptions.micName) return null;
+		return (
+			(mics.data ?? []).find((name) => name === rawOptions.micName) ?? null
+		);
+	});
 
 	const menuModes = async () =>
 		await Menu.new({
@@ -510,63 +551,92 @@ function RecordingControls(props: {
 
 	return (
 		<>
-			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 shadow-sm border-gray-4">
-				<div
-					onClick={() => {
-						setOptions("targetMode", null);
-						commands.closeTargetSelectOverlays();
-					}}
-					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
-				>
-					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
-				</div>
-				<div
-					data-inactive={rawOptions.mode === "instant" && !auth.data}
-					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
-					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
-							emit("start-sign-in");
-							return;
-						}
+			<div class="flex flex-col gap-2.5 items-stretch my-2.5 w-[22rem] max-w-[90vw]">
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+					<div class="flex gap-2.5 items-center">
+						<div
+							onClick={() => {
+								setOptions("targetMode", null);
+								commands.closeTargetSelectOverlays();
+							}}
+							class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+						>
+							<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+						</div>
+						<div
+							data-inactive={rawOptions.mode === "instant" && !auth.data}
+							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white shadow-[0_8px_20px_rgba(32,85,255,0.35)] bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
+							onClick={() => {
+								if (rawOptions.mode === "instant" && !auth.data) {
+									emit("start-sign-in");
+									return;
+								}
 
-						commands.startRecording({
-							capture_target: props.target,
-							mode: rawOptions.mode,
-							capture_system_audio: rawOptions.captureSystemAudio,
-						});
-					}}
-				>
-					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
-						{rawOptions.mode === "studio" ? (
-							<IconCapFilmCut class="size-4" />
-						) : (
-							<IconCapInstant class="size-4" />
-						)}
-						<div class="flex flex-col mr-2 ml-3">
-							<span class="text-sm font-medium text-white text-nowrap">
-								{rawOptions.mode === "instant" && !auth.data
-									? "Sign In To Use"
-									: "Start Recording"}
-							</span>
-							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
-								{`${capitalize(rawOptions.mode)} Mode`}
-							</span>
+								commands.startRecording({
+									capture_target: props.target,
+									mode: rawOptions.mode,
+									capture_system_audio: rawOptions.captureSystemAudio,
+								});
+							}}
+						>
+							<div class="flex flex-1 items-center py-1 pl-4 transition-colors hover:bg-white/10 min-w-0">
+								{rawOptions.mode === "studio" ? (
+									<IconCapFilmCut class="size-4 flex-shrink-0" />
+								) : (
+									<IconCapInstant class="size-4 flex-shrink-0" />
+								)}
+								<div class="flex flex-col mr-2 ml-3 min-w-0">
+									<span class="text-[0.95rem] font-medium text-white text-nowrap">
+										{rawOptions.mode === "instant" && !auth.data
+											? "Sign In To Use"
+											: "Start Recording"}
+									</span>
+									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
+										{`${capitalize(rawOptions.mode)} Mode`}
+									</span>
+								</div>
+							</div>
+							<div
+								class="pl-2.5 pr-3 py-1.5 flex items-center border-l border-white/20 bg-white/5 transition-colors group-hover:bg-white/10"
+								onMouseDown={(e) => showMenu(menuModes(), e)}
+								onClick={(e) => showMenu(menuModes(), e)}
+							>
+								<IconCapCaretDown class="pointer-events-none" />
+							</div>
+						</div>
+						<div
+							class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+							onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
+							onClick={(e) => showMenu(preRecordingMenu(), e)}
+						>
+							<IconCapGear class="pointer-events-none will-change-transform size-5" />
 						</div>
 					</div>
-					<div
-						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
-						onMouseDown={(e) => showMenu(menuModes(), e)}
-						onClick={(e) => showMenu(menuModes(), e)}
-					>
-						<IconCapCaretDown class="pointer-events-none focus:rotate-90" />
-					</div>
 				</div>
-				<div
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-					onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-					onClick={(e) => showMenu(preRecordingMenu(), e)}
-				>
-					<IconCapGear class="pointer-events-none will-change-transform size-5" />
+				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+					<div class="grid grid-cols-2 gap-2 w-full">
+						<CameraSelect
+							disabled={cameras.isPending}
+							options={cameras.data ?? []}
+							value={selectedCamera() ?? null}
+							onChange={(camera) => {
+								if (!camera) setCamera.mutate(null);
+								else if (camera.model_id)
+									setCamera.mutate({ ModelID: camera.model_id });
+								else setCamera.mutate({ DeviceID: camera.device_id });
+							}}
+						/>
+						<MicrophoneSelect
+							disabled={mics.isPending}
+							options={mics.isPending ? [] : (mics.data ?? [])}
+							value={
+								mics.isPending
+									? (rawOptions.micName ?? null)
+									: selectedMicName()
+							}
+							onChange={(value) => setMicInput.mutate(value)}
+						/>
+					</div>
 				</div>
 			</div>
 			<div class="flex justify-center items-center w-full">

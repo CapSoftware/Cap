@@ -46,6 +46,7 @@ declare global {
   const IconCapLogoFullDark: typeof import('~icons/cap/logo-full-dark.jsx')['default']
   const IconCapMessageBubble: typeof import('~icons/cap/message-bubble.jsx')['default']
   const IconCapMicrophone: typeof import('~icons/cap/microphone.jsx')['default']
+  const IconCapMonitor: typeof import('~icons/cap/monitor.jsx')['default']
   const IconCapMoreVertical: typeof import('~icons/cap/more-vertical.jsx')['default']
   const IconCapMoveLeft: typeof import("~icons/cap/move-left.jsx")["default"]
   const IconCapMoveRight: typeof import("~icons/cap/move-right.jsx")["default"]
