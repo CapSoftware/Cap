@@ -30,6 +30,7 @@ use specta::Type;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
+    error::Error as StdError,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -149,8 +150,14 @@ async fn shareable_content_missing_target_display(
 
 #[cfg(target_os = "macos")]
 fn is_shareable_content_error(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<SourceError>()
-        .is_some_and(|source_error| matches!(source_error, SourceError::AsContentFilter))
+    err.chain().any(|cause| {
+        let cause: &dyn StdError = cause;
+        if let Some(source_error) = cause.downcast_ref::<SourceError>() {
+            matches!(source_error, SourceError::AsContentFilter)
+        } else {
+            false
+        }
+    })
 }
 
 impl InProgressRecording {
