@@ -17,6 +17,8 @@ use std::{
 use tracing::{debug, error, info, trace, warn};
 
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
+type StreamReadyFuture =
+    BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>;
 
 #[derive(Clone)]
 pub struct MicrophoneSamples {
@@ -126,12 +128,7 @@ impl MicrophoneFeed {
         device_map
     }
 
-    fn spawn_input_stream(
-        params: StreamSpawnParams,
-    ) -> (
-        BoxFuture<'static, Result<(SupportedStreamConfig, Option<u32>), SetInputError>>,
-        SyncSender<()>,
-    ) {
+    fn spawn_input_stream(params: StreamSpawnParams) -> (StreamReadyFuture, SyncSender<()>) {
         let StreamSpawnParams {
             id,
             label,

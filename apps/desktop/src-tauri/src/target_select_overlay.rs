@@ -72,7 +72,6 @@ pub async fn open_target_select_overlays(
 
     let handle = tokio::spawn({
         let app = app.clone();
-        let window_exclusions = window_exclusions;
 
         async move {
             loop {

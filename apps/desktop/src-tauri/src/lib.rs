@@ -369,17 +369,17 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
         }
     }
 
-    if let Some(handle) = studio_handle {
-        if desired_label.is_some() {
-            let mic_lock = mic_feed
-                .ask(microphone::Lock)
-                .await
-                .map_err(|e| e.to_string())?;
-            handle
-                .set_mic_feed(Some(Arc::new(mic_lock)))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+    if let Some(handle) = studio_handle
+        && desired_label.is_some()
+    {
+        let mic_lock = mic_feed
+            .ask(microphone::Lock)
+            .await
+            .map_err(|e| e.to_string())?;
+        handle
+            .set_mic_feed(Some(Arc::new(mic_lock)))
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     {
@@ -459,17 +459,17 @@ async fn set_camera_input(
         }
     }
 
-    if let Some(handle) = studio_handle {
-        if id.is_some() {
-            let camera_lock = camera_feed
-                .ask(feeds::camera::Lock)
-                .await
-                .map_err(|e| e.to_string())?;
-            handle
-                .set_camera_feed(Some(Arc::new(camera_lock)))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+    if let Some(handle) = studio_handle
+        && id.is_some()
+    {
+        let camera_lock = camera_feed
+            .ask(feeds::camera::Lock)
+            .await
+            .map_err(|e| e.to_string())?;
+        handle
+            .set_camera_feed(Some(Arc::new(camera_lock)))
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     {
@@ -547,26 +547,24 @@ fn spawn_microphone_watcher(app_handle: AppHandle) {
                 )
             };
 
-            if should_check {
-                if let Some(label) = label {
-                    let available = microphone::MicrophoneFeed::list().contains_key(&label);
+            if should_check && let Some(selected_label) = label {
+                let available = microphone::MicrophoneFeed::list().contains_key(&selected_label);
 
-                    if !available && !is_marked {
-                        let mut app = state.write().await;
-                        if let Err(err) = app
-                            .handle_input_disconnect(RecordingInputKind::Microphone)
-                            .await
-                        {
-                            warn!("Failed to handle mic disconnect: {err}");
-                        }
-                    } else if available && is_marked {
-                        let mut app = state.write().await;
-                        if let Err(err) = app
-                            .handle_input_restored(RecordingInputKind::Microphone)
-                            .await
-                        {
-                            warn!("Failed to handle mic reconnection: {err}");
-                        }
+                if !available && !is_marked {
+                    let mut app = state.write().await;
+                    if let Err(err) = app
+                        .handle_input_disconnect(RecordingInputKind::Microphone)
+                        .await
+                    {
+                        warn!("Failed to handle mic disconnect: {err}");
+                    }
+                } else if available && is_marked {
+                    let mut app = state.write().await;
+                    if let Err(err) = app
+                        .handle_input_restored(RecordingInputKind::Microphone)
+                        .await
+                    {
+                        warn!("Failed to handle mic reconnection: {err}");
                     }
                 }
             }
@@ -594,25 +592,21 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
                 )
             };
 
-            if should_check {
-                if let Some(id) = camera_id {
-                    let available = is_camera_available(&id);
+            if should_check && let Some(selected_id) = camera_id {
+                let available = is_camera_available(&selected_id);
 
-                    if !available && !is_marked {
-                        let mut app = state.write().await;
-                        if let Err(err) = app
-                            .handle_input_disconnect(RecordingInputKind::Camera)
-                            .await
-                        {
-                            warn!("Failed to handle camera disconnect: {err}");
-                        }
-                    } else if available && is_marked {
-                        let mut app = state.write().await;
-                        if let Err(err) =
-                            app.handle_input_restored(RecordingInputKind::Camera).await
-                        {
-                            warn!("Failed to handle camera reconnection: {err}");
-                        }
+                if !available && !is_marked {
+                    let mut app = state.write().await;
+                    if let Err(err) = app
+                        .handle_input_disconnect(RecordingInputKind::Camera)
+                        .await
+                    {
+                        warn!("Failed to handle camera disconnect: {err}");
+                    }
+                } else if available && is_marked {
+                    let mut app = state.write().await;
+                    if let Err(err) = app.handle_input_restored(RecordingInputKind::Camera).await {
+                        warn!("Failed to handle camera reconnection: {err}");
                     }
                 }
             }
