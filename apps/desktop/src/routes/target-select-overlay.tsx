@@ -184,7 +184,9 @@ function Inner() {
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs">
-												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
+												{`${size().width}x${size().height} · ${
+													display.refresh_rate
+												}FPS`}
 											</span>
 										)}
 									</Show>
@@ -565,7 +567,7 @@ function RecordingControls(props: {
 						</div>
 						<div
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
-							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white shadow-[0_8px_20px_rgba(32,85,255,0.35)] bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
+							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
 							onClick={() => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
