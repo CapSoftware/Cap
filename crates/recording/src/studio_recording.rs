@@ -229,7 +229,7 @@ impl Message<SetMicFeed> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, msg: SetMicFeed, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        match self.state {
+        match self.state.as_ref() {
             Some(ActorState::Recording { .. }) => {
                 bail!("Pause the recording before changing microphone input")
             }
@@ -254,7 +254,7 @@ impl Message<SetCameraFeed> for Actor {
         msg: SetCameraFeed,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        match self.state {
+        match self.state.as_ref() {
             Some(ActorState::Recording { .. }) => {
                 bail!("Pause the recording before changing camera input")
             }
