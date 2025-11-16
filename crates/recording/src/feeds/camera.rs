@@ -420,29 +420,58 @@ impl Message<SetInput> for CameraFeed {
                 let actor_ref = ctx.actor_ref();
                 let new_frame_recipient = actor_ref.clone().recipient();
 
-                let _ = inner.done_tx.send(());
-
                 let rt = Runtime::new().expect("Failed to get Tokio runtime!");
                 std::thread::spawn(move || {
                     LocalSet::new().block_on(&rt, async move {
                         let handle = match setup_camera(&id, new_frame_recipient).await {
                             Ok(r) => {
-                                let _ = ready_tx.send(Ok(InputConnected {
-                                    camera_info: r.camera_info.clone(),
-                                    video_info: r.video_info,
-                                    done_tx: done_tx.clone(),
-                                }));
+                                let SetupCameraResult {
+                                    handle,
+                                    camera_info,
+                                    video_info,
+                                } = r;
 
-                                let _ = actor_ref
-                                    .tell(LockedCameraInputReconnected {
+                                let ready_payload = InputConnected {
+                                    camera_info: camera_info.clone(),
+                                    video_info,
+                                    done_tx: done_tx.clone(),
+                                };
+
+                                let reconnect_result = actor_ref
+                                    .ask(LockedCameraInputReconnected {
                                         id: id.clone(),
-                                        camera_info: r.camera_info.clone(),
-                                        video_info: r.video_info,
+                                        camera_info,
+                                        video_info,
                                         done_tx: done_tx.clone(),
                                     })
                                     .await;
 
-                                r.handle
+                                match reconnect_result {
+                                    Ok(true) => {
+                                        let _ = ready_tx.send(Ok(ready_payload));
+                                        handle
+                                    }
+                                    Ok(false) => {
+                                        warn!(
+                                            "Locked camera state changed before reconnecting {:?}",
+                                            id
+                                        );
+                                        let _ =
+                                            ready_tx.send(Err(SetInputError::BuildStreamCrashed));
+                                        let _ = handle.stop_capturing();
+                                        return;
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            ?err,
+                                            "Failed to update locked camera state for {:?}", id
+                                        );
+                                        let _ =
+                                            ready_tx.send(Err(SetInputError::BuildStreamCrashed));
+                                        let _ = handle.stop_capturing();
+                                        return;
+                                    }
+                                }
                             }
                             Err(e) => {
                                 let _ = ready_tx.send(Err(e.clone()));
@@ -662,7 +691,7 @@ impl Message<InputConnectFailed> for CameraFeed {
 }
 
 impl Message<LockedCameraInputReconnected> for CameraFeed {
-    type Reply = ();
+    type Reply = bool;
 
     async fn handle(
         &mut self,
@@ -674,7 +703,11 @@ impl Message<LockedCameraInputReconnected> for CameraFeed {
         {
             inner.camera_info = msg.camera_info;
             inner.video_info = msg.video_info;
-            inner.done_tx = msg.done_tx;
+            let previous_done_tx = std::mem::replace(&mut inner.done_tx, msg.done_tx);
+            let _ = previous_done_tx.send(());
+            true
+        } else {
+            false
         }
     }
 }
