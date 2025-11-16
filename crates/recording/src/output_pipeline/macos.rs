@@ -63,6 +63,8 @@ impl Muxer for AVFoundationMp4Muxer {
 impl VideoMuxer for AVFoundationMp4Muxer {
     type VideoFrame = screen_capture::VideoFrame;
 
+    const MAX_QUEUE_RETRIES: u32 = 500;
+
     fn send_video_frame(
         &mut self,
         frame: Self::VideoFrame,
@@ -76,10 +78,18 @@ impl VideoMuxer for AVFoundationMp4Muxer {
             mp4.resume();
         }
 
+        let mut retry_count = 0;
         loop {
             match mp4.queue_video_frame(frame.sample_buf.clone(), timestamp) {
                 Ok(()) => break,
                 Err(QueueFrameError::NotReadyForMore) => {
+                    retry_count += 1;
+                    if retry_count >= Self::MAX_QUEUE_RETRIES {
+                        return Err(anyhow!(
+                            "send_video_frame/timeout after {} retries",
+                            Self::MAX_QUEUE_RETRIES
+                        ));
+                    }
                     std::thread::sleep(Duration::from_millis(2));
                     continue;
                 }
