@@ -29,9 +29,10 @@ import {
 import { reconcile } from "solid-js/store";
 // Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
+import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { generalSettingsStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
 	createCameraMutation,
@@ -74,8 +75,8 @@ import TargetTypeButton from "./TargetTypeButton";
 
 function getWindowSize() {
 	return {
-		width: 270,
-		height: 256,
+		width: 290,
+		height: 310,
 	};
 }
 
@@ -191,7 +192,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	});
 
 	return (
-		<div class="flex flex-col w-full">
+		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
 				<div
 					onClick={() => props.onBack()}
@@ -224,11 +225,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					/>
 				</div>
 			</div>
-			<div class="pt-4">
-				<div
-					class="px-2 custom-scroll"
-					style="max-height: calc(256px - 100px - 1rem)"
-				>
+			<div class="flex flex-col flex-1 min-h-0 pt-4">
+				<div class="px-2 custom-scroll flex-1 overflow-y-auto">
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -302,6 +300,26 @@ function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const isRecording = () => !!currentRecording.data;
+	const auth = authStore.createQuery();
+
+	let hasHiddenMainWindowForPicker = false;
+	createEffect(() => {
+		const pickerActive = rawOptions.targetMode != null;
+		if (pickerActive && !hasHiddenMainWindowForPicker) {
+			hasHiddenMainWindowForPicker = true;
+			void getCurrentWindow().hide();
+		} else if (!pickerActive && hasHiddenMainWindowForPicker) {
+			hasHiddenMainWindowForPicker = false;
+			const currentWindow = getCurrentWindow();
+			void currentWindow.show();
+			void currentWindow.setFocus();
+		}
+	});
+	onCleanup(() => {
+		if (!hasHiddenMainWindowForPicker) return;
+		hasHiddenMainWindowForPicker = false;
+		void getCurrentWindow().show();
+	});
 
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
@@ -763,11 +781,7 @@ function Page() {
 	onCleanup(() => startSignInCleanup.then((cb) => cb()));
 
 	return (
-		<div
-			class={`flex relative ${
-				displayMenuOpen() || windowMenuOpen() ? "" : "justify-center"
-			} flex-col px-3 gap-2 h-full text-[--text-primary]`}
-		>
+		<div class="flex relative flex-col px-3 gap-2 h-full min-h-0 text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
 				<div
 					class={cx(
@@ -819,83 +833,103 @@ function Page() {
 					{ostype() === "macos" && (
 						<div class="flex-1" data-tauri-drag-region />
 					)}
-					<ErrorBoundary fallback={<></>}>
-						<Suspense>
-							<span
-								onClick={async () => {
-									if (license.data?.type !== "pro") {
-										await commands.showWindow("Upgrade");
-									}
-								}}
-								class={cx(
-									"text-[0.6rem] ml-2 rounded-full px-1.5 py-0.5",
-									license.data?.type === "pro"
-										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
-										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
-									ostype() === "windows" && "ml-2",
-								)}
-							>
-								{license.data?.type === "commercial"
-									? "Commercial"
-									: license.data?.type === "pro"
-										? "Pro"
-										: "Personal"}
-							</span>
-						</Suspense>
-					</ErrorBoundary>
 				</div>
 			</WindowChromeHeader>
-			<Show when={signIn.isPending}>
-				<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
-					<div class="flex flex-col gap-4 justify-center items-center">
-						<span>Signing In...</span>
-
-						<Button
-							onClick={() => {
-								signIn.variables?.abort();
-								signIn.reset();
-							}}
-							variant="gray"
-							class="w-full"
+			<Show when={!activeMenu()}>
+				<div class="flex items-center justify-between mt-4">
+					<div class="flex items-center space-x-1">
+						<a
+							class="*:w-[92px] *:h-auto text-[--text-primary]"
+							target="_blank"
+							href={
+								auth.data
+									? `${import.meta.env.VITE_SERVER_URL}/dashboard`
+									: import.meta.env.VITE_SERVER_URL
+							}
 						>
-							Cancel Sign In
-						</Button>
+							<IconCapLogoFullDark class="hidden dark:block" />
+							<IconCapLogoFull class="block dark:hidden" />
+						</a>
+						<ErrorBoundary fallback={<></>}>
+							<Suspense>
+								<span
+									onClick={async () => {
+										if (license.data?.type !== "pro") {
+											await commands.showWindow("Upgrade");
+										}
+									}}
+									class={cx(
+										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+										license.data?.type === "pro"
+											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
+									)}
+								>
+									{license.data?.type === "commercial"
+										? "Commercial"
+										: license.data?.type === "pro"
+											? "Pro"
+											: "Personal"}
+								</span>
+							</Suspense>
+						</ErrorBoundary>
 					</div>
+					<Mode />
 				</div>
 			</Show>
-			<Show when={!signIn.isPending}>
-				<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
-					{(variant) =>
-						variant === "display" ? (
-							<TargetMenuPanel
-								variant="display"
-								targets={displayTargetsData()}
-								isLoading={displayMenuLoading()}
-								errorMessage={displayErrorMessage()}
-								onSelect={selectDisplayTarget}
-								disabled={isRecording()}
-								onBack={() => {
-									setDisplayMenuOpen(false);
-									displayTriggerRef?.focus();
+			<div class="flex-1 min-h-0 w-full flex flex-col">
+				<Show when={signIn.isPending}>
+					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
+						<div class="flex flex-col gap-4 justify-center items-center">
+							<span>Signing In...</span>
+
+							<Button
+								onClick={() => {
+									signIn.variables?.abort();
+									signIn.reset();
 								}}
-							/>
-						) : (
-							<TargetMenuPanel
-								variant="window"
-								targets={windowTargetsData()}
-								isLoading={windowMenuLoading()}
-								errorMessage={windowErrorMessage()}
-								onSelect={selectWindowTarget}
-								disabled={isRecording()}
-								onBack={() => {
-									setWindowMenuOpen(false);
-									windowTriggerRef?.focus();
-								}}
-							/>
-						)
-					}
+								variant="gray"
+								class="w-full"
+							>
+								Cancel Sign In
+							</Button>
+						</div>
+					</div>
 				</Show>
-			</Show>
+				<Show when={!signIn.isPending}>
+					<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
+						{(variant) =>
+							variant === "display" ? (
+								<TargetMenuPanel
+									variant="display"
+									targets={displayTargetsData()}
+									isLoading={displayMenuLoading()}
+									errorMessage={displayErrorMessage()}
+									onSelect={selectDisplayTarget}
+									disabled={isRecording()}
+									onBack={() => {
+										setDisplayMenuOpen(false);
+										displayTriggerRef?.focus();
+									}}
+								/>
+							) : (
+								<TargetMenuPanel
+									variant="window"
+									targets={windowTargetsData()}
+									isLoading={windowMenuLoading()}
+									errorMessage={windowErrorMessage()}
+									onSelect={selectWindowTarget}
+									disabled={isRecording()}
+									onBack={() => {
+										setWindowMenuOpen(false);
+										windowTriggerRef?.focus();
+									}}
+								/>
+							)
+						}
+					</Show>
+				</Show>
+			</div>
 		</div>
 	);
 }
