@@ -17,6 +17,10 @@ pub struct AVFoundationMp4Muxer(
     Arc<AtomicBool>,
 );
 
+impl AVFoundationMp4Muxer {
+    const MAX_QUEUE_RETRIES: u32 = 500;
+}
+
 #[derive(Default)]
 pub struct AVFoundationMp4MuxerConfig {
     pub output_height: Option<u32>,
@@ -62,8 +66,6 @@ impl Muxer for AVFoundationMp4Muxer {
 
 impl VideoMuxer for AVFoundationMp4Muxer {
     type VideoFrame = screen_capture::VideoFrame;
-
-    const MAX_QUEUE_RETRIES: u32 = 500;
 
     fn send_video_frame(
         &mut self,
