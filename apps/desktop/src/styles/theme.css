@@ -261,6 +261,119 @@
 	animation-iteration-count: infinite;
 }
 
+.cap-selection-hint-monitor {
+	position: relative;
+	width: 9.5rem;
+	height: 6.5rem;
+}
+
+.cap-selection-hint-screen-area {
+	position: absolute;
+	top: 4.4%;
+	left: 3%;
+	width: 94%;
+	height: 91%;
+	overflow: hidden;
+}
+
+.cap-selection-hint-selection {
+	position: absolute;
+	top: calc(50% - 26px);
+	left: calc(50% - 34px);
+	width: 68px;
+	height: 52px;
+	border-radius: 0;
+	border: 1px solid rgba(255, 255, 255, 0.82);
+	background: linear-gradient(
+		135deg,
+		rgba(113, 205, 255, 0.4),
+		rgba(45, 97, 255, 0.2)
+	);
+	box-shadow: 0 16px 35px rgba(0, 0, 0, 0.4);
+	opacity: 1;
+	transform-origin: top left;
+	animation: cap-selection-hint-selection 2.8s cubic-bezier(0.4, 0, 0.2, 1)
+		infinite;
+}
+
+.cap-selection-hint-cursor {
+	position: absolute;
+	top: calc(50% - 26px);
+	left: calc(50% - 34px);
+	width: 18px;
+	height: 26px;
+	filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.6));
+	transform-origin: top left;
+	animation: cap-selection-hint-cursor 2.8s cubic-bezier(0.4, 0, 0.2, 1)
+		infinite;
+}
+
+.cap-selection-hint-cursor::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 55%;
+	width: 20px;
+	height: 20px;
+	border-radius: 999px;
+	border: 2px solid rgba(255, 255, 255, 0.85);
+	transform: translate(-50%, -50%) scale(0);
+	opacity: 0;
+	animation: cap-selection-hint-click 2.8s ease-out infinite;
+}
+
+@keyframes cap-selection-hint-selection {
+	0% {
+		width: 10px;
+		height: 8px;
+	}
+	50% {
+		width: 68px;
+		height: 52px;
+	}
+	100% {
+		width: 10px;
+		height: 8px;
+	}
+}
+
+@keyframes cap-selection-hint-cursor {
+	0% {
+		opacity: 1;
+		transform: translate3d(0px, 0px, 0) rotate(-6deg);
+	}
+	50% {
+		transform: translate3d(68px, 52px, 0) rotate(-4deg);
+	}
+	100% {
+		opacity: 1;
+		transform: translate3d(0px, 0px, 0) rotate(-6deg);
+	}
+}
+
+@keyframes cap-selection-hint-click {
+	0% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0);
+	}
+	10% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0);
+	}
+	12% {
+		opacity: 0.95;
+		transform: translate(-50%, -50%) scale(0.2);
+	}
+	18% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0.85);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(-50%, -50%) scale(0);
+	}
+}
+
 /* Tabs container with mask-based fade-out effect */
 
 .tabs-mask-content {

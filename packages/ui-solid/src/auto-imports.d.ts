@@ -25,6 +25,8 @@ declare global {
   const IconCapCorners: typeof import('~icons/cap/corners.jsx')['default']
   const IconCapCrop: typeof import('~icons/cap/crop.jsx')['default']
   const IconCapCursor: typeof import('~icons/cap/cursor.jsx')['default']
+  const IconCapCursorMacos: typeof import('~icons/cap/cursor-macos.jsx')['default']
+  const IconCapCursorWindows: typeof import('~icons/cap/cursor-windows.jsx')['default']
   const IconCapDownload: typeof import('~icons/cap/download.jsx')['default']
   const IconCapEditor: typeof import('~icons/cap/editor.jsx')['default']
   const IconCapEnlarge: typeof import('~icons/cap/enlarge.jsx')['default']
