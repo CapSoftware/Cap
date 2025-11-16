@@ -438,6 +438,9 @@ impl CapWindow {
                     let _ = main.close();
                 };
 
+                #[cfg(target_os = "macos")]
+                platform::add_recent_document(project_path);
+
                 self.window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)

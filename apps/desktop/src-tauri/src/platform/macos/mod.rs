@@ -1,5 +1,8 @@
+use std::path::Path;
+
 use dispatch2::run_on_main;
-use objc2_app_kit::{NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowLevel};
+use objc2_app_kit::{NSDocumentController, NSWindow, NSWindowButton};
+use objc2_foundation::NSURL;
 use tauri::WebviewWindow;
 
 mod sc_shareable_content;
@@ -35,5 +38,13 @@ impl WebviewWindowExt for WebviewWindow {
                 btn.setHidden(!visible);
             }
         }
+    }
+}
+
+pub fn add_recent_document<P: AsRef<Path>>(path: P) {
+    if let Some(url) = NSURL::from_file_path(path) {
+        run_on_main(move |mtm| {
+            NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url)
+        })
     }
 }
