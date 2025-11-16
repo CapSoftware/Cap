@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{SyncSender, sync_channel},
     },
     time::Duration,
@@ -19,11 +19,45 @@ use windows::{
     Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::Common::DXGI_FORMAT},
 };
 
+struct PauseTracker {
+    flag: Arc<AtomicBool>,
+    paused_at: Option<Duration>,
+    offset: Duration,
+}
+
+impl PauseTracker {
+    fn new(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            flag,
+            paused_at: None,
+            offset: Duration::ZERO,
+        }
+    }
+
+    fn adjust(&mut self, timestamp: Duration) -> Option<Duration> {
+        if self.flag.load(Ordering::Relaxed) {
+            if self.paused_at.is_none() {
+                self.paused_at = Some(timestamp);
+            }
+            return None;
+        }
+
+        if let Some(start) = self.paused_at.take() {
+            if let Some(delta) = timestamp.checked_sub(start) {
+                self.offset = self.offset.checked_add(delta).unwrap_or(Duration::MAX);
+            }
+        }
+
+        Some(timestamp.checked_sub(self.offset).unwrap_or(Duration::ZERO))
+    }
+}
+
 /// Muxes to MP4 using a combination of FFmpeg and Media Foundation
 pub struct WindowsMuxer {
     video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
+    pause: PauseTracker,
 }
 
 pub struct WindowsMuxerConfig {
@@ -43,7 +77,7 @@ impl Muxer for WindowsMuxer {
         output_path: PathBuf,
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
-        _: Arc<AtomicBool>,
+        pause_flag: Arc<AtomicBool>,
         tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
@@ -195,21 +229,23 @@ impl Muxer for WindowsMuxer {
                 match encoder {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder");
-                        let mut first_timestamp = None;
+                        let mut first_timestamp: Option<Duration> = None;
                         encoder
                             .run(
                                 Arc::new(AtomicBool::default()),
                                 || {
-                                    let Ok(Some((frame, _))) = video_rx.recv() else {
+                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
                                         trace!("No more frames available");
                                         return Ok(None);
                                     };
 
-                                    let frame_time = frame.inner().SystemRelativeTime()?;
-                                    let first_timestamp = first_timestamp.get_or_insert(frame_time);
-                                    let frame_time = TimeSpan {
-                                        Duration: frame_time.Duration - first_timestamp.Duration,
+                                    let relative = if let Some(first) = first_timestamp {
+                                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                    } else {
+                                        first_timestamp = Some(timestamp);
+                                        Duration::ZERO
                                     };
+                                    let frame_time = duration_to_timespan(relative);
 
                                     Ok(Some((frame.texture().clone(), frame_time)))
                                 },
@@ -230,12 +266,6 @@ impl Muxer for WindowsMuxer {
                             let Ok(mut output) = output.lock() else {
                                 continue;
                             };
-
-                            // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            //     mp4.pause();
-                            // } else {
-                            //     mp4.resume();
-                            // }
 
                             use scap_ffmpeg::AsFFmpeg;
 
@@ -265,6 +295,7 @@ impl Muxer for WindowsMuxer {
             video_tx,
             output,
             audio_encoder,
+            pause: PauseTracker::new(pause_flag),
         })
     }
 
@@ -297,18 +328,38 @@ impl VideoMuxer for WindowsMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        Ok(self.video_tx.send(Some((frame.frame, timestamp)))?)
+        if let Some(timestamp) = self.pause.adjust(timestamp) {
+            self.video_tx.send(Some((frame.frame, timestamp)))?;
+        }
+
+        Ok(())
     }
 }
 
 impl AudioMuxer for WindowsMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(encoder) = self.audio_encoder.as_mut()
-            && let Ok(mut output) = self.output.lock()
-        {
-            encoder.send_frame(frame.inner, timestamp, &mut output)?;
+        if let Some(timestamp) = self.pause.adjust(timestamp) {
+            if let Some(encoder) = self.audio_encoder.as_mut()
+                && let Ok(mut output) = self.output.lock()
+            {
+                encoder.send_frame(frame.inner, timestamp, &mut output)?;
+            }
         }
 
         Ok(())
+    }
+}
+
+fn duration_to_timespan(duration: Duration) -> TimeSpan {
+    const TICKS_PER_SEC: u64 = 10_000_000;
+    const NANOS_PER_TICK: u32 = 100;
+
+    let secs_ticks = duration.as_secs().saturating_mul(TICKS_PER_SEC);
+    let nanos_ticks = (duration.subsec_nanos() / NANOS_PER_TICK) as u64;
+    let total_ticks = secs_ticks.saturating_add(nanos_ticks);
+    let clamped = total_ticks.min(i64::MAX as u64);
+
+    TimeSpan {
+        Duration: clamped as i64,
     }
 }
