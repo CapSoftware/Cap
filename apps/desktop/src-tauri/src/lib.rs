@@ -508,8 +508,18 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
                 warn!("Failed to pause recording after mic disconnect: {handle_err}");
             }
 
-            if let Err(restart_err) = app.ensure_selected_mic_ready().await {
-                warn!("Failed to restart microphone input: {restart_err}");
+            match app.ensure_selected_mic_ready().await {
+                Ok(()) => {
+                    if let Err(restored_err) = app
+                        .handle_input_restored(RecordingInputKind::Microphone)
+                        .await
+                    {
+                        warn!("Failed to handle mic restoration: {restored_err}");
+                    }
+                }
+                Err(restart_err) => {
+                    warn!("Failed to restart microphone input: {restart_err}");
+                }
             }
         }
     });
