@@ -1,5 +1,6 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { throttle } from "@solid-primitives/scheduled";
 import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { batch, createRoot, createSignal, For, onMount, Show } from "solid-js";
@@ -37,6 +38,10 @@ export function Timeline() {
 	const timelineBounds = createElementBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+
+	const setPreviewTimeThrottled = throttle((time: number) => {
+		setEditorState("previewTime", time);
+	}, 16);
 
 	onMount(() => {
 		if (!project.timeline) {
@@ -196,10 +201,9 @@ export function Timeline() {
 				}}
 				onMouseMove={(e) => {
 					const { left } = timelineBounds;
-					if (editorState.playing) return;
-					setEditorState(
-						"previewTime",
-						transform().position + secsPerPixel() * (e.clientX - left!),
+					if (editorState.playing || left == null) return;
+					setPreviewTimeThrottled(
+						transform().position + secsPerPixel() * (e.clientX - left),
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
