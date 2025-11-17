@@ -1,3 +1,4 @@
+import { createElementBounds } from "@solid-primitives/bounds";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
@@ -17,6 +18,7 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	onCleanup,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
@@ -52,6 +54,7 @@ declare global {
 const MAX_RECORDING_FOR_FREE = 5 * 60 * 1000;
 const NO_MICROPHONE = "No Microphone";
 const NO_WEBCAM = "No Webcam";
+const FAKE_WINDOW_BOUNDS_NAME = "recording-controls-interactive-area";
 
 export default function () {
 	const [state, setState] = createSignal<State>(
@@ -80,7 +83,22 @@ export default function () {
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
+	const [interactiveAreaRef, setInteractiveAreaRef] =
+		createSignal<HTMLDivElement | null>(null);
+	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
+	const recordingMode = createMemo(
+		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
+	);
+	const canPauseRecording = createMemo(() => {
+		const mode = recordingMode();
+		const os = ostype();
+		return (
+			mode === "studio" ||
+			os === "macos" ||
+			(os === "windows" && mode === "instant")
+		);
+	});
 
 	const hasDisconnectedInput = () =>
 		disconnectedInputs.microphone || disconnectedInputs.camera;
@@ -189,6 +207,30 @@ export default function () {
 
 	createEffect(() => {
 		void refreshCameraWindowState();
+	});
+
+	createEffect(() => {
+		const element = interactiveAreaRef();
+		if (!element) {
+			void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
+			return;
+		}
+
+		const left = interactiveBounds.left ?? 0;
+		const top = interactiveBounds.top ?? 0;
+		const width = interactiveBounds.width ?? 0;
+		const height = interactiveBounds.height ?? 0;
+
+		if (width === 0 || height === 0) return;
+
+		void commands.setFakeWindowBounds(FAKE_WINDOW_BOUNDS_NAME, {
+			position: { x: left, y: top },
+			size: { width, height },
+		});
+	});
+
+	onCleanup(() => {
+		void commands.removeFakeWindow(FAKE_WINDOW_BOUNDS_NAME);
 	});
 
 	createTimer(
@@ -477,166 +519,167 @@ export default function () {
 	});
 
 	return (
-		<div class="flex h-full w-full flex-col justify-end gap-2">
-			<Show when={hasRecordingIssue() && issuePanelVisible()}>
-				<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
-					<IconLucideAlertTriangle class="mt-0.5 size-5 text-red-9" />
-					<div class="flex-1 space-y-1">
-						{issueMessages().map((message) => (
-							<p>{message}</p>
-						))}
+		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
+			<div ref={setInteractiveAreaRef} class="flex w-full flex-col gap-2">
+				<Show when={hasRecordingIssue() && issuePanelVisible()}>
+					<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
+						<IconLucideAlertTriangle class="mt-0.5 size-5 text-red-9" />
+						<div class="flex-1 space-y-1">
+							{issueMessages().map((message) => (
+								<p>{message}</p>
+							))}
+						</div>
+						<button
+							type="button"
+							class="text-red-9 transition hover:text-red-11"
+							onClick={() => dismissIssuePanel()}
+							aria-label="Dismiss recording issue"
+						>
+							<IconLucideX class="size-4" />
+						</button>
 					</div>
-					<button
-						type="button"
-						class="text-red-9 transition hover:text-red-11"
-						onClick={() => dismissIssuePanel()}
-						aria-label="Dismiss recording issue"
-					>
-						<IconLucideX class="size-4" />
-					</button>
-				</div>
-			</Show>
-			<div class="h-10 w-full rounded-2xl">
-				<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 shadow-[0_8px_24px_rgba(18,18,18,0.18)] animate-in fade-in">
-					<Show when={countdownState()}>
-						{(state) => (
-							<div
-								ref={setCountdownRef}
-								class={cx(
-									"transition-opacity",
-									showCountdown() ? "opacity-100" : "opacity-0",
-								)}
-							>
-								<Countdown from={state().from} current={state().current} />
-							</div>
-						)}
-					</Show>
-					<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
-						<div class="flex flex-1 flex-row justify-between">
-							<button
-								disabled={stopRecording.isPending}
-								class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
-								type="button"
-								onClick={() => stopRecording.mutate()}
-								title="Stop recording"
-								aria-label="Stop recording"
-							>
-								<IconCapStopCircle />
-								<span class="text-[0.875rem] font-[500] tabular-nums">
-									<Show
-										when={isMaxRecordingLimitEnabled()}
-										fallback={formatTime(adjustedTime() / 1000)}
-									>
-										{formatTime(remainingRecordingTime() / 1000)}
-									</Show>
-								</span>
-							</button>
-
-							<div class="flex items-center gap-1">
+				</Show>
+				<div class="h-10 w-full rounded-2xl">
+					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 shadow-[0_8px_24px_rgba(18,18,18,0.18)] animate-in fade-in">
+						<Show when={countdownState()}>
+							{(state) => (
 								<div
-									class="relative flex h-8 w-8 items-center justify-center"
-									title={microphoneTitle()}
-								>
-									{optionsQuery.rawOptions.micName != null ? (
-										disconnectedInputs.microphone ? (
-											<IconLucideMicOff class="size-5 text-amber-11" />
-										) : (
-											<>
-												<IconCapMicrophone class="size-5 text-gray-12" />
-												<div class="absolute bottom-1 left-1 right-1 h-0.5 overflow-hidden rounded-full bg-gray-10">
-													<div
-														class="absolute inset-0 bg-blue-9 transition-transform duration-100"
-														style={{
-															transform: `translateX(-${
-																(1 - audioLevel()) * 100
-															}%)`,
-														}}
-													/>
-												</div>
-											</>
-										)
-									) : (
-										<IconLucideMicOff
-											class="size-5 text-gray-7"
-											data-tauri-drag-region
-										/>
+									ref={setCountdownRef}
+									class={cx(
+										"transition-opacity",
+										showCountdown() ? "opacity-100" : "opacity-0",
 									)}
+								>
+									<Countdown from={state().from} current={state().current} />
 								</div>
-								<Show when={hasRecordingIssue()}>
-									<ActionButton
-										class={cx(
-											"text-red-10 hover:bg-red-3/40",
-											issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8",
-										)}
-										onClick={() => toggleIssuePanel()}
-										title={issueMessages().join(", ")}
-										aria-pressed={issuePanelVisible() ? "true" : "false"}
-										aria-label="Recording issues"
-									>
-										<IconLucideAlertTriangle class="size-5" />
-									</ActionButton>
-								</Show>
+							)}
+						</Show>
+						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
+							<div class="flex flex-1 flex-row justify-between">
+								<button
+									disabled={stopRecording.isPending}
+									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
+									type="button"
+									onClick={() => stopRecording.mutate()}
+									title="Stop recording"
+									aria-label="Stop recording"
+								>
+									<IconCapStopCircle />
+									<span class="text-[0.875rem] font-[500] tabular-nums">
+										<Show
+											when={isMaxRecordingLimitEnabled()}
+											fallback={formatTime(adjustedTime() / 1000)}
+										>
+											{formatTime(remainingRecordingTime() / 1000)}
+										</Show>
+									</span>
+								</button>
 
-								{(currentRecording.data?.mode === "studio" ||
-									ostype() === "macos") && (
-									<ActionButton
-										disabled={togglePause.isPending || hasDisconnectedInput()}
-										onClick={() => togglePause.mutate()}
-										title={
-											state().variant === "paused"
-												? "Resume recording"
-												: "Pause recording"
-										}
-										aria-label={
-											state().variant === "paused"
-												? "Resume recording"
-												: "Pause recording"
-										}
+								<div class="flex items-center gap-1">
+									<div
+										class="relative flex h-8 w-8 items-center justify-center"
+										title={microphoneTitle()}
 									>
-										{state().variant === "paused" ? (
-											<IconCapPlayCircle />
+										{optionsQuery.rawOptions.micName != null ? (
+											disconnectedInputs.microphone ? (
+												<IconLucideMicOff class="size-5 text-amber-11" />
+											) : (
+												<>
+													<IconCapMicrophone class="size-5 text-gray-12" />
+													<div class="absolute bottom-1 left-1 right-1 h-0.5 overflow-hidden rounded-full bg-gray-10">
+														<div
+															class="absolute inset-0 bg-blue-9 transition-transform duration-100"
+															style={{
+																transform: `translateX(-${
+																	(1 - audioLevel()) * 100
+																}%)`,
+															}}
+														/>
+													</div>
+												</>
+											)
 										) : (
-											<IconCapPauseCircle />
+											<IconLucideMicOff
+												class="size-5 text-gray-7"
+												data-tauri-drag-region
+											/>
 										)}
-									</ActionButton>
-								)}
+									</div>
+									<Show when={hasRecordingIssue()}>
+										<ActionButton
+											class={cx(
+												"text-red-10 hover:bg-red-3/40",
+												issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8",
+											)}
+											onClick={() => toggleIssuePanel()}
+											title={issueMessages().join(", ")}
+											aria-pressed={issuePanelVisible() ? "true" : "false"}
+											aria-label="Recording issues"
+										>
+											<IconLucideAlertTriangle class="size-5" />
+										</ActionButton>
+									</Show>
 
-								<ActionButton
-									disabled={restartRecording.isPending}
-									onClick={() => restartRecording.mutate()}
-									title="Restart recording"
-									aria-label="Restart recording"
-								>
-									<IconCapRestart />
-								</ActionButton>
-								<ActionButton
-									disabled={deleteRecording.isPending}
-									onClick={() => deleteRecording.mutate()}
-									title="Delete recording"
-									aria-label="Delete recording"
-								>
-									<IconCapTrash />
-								</ActionButton>
-								<ActionButton
-									ref={(el) => {
-										settingsButtonRef = el ?? undefined;
-									}}
-									onClick={() => {
-										void openRecordingSettingsMenu();
-									}}
-									title="Recording settings"
-									aria-label="Recording settings"
-								>
-									<IconCapSettings class="size-5" />
-								</ActionButton>
+									{canPauseRecording() && (
+										<ActionButton
+											disabled={togglePause.isPending || hasDisconnectedInput()}
+											onClick={() => togglePause.mutate()}
+											title={
+												state().variant === "paused"
+													? "Resume recording"
+													: "Pause recording"
+											}
+											aria-label={
+												state().variant === "paused"
+													? "Resume recording"
+													: "Pause recording"
+											}
+										>
+											{state().variant === "paused" ? (
+												<IconCapPlayCircle />
+											) : (
+												<IconCapPauseCircle />
+											)}
+										</ActionButton>
+									)}
+
+									<ActionButton
+										disabled={restartRecording.isPending}
+										onClick={() => restartRecording.mutate()}
+										title="Restart recording"
+										aria-label="Restart recording"
+									>
+										<IconCapRestart />
+									</ActionButton>
+									<ActionButton
+										disabled={deleteRecording.isPending}
+										onClick={() => deleteRecording.mutate()}
+										title="Delete recording"
+										aria-label="Delete recording"
+									>
+										<IconCapTrash />
+									</ActionButton>
+									<ActionButton
+										ref={(el) => {
+											settingsButtonRef = el ?? undefined;
+										}}
+										onClick={() => {
+											void openRecordingSettingsMenu();
+										}}
+										title="Recording settings"
+										aria-label="Recording settings"
+									>
+										<IconCapSettings class="size-5" />
+									</ActionButton>
+								</div>
 							</div>
 						</div>
-					</div>
-					<div
-						class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move"
-						data-tauri-drag-region
-					>
-						<IconCapMoreVertical class="pointer-events-none text-gray-10" />
+						<div
+							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move"
+							data-tauri-drag-region
+						>
+							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
+						</div>
 					</div>
 				</div>
 			</div>
