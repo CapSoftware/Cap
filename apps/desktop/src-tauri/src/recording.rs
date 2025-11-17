@@ -371,19 +371,17 @@ async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableSt
         }
     };
 
-    if needs_mic {
-        if let Some(mic) = settings.mic_name.clone() {
-            if let Err(err) = apply_mic_input(app.state(), Some(mic)).await {
-                warn!(%err, "Failed to restore microphone input");
-            }
+    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
+        match apply_mic_input(app.state(), Some(mic)).await {
+            Err(err) => warn!(%err, "Failed to restore microphone input"),
+            Ok(_) => {}
         }
     }
 
-    if needs_camera {
-        if let Some(camera) = settings.camera_id.clone() {
-            if let Err(err) = apply_camera_input(app.clone(), app.state(), Some(camera)).await {
-                warn!(%err, "Failed to restore camera input");
-            }
+    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
+        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
+            Err(err) => warn!(%err, "Failed to restore camera input"),
+            Ok(_) => {}
         }
     }
 }

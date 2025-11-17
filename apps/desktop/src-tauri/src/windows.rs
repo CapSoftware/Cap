@@ -826,16 +826,16 @@ fn restore_recording_inputs_if_idle(app: &AppHandle<Wry>) {
         }
 
         if let Some(mic) = mic_name {
-            if let Err(err) = apply_mic_input(app_handle.state(), Some(mic)).await {
-                warn!(%err, "Failed to restore microphone input");
+            match apply_mic_input(app_handle.state(), Some(mic)).await {
+                Err(err) => warn!(%err, "Failed to restore microphone input"),
+                Ok(_) => {}
             }
         }
 
         if let Some(camera) = camera_id {
-            if let Err(err) =
-                apply_camera_input(app_handle.clone(), app_handle.state(), Some(camera)).await
-            {
-                warn!(%err, "Failed to restore camera input");
+            match apply_camera_input(app_handle.clone(), app_handle.state(), Some(camera)).await {
+                Err(err) => warn!(%err, "Failed to restore camera input"),
+                Ok(_) => {}
             }
         }
     });
