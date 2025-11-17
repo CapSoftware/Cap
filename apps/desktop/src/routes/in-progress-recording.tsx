@@ -444,13 +444,13 @@ export default function () {
 					"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
 			}}
 		>
-			{/* <Show when={countdownState()}>
+			<Show when={countdownState()}>
 				{(state) => (
 					<div ref={setCountdownRef} class={cx("transition-opacity", showCountdown() ? "opacity-100" : "opacity-0")}>
 						<Countdown from={state().from} current={state().current} />
 					</div>
 				)}
-			</Show> */}
+			</Show>
 			<div class="flex flex-row items-center px-2 flex-1 gap-0">
 				<button
 					disabled={stopRecording.isPending}

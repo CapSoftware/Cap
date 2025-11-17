@@ -288,7 +288,8 @@ function Inner() {
 								</div>
 								<button
 									class="flex flex-row items-center gap-1 pl-1 pr-2 h-6 rounded-[8px] bg-black/30 hover:bg-black/50 text-xs cursor-pointer text-white opacity-80 hover:opacity-100 transition-opacity"
-									onClick={() => {
+									onClick={(e) => {
+										e.stopPropagation();
 										setInitialAreaBounds({
 											x: windowUnderCursor.bounds.position.x,
 											y: windowUnderCursor.bounds.position.y,

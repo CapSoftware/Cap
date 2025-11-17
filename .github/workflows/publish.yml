@@ -7,8 +7,8 @@ on:
 env:
   CN_APPLICATION: inflight/inflight
   APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
-  SENTRY_ORG: cap-s2
-  SENTRY_PROJECT: cap-desktop
+  SENTRY_ORG: inflight-software
+  SENTRY_PROJECT: inflight-desktop
 
 jobs:
   draft:

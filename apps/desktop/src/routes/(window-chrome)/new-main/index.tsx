@@ -60,7 +60,7 @@ import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIco
 function getWindowSize() {
 	return {
 		width: 272,
-		height: 386,
+		height: 394,
 	};
 }
 
@@ -765,44 +765,6 @@ function Page() {
 					</ErrorBoundary> */}
 				</div>
 			</WindowChromeHeader>
-			<Show when={!activeMenu()}>
-				<div class="flex items-center justify-between mt-4">
-					<div class="flex items-center space-x-1">
-						<a
-							class="*:w-[92px] *:h-auto text-[--text-primary]"
-							target="_blank"
-							href={auth.data ? `${import.meta.env.VITE_SERVER_URL}/dashboard` : import.meta.env.VITE_SERVER_URL}
-						>
-							<IconCapLogoFullDark class="hidden dark:block" />
-							<IconCapLogoFull class="block dark:hidden" />
-						</a>
-						<ErrorBoundary fallback={<></>}>
-							<Suspense>
-								<span
-									onClick={async () => {
-										if (license.data?.type !== "pro") {
-											await commands.showWindow("Upgrade");
-										}
-									}}
-									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
-										license.data?.type === "pro"
-											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-											: "bg-gray-3 cursor-pointer hover:bg-gray-5"
-									)}
-								>
-									{license.data?.type === "commercial"
-										? "Commercial"
-										: license.data?.type === "pro"
-										? "Pro"
-										: "Personal"}
-								</span>
-							</Suspense>
-						</ErrorBoundary>
-					</div>
-					<Mode />
-				</div>
-			</Show>
 			<div class="flex-1 min-h-0 w-full flex flex-col">
 				<Show when={signIn.isPending}>
 					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
