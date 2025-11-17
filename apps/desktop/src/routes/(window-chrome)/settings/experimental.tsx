@@ -23,7 +23,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			autoCreateShareableLink: false,
 			enableNotifications: true,
 			enableNativeCameraPreview: false,
-			enableNewRecordingFlow: false,
+			enableNewRecordingFlow: true,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
 		},
@@ -76,19 +76,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							value={!!settings.autoZoomOnClicks}
 							onChange={(value) => {
 								handleChange("autoZoomOnClicks", value);
-								// This is bad code, but I just want the UI to not jank and can't seem to find the issue.
-								setTimeout(
-									() => window.scrollTo({ top: 0, behavior: "instant" }),
-									5,
-								);
-							}}
-						/>
-						<ToggleSettingItem
-							label="New recording flow"
-							description="New and improved flow for starting a recording! You may need to restart the app for this to take effect."
-							value={!!settings.enableNewRecordingFlow}
-							onChange={(value) => {
-								handleChange("enableNewRecordingFlow", value);
 								// This is bad code, but I just want the UI to not jank and can't seem to find the issue.
 								setTimeout(
 									() => window.scrollTo({ top: 0, behavior: "instant" }),

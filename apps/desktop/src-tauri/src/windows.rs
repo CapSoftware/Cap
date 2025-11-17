@@ -225,6 +225,8 @@ impl ShowCapWindow {
         }
 
         if let Some(window) = self.id(app).get(app) {
+            window.show().ok();
+            window.unminimize().ok();
             window.set_focus().ok();
             return Ok(window);
         }
@@ -670,7 +672,7 @@ impl ShowCapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(true)
+                    .shadow(!cfg!(windows))
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)

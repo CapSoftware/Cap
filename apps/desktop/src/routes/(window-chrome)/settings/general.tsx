@@ -65,7 +65,8 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	autoCreateShareableLink: false,
 	enableNotifications: true,
 	enableNativeCameraPreview: false,
-	enableNewRecordingFlow: false,
+	enableNewRecordingFlow: true,
+	recordingPickerPreferenceSet: false,
 	autoZoomOnClicks: false,
 	custom_cursor_capture2: true,
 	excludedWindows: [],
@@ -180,11 +181,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		}
 	);
 
-	const handleChange = async <K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) => {
+	const handleChange = async <K extends keyof typeof settings>(
+		key: K,
+		value: (typeof settings)[K],
+		extra?: Partial<GeneralSettingsStore>
+	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
 		setSettings(key as keyof GeneralSettingsStore, value);
-		generalSettingsStore.set({ [key]: value });
+		generalSettingsStore.set({ [key]: value, ...(extra ?? {}) });
 
 		// Update recording options to reflect the new default immediately
 		if (key === "defaultWorkspaceId") {
@@ -194,6 +199,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
+	const recordingWindowVariant = () => (settings.enableNewRecordingFlow === false ? "old" : "new");
+
+	const updateRecordingWindowVariant = (variant: "new" | "old") => {
+		const shouldUseNew = variant === "new";
+		if (settings.enableNewRecordingFlow === shouldUseNew) return;
+		handleChange("enableNewRecordingFlow", shouldUseNew, {
+			recordingPickerPreferenceSet: true,
+		});
+	};
 
 	const matchesExclusion = (exclusion: WindowExclusion, window: CaptureWindow) => {
 		const bundleMatch = exclusion.bundleIdentifier ? window.bundle_identifier === exclusion.bundleIdentifier : false;

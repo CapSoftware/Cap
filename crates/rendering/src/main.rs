@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
             OutputFormat::Jpeg => "jpg",
             OutputFormat::Raw => "raw",
         };
-        PathBuf::from(format!("frame.{}", extension))
+        PathBuf::from(format!("frame.{extension}"))
     });
 
     // Ensure output directory exists

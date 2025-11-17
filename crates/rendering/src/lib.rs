@@ -427,7 +427,7 @@ impl MotionBounds {
             && self.end.coord.y >= other.end.coord.y
     }
 
-    fn to_uv(&self, point: XY<f64>) -> XY<f32> {
+    fn point_to_uv(&self, point: XY<f64>) -> XY<f32> {
         let size = self.size();
         XY::new(
             ((point.x - self.start.coord.x) / size.x.max(f64::EPSILON)) as f32,
@@ -513,7 +513,7 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis.movement_uv = movement_uv;
     analysis.movement_magnitude = movement_magnitude;
     analysis.zoom_magnitude = zoom_magnitude;
-    analysis.zoom_center_uv = current.to_uv(zoom_center_point);
+    analysis.zoom_center_uv = current.point_to_uv(zoom_center_point);
     analysis
 }
 

@@ -1,7 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { cx } from "cva";
-import { type Component, type ComponentProps, createSignal, onMount, Show } from "solid-js";
+import { type Component, type ComponentProps, createEffect, createSignal, Show } from "solid-js";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCurrentRecordingQuery, getPermissions } from "~/utils/queries";
@@ -74,12 +74,10 @@ export function MicrophoneSelectBase(props: {
 	// visual audio level from 0 -> 1
 	const audioLevel = () => (1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
-	// Initialize audio input if needed - only once when component mounts
-	onMount(() => {
+	createEffect(() => {
 		if (!props.value || !permissionGranted() || isInitialized()) return;
 
 		setIsInitialized(true);
-		// Ensure the selected microphone is activated so levels flow in
 		void handleMicrophoneChange({ name: props.value });
 	});
 

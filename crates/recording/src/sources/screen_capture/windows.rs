@@ -376,7 +376,14 @@ impl output_pipeline::AudioSource for SystemAudioSource {
     }
 
     fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> {
-        let res = self.capturer.pause().map_err(Into::into);
-        async { res }
+        let res = self.capturer.pause();
+
+        async move {
+            if let Err(err) = res {
+                warn!("system audio capturer pause failed: {err}");
+            }
+
+            Ok(())
+        }
     }
 }

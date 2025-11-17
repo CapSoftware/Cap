@@ -45,7 +45,7 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SourceError {
+pub enum SourceError {
     #[error("NoDisplay: Id '{0}'")]
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]

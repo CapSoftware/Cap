@@ -3,6 +3,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
+	type Accessor,
 	type ComponentProps,
 	createEffect,
 	createResource,
@@ -15,11 +16,12 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
-import { commands } from "~/utils/tauri";
 import { RecordingOptionsProvider, useRecordingOptions } from "./(window-chrome)/OptionsContext";
 import { ArrowsOutIcon, CloseIcon } from "~/icons";
+import { commands, events } from "~/utils/tauri";
 
 namespace CameraWindow {
 	export type Size = "sm" | "lg";
@@ -37,16 +39,26 @@ export default function () {
 	const generalSettings = generalSettingsStore.createQuery();
 	const isNativePreviewEnabled = generalSettings.data?.enableNativeCameraPreview || false;
 
+	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
+
+	createTauriEventListener(events.recordingEvent, (payload) => {
+		if (payload.variant === "InputLost" && payload.input === "camera") {
+			setCameraDisconnected(true);
+		} else if (payload.variant === "InputRestored" && payload.input === "camera") {
+			setCameraDisconnected(false);
+		}
+	});
+
 	return (
 		<RecordingOptionsProvider>
-			<Show when={isNativePreviewEnabled} fallback={<LegacyCameraPreviewPage />}>
-				<NativeCameraPreviewPage />
+			<Show when={isNativePreviewEnabled} fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}>
+				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
 			</Show>
 		</RecordingOptionsProvider>
 	);
 }
 
-function NativeCameraPreviewPage() {
+function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	const [state, setState] = makePersisted(
 		createStore<CameraWindow.State>({
 			size: "sm",
@@ -64,7 +76,10 @@ function NativeCameraPreviewPage() {
 
 	return (
 		<div data-tauri-drag-region class="flex relative flex-col w-screen h-screen cursor-move group">
-			<div class="h-12">
+			<Show when={props.disconnected()}>
+				<CameraDisconnectedOverlay />
+			</Show>
+			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div
 						class="flex flex-row items-center justify-center gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-6 transition-[opacity,transform] text-white rounded-[18px] border border-white/15"
@@ -139,7 +154,7 @@ function ControlButton(
 
 // Legacy stuff below
 
-function LegacyCameraPreviewPage() {
+function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	const { rawOptions } = useRecordingOptions();
 
 	const [state, setState] = makePersisted(
@@ -251,6 +266,9 @@ function LegacyCameraPreviewPage() {
 			class="flex relative flex-col w-screen h-screen cursor-move group"
 			style={{ "border-radius": cameraBorderRadius(state) }}
 		>
+			<Show when={props.disconnected()}>
+				<CameraDisconnectedOverlay />
+			</Show>
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
@@ -359,4 +377,15 @@ function cameraBorderRadius(state: CameraWindow.State) {
 	if (state.shape === "round") return "9999px";
 	if (state.size === "sm") return "3rem";
 	return "4rem";
+}
+
+function CameraDisconnectedOverlay() {
+	return (
+		<div
+			class="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4 pointer-events-none"
+			style={{ "border-radius": "inherit" }}
+		>
+			<p class="text-center text-sm font-medium text-white/90">Camera disconnected</p>
+		</div>
+	);
 }

@@ -13,9 +13,10 @@ import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMou
 import { reconcile } from "solid-js/store";
 // Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
+import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
-import { generalSettingsStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
 	createCameraMutation,
@@ -36,6 +37,7 @@ import {
 	type CaptureWindowWithThumbnail,
 	commands,
 	type DeviceOrModelID,
+	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -150,7 +152,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	});
 
 	return (
-		<div class="flex flex-col w-full">
+		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
 				<div
 					onClick={() => props.onBack()}
@@ -258,6 +260,27 @@ function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 	const currentRecording = createCurrentRecordingQuery();
 	const isRecording = () => !!currentRecording.data;
+	const auth = authStore.createQuery();
+
+	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] = createSignal(false);
+	createEffect(() => {
+		const pickerActive = rawOptions.targetMode != null;
+		const hasHidden = hasHiddenMainWindowForPicker();
+		if (pickerActive && !hasHidden) {
+			setHasHiddenMainWindowForPicker(true);
+			void getCurrentWindow().hide();
+		} else if (!pickerActive && hasHidden) {
+			setHasHiddenMainWindowForPicker(false);
+			const currentWindow = getCurrentWindow();
+			void currentWindow.show();
+			void currentWindow.setFocus();
+		}
+	});
+	onCleanup(() => {
+		if (!hasHiddenMainWindowForPicker()) return;
+		setHasHiddenMainWindowForPicker(false);
+		void getCurrentWindow().show();
+	});
 
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
@@ -332,7 +355,7 @@ function Page() {
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
 		setOptions("captureTarget", reconcile({ variant: "display", id: target.id }));
 		setOptions("targetMode", "display");
-		commands.openTargetSelectOverlays(rawOptions.captureTarget);
+		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
 		setDisplayMenuOpen(false);
 		displayTriggerRef?.focus();
 	};
@@ -340,7 +363,7 @@ function Page() {
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
 		setOptions("captureTarget", reconcile({ variant: "window", id: target.id }));
 		setOptions("targetMode", "window");
-		commands.openTargetSelectOverlays(rawOptions.captureTarget);
+		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
@@ -360,10 +383,13 @@ function Page() {
 	createUpdateCheck();
 
 	onMount(async () => {
-		const targetMode = (window as any).__CAP__.initialTargetMode;
+		const { __CAP__ } = window as typeof window & {
+			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
+		};
+		const targetMode = __CAP__?.initialTargetMode ?? null;
 		setOptions({ targetMode });
-		if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-		else commands.closeTargetSelectOverlays();
+		if (targetMode) await commands.openTargetSelectOverlays(null);
+		else await commands.closeTargetSelectOverlays();
 
 		const currentWindow = getCurrentWindow();
 
@@ -448,7 +474,7 @@ function Page() {
 
 	const options = {
 		screen: () => {
-			let screen;
+			let screen: CaptureDisplay | undefined;
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
@@ -461,7 +487,7 @@ function Page() {
 			return screen;
 		},
 		window: () => {
-			let win;
+			let win: CaptureWindow | undefined;
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
@@ -500,6 +526,14 @@ function Page() {
 		},
 	};
 
+	const toggleTargetMode = (mode: "display" | "window" | "area") => {
+		if (isRecording()) return;
+		const nextMode = rawOptions.targetMode === mode ? null : mode;
+		setOptions("targetMode", nextMode);
+		if (nextMode) commands.openTargetSelectOverlays(null);
+		else commands.closeTargetSelectOverlays();
+	};
+
 	createEffect(() => {
 		const target = options.target();
 		if (!target) return;
@@ -521,6 +555,10 @@ function Page() {
 	const setCamera = createCameraMutation();
 
 	onMount(() => {
+		if (rawOptions.micName) {
+			setMicInput.mutateAsync(rawOptions.micName).catch((error) => console.error("Failed to set mic input:", error));
+		}
+
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
 			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
@@ -727,57 +765,97 @@ function Page() {
 					</ErrorBoundary> */}
 				</div>
 			</WindowChromeHeader>
-			<Show when={signIn.isPending}>
-				<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
-					<div class="flex flex-col gap-4 justify-center items-center">
-						<span>Signing In...</span>
-
-						<Button
-							onClick={() => {
-								signIn.variables?.abort();
-								signIn.reset();
-							}}
-							variant="gray"
-							class="w-full"
+			<Show when={!activeMenu()}>
+				<div class="flex items-center justify-between mt-4">
+					<div class="flex items-center space-x-1">
+						<a
+							class="*:w-[92px] *:h-auto text-[--text-primary]"
+							target="_blank"
+							href={auth.data ? `${import.meta.env.VITE_SERVER_URL}/dashboard` : import.meta.env.VITE_SERVER_URL}
 						>
-							Cancel Sign In
-						</Button>
+							<IconCapLogoFullDark class="hidden dark:block" />
+							<IconCapLogoFull class="block dark:hidden" />
+						</a>
+						<ErrorBoundary fallback={<></>}>
+							<Suspense>
+								<span
+									onClick={async () => {
+										if (license.data?.type !== "pro") {
+											await commands.showWindow("Upgrade");
+										}
+									}}
+									class={cx(
+										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+										license.data?.type === "pro"
+											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+											: "bg-gray-3 cursor-pointer hover:bg-gray-5"
+									)}
+								>
+									{license.data?.type === "commercial"
+										? "Commercial"
+										: license.data?.type === "pro"
+										? "Pro"
+										: "Personal"}
+								</span>
+							</Suspense>
+						</ErrorBoundary>
 					</div>
+					<Mode />
 				</div>
 			</Show>
-			<Show when={!signIn.isPending}>
-				<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
-					{(variant) =>
-						variant === "display" ? (
-							<TargetMenuPanel
-								variant="display"
-								targets={displayTargetsData()}
-								isLoading={displayMenuLoading()}
-								errorMessage={displayErrorMessage()}
-								onSelect={selectDisplayTarget}
-								disabled={isRecording()}
-								onBack={() => {
-									setDisplayMenuOpen(false);
-									displayTriggerRef?.focus();
+			<div class="flex-1 min-h-0 w-full flex flex-col">
+				<Show when={signIn.isPending}>
+					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
+						<div class="flex flex-col gap-4 justify-center items-center">
+							<span>Signing In...</span>
+
+							<Button
+								onClick={() => {
+									signIn.variables?.abort();
+									signIn.reset();
 								}}
-							/>
-						) : (
-							<TargetMenuPanel
-								variant="window"
-								targets={windowTargetsData()}
-								isLoading={windowMenuLoading()}
-								errorMessage={windowErrorMessage()}
-								onSelect={selectWindowTarget}
-								disabled={isRecording()}
-								onBack={() => {
-									setWindowMenuOpen(false);
-									windowTriggerRef?.focus();
-								}}
-							/>
-						)
-					}
+								variant="gray"
+								class="w-full"
+							>
+								Cancel Sign In
+							</Button>
+						</div>
+					</div>
 				</Show>
-			</Show>
+				<Show when={!signIn.isPending}>
+					<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
+						{(variant) =>
+							variant === "display" ? (
+								<TargetMenuPanel
+									variant="display"
+									targets={displayTargetsData()}
+									isLoading={displayMenuLoading()}
+									errorMessage={displayErrorMessage()}
+									onSelect={selectDisplayTarget}
+									disabled={isRecording()}
+									onBack={() => {
+										setDisplayMenuOpen(false);
+										displayTriggerRef?.focus();
+									}}
+								/>
+							) : (
+								<TargetMenuPanel
+									variant="window"
+									targets={windowTargetsData()}
+									isLoading={windowMenuLoading()}
+									errorMessage={windowErrorMessage()}
+									onSelect={selectWindowTarget}
+									disabled={isRecording()}
+									onBack={() => {
+										setWindowMenuOpen(false);
+										windowTriggerRef?.focus();
+									}}
+								/>
+							)
+						}
+					</Show>
+				</Show>
+			</div>
 		</div>
 	);
 }
