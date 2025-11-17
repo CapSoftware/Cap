@@ -268,16 +268,11 @@ impl WindowFocusManager {
                     let cap_main = CapWindowId::Main.get(app);
                     let cap_settings = CapWindowId::Settings.get(app);
 
-                    let has_cap_main = cap_main
-                        .as_ref()
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
-                    let has_cap_settings = cap_settings
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
+                    let main_window_available = cap_main.is_some();
+                    let settings_window_available = cap_settings.is_some();
 
-                    // Close the overlay if the cap main and settings are not available.
-                    if has_cap_main && has_cap_settings {
+                    // Close the overlay if both cap windows are gone.
+                    if !main_window_available && !settings_window_available {
                         window.hide().ok();
                         break;
                     }

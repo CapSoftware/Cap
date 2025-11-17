@@ -53,6 +53,7 @@ import {
 	type CaptureWindowWithThumbnail,
 	commands,
 	type DeviceOrModelID,
+	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
@@ -434,10 +435,13 @@ function Page() {
 	createUpdateCheck();
 
 	onMount(async () => {
-		const targetMode = (window as any).__CAP__.initialTargetMode;
+		const { __CAP__ } = window as typeof window & {
+			__CAP__?: { initialTargetMode?: RecordingTargetMode | null };
+		};
+		const targetMode = __CAP__?.initialTargetMode ?? null;
 		setOptions({ targetMode });
-		if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
-		else commands.closeTargetSelectOverlays();
+		if (targetMode) await commands.openTargetSelectOverlays(null);
+		else await commands.closeTargetSelectOverlays();
 
 		const currentWindow = getCurrentWindow();
 
@@ -616,6 +620,12 @@ function Page() {
 	const setCamera = createCameraMutation();
 
 	onMount(() => {
+		if (rawOptions.micName) {
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
+		}
+
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
 			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)

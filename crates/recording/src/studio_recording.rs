@@ -23,7 +23,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::watch;
-use tracing::{Instrument, debug, error_span, info, trace};
+use tracing::{Instrument, debug, error_span, info, trace, warn};
 
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
@@ -311,12 +311,20 @@ impl Pipeline {
             cursor.actor.stop();
         }
 
+        let system_audio = match system_audio.transpose() {
+            Ok(value) => value,
+            Err(err) => {
+                warn!("system audio pipeline failed during stop: {err:#}");
+                None
+            }
+        };
+
         Ok(FinishedPipeline {
             start_time: self.start_time,
             screen: screen.context("screen")?,
             microphone: microphone.transpose().context("microphone")?,
             camera: camera.transpose().context("camera")?,
-            system_audio: system_audio.transpose().context("system_audio")?,
+            system_audio,
             cursor: self.cursor,
         })
     }
