@@ -1,8 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "Cap - Development",
-	"identifier": "so.cap.desktop.dev",
-	"mainBinaryName": "Cap - Development",
+	"productName": "Inflight - Development",
+	"identifier": "co.inflight.desktop.dev",
+	"mainBinaryName": "Inflight - Development",
 	"build": {
 		"beforeDevCommand": "pnpm localdev",
 		"devUrl": "http://localhost:3002",

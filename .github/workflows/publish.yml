@@ -3,14 +3,9 @@ name: "publish"
 # change this when ready to release if you want CI/CD
 on:
   workflow_dispatch:
-    inputs:
-      interactionId:
-        description: "Discord Interaction ID"
-        required: false
-        type: string
 
 env:
-  CN_APPLICATION: cap/cap
+  CN_APPLICATION: inflight/inflight
   APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
   SENTRY_ORG: cap-s2
   SENTRY_PROJECT: cap-desktop
@@ -96,36 +91,6 @@ jobs:
           tag_name: ${{ steps.create_tag.outputs.tag_name }}
           draft: true
           generate_release_notes: true
-
-      - name: Update Discord interaction
-        if: ${{ inputs.interactionId != '' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            async function main() {
-              const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ steps.create_cn_release.outputs.stdout }}`).id;
-
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-ready",
-                  tag: "${{ steps.create_tag.outputs.tag_name }}",
-                  version: "${{ steps.read_version.outputs.value }}",
-                  releaseUrl: "${{ steps.create_gh_release.outputs.url }}",
-                  interactionId: "${{ inputs.interactionId }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
-
-              if(resp.status !== 200) throw new Error(await resp.text());
-            }
-
-            main();
 
   build:
     needs: draft
@@ -280,39 +245,3 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
-
-  done:
-    needs: [draft, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - name: Send Discord notification
-        if: ${{ inputs.interactionId != '' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            async function main() {
-              const token = await core.getIDToken("cap-discord-bot");
-              const cnReleaseId = JSON.parse(`${{ needs.draft.outputs.cn_release_stdout }}`).id;
-
-              const resp = await fetch("https://cap-discord-bot.brendonovich.workers.dev/github-workflow", {
-                method: "POST",
-                body: JSON.stringify({
-                  type: "release-done",
-                  interactionId: "${{ inputs.interactionId }}",
-                  version: "${{ needs.draft.outputs.version }}",
-                  releaseUrl: "${{ needs.draft.outputs.gh_release_url }}",
-                  cnReleaseId
-                }),
-                headers: {
-                	"Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-                }
-              });
-
-              if(resp.status !== 200) throw new Error(await resp.text());
-            }
-
-            main();
