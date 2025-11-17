@@ -110,10 +110,10 @@ impl VideoMuxer for Mp4Muxer {
     ) -> anyhow::Result<()> {
         if let Some(video_encoder) = self.video_encoder.as_mut() {
             if let Some(frame_duration) = self.video_frame_duration {
-                if let Some(last_ts) = self.last_video_ts {
-                    if timestamp <= last_ts {
-                        timestamp = last_ts + frame_duration;
-                    }
+                if let Some(last_ts) = self.last_video_ts
+                    && timestamp <= last_ts
+                {
+                    timestamp = last_ts + frame_duration;
                 }
 
                 self.last_video_ts = Some(timestamp);
