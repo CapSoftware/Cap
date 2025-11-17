@@ -87,6 +87,18 @@ export default function () {
 		createSignal<HTMLDivElement | null>(null);
 	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
+	const recordingMode = createMemo(
+		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
+	);
+	const canPauseRecording = createMemo(() => {
+		const mode = recordingMode();
+		const os = ostype();
+		return (
+			mode === "studio" ||
+			os === "macos" ||
+			(os === "windows" && mode === "instant")
+		);
+	});
 
 	const hasDisconnectedInput = () =>
 		disconnectedInputs.microphone || disconnectedInputs.camera;
@@ -608,8 +620,7 @@ export default function () {
 										</ActionButton>
 									</Show>
 
-									{(currentRecording.data?.mode === "studio" ||
-										ostype() === "macos") && (
+									{canPauseRecording() && (
 										<ActionButton
 											disabled={togglePause.isPending || hasDisconnectedInput()}
 											onClick={() => togglePause.mutate()}
