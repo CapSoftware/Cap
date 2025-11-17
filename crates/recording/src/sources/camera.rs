@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use cap_media_info::VideoInfo;
 use futures::{SinkExt, channel::mpsc};
 use std::sync::Arc;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 pub struct Camera(Arc<CameraFeedLock>);
 
@@ -26,7 +26,7 @@ impl VideoSource for Camera {
         let (tx, rx) = flume::bounded(8);
 
         feed_lock
-            .ask(camera::AddSender(tx))
+            .ask(camera::AddSender(tx.clone()))
             .await
             .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
 
@@ -34,33 +34,46 @@ impl VideoSource for Camera {
             let feed_lock = feed_lock.clone();
             async move {
                 let mut receiver = rx;
+                let mut frame_count = 0u64;
 
-                loop {
+                let result = loop {
                     match receiver.recv_async().await {
                         Ok(frame) => {
+                            frame_count += 1;
                             if let Err(err) = video_tx.send(frame).await {
                                 error!(
                                     ?err,
+                                    frame_count,
                                     "Camera pipeline receiver dropped; stopping camera forwarding"
                                 );
-                                break;
+                                break Ok(());
                             }
                         }
                         Err(_) => {
-                            let (tx, new_rx) = flume::bounded(8);
+                            let (new_tx, new_rx) = flume::bounded(8);
 
-                            if let Err(err) = feed_lock.ask(camera::AddSender(tx)).await {
+                            if let Err(err) = feed_lock.ask(camera::AddSender(new_tx)).await {
                                 warn!(
                                     ?err,
                                     "Camera sender disconnected and could not be reattached"
                                 );
-                                break;
+                                break Err(err);
                             }
 
                             receiver = new_rx;
                         }
                     }
-                }
+                };
+
+                // Explicitly drop the sender to disconnect from the feed
+                drop(tx);
+                drop(receiver);
+
+                info!(
+                    frame_count,
+                    ?result,
+                    "Camera forwarding stopped after processing frames"
+                );
             }
         });
 
