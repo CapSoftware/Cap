@@ -224,6 +224,8 @@ impl ShowCapWindow {
         }
 
         if let Some(window) = self.id(app).get(app) {
+            window.show().ok();
+            window.unminimize().ok();
             window.set_focus().ok();
             return Ok(window);
         }
