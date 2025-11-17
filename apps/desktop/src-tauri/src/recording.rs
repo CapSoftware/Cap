@@ -402,6 +402,22 @@ pub async fn start_recording(
         return Err("Recording already in progress".to_string());
     }
 
+    let has_camera_selected = {
+        let guard = state_mtx.read().await;
+        guard.selected_camera_id.is_some()
+    };
+    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
+    let should_open_camera_preview =
+        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
+
+    if should_open_camera_preview {
+        ShowCapWindow::Camera
+            .show(&app)
+            .await
+            .map_err(|err| error!("Failed to show camera preview window: {err}"))
+            .ok();
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
