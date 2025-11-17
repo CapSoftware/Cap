@@ -28,6 +28,8 @@ pub struct Mp4Muxer {
     output: ffmpeg::format::context::Output,
     video_encoder: Option<H264Encoder>,
     audio_encoder: Option<AACEncoder>,
+    video_frame_duration: Option<Duration>,
+    last_video_ts: Option<Duration>,
 }
 
 impl Muxer for Mp4Muxer {
@@ -46,10 +48,16 @@ impl Muxer for Mp4Muxer {
     {
         let mut output = ffmpeg::format::output(&output_path)?;
 
-        let video_encoder = video_config
-            .map(|video_config| H264Encoder::builder(video_config).build(&mut output))
-            .transpose()
-            .context("video encoder")?;
+        let (video_encoder, video_frame_duration) = match video_config {
+            Some(config) => {
+                let duration = Self::frame_duration(&config);
+                let encoder = H264Encoder::builder(config)
+                    .build(&mut output)
+                    .context("video encoder")?;
+                (Some(encoder), Some(duration))
+            }
+            None => (None, None),
+        };
 
         let audio_encoder = audio_config
             .map(|config| AACEncoder::init(config, &mut output))
@@ -62,6 +70,8 @@ impl Muxer for Mp4Muxer {
             output,
             video_encoder,
             audio_encoder,
+            video_frame_duration,
+            last_video_ts: None,
         })
     }
 
@@ -96,13 +106,34 @@ impl VideoMuxer for Mp4Muxer {
     fn send_video_frame(
         &mut self,
         frame: Self::VideoFrame,
-        timestamp: Duration,
+        mut timestamp: Duration,
     ) -> anyhow::Result<()> {
         if let Some(video_encoder) = self.video_encoder.as_mut() {
+            if let Some(frame_duration) = self.video_frame_duration {
+                if let Some(last_ts) = self.last_video_ts {
+                    if timestamp <= last_ts {
+                        timestamp = last_ts + frame_duration;
+                    }
+                }
+
+                self.last_video_ts = Some(timestamp);
+            }
+
             video_encoder.queue_frame(frame.inner, timestamp, &mut self.output)?;
         }
 
         Ok(())
+    }
+}
+
+impl Mp4Muxer {
+    fn frame_duration(info: &VideoInfo) -> Duration {
+        let num = info.frame_rate.numerator().max(1);
+        let den = info.frame_rate.denominator().max(1);
+
+        let nanos = ((den as u128 * 1_000_000_000u128) / num as u128).max(1);
+
+        Duration::from_nanos(nanos as u64)
     }
 }
 
