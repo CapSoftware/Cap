@@ -111,10 +111,7 @@ impl AuthStore {
     }
 
     pub fn is_upgraded(&self) -> bool {
-        match &self.plan {
-            Some(plan) => plan.upgraded || plan.manual,
-            None => false,
-        }
+        true
     }
 
     pub fn set(app: &AppHandle, value: Option<Self>) -> Result<(), String> {

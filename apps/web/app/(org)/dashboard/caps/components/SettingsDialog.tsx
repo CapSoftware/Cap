@@ -40,7 +40,6 @@ const options: {
 		label: "Enable summary",
 		value: "disableSummary",
 		description: "Show AI-generated summary (requires transcript)",
-		pro: true,
 	},
 	{
 		label: "Enable captions",
@@ -51,7 +50,6 @@ const options: {
 		label: "Enable chapters",
 		value: "disableChapters",
 		description: "Show AI-generated chapters (requires transcript)",
-		pro: true,
 	},
 	{
 		label: "Enable reactions",
@@ -62,7 +60,6 @@ const options: {
 		label: "Enable transcript",
 		value: "disableTranscript",
 		description: "Enabling this also allows summary and chapters",
-		pro: true,
 	},
 ];
 

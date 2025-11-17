@@ -39,11 +39,6 @@ export const UploadCapButton = ({
 	const handleClick = () => {
 		if (!user) return;
 
-		if (!user.isPro) {
-			setUpgradeModalOpen(true);
-			return;
-		}
-
 		inputRef.current?.click();
 	};
 

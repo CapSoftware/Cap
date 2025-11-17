@@ -17,22 +17,5 @@ export const userIsPro = (
 		thirdPartyStripeSubscriptionId?: string | null;
 	} | null,
 ) => {
-	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
-
-	if (!user) return false;
-
-	const { stripeSubscriptionStatus, thirdPartyStripeSubscriptionId } = user;
-
-	// Check for third-party subscription first
-	if (thirdPartyStripeSubscriptionId) {
-		return true;
-	}
-
-	// Then check regular subscription status
-	return (
-		stripeSubscriptionStatus === "active" ||
-		stripeSubscriptionStatus === "trialing" ||
-		stripeSubscriptionStatus === "complete" ||
-		stripeSubscriptionStatus === "paid"
-	);
+	return true;
 };

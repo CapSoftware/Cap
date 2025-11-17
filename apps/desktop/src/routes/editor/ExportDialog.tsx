@@ -345,20 +345,6 @@ export function ExportDialog() {
 			});
 
 			const metadata = await commands.getVideoMetadata(projectPath);
-			const plan = await commands.checkUpgradedAndUpdate();
-			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
-			};
-
-			if (!canShare.allowed) {
-				if (canShare.reason === "upgrade_required") {
-					await commands.showWindow("Upgrade");
-					// The window takes a little to show and this prevents the user seeing it glitch
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-					throw new SilentError();
-				}
-			}
 
 			const uploadChannel = new Channel<UploadProgress>((progress) => {
 				console.log("Upload progress:", progress);

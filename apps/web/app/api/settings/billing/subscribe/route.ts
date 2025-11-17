@@ -23,11 +23,6 @@ export async function POST(request: NextRequest) {
 		return Response.json({ error: true, auth: false }, { status: 401 });
 	}
 
-	if (userIsPro(user)) {
-		console.error("User already has pro plan");
-		return Response.json({ error: true, subscription: true }, { status: 400 });
-	}
-
 	try {
 		if (!user.stripeCustomerId) {
 			const existingCustomers = await stripe().customers.list({

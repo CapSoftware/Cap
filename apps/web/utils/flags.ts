@@ -8,5 +8,5 @@ export interface FeatureFlagUser {
 export async function isAiGenerationEnabled(
 	user: FeatureFlagUser,
 ): Promise<boolean> {
-	return userIsPro(user);
+	return true;
 }

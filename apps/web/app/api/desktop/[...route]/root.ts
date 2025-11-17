@@ -156,31 +156,6 @@ app.get("/org-custom-domain", withAuth, async (c) => {
 app.get("/plan", withAuth, async (c) => {
 	const user = c.get("user");
 
-	let isSubscribed = userIsPro(user);
-
-	if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
-		try {
-			const subscriptions = await stripe().subscriptions.list({
-				customer: user.stripeCustomerId,
-			});
-			const activeSubscription = subscriptions.data.find(
-				(sub) => sub.status === "active",
-			);
-			if (activeSubscription) {
-				isSubscribed = true;
-				await db()
-					.update(users)
-					.set({
-						stripeSubscriptionStatus: activeSubscription.status,
-						stripeSubscriptionId: activeSubscription.id,
-					})
-					.where(eq(users.id, user.id));
-			}
-		} catch (error) {
-			console.error("[GET] Error fetching subscription from Stripe:", error);
-		}
-	}
-
 	let intercomHash = "";
 	const intercomSecret = serverEnv().INTERCOM_SECRET;
 	if (intercomSecret) {
@@ -191,7 +166,7 @@ app.get("/plan", withAuth, async (c) => {
 	}
 
 	return c.json({
-		upgraded: isSubscribed,
+		upgraded: true,
 		stripeSubscriptionStatus: user.stripeSubscriptionStatus,
 		intercomHash: intercomHash,
 	});
@@ -232,11 +207,6 @@ app.post(
 	async (c) => {
 		const { priceId } = c.req.valid("json");
 		const user = c.get("user");
-
-		if (userIsPro(user)) {
-			console.log("[POST] Error: User already on Pro plan");
-			return c.json({ error: true, subscription: true }, { status: 400 });
-		}
 
 		let customerId = user.stripeCustomerId;
 

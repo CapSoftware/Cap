@@ -24,13 +24,5 @@ export function isUserOnProPlan({
 }: {
 	subscriptionStatus: string | null;
 }): boolean {
-	if (
-		subscriptionStatus === "active" ||
-		subscriptionStatus === "trialing" ||
-		subscriptionStatus === "complete" ||
-		subscriptionStatus === "paid"
-	) {
-		return true;
-	}
-	return false;
+	return true;
 }

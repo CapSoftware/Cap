@@ -164,9 +164,6 @@ export async function createVideoAndGetUploadUrl({
 	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300)
-			throw new Error("upgrade_required");
-
 		const [customBucket] = await db()
 			.select()
 			.from(s3Buckets)

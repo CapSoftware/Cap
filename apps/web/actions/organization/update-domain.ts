@@ -19,10 +19,6 @@ export async function updateDomain(
 		throw new Error("Unauthorized");
 	}
 
-	if (!userIsPro(user)) {
-		throw new Error("User is not subscribed");
-	}
-
 	const [organization] = await db()
 		.select()
 		.from(organizations)

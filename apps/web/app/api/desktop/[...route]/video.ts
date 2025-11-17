@@ -64,11 +64,6 @@ app.get(
 			} = c.req.valid("query");
 			const user = c.get("user");
 
-			const isCapPro = userIsPro(user);
-
-			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
-				return c.json({ error: "upgrade_required" }, { status: 403 });
-
 			console.log("Video create request:", {
 				recordingMode,
 				isScreenshot,

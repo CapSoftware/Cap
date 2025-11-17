@@ -25,23 +25,12 @@ export async function GET() {
 		);
 	}
 
-	if (userIsPro(user)) {
-		return Response.json(
-			{
-				subscription: true,
-				videoLimit: 0,
-				videoCount: numberOfVideos[0].count,
-			},
-			{ status: 200 },
-		);
-	} else {
-		return Response.json(
-			{
-				subscription: false,
-				videoLimit: 25,
-				videoCount: numberOfVideos[0].count,
-			},
-			{ status: 200 },
-		);
-	}
+	return Response.json(
+		{
+			subscription: true,
+			videoLimit: 0,
+			videoCount: numberOfVideos[0].count,
+		},
+		{ status: 200 },
+	);
 }
