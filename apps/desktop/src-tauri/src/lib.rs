@@ -2620,6 +2620,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             .camera_feed
                                             .ask(feeds::camera::RemoveInput)
                                             .await;
+                                        app_state.selected_mic_label = None;
+                                        app_state.selected_camera_id = None;
+                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
