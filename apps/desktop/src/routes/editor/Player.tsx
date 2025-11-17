@@ -397,7 +397,12 @@ function PreviewCanvas() {
 						return width / height;
 					};
 
-					const frameAspect = () => frameWidth() / frameHeight();
+					const frameAspect = () => {
+						const width = frameWidth();
+						const height = frameHeight();
+						if (width === 0 || height === 0) return containerAspect();
+						return width / height;
+					};
 
 					const size = () => {
 						let width: number;
