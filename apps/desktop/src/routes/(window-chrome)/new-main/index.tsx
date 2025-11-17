@@ -616,6 +616,8 @@ function Page() {
 	const setCamera = createCameraMutation();
 
 	onMount(() => {
+		if (rawOptions.micName) void commands.setMicInput(rawOptions.micName);
+
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
 			setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
 		else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
