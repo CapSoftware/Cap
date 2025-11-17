@@ -331,6 +331,13 @@ impl App {
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
+    apply_mic_input(state, label).await
+}
+
+pub(crate) async fn apply_mic_input(
+    state: MutableState<'_, App>,
+    label: Option<String>,
+) -> Result<(), String> {
     let (mic_feed, studio_handle, current_label) = {
         let app = state.read().await;
         let handle = match app.current_recording() {
@@ -411,6 +418,14 @@ async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
 #[instrument(skip(app_handle, state))]
 #[allow(unused_mut)]
 async fn set_camera_input(
+    app_handle: AppHandle,
+    state: MutableState<'_, App>,
+    id: Option<DeviceOrModelID>,
+) -> Result<(), String> {
+    apply_camera_input(app_handle, state, id).await
+}
+
+pub(crate) async fn apply_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
@@ -2543,8 +2558,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .flatten()
                     .unwrap_or_default();
 
-                let _ = set_mic_input(app.state(), settings.mic_name).await;
-                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
+                let _ = apply_mic_input(app.state(), settings.mic_name).await;
+                let _ = apply_camera_input(app.clone(), app.state(), settings.camera_id).await;
 
                 let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
