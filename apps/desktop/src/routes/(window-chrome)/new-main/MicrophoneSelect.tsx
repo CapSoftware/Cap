@@ -4,8 +4,8 @@ import { cx } from "cva";
 import {
 	type Component,
 	type ComponentProps,
+	createEffect,
 	createSignal,
-	onMount,
 	Show,
 } from "solid-js";
 import { trackEvent } from "~/utils/analytics";
@@ -83,12 +83,10 @@ export function MicrophoneSelectBase(props: {
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
-	// Initialize audio input if needed - only once when component mounts
-	onMount(() => {
+	createEffect(() => {
 		if (!props.value || !permissionGranted() || isInitialized()) return;
 
 		setIsInitialized(true);
-		// Ensure the selected microphone is activated so levels flow in
 		void handleMicrophoneChange({ name: props.value });
 	});
 

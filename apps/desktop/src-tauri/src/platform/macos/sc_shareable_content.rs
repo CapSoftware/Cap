@@ -24,7 +24,17 @@ fn state() -> &'static CacheState {
 }
 
 pub async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
-    if state().cache.read().unwrap().is_some() {
+    prewarm_shareable_content_inner(false).await
+}
+
+pub async fn refresh_shareable_content() -> Result<(), arc::R<ns::Error>> {
+    prewarm_shareable_content_inner(true).await
+}
+
+async fn prewarm_shareable_content_inner(force_refresh: bool) -> Result<(), arc::R<ns::Error>> {
+    if force_refresh {
+        state().cache.write().unwrap().take();
+    } else if state().cache.read().unwrap().is_some() {
         trace!("ScreenCaptureKit shareable content already warmed");
         return Ok(());
     }
@@ -161,7 +171,11 @@ impl ScreenCapturePrewarmer {
         }
 
         let warm_start = std::time::Instant::now();
-        let result = crate::platform::prewarm_shareable_content().await;
+        let result = if force {
+            crate::platform::refresh_shareable_content().await
+        } else {
+            crate::platform::prewarm_shareable_content().await
+        };
 
         let mut state = self.state.lock().await;
         match result {

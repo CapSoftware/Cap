@@ -9,6 +9,8 @@ use cap_project::{
     cursor::CursorEvents,
 };
 use cap_recording::feeds::camera::CameraFeedLock;
+#[cfg(target_os = "macos")]
+use cap_recording::sources::screen_capture::SourceError;
 use cap_recording::{
     RecordingMode,
     feeds::{camera, microphone},
@@ -28,6 +30,7 @@ use specta::Type;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
+    error::Error as StdError,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -44,6 +47,7 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
+    apply_camera_input, apply_mic_input,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -52,6 +56,7 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
+    recording_settings::RecordingSettingsStore,
     thumbnails::*,
     upload::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
@@ -98,6 +103,64 @@ unsafe impl Send for SendableShareableContent {}
 
 #[cfg(target_os = "macos")]
 unsafe impl Sync for SendableShareableContent {}
+
+#[cfg(target_os = "macos")]
+async fn acquire_shareable_content_for_target(
+    capture_target: &ScreenCaptureTarget,
+) -> anyhow::Result<SendableShareableContent> {
+    let mut refreshed = false;
+
+    loop {
+        let shareable_content = SendableShareableContent(
+            crate::platform::get_shareable_content()
+                .await
+                .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
+                .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
+        );
+
+        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
+            .await
+        {
+            return Ok(shareable_content);
+        }
+
+        if refreshed {
+            return Err(anyhow!("GetShareableContent/DisplayMissing"));
+        }
+
+        crate::platform::refresh_shareable_content()
+            .await
+            .map_err(|e| anyhow!(format!("RefreshShareableContent: {e}")))?;
+        refreshed = true;
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn shareable_content_missing_target_display(
+    capture_target: &ScreenCaptureTarget,
+    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+) -> bool {
+    match capture_target.display() {
+        Some(display) => display
+            .raw_handle()
+            .as_sc(shareable_content)
+            .await
+            .is_none(),
+        None => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_shareable_content_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let cause: &dyn StdError = cause;
+        if let Some(source_error) = cause.downcast_ref::<SourceError>() {
+            matches!(source_error, SourceError::AsContentFilter)
+        } else {
+            false
+        }
+    })
+}
 
 impl InProgressRecording {
     pub fn capture_target(&self) -> &ScreenCaptureTarget {
@@ -263,6 +326,13 @@ pub struct StartRecordingInputs {
     pub organization_id: Option<String>,
 }
 
+#[derive(Deserialize, Type, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingInputKind {
+    Microphone,
+    Camera,
+}
+
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
 #[serde(tag = "variant")]
 pub enum RecordingEvent {
@@ -270,6 +340,8 @@ pub enum RecordingEvent {
     Started,
     Stopped,
     Failed { error: String },
+    InputLost { input: RecordingInputKind },
+    InputRestored { input: RecordingInputKind },
 }
 
 #[derive(Serialize, Type)]
@@ -277,6 +349,41 @@ pub enum RecordingAction {
     Started,
     InvalidAuthentication,
     UpgradeRequired,
+}
+
+async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableState<'_, App>) {
+    let guard = state.read().await;
+    let recording_active = !matches!(guard.recording_state, RecordingState::None);
+    let needs_mic = guard.selected_mic_label.is_none();
+    let needs_camera = guard.selected_camera_id.is_none();
+    drop(guard);
+
+    if recording_active || (!needs_mic && !needs_camera) {
+        return;
+    }
+
+    let settings = match RecordingSettingsStore::get(app) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return,
+        Err(err) => {
+            warn!(%err, "Failed to load recording settings while restoring inputs");
+            return;
+        }
+    };
+
+    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
+        match apply_mic_input(app.state(), Some(mic)).await {
+            Err(err) => warn!(%err, "Failed to restore microphone input"),
+            Ok(_) => {}
+        }
+    }
+
+    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
+        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
+            Err(err) => warn!(%err, "Failed to restore camera input"),
+            Ok(_) => {}
+        }
+    }
 }
 
 #[tauri::command]
@@ -287,8 +394,26 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
+    restore_inputs_from_store_if_missing(&app, &state_mtx).await;
+
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
+    }
+
+    let has_camera_selected = {
+        let guard = state_mtx.read().await;
+        guard.selected_camera_id.is_some()
+    };
+    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
+    let should_open_camera_preview =
+        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
+
+    if should_open_camera_preview {
+        ShowCapWindow::Camera
+            .show(&app)
+            .await
+            .map_err(|err| error!("Failed to show camera preview window: {err}"))
+            .ok();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -485,13 +610,11 @@ pub async fn start_recording(
                 Err(e) => return Err(anyhow!(e.to_string())),
             };
 
+            state.camera_in_use = camera_feed.is_some();
+
             #[cfg(target_os = "macos")]
-            let shareable_content = SendableShareableContent(
-                crate::platform::get_shareable_content()
-                    .await
-                    .map_err(|e| anyhow!(format!("GetShareableContent: {e}")))?
-                    .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
-            );
+            let mut shareable_content =
+                acquire_shareable_content_for_target(&inputs.capture_target).await?;
 
             let common = InProgressRecordingCommon {
                 target_name,
@@ -625,6 +748,12 @@ pub async fn start_recording(
                         let done_fut = actor.done_fut();
                         state.set_current_recording(actor);
                         break done_fut;
+                    }
+                    #[cfg(target_os = "macos")]
+                    Err(err) if is_shareable_content_error(&err) => {
+                        shareable_content =
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
+                        continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {
                         mic_restart_attempts += 1;
@@ -908,6 +1037,8 @@ async fn handle_recording_end(
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
     app.clear_current_recording();
+    app.disconnected_inputs.clear();
+    app.camera_in_use = false;
 
     let res = match recording {
         // we delay reporting errors here so that everything else happens first

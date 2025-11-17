@@ -324,25 +324,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					<SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
 				</div>
 				<div className="pb-4 mt-auto w-full">
-					<AnimatePresence>
-						{!sidebarCollapsed && !user.isPro && (
-							<motion.div
-								initial={{ scale: 0 }}
-								animate={{ scale: 1 }}
-								exit={{ scale: 0 }}
-								transition={{
-									type: "spring",
-									bounce: 0.2,
-									duration: 0.2,
-								}}
-							>
-								<CapAIBox
-									openAIDialog={openAIDialog}
-									setOpenAIDialog={setOpenAIDialog}
-								/>
-							</motion.div>
-						)}
-					</AnimatePresence>
 					<UsageButton
 						toggleMobileNav={() => toggleMobileNav?.()}
 						subscribed={user.isPro}

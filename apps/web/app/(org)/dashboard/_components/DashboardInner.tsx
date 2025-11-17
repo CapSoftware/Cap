@@ -20,7 +20,7 @@ export default function DashboardInner({
 					className="h-0 rounded-tl-xl border border-b-0 pointer-events-none lg:h-2 bg-gray-2 border-gray-3"
 				/>
 				{/* Scrolling content area shares border/background; top border removed to meet cap */}
-				<div className="flex overflow-hidden overflow-y-auto overscroll-contain flex-col flex-1 p-5 h-full border border-t-0 bg-gray-2 border-gray-3 lg:p-8">
+				<div className="flex overflow-hidden overflow-y-auto overscroll-contain flex-col flex-1 p-5 h-full border border-t-0 bg-gray-2 border-gray-3 lg:p-8 relative">
 					<div className="flex flex-col flex-1 gap-4 min-h-fit">{children}</div>
 				</div>
 			</main>

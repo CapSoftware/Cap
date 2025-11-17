@@ -22,10 +22,10 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, apply_camera_input, apply_mic_input, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
-    recording_settings::RecordingTargetMode,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
@@ -262,13 +262,14 @@ impl CapWindow {
             }
         }
 
-        if let Some(window) = self.def(app).get(app) {
+        let def = self.def(app);
+
+        if let Some(window) = def.get(app) {
+            window.show().ok();
+            window.unminimize().ok();
             window.set_focus().ok();
             return Ok(window);
         }
-
-        #[cfg(target_os = "macos")]
-        let def = self.def(app);
 
         let monitor = app.primary_monitor()?.unwrap();
 
@@ -311,6 +312,8 @@ impl CapWindow {
                             .expect("Failed to serialize initial target mode")
                     ))
                     .build()?;
+
+                restore_recording_inputs_if_idle(app);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -626,15 +629,15 @@ impl CapWindow {
                 builder.build()?
             }
             Self::InProgressRecording { countdown } => {
-                let width = 250.0;
-                let height = 40.0;
+                let width = 320.0;
+                let height = 150.0;
 
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(true)
+                    .shadow(!cfg!(windows))
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
@@ -795,6 +798,48 @@ impl CapWindow {
             CapWindow::ModeSelect => CapWindowDef::ModeSelect,
         }
     }
+}
+
+fn restore_recording_inputs_if_idle(app: &AppHandle<Wry>) {
+    let settings = match RecordingSettingsStore::get(app) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return,
+        Err(err) => {
+            warn!(%err, "Failed to load recording settings while restoring inputs");
+            return;
+        }
+    };
+
+    let mic_name = settings.mic_name.clone();
+    let camera_id = settings.camera_id.clone();
+
+    if mic_name.is_none() && camera_id.is_none() {
+        return;
+    }
+
+    let app_handle = app.clone();
+    let state = app_handle.state::<ArcLock<App>>();
+    let app_state = state.inner().clone();
+
+    tauri::async_runtime::spawn(async move {
+        if app_state.read().await.is_recording_active_or_pending() {
+            return;
+        }
+
+        if let Some(mic) = mic_name {
+            match apply_mic_input(app_handle.state(), Some(mic)).await {
+                Err(err) => warn!(%err, "Failed to restore microphone input"),
+                Ok(_) => {}
+            }
+        }
+
+        if let Some(camera) = camera_id {
+            match apply_camera_input(app_handle.clone(), app_handle.state(), Some(camera)).await {
+                Err(err) => warn!(%err, "Failed to restore camera input"),
+                Ok(_) => {}
+            }
+        }
+    });
 }
 
 #[tauri::command]

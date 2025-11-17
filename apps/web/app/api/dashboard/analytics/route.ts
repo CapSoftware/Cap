@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 import { getOrgAnalyticsData } from "@/app/(org)/dashboard/analytics/data";
 import type { AnalyticsRange } from "@/app/(org)/dashboard/analytics/types";
 
-const RANGE_VALUES: AnalyticsRange[] = ["24h", "7d", "30d"];
+const RANGE_VALUES: AnalyticsRange[] = ["24h", "7d", "30d", "lifetime"];
 
 export const dynamic = "force-dynamic";
 

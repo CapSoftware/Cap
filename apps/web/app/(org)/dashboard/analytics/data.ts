@@ -1,7 +1,8 @@
 import { db } from "@cap/database";
 import { comments, spaceVideos, videos } from "@cap/database/schema";
 import { Tinybird } from "@cap/web-backend";
-import { and, between, eq, inArray, sql } from "drizzle-orm";
+import { and, between, eq, inArray } from "drizzle-orm";
+import { sql } from "drizzle-orm/sql";
 import { Effect } from "effect";
 
 import { runPromise } from "@/lib/server";
@@ -15,6 +16,8 @@ import type {
 type VideoRow = typeof videos.$inferSelect;
 type OrgId = VideoRow["orgId"];
 type VideoId = VideoRow["id"];
+type SpaceVideoRow = typeof spaceVideos.$inferSelect;
+type SpaceOrOrgId = SpaceVideoRow["spaceId"];
 
 type CountSeriesRow = { bucket: string; count: number };
 type ViewSeriesRow = { bucket: string; views: number };
@@ -31,14 +34,18 @@ type TinybirdAnalyticsData = {
 	topCapsRaw: TopCapRow[];
 };
 
-const RANGE_CONFIG: Record<
-	AnalyticsRange,
+type RollingAnalyticsRange = Exclude<AnalyticsRange, "lifetime">;
+
+const ROLLING_RANGE_CONFIG: Record<
+	RollingAnalyticsRange,
 	{ hours: number; bucket: "hour" | "day" }
 > = {
 	"24h": { hours: 24, bucket: "hour" },
 	"7d": { hours: 7 * 24, bucket: "day" },
 	"30d": { hours: 30 * 24, bucket: "day" },
 };
+
+const LIFETIME_FALLBACK_DAYS = 30;
 
 const escapeLiteral = (value: string) => value.replace(/'/g, "''");
 const toDateString = (date: Date) => date.toISOString().slice(0, 10);
@@ -80,13 +87,55 @@ const buildBuckets = (from: Date, to: Date, bucket: "hour" | "day") => {
 	return buckets;
 };
 
+const getLifetimeRangeStart = async (
+	orgId: OrgId,
+	videoIds?: VideoId[],
+): Promise<Date | undefined> => {
+	const whereClause =
+		videoIds && videoIds.length > 0
+			? and(eq(videos.orgId, orgId), inArray(videos.id, videoIds))
+			: eq(videos.orgId, orgId);
+
+	const rows = await db()
+		.select({ minCreatedAt: sql<Date>`MIN(${videos.createdAt})` })
+		.from(videos)
+		.where(whereClause)
+		.limit(1);
+
+	const candidate = rows[0]?.minCreatedAt;
+	if (!candidate) return undefined;
+	return candidate instanceof Date ? candidate : new Date(candidate);
+};
+
+const resolveRangeBounds = async (
+	range: AnalyticsRange,
+	orgId: OrgId,
+	videoIds?: VideoId[],
+): Promise<{ from: Date; to: Date; bucket: "hour" | "day" }> => {
+	const to = new Date();
+
+	if (range === "lifetime") {
+		const lifetimeStart = await getLifetimeRangeStart(orgId, videoIds);
+		const fallbackFrom = new Date(
+			to.getTime() - LIFETIME_FALLBACK_DAYS * 24 * 60 * 60 * 1000,
+		);
+		const from =
+			lifetimeStart && lifetimeStart < to ? lifetimeStart : fallbackFrom;
+		return { from, to, bucket: "day" };
+	}
+
+	const config = ROLLING_RANGE_CONFIG[range];
+	const from = new Date(to.getTime() - config.hours * 60 * 60 * 1000);
+	return { from, to, bucket: config.bucket };
+};
+
 const fallbackIfEmpty = <Row>(
 	primary: Effect.Effect<Row[], never, never>,
 	fallback?: Effect.Effect<Row[], never, never>,
 ) =>
 	fallback
 		? primary.pipe(
-				Effect.flatMap((rows) =>
+				Effect.flatMap((rows: Row[]) =>
 					rows.length > 0 ? Effect.succeed(rows) : fallback,
 				),
 			)
@@ -96,32 +145,24 @@ const withTinybirdFallback = <Row>(
 	effect: Effect.Effect<unknown, unknown, never>,
 ) =>
 	effect.pipe(
-		Effect.catchAll((e) => {
+		Effect.catchAll((e: unknown) => {
 			console.error("tinybird query error", e);
 			return Effect.succeed<{ data: Row[] }>({ data: [] as Row[] });
 		}),
-		Effect.map((res) => {
-			console.log("tinybird raw response", JSON.stringify(res, null, 2));
-			const response = res as { data: unknown[] };
+		Effect.map((res: unknown) => {
+			const response = res as { data?: unknown[] };
 			const data = response.data ?? [];
-			console.log("tinybird data array", JSON.stringify(data, null, 2));
-			const filtered = data.filter((item): item is Row => {
-				const isObject = typeof item === "object" && item !== null;
-				if (!isObject) {
-					console.log("filtered out non-object item", typeof item, item);
-				}
-				return isObject;
-			}) as Row[];
-			console.log("tinybird filtered rows", JSON.stringify(filtered, null, 2));
-			return filtered;
+			return data.filter(
+				(item): item is Row => typeof item === "object" && item !== null,
+			) as Row[];
 		}),
 	);
 
-const getSpaceVideoIds = async (spaceId: string): Promise<VideoId[]> => {
+const getSpaceVideoIds = async (spaceId: SpaceOrOrgId): Promise<VideoId[]> => {
 	const rows = await db()
 		.select({ videoId: spaceVideos.videoId })
 		.from(spaceVideos)
-		.where(eq(spaceVideos.spaceId, spaceId as any));
+		.where(eq(spaceVideos.spaceId, spaceId));
 	return rows.map((row) => row.videoId);
 };
 
@@ -131,15 +172,20 @@ export const getOrgAnalyticsData = async (
 	spaceId?: string,
 	capId?: string,
 ): Promise<OrgAnalyticsResponse> => {
-	const rangeConfig = RANGE_CONFIG[range];
-	const to = new Date();
-	const from = new Date(to.getTime() - rangeConfig.hours * 60 * 60 * 1000);
-	const buckets = buildBuckets(from, to, rangeConfig.bucket);
 	const typedOrgId = orgId as OrgId;
 
-	const spaceVideoIds = spaceId ? await getSpaceVideoIds(spaceId) : undefined;
+	const spaceVideoIds = spaceId
+		? await getSpaceVideoIds(spaceId as SpaceOrOrgId)
+		: undefined;
 	const capVideoIds = capId ? [capId as VideoId] : undefined;
 	const videoIds = capVideoIds || spaceVideoIds;
+
+	const { from, to, bucket } = await resolveRangeBounds(
+		range,
+		typedOrgId,
+		videoIds,
+	);
+	const buckets = buildBuckets(from, to, bucket);
 
 	if (
 		(spaceId && spaceVideoIds && spaceVideoIds.length === 0) ||
@@ -177,47 +223,22 @@ export const getOrgAnalyticsData = async (
 	}
 
 	const [capsSeries, commentSeries, reactionSeries] = await Promise.all([
-		queryVideoSeries(typedOrgId, from, to, rangeConfig.bucket, videoIds),
-		queryCommentsSeries(
-			typedOrgId,
-			from,
-			to,
-			"text",
-			rangeConfig.bucket,
-			videoIds,
-		),
-		queryCommentsSeries(
-			typedOrgId,
-			from,
-			to,
-			"emoji",
-			rangeConfig.bucket,
-			videoIds,
-		),
+		queryVideoSeries(typedOrgId, from, to, bucket, videoIds),
+		queryCommentsSeries(typedOrgId, from, to, "text", bucket, videoIds),
+		queryCommentsSeries(typedOrgId, from, to, "emoji", bucket, videoIds),
 	]);
 
 	const tinybirdData = await runPromise(
 		Effect.gen(function* () {
 			const tinybird = yield* Tinybird;
-			console.log("getOrgAnalyticsData - orgId:", orgId, "range:", range);
-			console.log(
-				"getOrgAnalyticsData - from:",
-				from.toISOString(),
-				"to:",
-				to.toISOString(),
-			);
 
 			const viewSeries = yield* queryViewSeries(
 				tinybird,
 				typedOrgId,
 				from,
 				to,
-				rangeConfig.bucket,
+				bucket,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - viewSeries:",
-				JSON.stringify(viewSeries, null, 2),
 			);
 
 			const countries = yield* queryCountries(
@@ -227,10 +248,6 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - countries:",
-				JSON.stringify(countries, null, 2),
-			);
 
 			const cities = yield* queryCities(
 				tinybird,
@@ -238,10 +255,6 @@ export const getOrgAnalyticsData = async (
 				from,
 				to,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - cities:",
-				JSON.stringify(cities, null, 2),
 			);
 
 			const browsers = yield* queryBrowsers(
@@ -251,10 +264,6 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - browsers:",
-				JSON.stringify(browsers, null, 2),
-			);
 
 			const devices = yield* queryDevices(
 				tinybird,
@@ -262,10 +271,6 @@ export const getOrgAnalyticsData = async (
 				from,
 				to,
 				videoIds,
-			);
-			console.log(
-				"getOrgAnalyticsData - devices:",
-				JSON.stringify(devices, null, 2),
 			);
 
 			const operatingSystems = yield* queryOperatingSystems(
@@ -275,18 +280,10 @@ export const getOrgAnalyticsData = async (
 				to,
 				videoIds,
 			);
-			console.log(
-				"getOrgAnalyticsData - operatingSystems:",
-				JSON.stringify(operatingSystems, null, 2),
-			);
 
 			const topCapsRaw = capId
 				? []
 				: yield* queryTopCaps(tinybird, typedOrgId, from, to, videoIds);
-			console.log(
-				"getOrgAnalyticsData - topCapsRaw:",
-				JSON.stringify(topCapsRaw, null, 2),
-			);
 
 			return {
 				viewSeries,
@@ -301,27 +298,43 @@ export const getOrgAnalyticsData = async (
 	);
 
 	const totalViews = tinybirdData.viewSeries.reduce(
-		(sum, row) => sum + row.views,
+		(sum: number, row: ViewSeriesRow) => sum + row.views,
 		0,
 	);
-	const totalCaps = capsSeries.reduce((sum, row) => sum + row.count, 0);
-	const totalComments = commentSeries.reduce((sum, row) => sum + row.count, 0);
+	const totalCaps = capsSeries.reduce(
+		(sum: number, row: CountSeriesRow) => sum + row.count,
+		0,
+	);
+	const totalComments = commentSeries.reduce(
+		(sum: number, row: CountSeriesRow) => sum + row.count,
+		0,
+	);
 	const totalReactions = reactionSeries.reduce(
-		(sum, row) => sum + row.count,
+		(sum: number, row: CountSeriesRow) => sum + row.count,
 		0,
 	);
 
 	const chartData = buckets.map((bucket) => ({
 		bucket,
-		caps: capsSeries.find((row) => row.bucket === bucket)?.count ?? 0,
+		caps:
+			capsSeries.find((row: CountSeriesRow) => row.bucket === bucket)?.count ??
+			0,
 		views:
-			tinybirdData.viewSeries.find((row) => row.bucket === bucket)?.views ?? 0,
-		comments: commentSeries.find((row) => row.bucket === bucket)?.count ?? 0,
-		reactions: reactionSeries.find((row) => row.bucket === bucket)?.count ?? 0,
+			tinybirdData.viewSeries.find(
+				(row: ViewSeriesRow) => row.bucket === bucket,
+			)?.views ?? 0,
+		comments:
+			commentSeries.find((row: CountSeriesRow) => row.bucket === bucket)
+				?.count ?? 0,
+		reactions:
+			reactionSeries.find((row: CountSeriesRow) => row.bucket === bucket)
+				?.count ?? 0,
 	}));
 
 	const videoNames = await loadVideoNames(
-		tinybirdData.topCapsRaw.map((cap) => cap.videoId).filter(Boolean),
+		tinybirdData.topCapsRaw
+			.map((cap: TopCapRow) => cap.videoId)
+			.filter(Boolean),
 	);
 
 	let capName: string | undefined;
@@ -367,7 +380,7 @@ export const getOrgAnalyticsData = async (
 				(row) => row.name,
 				normalizeDeviceName,
 			),
-			topCaps: tinybirdData.topCapsRaw.map((row) => ({
+			topCaps: tinybirdData.topCapsRaw.map((row: TopCapRow) => ({
 				id: row.videoId,
 				name: videoNames.get(row.videoId) ?? row.videoId,
 				views: row.views,
@@ -583,8 +596,10 @@ const queryCommentsSeries = async (
 		.filter((row): row is CountSeriesRow => Boolean(row.bucket));
 };
 
+type TinybirdService = Effect.Effect.Success<typeof Tinybird>;
+
 const queryViewSeries = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -630,8 +645,8 @@ const queryViewSeries = (
 				);
 
 	return effect.pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				bucket: row.bucket,
 				views: Number(row.views) || 0,
 			})),
@@ -640,7 +655,7 @@ const queryViewSeries = (
 };
 
 const queryCountries = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -681,8 +696,8 @@ const queryCountries = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -691,7 +706,7 @@ const queryCountries = (
 };
 
 const queryCities = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -734,8 +749,8 @@ const queryCities = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.city,
 				subtitle: row.country,
 				views: Number(row.views) || 0,
@@ -745,7 +760,7 @@ const queryCities = (
 };
 
 const queryBrowsers = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -784,8 +799,8 @@ const queryBrowsers = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -794,7 +809,7 @@ const queryBrowsers = (
 };
 
 const queryDevices = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -833,8 +848,8 @@ const queryDevices = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -843,7 +858,7 @@ const queryDevices = (
 };
 
 const queryOperatingSystems = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -882,8 +897,8 @@ const queryOperatingSystems = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
-			rows.map((row) => ({
+		Effect.map((rows: Row[]) =>
+			rows.map((row: Row) => ({
 				name: row.name,
 				views: Number(row.views) || 0,
 			})),
@@ -892,7 +907,7 @@ const queryOperatingSystems = (
 };
 
 const queryTopCaps = (
-	tinybird: Tinybird,
+	tinybird: TinybirdService,
 	orgId: OrgId,
 	from: Date,
 	to: Date,
@@ -933,13 +948,15 @@ const queryTopCaps = (
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(aggregatedSql)),
 		withTinybirdFallback<Row>(tinybird.querySql<Row>(rawSql)),
 	).pipe(
-		Effect.map((rows) =>
+		Effect.map((rows: Row[]) =>
 			rows
-				.map((row) => ({
+				.map((row: Row) => ({
 					videoId: row.pathname?.split("/s/")[1] ?? row.pathname,
 					views: Number(row.views) || 0,
 				}))
-				.filter((row): row is TopCapRow => Boolean(row.videoId)),
+				.filter((row: { videoId: string; views: number }): row is TopCapRow =>
+					Boolean(row.videoId),
+				),
 		),
 	);
 };

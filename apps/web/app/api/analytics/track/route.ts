@@ -81,7 +81,6 @@ export async function POST(request: NextRequest) {
 				return;
 			}
 
-			// @ts-expect-error - Tinybird service can be yielded directly
 			const tinybird = yield* Tinybird;
 			yield* tinybird.appendEvents([
 				{
