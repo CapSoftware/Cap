@@ -382,36 +382,37 @@ function PreviewCanvas() {
 			<Show when={latestFrame()}>
 				{(currentFrame) => {
 					const padding = 4;
+					const frameWidth = () => currentFrame().width;
+					const frameHeight = () => currentFrame().data.height;
+
+					const availableWidth = () =>
+						Math.max((containerBounds.width ?? 0) - padding * 2, 0);
+					const availableHeight = () =>
+						Math.max((containerBounds.height ?? 0) - padding * 2, 0);
 
 					const containerAspect = () => {
-						if (containerBounds.width && containerBounds.height) {
-							return (
-								(containerBounds.width - padding * 2) /
-								(containerBounds.height - padding * 2)
-							);
-						}
-
-						return 1;
+						const width = availableWidth();
+						const height = availableHeight();
+						if (width === 0 || height === 0) return 1;
+						return width / height;
 					};
 
-					const frameAspect = () =>
-						currentFrame().width / currentFrame().data.height;
+					const frameAspect = () => frameWidth() / frameHeight();
 
 					const size = () => {
+						let width: number;
+						let height: number;
 						if (frameAspect() < containerAspect()) {
-							const height = (containerBounds.height ?? 0) - padding * 1;
-
-							return {
-								width: height * frameAspect(),
-								height,
-							};
+							height = availableHeight();
+							width = height * frameAspect();
+						} else {
+							width = availableWidth();
+							height = width / frameAspect();
 						}
 
-						const width = (containerBounds.width ?? 0) - padding * 2;
-
 						return {
-							width,
-							height: width / frameAspect(),
+							width: Math.min(width, frameWidth()),
+							height: Math.min(height, frameHeight()),
 						};
 					};
 
@@ -419,15 +420,15 @@ function PreviewCanvas() {
 						<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
 							<canvas
 								style={{
-									width: `${size().width - padding * 2}px`,
+									width: `${size().width}px`,
 									height: `${size().height}px`,
 									...gridStyle,
 								}}
 								class="rounded"
 								ref={canvasRef}
 								id="canvas"
-								width={currentFrame().width}
-								height={currentFrame().data.height}
+								width={frameWidth()}
+								height={frameHeight()}
 							/>
 						</div>
 					);
