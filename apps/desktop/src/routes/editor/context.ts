@@ -313,9 +313,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			shouldResave = false;
 			hasPendingProjectSave = false;
 			try {
-				await commands.setProjectConfig(
-					serializeProjectConfiguration(project),
-				);
+				await commands.setProjectConfig(serializeProjectConfiguration(project));
 			} catch (error) {
 				console.error("Failed to persist project config", error);
 			} finally {
