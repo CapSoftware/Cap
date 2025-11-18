@@ -464,10 +464,12 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let _ = first_tx.send(timestamp);
                     }
 
+                    let duration = timestamp.checked_duration_since(timestamps).unwrap_or(Duration::ZERO);
+
                     muxer
                         .lock()
                         .await
-                        .send_video_frame(frame, timestamp.duration_since(timestamps))
+                        .send_video_frame(frame, duration)
                         .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
                 }
 
@@ -476,11 +478,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             })
             .await;
 
+        muxer.lock().await.stop();
+
+        if let Some(Err(e)) = res {
+            return Err(e);
+        }
+
         if res.is_none() {
             info!("mux-video cancelled");
         }
-
-        muxer.lock().await.stop();
 
         Ok(())
     });
@@ -512,7 +518,7 @@ impl PreparedAudioSources {
                                 let _ = first_tx.send(frame.timestamp);
                             }
 
-                            let timestamp = frame.timestamp.duration_since(timestamps);
+                            let timestamp = frame.timestamp.checked_duration_since(timestamps).unwrap_or(Duration::ZERO);
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
                                 error!("Audio encoder: {e}");
                             }
