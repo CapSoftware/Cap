@@ -18,10 +18,12 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	For,
 	onCleanup,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -191,8 +193,9 @@ export default function () {
 	});
 
 	createEffect(() => {
-		if (state().variant === "initializing") {
-			const recording = currentRecording.data as CurrentRecording;
+		const s = state();
+		if (s.variant === "initializing" || s.variant === "countdown") {
+			const recording = currentRecording.data as CurrentRecording | undefined;
 			if (recording?.status === "recording") {
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
@@ -486,7 +489,7 @@ export default function () {
 		for (const { pause, resume } of pauseResumes) {
 			if (pause && resume) t -= resume - pause;
 		}
-		return t;
+		return Math.max(0, t);
 	};
 
 	const isMaxRecordingLimitEnabled = () => {
@@ -560,10 +563,55 @@ export default function () {
 								>
 									<IconCapStopCircle />
 									<span class="text-[0.875rem] font-[500] tabular-nums">
-										<Show when={!isInitializing()} fallback="Starting...">
+										<Show when={!isInitializing()} fallback="Starting">
 											<Show
 												when={!isCountdown()}
-												fallback={`${countdownCurrent()}...`}
+												fallback={
+													<div class="relative inline-block h-[1.5em] w-[1ch] overflow-hidden align-middle">
+														<TransitionGroup
+															onEnter={(el, done) => {
+																const a = el.animate(
+																	[
+																		{
+																			opacity: 0,
+																			transform: "translateY(-100%)",
+																		},
+																		{ opacity: 1, transform: "translateY(0)" },
+																	],
+																	{
+																		duration: 300,
+																		easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+																	},
+																);
+																a.finished.then(done);
+															}}
+															onExit={(el, done) => {
+																const a = el.animate(
+																	[
+																		{ opacity: 1, transform: "translateY(0)" },
+																		{
+																			opacity: 0,
+																			transform: "translateY(100%)",
+																		},
+																	],
+																	{
+																		duration: 300,
+																		easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+																	},
+																);
+																a.finished.then(done);
+															}}
+														>
+															<For each={[countdownCurrent()]}>
+																{(num) => (
+																	<span class="absolute inset-0 flex items-center justify-center">
+																		{num}
+																	</span>
+																)}
+															</For>
+														</TransitionGroup>
+													</div>
+												}
 											>
 												<Show
 													when={isMaxRecordingLimitEnabled()}
