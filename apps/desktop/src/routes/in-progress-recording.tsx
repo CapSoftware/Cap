@@ -22,7 +22,6 @@ import {
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import createPresence from "solid-presence";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -38,6 +37,7 @@ import type {
 import { commands, events } from "~/utils/tauri";
 
 type State =
+	| { variant: "initializing" }
 	| { variant: "countdown"; from: number; current: number }
 	| { variant: "recording" }
 	| { variant: "paused" }
@@ -59,7 +59,7 @@ const FAKE_WINDOW_BOUNDS_NAME = "recording-controls-interactive-area";
 export default function () {
 	const [state, setState] = createSignal<State>(
 		window.COUNTDOWN === 0
-			? { variant: "recording" }
+			? { variant: "initializing" }
 			: {
 					variant: "countdown",
 					from: window.COUNTDOWN,
@@ -186,6 +186,18 @@ export default function () {
 			case "Failed":
 				setRecordingFailure(payload.error);
 				break;
+		}
+	});
+
+	createEffect(() => {
+		if (state().variant === "initializing") {
+			const recording = currentRecording.data as any;
+			if (recording?.status === "recording") {
+				setDisconnectedInputs({ microphone: false, camera: false });
+				setRecordingFailure(null);
+				setState({ variant: "recording" });
+				setStart(Date.now());
+			}
 		}
 	});
 
@@ -467,7 +479,8 @@ export default function () {
 	};
 
 	const adjustedTime = () => {
-		if (state().variant === "countdown") return 0;
+		if (state().variant === "countdown" || state().variant === "initializing")
+			return 0;
 		let t = time() - start();
 		for (const { pause, resume } of pauseResumes) {
 			if (pause && resume) t -= resume - pause;
@@ -502,21 +515,12 @@ export default function () {
 		return MAX_RECORDING_FOR_FREE - adjustedTime();
 	};
 
-	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
-		null,
-	);
-	const showCountdown = () => state().variant === "countdown";
-	const countdownPresence = createPresence({
-		show: showCountdown,
-		element: countdownRef,
-	});
-	const countdownState = createMemo<
-		Extract<State, { variant: "countdown" }> | undefined
-	>((prev) => {
+	const isInitializing = () => state().variant === "initializing";
+	const isCountdown = () => state().variant === "countdown";
+	const countdownCurrent = () => {
 		const s = state();
-		if (s.variant === "countdown") return s;
-		if (prev && countdownPresence.present()) return prev;
-	});
+		return s.variant === "countdown" ? s.current : 0;
+	};
 
 	return (
 		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
@@ -541,23 +545,12 @@ export default function () {
 				</Show>
 				<div class="h-10 w-full rounded-2xl">
 					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] animate-in fade-in">
-						<Show when={countdownState()}>
-							{(state) => (
-								<div
-									ref={setCountdownRef}
-									class={cx(
-										"transition-opacity",
-										showCountdown() ? "opacity-100" : "opacity-0",
-									)}
-								>
-									<Countdown from={state().from} current={state().current} />
-								</div>
-							)}
-						</Show>
 						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
 							<div class="flex flex-1 flex-row justify-between">
 								<button
-									disabled={stopRecording.isPending}
+									disabled={
+										stopRecording.isPending || isInitializing() || isCountdown()
+									}
 									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
 									type="button"
 									onClick={() => stopRecording.mutate()}
@@ -566,11 +559,18 @@ export default function () {
 								>
 									<IconCapStopCircle />
 									<span class="text-[0.875rem] font-[500] tabular-nums">
-										<Show
-											when={isMaxRecordingLimitEnabled()}
-											fallback={formatTime(adjustedTime() / 1000)}
-										>
-											{formatTime(remainingRecordingTime() / 1000)}
+										<Show when={!isInitializing()} fallback="Starting...">
+											<Show
+												when={!isCountdown()}
+												fallback={`${countdownCurrent()}...`}
+											>
+												<Show
+													when={isMaxRecordingLimitEnabled()}
+													fallback={formatTime(adjustedTime() / 1000)}
+												>
+													{formatTime(remainingRecordingTime() / 1000)}
+												</Show>
+											</Show>
 										</Show>
 									</span>
 								</button>
@@ -622,7 +622,11 @@ export default function () {
 
 									{canPauseRecording() && (
 										<ActionButton
-											disabled={togglePause.isPending || hasDisconnectedInput()}
+											disabled={
+												togglePause.isPending ||
+												hasDisconnectedInput() ||
+												isCountdown()
+											}
 											onClick={() => togglePause.mutate()}
 											title={
 												state().variant === "paused"
@@ -644,7 +648,7 @@ export default function () {
 									)}
 
 									<ActionButton
-										disabled={restartRecording.isPending}
+										disabled={restartRecording.isPending || isCountdown()}
 										onClick={() => restartRecording.mutate()}
 										title="Restart recording"
 										aria-label="Restart recording"
@@ -652,7 +656,7 @@ export default function () {
 										<IconCapRestart />
 									</ActionButton>
 									<ActionButton
-										disabled={deleteRecording.isPending}
+										disabled={deleteRecording.isPending || isCountdown()}
 										onClick={() => deleteRecording.mutate()}
 										title="Delete recording"
 										aria-label="Delete recording"
@@ -726,49 +730,6 @@ function createAudioInputLevel() {
 	});
 
 	return level;
-}
-
-function Countdown(props: { from: number; current: number }) {
-	const [animation, setAnimation] = createSignal(1);
-	setTimeout(() => setAnimation(0), 10);
-
-	return (
-		<div class="flex flex-row justify-between p-[0.25rem] flex-1">
-			<div class="flex flex-1 gap-3 items-center px-3">
-				<div class="flex-1 text-[13px] text-gray-11">Recording starting...</div>
-				<div class="relative w-5 h-5 text-red-300">
-					<svg class="absolute inset-0 w-5 h-5 -rotate-90" viewBox="0 0 20 20">
-						<circle
-							cx="10"
-							cy="10"
-							r="8"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							opacity="0.2"
-						/>
-						<circle
-							cx="10"
-							cy="10"
-							r="8"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="1.5"
-							stroke-dasharray={`${animation() * 50.265} 50.265`}
-							stroke-linecap="round"
-							class="transition-all duration-1000 ease-linear"
-							style={{
-								"transition-duration": `${props.from * 1000}ms`,
-							}}
-						/>
-					</svg>
-					<span class="flex absolute inset-0 justify-center items-center text-[11px]">
-						{props.current}
-					</span>
-				</div>
-			</div>
-		</div>
-	);
 }
 
 function cameraMatchesSelection(
