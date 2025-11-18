@@ -22,6 +22,7 @@ import {
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { createCameraMutation } from "~/utils/queries";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
 import {
@@ -87,6 +88,8 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		commands.awaitCameraPreviewReady(),
 	);
 
+	const setCamera = createCameraMutation();
+
 	return (
 		<div
 			data-tauri-drag-region
@@ -98,7 +101,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
-						<ControlButton onClick={() => void getCurrentWindow().close()}>
+						<ControlButton onClick={() => setCamera.mutate(null)}>
 							<IconCapCircleX class="size-5.5" />
 						</ControlButton>
 						<ControlButton
@@ -265,6 +268,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
+	const setCamera = createCameraMutation();
+
 	createEffect(
 		on(
 			() => rawOptions.cameraLabel,
@@ -289,7 +294,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
-						<ControlButton onClick={() => void getCurrentWindow().close()}>
+						<ControlButton onClick={() => setCamera.mutate(null)}>
 							<IconCapCircleX class="size-5.5" />
 						</ControlButton>
 						<ControlButton

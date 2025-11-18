@@ -31,7 +31,6 @@ use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     error::Error as StdError,
-    mem,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -48,7 +47,6 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
-    apply_camera_input, apply_mic_input,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -57,7 +55,6 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
-    recording_settings::RecordingSettingsStore,
     thumbnails::*,
     upload::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
@@ -65,8 +62,6 @@ use crate::{
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
-#[cfg(target_os = "macos")]
-use scap_targets::Window;
 
 #[derive(Clone)]
 pub struct InProgressRecordingCommon {
@@ -110,7 +105,6 @@ unsafe impl Sync for SendableShareableContent {}
 #[cfg(target_os = "macos")]
 async fn acquire_shareable_content_for_target(
     capture_target: &ScreenCaptureTarget,
-    excluded_windows: &[scap_targets::WindowId],
 ) -> anyhow::Result<SendableShareableContent> {
     let mut refreshed = false;
 
@@ -122,20 +116,13 @@ async fn acquire_shareable_content_for_target(
                 .ok_or_else(|| anyhow!("GetShareableContent/NotAvailable"))?,
         );
 
-        let sc_content = shareable_content.retained();
-        let missing_display =
-            shareable_content_missing_target_display(capture_target, sc_content.clone()).await;
-        let missing_windows =
-            shareable_content_missing_windows(excluded_windows, sc_content.clone()).await;
-
-        if !missing_display && (!missing_windows || refreshed) {
-            if missing_windows && refreshed {
-                debug!("Excluded windows missing from refreshed ScreenCaptureKit content");
-            }
+        if !shareable_content_missing_target_display(capture_target, shareable_content.retained())
+            .await
+        {
             return Ok(shareable_content);
         }
 
-        if refreshed && missing_display {
+        if refreshed {
             return Err(anyhow!("GetShareableContent/DisplayMissing"));
         }
 
@@ -159,74 +146,6 @@ async fn shareable_content_missing_target_display(
             .is_none(),
         None => false,
     }
-}
-
-#[cfg(target_os = "macos")]
-async fn shareable_content_missing_windows(
-    excluded_windows: &[scap_targets::WindowId],
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-) -> bool {
-    if excluded_windows.is_empty() {
-        return false;
-    }
-
-    for window_id in excluded_windows {
-        let Some(window) = Window::from_id(window_id) else {
-            continue;
-        };
-
-        if window
-            .raw_handle()
-            .as_sc(shareable_content.clone())
-            .await
-            .is_none()
-        {
-            return true;
-        }
-    }
-
-    false
-}
-
-#[cfg(target_os = "macos")]
-async fn prune_excluded_windows_without_shareable_content(
-    excluded_windows: &mut Vec<scap_targets::WindowId>,
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
-) {
-    if excluded_windows.is_empty() {
-        return;
-    }
-
-    let mut removed = 0usize;
-    let mut pruned = Vec::with_capacity(excluded_windows.len());
-    let current = mem::take(excluded_windows);
-
-    for window_id in current {
-        let Some(window) = Window::from_id(&window_id) else {
-            removed += 1;
-            continue;
-        };
-
-        if window
-            .raw_handle()
-            .as_sc(shareable_content.clone())
-            .await
-            .is_some()
-        {
-            pruned.push(window_id);
-        } else {
-            removed += 1;
-        }
-    }
-
-    if removed > 0 {
-        debug!(
-            removed,
-            "Dropping excluded windows missing from ScreenCaptureKit content"
-        );
-    }
-
-    *excluded_windows = pruned;
 }
 
 #[cfg(target_os = "macos")]
@@ -430,41 +349,6 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
-async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableState<'_, App>) {
-    let guard = state.read().await;
-    let recording_active = !matches!(guard.recording_state, RecordingState::None);
-    let needs_mic = guard.selected_mic_label.is_none();
-    let needs_camera = guard.selected_camera_id.is_none();
-    drop(guard);
-
-    if recording_active || (!needs_mic && !needs_camera) {
-        return;
-    }
-
-    let settings = match RecordingSettingsStore::get(app) {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "Failed to load recording settings while restoring inputs");
-            return;
-        }
-    };
-
-    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
-        match apply_mic_input(app.state(), Some(mic)).await {
-            Err(err) => warn!(%err, "Failed to restore microphone input"),
-            Ok(_) => {}
-        }
-    }
-
-    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
-        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
-            Err(err) => warn!(%err, "Failed to restore camera input"),
-            Ok(_) => {}
-        }
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -473,26 +357,8 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
-    restore_inputs_from_store_if_missing(&app, &state_mtx).await;
-
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
-    }
-
-    let has_camera_selected = {
-        let guard = state_mtx.read().await;
-        guard.selected_camera_id.is_some()
-    };
-    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
-    let should_open_camera_preview =
-        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
-
-    if should_open_camera_preview {
-        ShowCapWindow::Camera
-            .show(&app)
-            .await
-            .map_err(|err| error!("Failed to show camera preview window: {err}"))
-            .ok();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -692,7 +558,17 @@ pub async fn start_recording(
             state.camera_in_use = camera_feed.is_some();
 
             #[cfg(target_os = "macos")]
-            let mut excluded_windows = {
+            let mut shareable_content =
+                acquire_shareable_content_for_target(&inputs.capture_target).await?;
+
+            let common = InProgressRecordingCommon {
+                target_name,
+                inputs: inputs.clone(),
+                recording_dir: recording_dir.clone(),
+            };
+
+            #[cfg(target_os = "macos")]
+            let excluded_windows = {
                 let window_exclusions = general_settings
                     .as_ref()
                     .map_or_else(general_settings::default_excluded_windows, |settings| {
@@ -700,24 +576,6 @@ pub async fn start_recording(
                     });
 
                 crate::window_exclusion::resolve_window_ids(&window_exclusions)
-            };
-
-            #[cfg(target_os = "macos")]
-            let mut shareable_content =
-                acquire_shareable_content_for_target(&inputs.capture_target, &excluded_windows)
-                    .await?;
-
-            #[cfg(target_os = "macos")]
-            prune_excluded_windows_without_shareable_content(
-                &mut excluded_windows,
-                shareable_content.retained(),
-            )
-            .await;
-
-            let common = InProgressRecordingCommon {
-                target_name,
-                inputs: inputs.clone(),
-                recording_dir: recording_dir.clone(),
             };
 
             let mut mic_restart_attempts = 0;
@@ -838,16 +696,8 @@ pub async fn start_recording(
                     }
                     #[cfg(target_os = "macos")]
                     Err(err) if is_shareable_content_error(&err) => {
-                        shareable_content = acquire_shareable_content_for_target(
-                            &inputs.capture_target,
-                            &excluded_windows,
-                        )
-                        .await?;
-                        prune_excluded_windows_without_shareable_content(
-                            &mut excluded_windows,
-                            shareable_content.retained(),
-                        )
-                        .await;
+                        shareable_content =
+                            acquire_shareable_content_for_target(&inputs.capture_target).await?;
                         continue;
                     }
                     Err(err) if mic_restart_attempts == 0 && mic_actor_not_running(&err) => {

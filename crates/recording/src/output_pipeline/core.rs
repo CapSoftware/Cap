@@ -429,7 +429,7 @@ async fn setup_muxer<TMuxer: Muxer>(
 fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
     setup_ctx: &mut SetupCtx,
     mut video_source: TVideo,
-    video_rx: mpsc::Receiver<TVideo::Frame>,
+    mut video_rx: mpsc::Receiver<TVideo::Frame>,
     first_tx: oneshot::Sender<Timestamp>,
     stop_token: CancellationToken,
     muxer: Arc<Mutex<TMutex>>,
@@ -450,53 +450,34 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         }
     });
 
-    setup_ctx.tasks().spawn("mux-video", {
-        let stop_token_on_close = stop_token.clone();
-        async move {
-            use futures::StreamExt;
+    setup_ctx.tasks().spawn("mux-video", async move {
+        use futures::StreamExt;
 
-            let mut first_tx = Some(first_tx);
-            let cancelled = stop_token.cancelled_owned();
-            tokio::pin!(cancelled);
-            let mut video_rx = video_rx.fuse();
+        let mut first_tx = Some(first_tx);
 
-            loop {
-                tokio::select! {
-                    _ = &mut cancelled => {
-                        break;
+        stop_token
+            .run_until_cancelled(async {
+                while let Some(frame) = video_rx.next().await {
+                    let timestamp = frame.timestamp();
+
+                    if let Some(first_tx) = first_tx.take() {
+                        let _ = first_tx.send(timestamp);
                     }
-                    maybe_frame = video_rx.next() => {
-                        match maybe_frame {
-                            Some(frame) => {
-                                let timestamp = frame.timestamp();
 
-                                if let Some(first_tx) = first_tx.take() {
-                                    let _ = first_tx.send(timestamp);
-                                }
-
-                                muxer
-                                    .lock()
-                                    .await
-                                    .send_video_frame(frame, timestamp.duration_since(timestamps))
-                                    .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
-                            }
-                            None => {
-                                warn!(
-                                    video_source = %std::any::type_name::<TVideo>(),
-                                    "Video mux channel closed before cancellation; cancelling pipeline"
-                                );
-                                stop_token_on_close.cancel();
-                                break;
-                            }
-                        }
-                    }
+                    muxer
+                        .lock()
+                        .await
+                        .send_video_frame(frame, timestamp.duration_since(timestamps))
+                        .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
                 }
-            }
 
-            muxer.lock().await.stop();
+                Ok::<(), anyhow::Error>(())
+            })
+            .await;
 
-            Ok(())
-        }
+        muxer.lock().await.stop();
+
+        Ok(())
     });
 }
 
