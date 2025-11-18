@@ -59,7 +59,7 @@ impl Default for CameraPreviewState {
 }
 
 fn clamp_size(size: f32) -> f32 {
-    size.max(MIN_CAMERA_SIZE).min(MAX_CAMERA_SIZE)
+    size.clamp(MIN_CAMERA_SIZE, MAX_CAMERA_SIZE)
 }
 
 pub struct CameraPreviewManager {
