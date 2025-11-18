@@ -28,6 +28,7 @@ use crate::{
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
+use cap_recording::feeds;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -500,6 +501,13 @@ impl ShowCapWindow {
                     let window = window_builder.build()?;
 
                     if enable_native_camera_preview {
+                        if let Some(id) = state.selected_camera_id.clone()
+                            && !state.camera_in_use
+                        {
+                            let _ = state.camera_feed.ask(feeds::camera::SetInput { id }).await;
+                            state.camera_in_use = true;
+                        }
+
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview

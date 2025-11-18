@@ -545,15 +545,56 @@ pub async fn start_recording(
         let inputs = inputs.clone();
         async move {
             fail!("recording::spawn_actor");
-            let mut state = state_mtx.write().await;
-
             use kameo::error::SendError;
 
-            let camera_feed = match state.camera_feed.ask(camera::Lock).await {
-                Ok(lock) => Some(Arc::new(lock)),
-                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+            // Initialize camera if selected but not active
+            let (camera_feed_actor, selected_camera_id) = {
+                let state = state_mtx.read().await;
+                (state.camera_feed.clone(), state.selected_camera_id.clone())
+            };
+
+            let camera_lock_result = camera_feed_actor.ask(camera::Lock).await;
+
+            let camera_feed_lock = match camera_lock_result {
+                Ok(lock) => Some(lock),
+                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => {
+                    if let Some(id) = selected_camera_id {
+                        info!(
+                            "Camera selected but not initialized, initializing: {:?}",
+                            id
+                        );
+                        match camera_feed_actor
+                            .ask(camera::SetInput { id: id.clone() })
+                            .await
+                        {
+                            Ok(fut) => match fut.await {
+                                Ok(_) => match camera_feed_actor.ask(camera::Lock).await {
+                                    Ok(lock) => Some(lock),
+                                    Err(e) => {
+                                        warn!("Failed to lock camera after initialization: {}", e);
+                                        None
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Failed to initialize camera: {}", e);
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                warn!("Failed to ask SetInput: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
                 Err(e) => return Err(anyhow!(e.to_string())),
             };
+
+            let mut state = state_mtx.write().await;
+
+            let camera_feed = camera_feed_lock.map(Arc::new);
 
             state.camera_in_use = camera_feed.is_some();
 
@@ -1024,21 +1065,21 @@ async fn handle_recording_end(
         let _ = window.close();
     }
 
-	if let Some(window) = CapWindowId::Main.get(&handle) {
-		window.unminimize().ok();
-	} else {
-		if let Some(v) = CapWindowId::Camera.get(&handle) {
-			let _ = v.close();
-		}
-		let _ = app.mic_feed.ask(microphone::RemoveInput).await;
-		let _ = app.camera_feed.ask(camera::RemoveInput).await;
-		app.selected_mic_label = None;
-		app.selected_camera_id = None;
-		app.camera_in_use = false;
-		if let Some(win) = CapWindowId::Camera.get(&handle) {
-			win.close().ok();
-		}
-	}
+    if let Some(window) = CapWindowId::Main.get(&handle) {
+        window.unminimize().ok();
+    } else {
+        if let Some(v) = CapWindowId::Camera.get(&handle) {
+            let _ = v.close();
+        }
+        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+        let _ = app.camera_feed.ask(camera::RemoveInput).await;
+        app.selected_mic_label = None;
+        app.selected_camera_id = None;
+        app.camera_in_use = false;
+        if let Some(win) = CapWindowId::Camera.get(&handle) {
+            win.close().ok();
+        }
+    }
 
     CurrentRecordingChanged.emit(&handle).ok();
 

@@ -444,12 +444,39 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            camera_feed
-                .ask(feeds::camera::SetInput { id: id.clone() })
-                .await
-                .map_err(|e| e.to_string())?
-                .await
-                .map_err(|e| e.to_string())?;
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+
+                // We first ask the actor to set the input
+                // This returns a future that resolves when the camera is actually ready
+                let request = camera_feed
+                    .ask(feeds::camera::SetInput { id: id.clone() })
+                    .await
+                    .map_err(|e| e.to_string());
+
+                let result = match request {
+                    Ok(future) => future.await.map_err(|e| e.to_string()),
+                    Err(e) => Err(e),
+                };
+
+                match result {
+                    Ok(_) => break,
+                    Err(e) => {
+                        if attempts >= 3 {
+                            return Err(format!(
+                                "Failed to initialize camera after {} attempts: {}",
+                                attempts, e
+                            ));
+                        }
+                        warn!(
+                            "Failed to set camera input (attempt {}): {}. Retrying...",
+                            attempts, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
 
             ShowCapWindow::Camera
                 .show(&app_handle)
@@ -728,9 +755,17 @@ enum CurrentRecordingTarget {
 
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub enum RecordingStatus {
+    Pending,
+    Recording,
+}
+
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 struct CurrentRecording {
     target: CurrentRecordingTarget,
     mode: RecordingMode,
+    status: RecordingStatus,
 }
 
 #[tauri::command]
@@ -741,10 +776,14 @@ async fn get_current_recording(
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
 
-    let (mode, capture_target) = match &state.recording_state {
+    let (mode, capture_target, status) = match &state.recording_state {
         RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target),
-        RecordingState::Active(inner) => (inner.mode(), inner.capture_target()),
+        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
+        RecordingState::Active(inner) => (
+            inner.mode(),
+            inner.capture_target(),
+            RecordingStatus::Recording,
+        ),
     };
 
     let target = match capture_target {
@@ -762,7 +801,11 @@ async fn get_current_recording(
         },
     };
 
-    Ok(JsonValue::new(&Some(CurrentRecording { target, mode })))
+    Ok(JsonValue::new(&Some(CurrentRecording {
+        target,
+        mode,
+        status,
+    })))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -2596,37 +2639,37 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             match event {
                 WindowEvent::Destroyed => {
-						if let Ok(window_id) = CapWindowId::from_str(label) {
-							match window_id {
-								CapWindowId::Main => {
-									let app = app.clone();
+                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                        match window_id {
+                            CapWindowId::Main => {
+                                let app = app.clone();
 
-									for (id, window) in app.webview_windows() {
-										if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
-											CapWindowId::from_str(&id)
-										{
-											let _ = window.close();
-										}
-									}
+                                for (id, window) in app.webview_windows() {
+                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                        CapWindowId::from_str(&id)
+                                    {
+                                        let _ = window.close();
+                                    }
+                                }
 
-									tokio::spawn(async move {
-										let state = app.state::<ArcLock<App>>();
-										let app_state = &mut *state.write().await;
+                                tokio::spawn(async move {
+                                    let state = app.state::<ArcLock<App>>();
+                                    let app_state = &mut *state.write().await;
 
-										if !app_state.is_recording_active_or_pending() {
-											let _ =
-												app_state.mic_feed.ask(microphone::RemoveInput).await;
-											let _ = app_state
-												.camera_feed
-												.ask(feeds::camera::RemoveInput)
-												.await;
+                                    if !app_state.is_recording_active_or_pending() {
+                                        let _ =
+                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
 
-											app_state.selected_mic_label = None;
-											app_state.selected_camera_id = None;
-											app_state.camera_in_use = false;
-										}
-									});
-								}
+                                        app_state.selected_mic_label = None;
+                                        app_state.selected_camera_id = None;
+                                        app_state.camera_in_use = false;
+                                    }
+                                });
+                            }
                             CapWindowId::Editor { id } => {
                                 let window_ids = EditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
@@ -2681,11 +2724,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Camera => {
                                 let app = app.clone();
                                 tokio::spawn(async move {
-                                    app.state::<ArcLock<App>>()
-                                        .write()
-                                        .await
-                                        .camera_preview
-                                        .on_window_close();
+                                    let state = app.state::<ArcLock<App>>();
+                                    let mut app_state = state.write().await;
+
+                                    app_state.camera_preview.on_window_close();
+
+                                    if !app_state.is_recording_active_or_pending() {
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
+                                        app_state.camera_in_use = false;
+                                    }
                                 });
                             }
                             _ => {}

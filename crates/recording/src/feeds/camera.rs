@@ -592,8 +592,7 @@ impl Message<ListenForReady> for CameraFeed {
         match self.state {
             State::Locked { .. }
             | State::Open(OpenState {
-                connecting: None,
-                attached: Some(..),
+                connecting: None, ..
             }) => {
                 msg.0.send(()).ok();
             }
@@ -743,6 +742,10 @@ impl Message<InputConnectFailed> for CameraFeed {
             && connecting.id == msg.id
         {
             state.connecting = None;
+
+            for tx in &mut self.on_ready.drain(..) {
+                tx.send(()).ok();
+            }
         }
 
         Ok(())
