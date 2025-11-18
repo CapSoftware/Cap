@@ -112,7 +112,7 @@ export function createOptionsQuery() {
 		captureTarget: { variant: "display", id: "0" },
 		micName: null,
 		cameraLabel: null,
-		mode: "studio",
+		mode: "instant",
 		organizationId: null,
 		workspaceId: null,
 	});
