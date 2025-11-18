@@ -2294,6 +2294,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
+            target_select_overlay::update_camera_overlay_bounds,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,

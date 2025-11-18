@@ -277,6 +277,9 @@ async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null) : Prom
 async closeTargetSelectOverlays() : Promise<null> {
     return await TAURI_INVOKE("close_target_select_overlays");
 },
+async updateCameraOverlayBounds(x: number, y: number, width: number, height: number) : Promise<null> {
+    return await TAURI_INVOKE("update_camera_overlay_bounds", { x, y, width, height });
+},
 async displayInformation(displayId: string) : Promise<DisplayInformation> {
     return await TAURI_INVOKE("display_information", { displayId });
 },
