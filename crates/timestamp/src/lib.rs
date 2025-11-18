@@ -37,7 +37,9 @@ impl Timestamp {
             Self::Instant(instant) => instant.checked_duration_since(start.instant),
             Self::SystemTime(time) => time.duration_since(start.system_time).ok(),
             #[cfg(windows)]
-            Self::PerformanceCounter(counter) => counter.checked_duration_since(start.performance_counter),
+            Self::PerformanceCounter(counter) => {
+                counter.checked_duration_since(start.performance_counter)
+            }
             #[cfg(target_os = "macos")]
             Self::MachAbsoluteTime(time) => time.checked_duration_since(start.mach_absolute_time),
         }

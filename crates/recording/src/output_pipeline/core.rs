@@ -464,7 +464,9 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let _ = first_tx.send(timestamp);
                     }
 
-                    let duration = timestamp.checked_duration_since(timestamps).unwrap_or(Duration::ZERO);
+                    let duration = timestamp
+                        .checked_duration_since(timestamps)
+                        .unwrap_or(Duration::ZERO);
 
                     muxer
                         .lock()
@@ -518,7 +520,10 @@ impl PreparedAudioSources {
                                 let _ = first_tx.send(frame.timestamp);
                             }
 
-                            let timestamp = frame.timestamp.checked_duration_since(timestamps).unwrap_or(Duration::ZERO);
+                            let timestamp = frame
+                                .timestamp
+                                .checked_duration_since(timestamps)
+                                .unwrap_or(Duration::ZERO);
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
                                 error!("Audio encoder: {e}");
                             }
