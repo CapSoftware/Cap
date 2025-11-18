@@ -2596,33 +2596,37 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             match event {
                 WindowEvent::Destroyed => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
-                        match window_id {
-                            CapWindowId::Main => {
-                                let app = app.clone();
+						if let Ok(window_id) = CapWindowId::from_str(label) {
+							match window_id {
+								CapWindowId::Main => {
+									let app = app.clone();
 
-                                for (id, window) in app.webview_windows() {
-                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
-                                        CapWindowId::from_str(&id)
-                                    {
-                                        let _ = window.close();
-                                    }
-                                }
+									for (id, window) in app.webview_windows() {
+										if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+											CapWindowId::from_str(&id)
+										{
+											let _ = window.close();
+										}
+									}
 
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
-                                    let app_state = &mut *state.write().await;
+									tokio::spawn(async move {
+										let state = app.state::<ArcLock<App>>();
+										let app_state = &mut *state.write().await;
 
-                                    if !app_state.is_recording_active_or_pending() {
-                                        let _ =
-                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
-                                        let _ = app_state
-                                            .camera_feed
-                                            .ask(feeds::camera::RemoveInput)
-                                            .await;
-                                    }
-                                });
-                            }
+										if !app_state.is_recording_active_or_pending() {
+											let _ =
+												app_state.mic_feed.ask(microphone::RemoveInput).await;
+											let _ = app_state
+												.camera_feed
+												.ask(feeds::camera::RemoveInput)
+												.await;
+
+											app_state.selected_mic_label = None;
+											app_state.selected_camera_id = None;
+											app_state.camera_in_use = false;
+										}
+									});
+								}
                             CapWindowId::Editor { id } => {
                                 let window_ids = EditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);

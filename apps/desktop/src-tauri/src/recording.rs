@@ -1024,18 +1024,21 @@ async fn handle_recording_end(
         let _ = window.close();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&handle) {
-        window.unminimize().ok();
-    } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.close();
-        }
-        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
-        let _ = app.camera_feed.ask(camera::RemoveInput).await;
-        if let Some(win) = CapWindowId::Camera.get(&handle) {
-            win.close().ok();
-        }
-    }
+	if let Some(window) = CapWindowId::Main.get(&handle) {
+		window.unminimize().ok();
+	} else {
+		if let Some(v) = CapWindowId::Camera.get(&handle) {
+			let _ = v.close();
+		}
+		let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+		let _ = app.camera_feed.ask(camera::RemoveInput).await;
+		app.selected_mic_label = None;
+		app.selected_camera_id = None;
+		app.camera_in_use = false;
+		if let Some(win) = CapWindowId::Camera.get(&handle) {
+			win.close().ok();
+		}
+	}
 
     CurrentRecordingChanged.emit(&handle).ok();
 
