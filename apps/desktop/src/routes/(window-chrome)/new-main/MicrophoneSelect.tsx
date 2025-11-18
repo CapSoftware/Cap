@@ -22,7 +22,7 @@ export default function MicrophoneSelect(props: {
 	return (
 		<MicrophoneSelectBase
 			{...props}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect group"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect group relative overflow-hidden"
 			levelIndicatorClass="bg-blue-7"
 			iconClass="size-4"
 			PillComponent={InfoPill}
