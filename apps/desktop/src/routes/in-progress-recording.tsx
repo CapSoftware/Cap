@@ -31,6 +31,7 @@ import {
 import { handleRecordingResult } from "~/utils/recording";
 import type {
 	CameraInfo,
+	CurrentRecording,
 	DeviceOrModelID,
 	RecordingInputKind,
 } from "~/utils/tauri";
@@ -191,7 +192,7 @@ export default function () {
 
 	createEffect(() => {
 		if (state().variant === "initializing") {
-			const recording = currentRecording.data as any;
+			const recording = currentRecording.data as CurrentRecording;
 			if (recording?.status === "recording") {
 				setDisconnectedInputs({ microphone: false, camera: false });
 				setRecordingFailure(null);
