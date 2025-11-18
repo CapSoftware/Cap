@@ -103,9 +103,9 @@ jobs:
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            runner: macos-latest-xlarge
+            runner: macos-latest
           - target: aarch64-apple-darwin
-            runner: macos-latest-xlarge
+            runner: macos-latest
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     env:
