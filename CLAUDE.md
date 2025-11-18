@@ -414,3 +414,11 @@ Transcription/AI Enhancement → Database Storage
 - **Monorepo Guide**: Turborepo documentation
 - **Effect System**: Used in web-backend packages
 - **Media Processing**: FFmpeg documentation for Rust bindings
+
+## Code Formatting
+
+Always format code before completing work:
+- **TypeScript/JavaScript**: Run `pnpm format` to format all code with Biome
+- **Rust**: Run `cargo fmt` to format all Rust code with rustfmt
+
+These commands should be run regularly during development and always at the end of a coding session to ensure consistent formatting across the codebase.
