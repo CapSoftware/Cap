@@ -455,7 +455,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         let mut first_tx = Some(first_tx);
 
-        stop_token
+        let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
                     let timestamp = frame.timestamp();
@@ -471,9 +471,14 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
                 }
 
+                info!("mux-video stream ended (rx closed)");
                 Ok::<(), anyhow::Error>(())
             })
             .await;
+
+        if res.is_none() {
+            info!("mux-video cancelled");
+        }
 
         muxer.lock().await.stop();
 
