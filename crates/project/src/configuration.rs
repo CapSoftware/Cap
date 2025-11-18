@@ -401,8 +401,8 @@ pub enum CursorType {
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorAnimationStyle {
-    #[default]
     Slow,
+    #[default]
     #[serde(alias = "regular", alias = "quick", alias = "rapid", alias = "fast")]
     Mellow,
     Custom,
