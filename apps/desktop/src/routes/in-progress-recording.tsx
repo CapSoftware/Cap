@@ -540,7 +540,7 @@ export default function () {
 					</div>
 				</Show>
 				<div class="h-10 w-full rounded-2xl">
-					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 shadow-[0_8px_24px_rgba(18,18,18,0.18)] animate-in fade-in">
+					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] animate-in fade-in">
 						<Show when={countdownState()}>
 							{(state) => (
 								<div
@@ -733,7 +733,7 @@ function Countdown(props: { from: number; current: number }) {
 	setTimeout(() => setAnimation(0), 10);
 
 	return (
-		<div class="flex flex-row justify-between p-[0.25rem] flex-1 bg-gray-1 fixed inset-0 z-10">
+		<div class="flex flex-row justify-between p-[0.25rem] flex-1">
 			<div class="flex flex-1 gap-3 items-center px-3">
 				<div class="flex-1 text-[13px] text-gray-11">Recording starting...</div>
 				<div class="relative w-5 h-5 text-red-300">
