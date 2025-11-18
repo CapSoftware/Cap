@@ -124,7 +124,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     } else if (shape == 1.0) {
         // Square shape with enhanced corner anti-aliasing
-        let corner_radius = select(0.1, 0.12, size == 1.0);
+        // Interpolate corner radius based on normalized size (0-1)
+        let corner_radius = mix(0.10, 0.14, size);
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
@@ -138,7 +139,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     } else if (shape == 2.0) {
         // Full shape with aspect ratio-corrected rounded corners
         let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
-        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
+        // Interpolate corner radius based on normalized size (0-1)
+        let corner_radius = mix(0.08, 0.12, size);
 
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);

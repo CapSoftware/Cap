@@ -28,13 +28,9 @@ static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 // Basically poor man's MSAA
 static GPU_SURFACE_SCALE: u32 = 4;
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "lowercase")]
-pub enum CameraPreviewSize {
-    #[default]
-    Sm,
-    Lg,
-}
+pub const MIN_CAMERA_SIZE: f32 = 150.0;
+pub const MAX_CAMERA_SIZE: f32 = 600.0;
+pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -45,11 +41,25 @@ pub enum CameraPreviewShape {
     Full,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct CameraPreviewState {
-    size: CameraPreviewSize,
+    size: f32,
     shape: CameraPreviewShape,
     mirrored: bool,
+}
+
+impl Default for CameraPreviewState {
+    fn default() -> Self {
+        Self {
+            size: DEFAULT_CAMERA_SIZE,
+            shape: CameraPreviewShape::default(),
+            mirrored: false,
+        }
+    }
+}
+
+fn clamp_size(size: f32) -> f32 {
+    size.max(MIN_CAMERA_SIZE).min(MAX_CAMERA_SIZE)
 }
 
 pub struct CameraPreviewManager {
@@ -70,17 +80,22 @@ impl CameraPreviewManager {
 
     /// Get the current state of the camera window.
     pub fn get_state(&self) -> anyhow::Result<CameraPreviewState> {
-        Ok(self
+        let mut state: CameraPreviewState = self
             .store
             .as_ref()
             .map_err(|err| anyhow!("{err}"))?
             .get("state")
-            .and_then(|v| serde_json::from_value(v).ok().unwrap_or_default())
-            .unwrap_or_default())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        state.size = clamp_size(state.size);
+        Ok(state)
     }
 
     /// Save the current state of the camera window.
-    pub fn set_state(&self, state: CameraPreviewState) -> anyhow::Result<()> {
+    pub fn set_state(&self, mut state: CameraPreviewState) -> anyhow::Result<()> {
+        state.size = clamp_size(state.size);
+
         let store = self.store.as_ref().map_err(|err| anyhow!("{err}"))?;
         store.set("state", serde_json::to_value(&state)?);
         store.save()?;
@@ -607,16 +622,17 @@ impl Renderer {
 
     /// Update the uniforms which hold the camera preview state
     fn update_state_uniforms(&self, state: &CameraPreviewState) {
+        let clamped_size = clamp_size(state.size);
+        let normalized_size =
+            (clamped_size - MIN_CAMERA_SIZE) / (MAX_CAMERA_SIZE - MIN_CAMERA_SIZE);
+
         let state_uniforms = StateUniforms {
             shape: match state.shape {
                 CameraPreviewShape::Round => 0.0,
                 CameraPreviewShape::Square => 1.0,
                 CameraPreviewShape::Full => 2.0,
             },
-            size: match state.size {
-                CameraPreviewSize::Sm => 0.0,
-                CameraPreviewSize::Lg => 1.0,
-            },
+            size: normalized_size,
             mirrored: if state.mirrored { 1.0 } else { 0.0 },
             _padding: 0.0,
         };
@@ -664,11 +680,7 @@ fn resize_window(
 ) -> tauri::Result<(u32, u32)> {
     trace!("CameraPreview/resize_window");
 
-    let base: f32 = if state.size == CameraPreviewSize::Sm {
-        230.0
-    } else {
-        400.0
-    };
+    let base = clamp_size(state.size);
     let window_width = if state.shape == CameraPreviewShape::Full {
         if aspect >= 1.0 { base * aspect } else { base }
     } else {
