@@ -19,7 +19,7 @@ async function main() {
 		let releaseDir = path.join(targetDir, "release");
 		if (!(await fileExists(releaseDir))) return;
 		const releaseFiles = await fs.readdir(releaseDir);
-		let releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
+		let releaseFile = releaseFiles.find((f) => f.startsWith("Inflight"));
 		dirs.push(releaseDir);
 
 		if (!releaseFile) {
@@ -29,7 +29,7 @@ async function main() {
 			);
 			dirs.push(releaseDir);
 			const releaseFiles = await fs.readdir(releaseDir);
-			releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
+			releaseFile = releaseFiles.find((f) => f.startsWith("Inflight"));
 		}
 
 		if (!releaseFile) throw new Error(`No binary found at ${dirs.join(", ")}`);
