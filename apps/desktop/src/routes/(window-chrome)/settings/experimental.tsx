@@ -1,5 +1,6 @@
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
+import { type } from "@tauri-apps/plugin-os";
 
 import { generalSettingsStore } from "~/store";
 import type { GeneralSettingsStore } from "~/utils/tauri";
@@ -62,14 +63,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								handleChange("custom_cursor_capture2", value)
 							}
 						/>
-						<ToggleSettingItem
-							label="Native camera preview"
-							description="Show the camera preview using a native GPU surface instead of rendering it within the webview. This is not functional on certain Windows systems so your mileage may vary."
-							value={!!settings.enableNativeCameraPreview}
-							onChange={(value) =>
-								handleChange("enableNativeCameraPreview", value)
-							}
-						/>
+						{type() !== "windows" && (
+							<ToggleSettingItem
+								label="Native camera preview"
+								description="Show the camera preview using a native GPU surface instead of rendering it within the webview. This is not functional on certain Windows systems so your mileage may vary."
+								value={!!settings.enableNativeCameraPreview}
+								onChange={(value) =>
+									handleChange("enableNativeCameraPreview", value)
+								}
+							/>
+						)}
 						<ToggleSettingItem
 							label="Auto zoom on clicks"
 							description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
