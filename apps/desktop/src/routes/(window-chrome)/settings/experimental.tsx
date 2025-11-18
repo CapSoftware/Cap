@@ -1,6 +1,6 @@
+import { type } from "@tauri-apps/plugin-os";
 import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
-import { type } from "@tauri-apps/plugin-os";
 
 import { generalSettingsStore } from "~/store";
 import type { GeneralSettingsStore } from "~/utils/tauri";
