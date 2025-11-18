@@ -447,8 +447,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
-	const setCamera = createCameraMutation();
-
 	createEffect(
 		on(
 			() => rawOptions.cameraLabel,
