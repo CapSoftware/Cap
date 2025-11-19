@@ -224,9 +224,9 @@ async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult,
     }
 
     let result = migrate_project_filename_async(&path, &meta).await;
-    
+
     IN_FLIGHT_BASES.lock().await.remove(&base_name);
-    
+
     match result {
         Ok(new_path) => {
             if new_path != path {
