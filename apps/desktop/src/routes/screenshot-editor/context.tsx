@@ -1,27 +1,23 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
+import { debounce } from "@solid-primitives/scheduled";
 import { createEffect, createResource, createSignal, on } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
 	type AspectRatio,
+	type AudioConfiguration,
 	type BackgroundConfiguration,
+	type Camera,
+	type CameraPosition,
+	type CursorConfiguration,
 	commands,
+	type HotkeysConfiguration,
+	type ProjectConfiguration,
 	type XY,
 } from "~/utils/tauri";
-import {
-	normalizeProject,
-	serializeProjectConfiguration,
-} from "../editor/context";
-import {
-	DEFAULT_GRADIENT_FROM,
-	DEFAULT_GRADIENT_TO,
-} from "../editor/projectConfig";
 
-export type ScreenshotProject = {
-	background: BackgroundConfiguration;
-	aspectRatio: AspectRatio | null;
-};
+export type ScreenshotProject = ProjectConfiguration;
 
 export type CurrentDialog =
 	| { type: "createPreset" }
@@ -31,6 +27,46 @@ export type CurrentDialog =
 	| { type: "export" };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
+
+const DEFAULT_CAMERA: Camera = {
+	hide: false,
+	mirror: false,
+	position: { x: "right", y: "bottom" },
+	size: 30,
+	zoom_size: 60,
+	rounding: 0,
+	shadow: 0,
+	advancedShadow: null,
+	shape: "square",
+	roundingType: "squircle",
+};
+
+const DEFAULT_AUDIO: AudioConfiguration = {
+	mute: false,
+	improve: false,
+	micVolumeDb: 0,
+	micStereoMode: "stereo",
+	systemVolumeDb: 0,
+};
+
+const DEFAULT_CURSOR: CursorConfiguration = {
+	hide: false,
+	hideWhenIdle: false,
+	hideWhenIdleDelay: 2,
+	size: 100,
+	type: "pointer",
+	animationStyle: "mellow",
+	tension: 120,
+	mass: 1.1,
+	friction: 18,
+	raw: false,
+	motionBlur: 0,
+	useSvg: true,
+};
+
+const DEFAULT_HOTKEYS: HotkeysConfiguration = {
+	show: false,
+};
 
 const DEFAULT_PROJECT: ScreenshotProject = {
 	background: {
@@ -49,10 +85,17 @@ const DEFAULT_PROJECT: ScreenshotProject = {
 		border: null,
 	},
 	aspectRatio: null,
+	camera: DEFAULT_CAMERA,
+	audio: DEFAULT_AUDIO,
+	cursor: DEFAULT_CURSOR,
+	hotkeys: DEFAULT_HOTKEYS,
+	timeline: null,
+	captions: null,
+	clips: [],
 };
 
 export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
-	createContextProvider((props: { path: string }) => {
+	createContextProvider(() => {
 		const [project, setProject] =
 			createStore<ScreenshotProject>(DEFAULT_PROJECT);
 		const [dialog, setDialog] = createSignal<DialogState>({
@@ -65,9 +108,12 @@ export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
 		}>();
 
 		const [editorInstance] = createResource(async () => {
-			const instance = await commands.createScreenshotEditorInstance(
-				props.path,
-			);
+			// @ts-expect-error - types not updated yet
+			const instance = await commands.createScreenshotEditorInstance();
+
+			if (instance.config) {
+				setProject(reconcile(instance.config));
+			}
 
 			const [_ws, isConnected] = createImageDataWS(
 				instance.framesSocketUrl,
@@ -77,33 +123,21 @@ export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
 			return instance;
 		});
 
+		const saveConfig = debounce((config: ProjectConfiguration) => {
+			// @ts-expect-error - command signature update
+			commands.updateScreenshotConfig(config, true);
+		}, 1000);
+
 		createEffect(
-			on(
-				() => trackStore(project),
-				async () => {
-					const instance = editorInstance();
-					if (!instance) return;
+			on([() => trackStore(project), editorInstance], async ([, instance]) => {
+				if (!instance) return;
 
-					// Convert ScreenshotProject to ProjectConfiguration
-					// We need to construct a full ProjectConfiguration from the partial ScreenshotProject
-					// For now, we can use a default one and override background
-					const config = serializeProjectConfiguration({
-						...normalizeProject({
-							// @ts-expect-error - partial config
-							background: project.background,
-							// @ts-expect-error - partial config
-							camera: {
-								source: { type: "none" },
-							},
-						}),
-						// @ts-expect-error
-						aspectRatio: project.aspectRatio,
-					});
+				const config = unwrap(project);
 
-					await commands.updateScreenshotConfig(instance, config);
-				},
-				{ defer: true },
-			),
+				// @ts-expect-error - command signature update
+				commands.updateScreenshotConfig(config, false);
+				saveConfig(config);
+			}),
 		);
 
 		// Mock history for now or implement if needed
@@ -118,7 +152,9 @@ export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
 		};
 
 		return {
-			path: props.path,
+			get path() {
+				return editorInstance()?.path ?? "";
+			},
 			project,
 			setProject,
 			projectHistory,

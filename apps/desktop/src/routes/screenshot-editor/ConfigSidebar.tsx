@@ -318,8 +318,18 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 	};
 
 	const ensurePaddingForBackground = () => {
-		if (project.background.padding === 0)
-			setProject("background", "padding", 10);
+		batch(() => {
+			const isPaddingZero = project.background.padding === 0;
+			const isRoundingZero = project.background.rounding === 0;
+
+			if (isPaddingZero) {
+				setProject("background", "padding", 10);
+			}
+
+			if (isPaddingZero && isRoundingZero) {
+				setProject("background", "rounding", 8);
+			}
+		});
 	};
 
 	return (

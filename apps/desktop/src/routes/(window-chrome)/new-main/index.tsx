@@ -58,6 +58,7 @@ import {
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
+import IconLucideImage from "~icons/lucide/image";
 import IconLucideSearch from "~icons/lucide/search";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
@@ -801,7 +802,7 @@ function Page() {
 								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
-						<Tooltip content={<span>Previous Recordings</span>}>
+						<Tooltip content={<span>Recordings</span>}>
 							<button
 								type="button"
 								onClick={async () => {
@@ -813,6 +814,20 @@ function Page() {
 								class="flex justify-center items-center size-5"
 							>
 								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+							</button>
+						</Tooltip>
+						<Tooltip content={<span>Screenshots</span>}>
+							<button
+								type="button"
+								onClick={async () => {
+									await commands.showWindow({
+										Settings: { page: "screenshots" },
+									});
+									getCurrentWindow().hide();
+								}}
+								class="flex justify-center items-center size-5"
+							>
+								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
 						<ChangelogButton />

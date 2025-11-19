@@ -1,18 +1,20 @@
-use crate::frame_ws::{WSFrame, create_frame_ws};
+use crate::frame_ws::{WSFrame, create_watch_frame_ws};
+use crate::windows::{CapWindowId, ScreenshotEditorWindowIds};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, Resolution, SingleSegment,
-    StudioRecordingMeta, VideoMeta,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
+    VideoMeta,
 };
 use cap_rendering::{
-    DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderSession,
-    RenderVideoConstants, RenderedFrame, RendererLayers,
+    DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
+    RendererLayers,
 };
 use image::GenericImageView;
 use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
+use std::str::FromStr;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
-use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
+use tauri::{Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -81,8 +83,8 @@ impl ScreenshotEditorInstances {
 
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
-                let (frame_tx, frame_rx) = flume::bounded(4);
-                let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
+                let (frame_tx, frame_rx) = watch::channel(None);
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
 
                 // Load image
                 let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
@@ -90,27 +92,48 @@ impl ScreenshotEditorInstances {
                 let img_rgba = img.to_rgba8();
                 let data = img_rgba.into_raw();
 
-                // Create dummy meta
-                let relative_path = RelativePathBuf::from_path(&path).unwrap();
-                let video_meta = VideoMeta {
-                    path: relative_path.clone(),
-                    fps: 30,
-                    start_time: Some(0.0),
+                // Try to load existing meta if in a .cap directory
+                let (recording_meta, loaded_config) = if let Some(parent) = path.parent() {
+                    if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
+                        let meta = RecordingMeta::load_for_project(parent).ok();
+                        let config = ProjectConfiguration::load(parent).ok();
+                        (meta, config)
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
                 };
-                let segment = SingleSegment {
-                    display: video_meta.clone(),
-                    camera: None,
-                    audio: None,
-                    cursor: None,
-                };
-                let studio_meta = StudioRecordingMeta::SingleSegment { segment };
-                let recording_meta = RecordingMeta {
-                    platform: None,
-                    project_path: path.parent().unwrap().to_path_buf(),
-                    pretty_name: "Screenshot".to_string(),
-                    sharing: None,
-                    inner: RecordingMetaInner::Studio(studio_meta.clone()),
-                    upload: None,
+
+                let recording_meta = if let Some(meta) = recording_meta {
+                    meta
+                } else {
+                    // Create dummy meta
+                    let filename = path
+                        .file_name()
+                        .ok_or_else(|| "Invalid path".to_string())?
+                        .to_string_lossy();
+                    let relative_path = RelativePathBuf::from(filename.as_ref());
+                    let video_meta = VideoMeta {
+                        path: relative_path.clone(),
+                        fps: 30,
+                        start_time: Some(0.0),
+                    };
+                    let segment = SingleSegment {
+                        display: video_meta.clone(),
+                        camera: None,
+                        audio: None,
+                        cursor: None,
+                    };
+                    let studio_meta = StudioRecordingMeta::SingleSegment { segment };
+                    RecordingMeta {
+                        platform: None,
+                        project_path: path.parent().unwrap().to_path_buf(),
+                        pretty_name: "Screenshot".to_string(),
+                        sharing: None,
+                        inner: RecordingMetaInner::Studio(studio_meta.clone()),
+                        upload: None,
+                    }
                 };
 
                 let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -137,6 +160,12 @@ impl ScreenshotEditorInstances {
                     camera_size: None,
                 };
 
+                // We need to extract the studio meta from the recording meta
+                let studio_meta = match &recording_meta.inner {
+                    RecordingMetaInner::Studio(meta) => meta.clone(),
+                    _ => return Err("Invalid recording meta for screenshot".to_string()),
+                };
+
                 let constants = RenderVideoConstants {
                     _instance: instance,
                     _adapter: adapter,
@@ -148,7 +177,7 @@ impl ScreenshotEditorInstances {
                     background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
                 };
 
-                let (config_tx, mut config_rx) = watch::channel(ProjectConfiguration::default());
+                let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
 
                 let instance = Arc::new(ScreenshotEditorInstance {
                     ws_port,
@@ -158,7 +187,6 @@ impl ScreenshotEditorInstances {
                 });
 
                 // Spawn render loop
-                let frame_tx = frame_tx.clone();
                 let decoded_frame = DecodedFrame::new(data, width, height);
 
                 tokio::spawn(async move {
@@ -166,15 +194,14 @@ impl ScreenshotEditorInstances {
                     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
                     // Initial render
+                    println!("Initial screenshot render");
                     let mut current_config = config_rx.borrow().clone();
 
                     loop {
-                        // Wait for config change
-                        if config_rx.changed().await.is_err() {
-                            break;
-                        }
-                        current_config = config_rx.borrow().clone();
-
+                        println!(
+                            "Rendering screenshot frame with config: {:?}",
+                            current_config
+                        );
                         let segment_frames = DecodedSegmentFrames {
                             screen_frame: DecodedFrame::new(
                                 decoded_frame.data().to_vec(),
@@ -207,24 +234,55 @@ impl ScreenshotEditorInstances {
 
                         match rendered_frame {
                             Ok(frame) => {
-                                let _ = frame_tx.send(WSFrame {
+                                println!(
+                                    "Frame rendered successfully: {}x{}",
+                                    frame.width, frame.height
+                                );
+                                let _ = frame_tx.send(Some(WSFrame {
                                     data: frame.data,
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
-                                });
+                                }));
                             }
                             Err(e) => {
                                 eprintln!("Failed to render frame: {e}");
                             }
                         }
+
+                        // Wait for config change
+                        println!("Waiting for config change");
+                        if config_rx.changed().await.is_err() {
+                            println!("Config channel closed");
+                            break;
+                        }
+                        current_config = config_rx.borrow().clone();
+                        println!("Config changed");
                     }
                 });
 
                 entry.insert(instance.clone());
                 Ok(instance)
             }
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Occupied(entry) => {
+                let instance = entry.get().clone();
+                // Force a re-render for the new client by sending the current config again
+                let config = instance.config_tx.borrow().clone();
+                let _ = instance.config_tx.send(config);
+                Ok(instance)
+            }
+        }
+    }
+
+    pub async fn remove(window: Window) {
+        let instances = match window.try_state::<ScreenshotEditorInstances>() {
+            Some(s) => (*s).clone(),
+            None => return,
+        };
+
+        let mut instances = instances.0.write().await;
+        if let Some(instance) = instances.remove(window.label()) {
+            instance.dispose().await;
         }
     }
 }
@@ -234,19 +292,36 @@ impl ScreenshotEditorInstances {
 pub struct SerializedScreenshotEditorInstance {
     pub frames_socket_url: String,
     pub path: PathBuf,
+    pub config: Option<ProjectConfiguration>,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn create_screenshot_editor_instance(
     window: Window,
-    path: PathBuf,
 ) -> Result<SerializedScreenshotEditorInstance, String> {
+    let CapWindowId::ScreenshotEditor { id } =
+        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
+    else {
+        return Err("Invalid window".to_string());
+    };
+
+    let path = {
+        let window_ids = ScreenshotEditorWindowIds::get(window.app_handle());
+        let window_ids = window_ids.ids.lock().unwrap();
+        let Some((path, _)) = window_ids.iter().find(|(_, _id)| *_id == id) else {
+            return Err("Screenshot editor instance not found".to_string());
+        };
+        path.clone()
+    };
+
     let instance = ScreenshotEditorInstances::get_or_create(&window, path).await?;
+    let config = instance.config_tx.borrow().clone();
 
     Ok(SerializedScreenshotEditorInstance {
         frames_socket_url: format!("ws://localhost:{}", instance.ws_port),
         path: instance.path.clone(),
+        config: Some(config),
     })
 }
 
@@ -255,7 +330,26 @@ pub async fn create_screenshot_editor_instance(
 pub async fn update_screenshot_config(
     instance: WindowScreenshotEditorInstance,
     config: ProjectConfiguration,
+    save: bool,
 ) -> Result<(), String> {
-    let _ = instance.config_tx.send(config);
+    let _ = instance.config_tx.send(config.clone());
+
+    if save {
+        if let Some(parent) = instance.path.parent() {
+            if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
+                let path = parent.to_path_buf();
+                if let Err(e) = config.write(&path) {
+                    eprintln!("Failed to save screenshot config: {}", e);
+                } else {
+                    println!("Saved screenshot config to {:?}", path);
+                }
+            } else {
+                println!(
+                    "Not saving config: parent {:?} is not a .cap directory",
+                    parent
+                );
+            }
+        }
+    }
     Ok(())
 }
