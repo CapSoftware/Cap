@@ -90,10 +90,16 @@ module.exports = {
 			keyframes: {
 				"collapsible-down": {
 					from: { height: 0, filter: "blur(4px)" },
-					to: { height: "var(--kb-collapsible-content-height)", filter: "blur(0px)" },
+					to: {
+						height: "var(--kb-collapsible-content-height)",
+						filter: "blur(0px)",
+					},
 				},
 				"collapsible-up": {
-					from: { height: "var(--kb-collapsible-content-height)", filter: "blur(0px)" },
+					from: {
+						height: "var(--kb-collapsible-content-height)",
+						filter: "blur(0px)",
+					},
 					to: { height: 0, filter: "blur(4px)" },
 				},
 			},
