@@ -272,28 +272,28 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
-						<ControlButton onClick={() => setCamera.mutate(null)}>
+						<ControlButtonWithBackground onClick={() => setCamera.mutate(null)}>
 							<IconCapCircleX class="size-5.5" />
-						</ControlButton>
-						<ControlButton
+						</ControlButtonWithBackground>
+						<ControlButtonWithBackground
 							pressed={state.size === "lg"}
 							onClick={() => {
 								setState("size", (s) => (s === "sm" ? "lg" : "sm"));
 							}}
 						>
 							<IconCapEnlarge class="size-5.5" />
-						</ControlButton>
-						<ControlButton
+						</ControlButtonWithBackground>
+						<ControlButtonWithBackground
 							pressed={state.shape !== "round"}
 							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
 							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
-						</ControlButton>
-						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
+						</ControlButtonWithBackground>
+						{/* <ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
 							<IconCapArrows class="size-5.5" />
-						</ControlButton>
+						</ControlButton> */}
 					</div>
 				</div>
 			</div>
