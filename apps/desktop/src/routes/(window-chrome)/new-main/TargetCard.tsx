@@ -1,12 +1,17 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
-import { createMemo, Show, splitProps } from "solid-js";
+import { createMemo, createSignal, Show, splitProps } from "solid-js";
 import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
+	RecordingMetaWithMetadata,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMdiMonitor from "~icons/mdi/monitor";
+
+export type RecordingWithPath = RecordingMetaWithMetadata & { path: string };
 
 function formatResolution(width?: number, height?: number) {
 	if (!width || !height) return undefined;
@@ -34,6 +39,10 @@ type TargetCardProps = (
 			variant: "window";
 			target: CaptureWindowWithThumbnail;
 	  }
+	| {
+			variant: "recording";
+			target: RecordingWithPath;
+	  }
 ) &
 	Omit<ComponentProps<"button">, "children"> & {
 		highlightQuery?: string;
@@ -47,6 +56,7 @@ export default function TargetCard(props: TargetCardProps) {
 		"disabled",
 		"highlightQuery",
 	]);
+	const [imageExists, setImageExists] = createSignal(true);
 
 	const displayTarget = createMemo(() => {
 		if (local.variant !== "display") return undefined;
@@ -58,21 +68,38 @@ export default function TargetCard(props: TargetCardProps) {
 		return local.target as CaptureWindowWithThumbnail;
 	});
 
+	const recordingTarget = createMemo(() => {
+		if (local.variant !== "recording") return undefined;
+		return local.target as RecordingWithPath;
+	});
+
 	const renderIcon = (className: string) =>
 		local.variant === "display" ? (
 			<IconMdiMonitor class={className} />
-		) : (
+		) : local.variant === "window" ? (
 			<IconLucideAppWindowMac class={className} />
+		) : (
+			<IconLucideSquarePlay class={className} />
 		);
 
 	const label = createMemo(() => {
 		const display = displayTarget();
 		if (display) return display.name;
 		const target = windowTarget();
-		return target?.name || target?.owner_name;
+		if (target) return target.name || target.owner_name;
+		const recording = recordingTarget();
+		return recording?.pretty_name;
 	});
 
-	const subtitle = createMemo(() => windowTarget()?.owner_name);
+	const subtitle = createMemo(() => {
+		const target = windowTarget();
+		if (target) return target.owner_name;
+		const recording = recordingTarget();
+		if (recording) {
+			return recording.mode === "studio" ? "Studio Mode" : "Instant Mode";
+		}
+		return undefined;
+	});
 
 	const metadata = createMemo(() => {
 		if (local.variant === "window") {
@@ -94,6 +121,12 @@ export default function TargetCard(props: TargetCardProps) {
 	});
 
 	const thumbnailSrc = createMemo(() => {
+		const recording = recordingTarget();
+		if (recording) {
+			return `${convertFileSrc(
+				`${recording.path}/screenshots/display.jpg`,
+			)}?t=${Date.now()}`;
+		}
 		const target = displayTarget() ?? windowTarget();
 		if (!target?.thumbnail) return undefined;
 		return `data:image/png;base64,${target.thumbnail}`;
@@ -142,7 +175,7 @@ export default function TargetCard(props: TargetCardProps) {
 		>
 			<div class="relative h-[4.75rem] w-full overflow-hidden bg-gray-4/40">
 				<Show
-					when={thumbnailSrc()}
+					when={thumbnailSrc() && imageExists()}
 					fallback={
 						<div class="flex justify-center items-center w-full h-full bg-gray-4">
 							{renderIcon("size-6 text-gray-9 opacity-70")}
@@ -157,6 +190,7 @@ export default function TargetCard(props: TargetCardProps) {
 						class="object-cover w-full h-full"
 						loading="lazy"
 						draggable={false}
+						onError={() => setImageExists(false)}
 					/>
 				</Show>
 				<Show when={appIconSrc()}>
