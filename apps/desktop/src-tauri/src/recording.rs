@@ -47,6 +47,7 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
+    apply_camera_input, apply_mic_input,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -55,6 +56,7 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
+    recording_settings::RecordingSettingsStore,
     thumbnails::*,
     upload::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
@@ -351,6 +353,41 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
+async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableState<'_, App>) {
+    let guard = state.read().await;
+    let recording_active = !matches!(guard.recording_state, RecordingState::None);
+    let needs_mic = guard.selected_mic_label.is_none();
+    let needs_camera = guard.selected_camera_id.is_none();
+    drop(guard);
+
+    if recording_active || (!needs_mic && !needs_camera) {
+        return;
+    }
+
+    let settings = match RecordingSettingsStore::get(app) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return,
+        Err(err) => {
+            warn!(%err, "Failed to load recording settings while restoring inputs");
+            return;
+        }
+    };
+
+    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
+        match apply_mic_input(app.state(), Some(mic)).await {
+            Err(err) => warn!(%err, "Failed to restore microphone input"),
+            Ok(_) => {}
+        }
+    }
+
+    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
+        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
+            Err(err) => warn!(%err, "Failed to restore camera input"),
+            Ok(_) => {}
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -359,8 +396,26 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
+    restore_inputs_from_store_if_missing(&app, &state_mtx).await;
+
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
+    }
+
+    let has_camera_selected = {
+        let guard = state_mtx.read().await;
+        guard.selected_camera_id.is_some()
+    };
+    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
+    let should_open_camera_preview =
+        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
+
+    if should_open_camera_preview {
+        ShowCapWindow::Camera
+            .show(&app)
+            .await
+            .map_err(|err| error!("Failed to show camera preview window: {err}"))
+            .ok();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
