@@ -24,7 +24,6 @@ import {
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
-	type ImageUpload,
 	type Organisation,
 	Policy,
 	type Video,
@@ -118,6 +117,29 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
+function PolicyDeniedView() {
+	return (
+		<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+			<Logo className="size-32" />
+			<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
+			<p className="text-gray-400">
+				If you own this video, please <Link href="/login">sign in</Link> to
+				manage sharing.
+			</p>
+		</div>
+	);
+}
+
+const renderPolicyDenied = (videoId: Video.VideoId) =>
+	Effect.succeed(<PolicyDeniedView key={videoId} />);
+
+const renderNoSuchElement = () => Effect.sync(() => notFound());
+
+const getShareVideoPageCatchers = (videoId: Video.VideoId) => ({
+	PolicyDenied: () => renderPolicyDenied(videoId),
+	NoSuchElementException: renderNoSuchElement,
+});
+
 export async function generateMetadata(
 	props: PageProps<"/s/[videoId]">,
 ): Promise<Metadata> {
@@ -134,7 +156,7 @@ export async function generateMetadata(
 			Option.match({
 				onNone: () => notFound(),
 				onSome: ([video]) => ({
-					title: video.name + " | Cap Recording",
+					title: `${video.name} | Cap Recording`,
 					description: "Watch this video on Cap",
 					openGraph: {
 						images: [
@@ -161,7 +183,7 @@ export async function generateMetadata(
 					},
 					twitter: {
 						card: "player",
-						title: video.name + " | Cap Recording",
+						title: `${video.name} | Cap Recording`,
 						description: "Watch this video on Cap",
 						images: [
 							new URL(
@@ -320,25 +342,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				)}
 			</div>
 		)),
-		Effect.catchTags({
-			PolicyDenied: () =>
-				Effect.succeed(
-					<div
-						key={videoId}
-						className="flex flex-col justify-center items-center p-4 min-h-screen text-center"
-					>
-						<Logo className="size-32" />
-						<h1 className="mb-2 text-2xl font-semibold">
-							This video is private
-						</h1>
-						<p className="text-gray-400">
-							If you own this video, please <Link href="/login">sign in</Link>{" "}
-							to manage sharing.
-						</p>
-					</div>,
-				),
-			NoSuchElementException: () => Effect.sync(() => notFound()),
-		}),
+		Effect.catchTags(getShareVideoPageCatchers(videoId)),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
 	);
@@ -558,8 +562,7 @@ async function AuthorizedContent({
 
 		const org = orgArr[0];
 		if (
-			org &&
-			org.customDomain &&
+			org?.customDomain &&
 			org.domainVerified !== null &&
 			user.id === video.owner.id
 		) {
@@ -748,6 +751,7 @@ async function AuthorizedContent({
 					customDomain={customDomain}
 					domainVerified={domainVerified}
 					userOrganizations={userOrganizations}
+					viewerId={user?.id ?? null}
 					initialAiData={initialAiData}
 					aiGenerationEnabled={aiGenerationEnabled}
 				/>

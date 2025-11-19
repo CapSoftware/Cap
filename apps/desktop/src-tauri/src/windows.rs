@@ -28,6 +28,7 @@ use crate::{
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
+use cap_recording::feeds;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -224,6 +225,8 @@ impl ShowCapWindow {
         }
 
         if let Some(window) = self.id(app).get(app) {
+            window.show().ok();
+            window.unminimize().ok();
             window.set_focus().ok();
             return Ok(window);
         }
@@ -498,6 +501,13 @@ impl ShowCapWindow {
                     let window = window_builder.build()?;
 
                     if enable_native_camera_preview {
+                        if let Some(id) = state.selected_camera_id.clone()
+                            && !state.camera_in_use
+                        {
+                            let _ = state.camera_feed.ask(feeds::camera::SetInput { id }).await;
+                            state.camera_in_use = true;
+                        }
+
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview
@@ -511,6 +521,8 @@ impl ShowCapWindow {
 
                     #[cfg(target_os = "macos")]
                     {
+                        crate::platform::set_window_level(window.as_ref().window(), 60);
+
                         _ = window.run_on_main_thread({
                             let window = window.as_ref().window();
                             move || unsafe {
@@ -625,8 +637,8 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let width = 250.0;
-                let height = 40.0;
+                let width = 320.0;
+                let height = 150.0;
 
                 let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
@@ -636,7 +648,7 @@ impl ShowCapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(true)
+                    .shadow(!cfg!(windows))
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)

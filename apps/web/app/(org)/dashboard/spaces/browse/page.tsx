@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, Button, Input } from "@cap/ui";
+import { Button, Input } from "@cap/ui";
 import {
 	faEdit,
 	faLayerGroup,

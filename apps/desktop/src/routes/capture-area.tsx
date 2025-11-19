@@ -19,9 +19,11 @@ import {
 	createCropOptionsMenuItems,
 	type Ratio,
 } from "~/components/Cropper";
+import SelectionHint from "~/components/selection-hint";
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";
+import IconLucideExpand from "~icons/lucide/expand";
 
 const MIN_SIZE = { width: 150, height: 150 };
 
@@ -70,6 +72,15 @@ export default function CaptureArea() {
 
 	const { rawOptions, setOptions } = createOptionsQuery();
 
+	const hasStoredSelection = createMemo(() => {
+		const target = rawOptions.captureTarget;
+		if (target.variant !== "display") return false;
+		return (
+			state.lastSelectedBounds?.some((entry) => entry.screenId === target.id) ??
+			false
+		);
+	});
+
 	async function handleConfirm() {
 		const currentBounds = cropperRef?.bounds();
 		if (!currentBounds) throw new Error("Cropper not initialized");
@@ -115,6 +126,13 @@ export default function CaptureArea() {
 	}
 
 	const [visible, setVisible] = createSignal(true);
+
+	const showSelectionHint = createMemo(() => {
+		if (!visible()) return false;
+		if (hasStoredSelection()) return false;
+		const bounds = crop();
+		return bounds.width <= 1 && bounds.height <= 1;
+	});
 	function close() {
 		setVisible(false);
 		setTimeout(async () => {
@@ -255,6 +273,8 @@ export default function CaptureArea() {
 				</Transition>
 			</div>
 
+			<SelectionHint show={showSelectionHint()} />
+
 			<Transition
 				appear
 				enterActiveClass="fade-in animate-in duration-500"
@@ -270,10 +290,12 @@ export default function CaptureArea() {
 						initialCrop={() => {
 							const target = rawOptions.captureTarget;
 							if (target.variant === "display")
-								return state.lastSelectedBounds?.find(
-									(m) => m.screenId === target.id,
-								)?.bounds;
-							else return undefined;
+								return (
+									state.lastSelectedBounds?.find(
+										(m) => m.screenId === target.id,
+									)?.bounds ?? CROP_ZERO
+								);
+							return CROP_ZERO;
 						}}
 						onContextMenu={(e) => showCropOptionsMenu(e, true)}
 					/>

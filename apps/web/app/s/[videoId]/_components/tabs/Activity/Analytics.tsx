@@ -10,6 +10,7 @@ const Analytics = (props: {
 	views: MaybePromise<number>;
 	comments: CommentType[];
 	isLoadingAnalytics: boolean;
+	isOwner: boolean;
 }) => {
 	const [views, setViews] = useState(
 		props.views instanceof Promise ? use(props.views) : props.views,
@@ -46,6 +47,7 @@ const Analytics = (props: {
 			displayCount={views}
 			totalComments={totalComments}
 			totalReactions={totalReactions}
+			isOwner={props.isOwner}
 		/>
 	);
 };

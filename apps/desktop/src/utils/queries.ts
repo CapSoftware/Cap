@@ -198,18 +198,26 @@ export function createCameraMutation() {
 	const rawMutate = async (model: DeviceOrModelID | null) => {
 		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
 		setOptions("cameraID", reconcile(model));
-		if (model) {
-			await commands.showWindow("Camera");
-			getCurrentWindow().setFocus();
-		}
-
 		await commands.setCameraInput(model).catch(async (e) => {
+			const message =
+				typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+
+			if (message.includes("DeviceNotFound")) {
+				setOptions("cameraID", null);
+				console.warn("Selected camera is unavailable.");
+				return;
+			}
+
 			if (JSON.stringify(before) === JSON.stringify(model) || !before) {
 				setOptions("cameraID", null);
 			} else setOptions("cameraID", reconcile(before));
 
 			throw e;
 		});
+
+		if (model) {
+			getCurrentWindow().setFocus();
+		}
 	};
 
 	const setCameraInput = useMutation(() => ({

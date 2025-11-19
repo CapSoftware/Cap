@@ -8,7 +8,11 @@ use std::{
 use base64::prelude::*;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 
-use crate::windows::{CapWindowId, ShowCapWindow};
+use crate::{
+    general_settings,
+    window_exclusion::WindowExclusion,
+    windows::{CapWindowId, ShowCapWindow},
+};
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
@@ -59,6 +63,13 @@ pub async fn open_target_select_overlays(
             .await;
     }
 
+    let window_exclusions = general_settings::GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .map_or_else(general_settings::default_excluded_windows, |settings| {
+            settings.excluded_windows
+        });
+
     let handle = tokio::spawn({
         let app = app.clone();
 
@@ -77,6 +88,10 @@ pub async fn open_target_select_overlays(
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
                         window: window.and_then(|w| {
+                            if should_skip_window(&w, &window_exclusions) {
+                                return None;
+                            }
+
                             Some(WindowUnderCursor {
                                 id: w.id(),
                                 bounds: w.display_relative_logical_bounds()?,
@@ -106,6 +121,59 @@ pub async fn open_target_select_overlays(
             .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
             .ok();
     }
+
+    Ok(())
+}
+
+fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
+    if exclusions.is_empty() {
+        return false;
+    }
+
+    let owner_name = window.owner_name();
+    let window_title = window.name();
+
+    #[cfg(target_os = "macos")]
+    let bundle_identifier = window.raw_handle().bundle_identifier();
+
+    #[cfg(not(target_os = "macos"))]
+    let bundle_identifier = None::<&str>;
+
+    exclusions.iter().any(|entry| {
+        entry.matches(
+            bundle_identifier.as_deref(),
+            owner_name.as_deref(),
+            window_title.as_deref(),
+        )
+    })
+}
+
+#[specta::specta]
+#[tauri::command]
+#[instrument(skip(app))]
+pub async fn update_camera_overlay_bounds(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("camera")
+        .ok_or("Camera window not found")?;
+
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: width as u32,
+            height: height as u32,
+        }))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: x as i32,
+            y: y as i32,
+        }))
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -230,16 +298,11 @@ impl WindowFocusManager {
                     let cap_main = CapWindowId::Main.get(app);
                     let cap_settings = CapWindowId::Settings.get(app);
 
-                    let has_cap_main = cap_main
-                        .as_ref()
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
-                    let has_cap_settings = cap_settings
-                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
-                        .unwrap_or(true);
+                    let main_window_available = cap_main.is_some();
+                    let settings_window_available = cap_settings.is_some();
 
-                    // Close the overlay if the cap main and settings are not available.
-                    if has_cap_main && has_cap_settings {
+                    // Close the overlay if both cap windows are gone.
+                    if !main_window_available && !settings_window_available {
                         window.hide().ok();
                         break;
                     }

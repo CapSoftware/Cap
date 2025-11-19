@@ -92,6 +92,10 @@ function createServerEnv() {
 			STRIPE_WEBHOOK_SECRET: z.string().optional(),
 			DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
 			DISCORD_LOGS_WEBHOOK_URL: z.string().optional(),
+
+			/// Tinybird analytics
+			TINYBIRD_HOST: z.string().optional(),
+			TINYBIRD_TOKEN: z.string().optional(),
 			VERCEL_ENV: z
 				.union([
 					z.literal("production"),

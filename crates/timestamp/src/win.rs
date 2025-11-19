@@ -46,6 +46,25 @@ impl PerformanceCounterTimestamp {
         }
     }
 
+    pub fn checked_duration_since(&self, other: Self) -> Option<Duration> {
+        let freq = perf_freq() as i128;
+        debug_assert!(freq > 0);
+
+        let diff = self.0 as i128 - other.0 as i128;
+
+        if diff < 0 {
+            None
+        } else {
+            let diff = diff as u128;
+            let freq = freq as u128;
+
+            let secs = diff / freq;
+            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
+
+            Some(Duration::new(secs as u64, nanos as u32))
+        }
+    }
+
     pub fn now() -> Self {
         let mut value = 0;
         unsafe { QueryPerformanceCounter(&mut value).unwrap() };
