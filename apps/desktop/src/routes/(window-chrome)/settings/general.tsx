@@ -121,25 +121,16 @@ function AppearanceSection(props: {
 		{
 			id: "system",
 			name: "System",
-			preview: props.newRecordingFlow
-				? themePreviewAuto
-				: themePreviewLegacyAuto,
 		},
 		{
 			id: "light",
 			name: "Light",
-			preview: props.newRecordingFlow
-				? themePreviewLight
-				: themePreviewLegacyLight,
 		},
 		{
 			id: "dark",
 			name: "Dark",
-			preview: props.newRecordingFlow
-				? themePreviewDark
-				: themePreviewLegacyDark,
 		},
-	] satisfies { id: AppTheme; name: string; preview: string }[];
+	] satisfies { id: AppTheme; name: string }[];
 
 	const previews = createMemo(() => {
 		return {
