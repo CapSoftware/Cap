@@ -20,6 +20,7 @@
 - Rust: `rustfmt` + workspace clippy lints.
 - Naming: files kebab‑case (`user-menu.tsx`); components PascalCase; Rust modules snake_case, crates kebab‑case.
 - Runtime: Node 20, pnpm 10.x, Rust 1.88+, Docker for MySQL/MinIO.
+- **NO COMMENTS**: Never add comments to code (`//`, `/* */`, `///`, `//!`, `#`, etc.). Code must be self-explanatory through naming, types, and structure. This applies to all languages (TypeScript, Rust, JavaScript, etc.).
 
 ## Testing
 - TS/JS: Vitest where present (e.g., desktop). Name tests `*.test.ts(x)` near sources.
@@ -37,6 +38,7 @@
 - Database flow: always `db:generate` → `db:push` before relying on new schema.
 - Keep secrets out of VCS; configure via `.env` from `pnpm env-setup`.
 - macOS note: desktop permissions (screen/mic) apply to the terminal running `pnpm dev:desktop`.
+- **CRITICAL: NO CODE COMMENTS**: Never add any form of comments (`//`, `/* */`, `///`, `//!`, `#`, etc.) to generated or edited code. Code must be self-explanatory.
 
 ## Effect Usage
 - Next.js API routes in `apps/web/app/api/*` are built with `@effect/platform`'s `HttpApi` builder; copy the existing class/group/endpoint pattern instead of ad-hoc handlers.
