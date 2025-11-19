@@ -1885,5 +1885,8 @@ declare var FLAGS: Flags;
 declare global {
 	interface Window {
 		FLAGS: Flags;
+		__CAP__: {
+			cameraWsPort: number;
+		};
 	}
 }

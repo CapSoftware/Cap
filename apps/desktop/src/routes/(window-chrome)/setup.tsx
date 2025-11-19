@@ -21,6 +21,7 @@ import {
 	type OSPermission,
 	type OSPermissionStatus,
 } from "~/utils/tauri";
+import IconLucideVolumeX from "~icons/lucide/volume-x";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
 	return status === "granted" || status === "notNeeded";

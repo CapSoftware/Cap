@@ -151,6 +151,36 @@ fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
 #[specta::specta]
 #[tauri::command]
 #[instrument(skip(app))]
+pub async fn update_camera_overlay_bounds(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("camera")
+        .ok_or("Camera window not found")?;
+
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: width as u32,
+            height: height as u32,
+        }))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: x as i32,
+            y: y as i32,
+        }))
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[specta::specta]
+#[tauri::command]
+#[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {

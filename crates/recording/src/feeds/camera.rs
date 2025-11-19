@@ -577,6 +577,7 @@ impl Message<AddSender> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: AddSender, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        debug!("CameraFeed: Adding new sender");
         self.senders.push(msg.0);
     }
 }
@@ -592,8 +593,7 @@ impl Message<ListenForReady> for CameraFeed {
         match self.state {
             State::Locked { .. }
             | State::Open(OpenState {
-                connecting: None,
-                attached: Some(..),
+                connecting: None, ..
             }) => {
                 msg.0.send(()).ok();
             }
@@ -625,6 +625,10 @@ impl Message<NewFrame> for CameraFeed {
         for (i, sender) in self.senders.iter().enumerate() {
             if let Err(flume::TrySendError::Disconnected(_)) = sender.try_send(msg.0.clone()) {
                 warn!("Camera sender {} disconnected, will be removed", i);
+                info!(
+                    "Camera sender {} disconnected (rx dropped), removing from list",
+                    i
+                );
                 to_remove.push(i);
             };
         }
@@ -743,6 +747,10 @@ impl Message<InputConnectFailed> for CameraFeed {
             && connecting.id == msg.id
         {
             state.connecting = None;
+
+            for tx in &mut self.on_ready.drain(..) {
+                tx.send(()).ok();
+            }
         }
 
         Ok(())

@@ -331,13 +331,6 @@ impl App {
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    apply_mic_input(state, label).await
-}
-
-pub(crate) async fn apply_mic_input(
-    state: MutableState<'_, App>,
-    label: Option<String>,
-) -> Result<(), String> {
     let (mic_feed, studio_handle, current_label) = {
         let app = state.read().await;
         let handle = match app.current_recording() {
@@ -422,14 +415,6 @@ async fn set_camera_input(
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    apply_camera_input(app_handle, state, id).await
-}
-
-pub(crate) async fn apply_camera_input(
-    app_handle: AppHandle,
-    state: MutableState<'_, App>,
-    id: Option<DeviceOrModelID>,
-) -> Result<(), String> {
     let app = state.read().await;
     let camera_feed = app.camera_feed.clone();
     let studio_handle = match app.current_recording() {
@@ -459,12 +444,39 @@ pub(crate) async fn apply_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            camera_feed
-                .ask(feeds::camera::SetInput { id: id.clone() })
-                .await
-                .map_err(|e| e.to_string())?
-                .await
-                .map_err(|e| e.to_string())?;
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+
+                // We first ask the actor to set the input
+                // This returns a future that resolves when the camera is actually ready
+                let request = camera_feed
+                    .ask(feeds::camera::SetInput { id: id.clone() })
+                    .await
+                    .map_err(|e| e.to_string());
+
+                let result = match request {
+                    Ok(future) => future.await.map_err(|e| e.to_string()),
+                    Err(e) => Err(e),
+                };
+
+                match result {
+                    Ok(_) => break,
+                    Err(e) => {
+                        if attempts >= 3 {
+                            return Err(format!(
+                                "Failed to initialize camera after {} attempts: {}",
+                                attempts, e
+                            ));
+                        }
+                        warn!(
+                            "Failed to set camera input (attempt {}): {}. Retrying...",
+                            attempts, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
 
             ShowCapWindow::Camera
                 .show(&app_handle)
@@ -743,9 +755,17 @@ enum CurrentRecordingTarget {
 
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub enum RecordingStatus {
+    Pending,
+    Recording,
+}
+
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 struct CurrentRecording {
     target: CurrentRecordingTarget,
     mode: RecordingMode,
+    status: RecordingStatus,
 }
 
 #[tauri::command]
@@ -756,10 +776,14 @@ async fn get_current_recording(
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
 
-    let (mode, capture_target) = match &state.recording_state {
+    let (mode, capture_target, status) = match &state.recording_state {
         RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target),
-        RecordingState::Active(inner) => (inner.mode(), inner.capture_target()),
+        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
+        RecordingState::Active(inner) => (
+            inner.mode(),
+            inner.capture_target(),
+            RecordingStatus::Recording,
+        ),
     };
 
     let target = match capture_target {
@@ -777,7 +801,11 @@ async fn get_current_recording(
         },
     };
 
-    Ok(JsonValue::new(&Some(CurrentRecording { target, mode })))
+    Ok(JsonValue::new(&Some(CurrentRecording {
+        target,
+        mode,
+        status,
+    })))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -2266,6 +2294,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
+            target_select_overlay::update_camera_overlay_bounds,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
@@ -2558,8 +2587,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .flatten()
                     .unwrap_or_default();
 
-                let _ = apply_mic_input(app.state(), settings.mic_name).await;
-                let _ = apply_camera_input(app.clone(), app.state(), settings.camera_id).await;
+                let _ = set_mic_input(app.state(), settings.mic_name).await;
+                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
 
                 let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
@@ -2635,6 +2664,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             .camera_feed
                                             .ask(feeds::camera::RemoveInput)
                                             .await;
+
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
                                         app_state.camera_in_use = false;
@@ -2695,11 +2725,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                             CapWindowId::Camera => {
                                 let app = app.clone();
                                 tokio::spawn(async move {
-                                    app.state::<ArcLock<App>>()
-                                        .write()
-                                        .await
-                                        .camera_preview
-                                        .on_window_close();
+                                    let state = app.state::<ArcLock<App>>();
+                                    let mut app_state = state.write().await;
+
+                                    app_state.camera_preview.on_window_close();
+
+                                    if !app_state.is_recording_active_or_pending() {
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
+                                        app_state.camera_in_use = false;
+                                    }
                                 });
                             }
                             _ => {}

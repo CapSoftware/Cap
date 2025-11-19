@@ -1,8 +1,9 @@
 import { createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { createSignal, For, Show } from "solid-js";
-
 import { commands, events } from "~/utils/tauri";
+import IconLucideEye from "~icons/lucide/eye";
+import IconLucideFolder from "~icons/lucide/folder";
 
 type MediaEntry = {
 	path: string;

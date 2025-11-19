@@ -6,7 +6,6 @@ import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
-import { debounce } from "@solid-primitives/scheduled";
 import { createQuery, skipToken } from "@tanstack/solid-query";
 import {
 	type Accessor,
@@ -15,6 +14,7 @@ import {
 	createResource,
 	createSignal,
 	on,
+	onCleanup,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
@@ -51,6 +51,7 @@ export const OUTPUT_SIZE = {
 };
 
 export const MAX_ZOOM_IN = 3;
+const PROJECT_SAVE_DEBOUNCE_MS = 250;
 
 export type RenderState =
 	| { type: "starting" }
@@ -295,14 +296,62 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 		};
 
+		let projectSaveTimeout: number | undefined;
+		let saveInFlight = false;
+		let shouldResave = false;
+		let hasPendingProjectSave = false;
+
+		const flushProjectConfig = async () => {
+			if (!hasPendingProjectSave && !saveInFlight) return;
+			if (saveInFlight) {
+				if (hasPendingProjectSave) {
+					shouldResave = true;
+				}
+				return;
+			}
+			saveInFlight = true;
+			shouldResave = false;
+			hasPendingProjectSave = false;
+			try {
+				await commands.setProjectConfig(serializeProjectConfiguration(project));
+			} catch (error) {
+				console.error("Failed to persist project config", error);
+			} finally {
+				saveInFlight = false;
+				if (shouldResave) {
+					shouldResave = false;
+					void flushProjectConfig();
+				}
+			}
+		};
+
+		const scheduleProjectConfigSave = () => {
+			hasPendingProjectSave = true;
+			if (projectSaveTimeout) {
+				clearTimeout(projectSaveTimeout);
+			}
+			projectSaveTimeout = window.setTimeout(() => {
+				projectSaveTimeout = undefined;
+				void flushProjectConfig();
+			}, PROJECT_SAVE_DEBOUNCE_MS);
+		};
+
+		onCleanup(() => {
+			if (projectSaveTimeout) {
+				clearTimeout(projectSaveTimeout);
+				projectSaveTimeout = undefined;
+			}
+			void flushProjectConfig();
+		});
+
 		createEffect(
 			on(
 				() => {
 					trackStore(project);
 				},
-				debounce(() => {
-					commands.setProjectConfig(serializeProjectConfiguration(project));
-				}),
+				() => {
+					scheduleProjectConfigSave();
+				},
 				{ defer: true },
 			),
 		);

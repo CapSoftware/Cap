@@ -277,6 +277,9 @@ async openTargetSelectOverlays(focusedTarget: ScreenCaptureTarget | null) : Prom
 async closeTargetSelectOverlays() : Promise<null> {
     return await TAURI_INVOKE("close_target_select_overlays");
 },
+async updateCameraOverlayBounds(x: number, y: number, width: number, height: number) : Promise<null> {
+    return await TAURI_INVOKE("update_camera_overlay_bounds", { x, y, width, height });
+},
 async displayInformation(displayId: string) : Promise<DisplayInformation> {
     return await TAURI_INVOKE("display_information", { displayId });
 },
@@ -365,8 +368,7 @@ export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition;
 export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraPreviewShape = "round" | "square" | "full"
-export type CameraPreviewSize = "sm" | "lg"
-export type CameraPreviewState = { size: CameraPreviewSize; shape: CameraPreviewShape; mirrored: boolean }
+export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirrored: boolean }
 export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
@@ -383,7 +385,7 @@ export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type CornerStyle = "squircle" | "rounded"
 export type Crop = { position: XY<number>; size: XY<number> }
-export type CurrentRecording = { target: CurrentRecordingTarget; mode: RecordingMode }
+export type CurrentRecording = { target: CurrentRecordingTarget; mode: RecordingMode; status: RecordingStatus }
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: WindowId; bounds: LogicalBounds } } | { screen: { id: DisplayId } } | { area: { screen: DisplayId; bounds: LogicalBounds } }
 export type CursorAnimationStyle = "slow" | "mellow" | "custom"
@@ -456,6 +458,7 @@ export type RecordingMode = "studio" | "instant"
 export type RecordingOptionsChanged = null
 export type RecordingSettingsStore = { target: ScreenCaptureTarget | null; micName: string | null; cameraId: DeviceOrModelID | null; mode: RecordingMode | null; systemAudio: boolean; organizationId: string | null }
 export type RecordingStarted = null
+export type RecordingStatus = "pending" | "recording"
 export type RecordingStopped = null
 export type RecordingTargetMode = "display" | "window" | "area"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
