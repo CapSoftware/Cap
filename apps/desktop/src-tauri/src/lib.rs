@@ -59,7 +59,9 @@ use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
-use screenshot_editor::{create_screenshot_editor_instance, update_screenshot_config};
+use screenshot_editor::{
+    ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -86,7 +88,9 @@ use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
-use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
+use windows::{
+    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, set_window_transparent,
+};
 
 use crate::{
     camera::CameraPreviewManager,
@@ -2453,6 +2457,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            app.manage(ScreenshotEditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             app.manage(http_client::HttpClient::default());
@@ -2681,6 +2686,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
+
+                                #[cfg(target_os = "windows")]
+                                if CapWindowId::Settings.get(&app).is_none() {
+                                    reopen_main_window(&app);
+                                }
+                            }
+                            CapWindowId::ScreenshotEditor { id } => {
+                                let window_ids =
+                                    ScreenshotEditorWindowIds::get(window.app_handle());
+                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+
+                                tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
                                 if CapWindowId::Settings.get(&app).is_none() {

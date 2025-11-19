@@ -1046,20 +1046,61 @@ pub async fn take_screenshot(
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     };
 
-    let file_name = format!("Screenshot {date_time}.jpg");
-    let path = screenshots_dir.join(file_name);
+    let id = uuid::Uuid::new_v4().to_string();
+    let cap_dir = screenshots_dir.join(format!("{id}.cap"));
+    std::fs::create_dir_all(&cap_dir).map_err(|e| e.to_string())?;
+
+    let image_filename = "original.png";
+    let image_path = cap_dir.join(image_filename);
 
     image
-        .save_with_format(&path, image::ImageFormat::Jpeg)
+        .save_with_format(&image_path, image::ImageFormat::Png)
         .map_err(|e| format!("Failed to save screenshot: {e}"))?;
 
-    let _ = NewScreenshotAdded { path: path.clone() }.emit(&app);
+    // Create metadata
+    let relative_path = relative_path::RelativePathBuf::from(image_filename);
+
+    let video_meta = cap_project::VideoMeta {
+        path: relative_path,
+        fps: 0,
+        start_time: Some(0.0),
+    };
+
+    let segment = cap_project::SingleSegment {
+        display: video_meta,
+        camera: None,
+        audio: None,
+        cursor: None,
+    };
+
+    let meta = cap_project::RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: cap_dir.clone(),
+        pretty_name: format!("Screenshot {}", date_time),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Studio(
+            cap_project::StudioRecordingMeta::SingleSegment { segment },
+        ),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+
+    cap_project::ProjectConfiguration::default()
+        .write(&cap_dir)
+        .map_err(|e| format!("Failed to save project config: {e}"))?;
+
+    let _ = NewScreenshotAdded {
+        path: image_path.clone(),
+    }
+    .emit(&app);
 
     notifications::send_notification(&app, notifications::NotificationType::ScreenshotSaved);
 
     AppSounds::StopRecording.play();
 
-    Ok(path)
+    Ok(image_path)
 }
 
 // runs when a recording ends, whether from success or failure
