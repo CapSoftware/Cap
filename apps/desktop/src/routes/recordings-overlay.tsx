@@ -33,7 +33,10 @@ import {
 	type UploadProgress,
 	type UploadResult,
 } from "~/utils/tauri";
+import IconCapEditor from "~icons/cap/editor";
+import IconCapUpload from "~icons/cap/upload";
 import IconLucideClock from "~icons/lucide/clock";
+import IconLucideEye from "~icons/lucide/eye";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {

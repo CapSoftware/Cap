@@ -1,7 +1,6 @@
-use cap_recording::{feeds::*, screen_capture::ScreenCaptureTarget, *};
-use kameo::Actor as _;
+use cap_recording::{screen_capture::ScreenCaptureTarget, *};
 use scap_targets::Display;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tracing::*;
 
 #[tokio::main]

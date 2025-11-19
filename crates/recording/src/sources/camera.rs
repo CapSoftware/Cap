@@ -34,7 +34,7 @@ impl VideoSource for Camera {
 
     async fn setup(
         feed_lock: Self::Config,
-        mut video_tx: mpsc::Sender<Self::Frame>,
+        video_tx: mpsc::Sender<Self::Frame>,
         _: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
