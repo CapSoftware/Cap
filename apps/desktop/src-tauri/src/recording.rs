@@ -441,6 +441,7 @@ pub async fn start_recording(
             }
         }
         RecordingMode::Studio => None,
+        RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
     let date_time = if cfg!(windows) {
@@ -466,6 +467,9 @@ pub async fn start_recording(
             }
             RecordingMode::Instant => {
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+            RecordingMode::Screenshot => {
+                return Err("Use take_screenshot for screenshots".to_string());
             }
         },
         sharing: None,
@@ -725,6 +729,9 @@ pub async fn start_recording(
                                 camera_feed: camera_feed.clone(),
                             })
                         }
+                        RecordingMode::Screenshot => Err(anyhow!(
+                            "Screenshot mode should be handled via take_screenshot"
+                        )),
                     }
                 }
                 .await;
@@ -1012,6 +1019,47 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
     }
 
     Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[tracing::instrument(name = "take_screenshot", skip(app))]
+pub async fn take_screenshot(
+    app: AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<PathBuf, String> {
+    use crate::NewScreenshotAdded;
+    use crate::notifications;
+    use cap_recording::screenshot::capture_screenshot;
+
+    let image = capture_screenshot(target)
+        .await
+        .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
+
+    let screenshots_dir = app.path().app_data_dir().unwrap().join("screenshots");
+
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+
+    let date_time = if cfg!(windows) {
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let file_name = format!("Screenshot {date_time}.jpg");
+    let path = screenshots_dir.join(file_name);
+
+    image
+        .save_with_format(&path, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("Failed to save screenshot: {e}"))?;
+
+    let _ = NewScreenshotAdded { path: path.clone() }.emit(&app);
+
+    notifications::send_notification(&app, notifications::NotificationType::ScreenshotSaved);
+
+    AppSounds::StopRecording.play();
+
+    Ok(path)
 }
 
 // runs when a recording ends, whether from success or failure

@@ -21,6 +21,7 @@ cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-timestamp = { path = "../timestamp" }
+scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 specta = { workspace = true }
 tokio = { workspace = true }
@@ -74,7 +75,6 @@ cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
 cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 cap-camera-windows = { path = "../camera-windows" }
 scap-direct3d = { path = "../scap-direct3d" }
-scap-ffmpeg = { path = "../scap-ffmpeg" }
 scap-cpal = { path = "../scap-cpal" }
 
 [dev-dependencies]

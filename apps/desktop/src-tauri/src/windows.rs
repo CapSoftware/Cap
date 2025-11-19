@@ -49,6 +49,7 @@ pub enum CapWindowId {
     Upgrade,
     ModeSelect,
     Debug,
+    ScreenshotEditor,
 }
 
 impl FromStr for CapWindowId {
@@ -67,6 +68,7 @@ impl FromStr for CapWindowId {
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
+            "screenshot-editor" => Self::ScreenshotEditor,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
@@ -110,6 +112,7 @@ impl std::fmt::Display for CapWindowId {
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
+            Self::ScreenshotEditor => write!(f, "screenshot-editor"),
         }
     }
 }
@@ -127,6 +130,7 @@ impl CapWindowId {
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::RecordingControls => "Cap Recording Controls".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::ScreenshotEditor => "Cap Screenshot Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
@@ -140,6 +144,7 @@ impl CapWindowId {
             Self::Setup
                 | Self::Main
                 | Self::Editor { .. }
+                | Self::ScreenshotEditor
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
@@ -154,7 +159,9 @@ impl CapWindowId {
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
+            Self::Editor { .. } | Self::ScreenshotEditor => {
+                Some(Some(LogicalPosition::new(20.0, 32.0)))
+            }
             Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
@@ -170,6 +177,7 @@ impl CapWindowId {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
+            Self::ScreenshotEditor => (800.0, 600.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
@@ -207,6 +215,9 @@ pub enum ShowCapWindow {
     },
     Upgrade,
     ModeSelect,
+    ScreenshotEditor {
+        path: PathBuf,
+    },
 }
 
 impl ShowCapWindow {
@@ -412,6 +423,21 @@ impl ShowCapWindow {
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
+                    .build()?
+            }
+            Self::ScreenshotEditor { path } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
+                self.window_builder(app, "/screenshot-editor")
+                    .maximizable(true)
+                    .inner_size(1240.0, 800.0)
+                    .center()
+                    .initialization_script(format!(
+                        "window.__CAP__ = window.__CAP__ ?? {{}}; window.__CAP__.screenshotPath = {:?};",
+                        path
+                    ))
                     .build()?
             }
             Self::Upgrade => {
@@ -803,6 +829,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            ShowCapWindow::ScreenshotEditor { .. } => CapWindowId::ScreenshotEditor,
         }
     }
 }

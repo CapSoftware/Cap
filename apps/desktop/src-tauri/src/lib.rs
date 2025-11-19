@@ -2223,6 +2223,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::resume_recording,
             recording::restart_recording,
             recording::delete_recording,
+            recording::take_screenshot,
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_displays,

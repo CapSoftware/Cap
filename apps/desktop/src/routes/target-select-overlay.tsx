@@ -804,6 +804,15 @@ function RecordingControls(props: {
 					},
 					checked: rawOptions.mode === "instant",
 				}),
+				await CheckMenuItem.new({
+					text: "Screenshot Mode",
+					action: () => {
+						// @ts-expect-error
+						setOptions("mode", "screenshot");
+					},
+					// @ts-expect-error
+					checked: rawOptions.mode === "screenshot",
+				}),
 			],
 		});
 
@@ -870,7 +879,7 @@ function RecordingControls(props: {
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
 							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
-							onClick={() => {
+							onClick={async () => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
 									return;
@@ -899,6 +908,21 @@ function RecordingControls(props: {
 
 								props.onRecordingStart?.();
 
+								// @ts-expect-error
+								if (rawOptions.mode === "screenshot") {
+									try {
+										const path = await invoke<string>("take_screenshot", {
+											target: props.target,
+										});
+										// @ts-expect-error
+										commands.showWindow({ ScreenshotEditor: { path } });
+										commands.closeTargetSelectOverlays();
+									} catch (e) {
+										console.error("Failed to take screenshot", e);
+									}
+									return;
+								}
+
 								commands.startRecording({
 									capture_target: props.target,
 									mode: rawOptions.mode,
@@ -913,16 +937,27 @@ function RecordingControls(props: {
 										startDisabled(),
 								}}
 							>
-								{rawOptions.mode === "studio" ? (
-									<IconCapFilmCut class="size-4 flex-shrink-0" />
-								) : (
-									<IconCapInstant class="size-4 flex-shrink-0" />
-								)}
+								<Switch>
+									<Match when={rawOptions.mode === "studio"}>
+										<IconCapFilmCut class="size-4 flex-shrink-0" />
+									</Match>
+									<Match when={rawOptions.mode === "instant"}>
+										<IconCapInstant class="size-4 flex-shrink-0" />
+									</Match>
+									<Match when={(rawOptions.mode as string) === "screenshot"}>
+										<IconCapCamera class="size-4 flex-shrink-0" />
+									</Match>
+								</Switch>
 								<div class="flex flex-col mr-2 ml-3 min-w-0">
 									<span class="text-[0.95rem] font-medium text-white text-nowrap">
-										{rawOptions.mode === "instant" && !auth.data
-											? "Sign In To Use"
-											: "Start Recording"}
+										{(() => {
+											if (rawOptions.mode === "instant" && !auth.data)
+												return "Sign In To Use";
+											// @ts-expect-error
+											if (rawOptions.mode === "screenshot")
+												return "Take Screenshot";
+											return "Start Recording";
+										})()}
 									</span>
 									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
 										{`${capitalize(rawOptions.mode)} Mode`}
@@ -946,31 +981,33 @@ function RecordingControls(props: {
 						</div>
 					</div>
 				</div>
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
-					<div class="grid grid-cols-2 gap-2 w-full">
-						<CameraSelect
-							disabled={cameras.isPending}
-							options={cameras.data ?? []}
-							value={selectedCamera() ?? null}
-							onChange={(camera) => {
-								if (!camera) setCamera.mutate(null);
-								else if (camera.model_id)
-									setCamera.mutate({ ModelID: camera.model_id });
-								else setCamera.mutate({ DeviceID: camera.device_id });
-							}}
-						/>
-						<MicrophoneSelect
-							disabled={mics.isPending}
-							options={mics.isPending ? [] : (mics.data ?? [])}
-							value={
-								mics.isPending
-									? (rawOptions.micName ?? null)
-									: selectedMicName()
-							}
-							onChange={(value) => setMicInput.mutate(value)}
-						/>
+				<Show when={(rawOptions.mode as string) !== "screenshot"}>
+					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+						<div class="grid grid-cols-2 gap-2 w-full">
+							<CameraSelect
+								disabled={cameras.isPending}
+								options={cameras.data ?? []}
+								value={selectedCamera() ?? null}
+								onChange={(camera) => {
+									if (!camera) setCamera.mutate(null);
+									else if (camera.model_id)
+										setCamera.mutate({ ModelID: camera.model_id });
+									else setCamera.mutate({ DeviceID: camera.device_id });
+								}}
+							/>
+							<MicrophoneSelect
+								disabled={mics.isPending}
+								options={mics.isPending ? [] : (mics.data ?? [])}
+								value={
+									mics.isPending
+										? (rawOptions.micName ?? null)
+										: selectedMicName()
+								}
+								onChange={(value) => setMicInput.mutate(value)}
+							/>
+						</div>
 					</div>
-				</div>
+				</Show>
 			</div>
 			<div class="flex justify-center items-center w-full">
 				<div
