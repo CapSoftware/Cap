@@ -1,17 +1,25 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
 import { createMemo, createSignal, Show, splitProps } from "solid-js";
-import type {
-	CaptureDisplayWithThumbnail,
-	CaptureWindowWithThumbnail,
-	RecordingMetaWithMetadata,
+import {
+	type CaptureDisplayWithThumbnail,
+	type CaptureWindowWithThumbnail,
+	commands,
+	type RecordingMeta,
+	type RecordingMetaWithMetadata,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
+import IconLucideCopy from "~icons/lucide/copy";
+import IconLucideEdit from "~icons/lucide/edit";
+import IconLucideImage from "~icons/lucide/image";
+import IconLucideSave from "~icons/lucide/save";
 import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMdiMonitor from "~icons/mdi/monitor";
 
 export type RecordingWithPath = RecordingMetaWithMetadata & { path: string };
+export type ScreenshotWithPath = RecordingMeta & { path: string };
 
 function formatResolution(width?: number, height?: number) {
 	if (!width || !height) return undefined;
@@ -43,6 +51,10 @@ type TargetCardProps = (
 			variant: "recording";
 			target: RecordingWithPath;
 	  }
+	| {
+			variant: "screenshot";
+			target: ScreenshotWithPath;
+	  }
 ) &
 	Omit<ComponentProps<"button">, "children"> & {
 		highlightQuery?: string;
@@ -73,13 +85,20 @@ export default function TargetCard(props: TargetCardProps) {
 		return local.target as RecordingWithPath;
 	});
 
+	const screenshotTarget = createMemo(() => {
+		if (local.variant !== "screenshot") return undefined;
+		return local.target as ScreenshotWithPath;
+	});
+
 	const renderIcon = (className: string) =>
 		local.variant === "display" ? (
 			<IconMdiMonitor class={className} />
 		) : local.variant === "window" ? (
 			<IconLucideAppWindowMac class={className} />
-		) : (
+		) : local.variant === "recording" ? (
 			<IconLucideSquarePlay class={className} />
+		) : (
+			<IconLucideImage class={className} />
 		);
 
 	const label = createMemo(() => {
@@ -88,7 +107,9 @@ export default function TargetCard(props: TargetCardProps) {
 		const target = windowTarget();
 		if (target) return target.name || target.owner_name;
 		const recording = recordingTarget();
-		return recording?.pretty_name;
+		if (recording) return recording.pretty_name;
+		const screenshot = screenshotTarget();
+		return screenshot?.pretty_name;
 	});
 
 	const subtitle = createMemo(() => {
@@ -127,6 +148,10 @@ export default function TargetCard(props: TargetCardProps) {
 				`${recording.path}/screenshots/display.jpg`,
 			)}?t=${Date.now()}`;
 		}
+		const screenshot = screenshotTarget();
+		if (screenshot) {
+			return `${convertFileSrc(screenshot.path)}?t=${Date.now()}`;
+		}
 		const target = displayTarget() ?? windowTarget();
 		if (!target?.thumbnail) return undefined;
 		return `data:image/png;base64,${target.thumbnail}`;
@@ -159,6 +184,42 @@ export default function TargetCard(props: TargetCardProps) {
 			}
 			return part;
 		});
+	};
+
+	const handleOpenEditor = (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		commands.showWindow({
+			ScreenshotEditor: {
+				path: screenshot.path,
+			},
+		});
+	};
+
+	const handleCopy = async (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		await commands.copyScreenshotToClipboard(screenshot.path);
+	};
+
+	const handleSave = async (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		const path = await save({
+			defaultPath: screenshot.pretty_name + ".png",
+			filters: [
+				{
+					name: "Image",
+					extensions: ["png"],
+				},
+			],
+		});
+		if (path) {
+			await commands.copyFileToPath(screenshot.path, path);
+		}
 	};
 
 	return (
@@ -206,22 +267,52 @@ export default function TargetCard(props: TargetCardProps) {
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
 				<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t to-transparent pointer-events-none from-black/40" />
 			</div>
-			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
-				<div class="flex-1 min-w-0">
-					<p class="truncate text-[11px] font-medium text-gray-12">
-						{highlight(label())}
-					</p>
-					<Show when={subtitle()}>
-						<p class="truncate text-[11px] text-gray-11">
-							{highlight(subtitle())}
+			<div class="flex flex-col w-full">
+				<div class="flex flex-row items-start gap-2 px-2 py-1.5">
+					<div class="flex-1 min-w-0">
+						<p class="truncate text-[11px] font-medium text-gray-12">
+							{highlight(label())}
 						</p>
-					</Show>
-					<Show when={metadata()}>
-						<p class="truncate text-[11px] text-gray-10">
-							{highlight(metadata())}
-						</p>
-					</Show>
+						<Show when={subtitle()}>
+							<p class="truncate text-[11px] text-gray-11">
+								{highlight(subtitle())}
+							</p>
+						</Show>
+						<Show when={metadata()}>
+							<p class="truncate text-[11px] text-gray-10">
+								{highlight(metadata())}
+							</p>
+						</Show>
+					</div>
 				</div>
+				<Show when={local.variant === "screenshot"}>
+					<div class="flex items-center justify-between px-2 pb-1.5 pt-0.5 gap-1">
+						<button
+							type="button"
+							onClick={handleOpenEditor}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Editor"
+						>
+							<IconLucideEdit class="size-3.5" />
+						</button>
+						<button
+							type="button"
+							onClick={handleCopy}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Copy to clipboard"
+						>
+							<IconLucideCopy class="size-3.5" />
+						</button>
+						<button
+							type="button"
+							onClick={handleSave}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Save as..."
+						>
+							<IconLucideSave class="size-3.5" />
+						</button>
+					</div>
+				</Show>
 			</div>
 		</button>
 	);

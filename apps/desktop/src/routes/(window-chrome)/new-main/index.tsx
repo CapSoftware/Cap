@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
 import {
 	getAllWebviewWindows,
@@ -73,7 +73,7 @@ import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
-import type { RecordingWithPath } from "./TargetCard";
+import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
@@ -149,6 +149,12 @@ type TargetMenuPanelProps =
 			targets?: RecordingWithPath[];
 			onSelect: (target: RecordingWithPath) => void;
 			onViewAll: () => void;
+	  }
+	| {
+			variant: "screenshot";
+			targets?: ScreenshotWithPath[];
+			onSelect: (target: ScreenshotWithPath) => void;
+			onViewAll: () => void;
 	  };
 
 type SharedTargetMenuProps = {
@@ -167,13 +173,17 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 			? "Search displays"
 			: props.variant === "window"
 				? "Search windows"
-				: "Search recordings";
+				: props.variant === "recording"
+					? "Search recordings"
+					: "Search screenshots";
 	const noResultsMessage =
 		props.variant === "display"
 			? "No matching displays"
 			: props.variant === "window"
 				? "No matching windows"
-				: "No matching recordings";
+				: props.variant === "recording"
+					? "No matching recordings"
+					: "No matching screenshots";
 
 	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
 		() => {
@@ -220,6 +230,18 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
 
+	const filteredScreenshotTargets = createMemo<ScreenshotWithPath[]>(() => {
+		if (props.variant !== "screenshot") return [];
+		const query = normalizedQuery();
+		const targets = props.targets ?? [];
+		if (!query) return targets;
+
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
+
+		return targets.filter((target) => matchesQuery(target.pretty_name));
+	});
+
 	return (
 		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
@@ -234,7 +256,9 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
 					<Show
-						when={props.variant === "recording"}
+						when={
+							props.variant === "recording" || props.variant === "screenshot"
+						}
 						fallback={
 							<>
 								<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
@@ -266,8 +290,14 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 								if ("onViewAll" in props) props.onViewAll();
 							}}
 						>
-							<IconLucideSquarePlay class="mr-2 size-3" />
-							View All Recordings
+							{props.variant === "recording" ? (
+								<IconLucideSquarePlay class="mr-2 size-3" />
+							) : (
+								<IconLucideImage class="mr-2 size-3" />
+							)}
+							{props.variant === "recording"
+								? "View All Recordings"
+								: "View All Screenshots"}
 						</button>
 					</Show>
 				</div>
@@ -296,7 +326,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							highlightQuery={trimmedSearch()}
 							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
 						/>
-					) : (
+					) : props.variant === "recording" ? (
 						<TargetMenuGrid
 							variant="recording"
 							targets={filteredRecordingTargets()}
@@ -307,9 +337,22 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							highlightQuery={trimmedSearch()}
 							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
 						/>
+					) : (
+						<TargetMenuGrid
+							variant="screenshot"
+							targets={filteredScreenshotTargets()}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							highlightQuery={trimmedSearch()}
+							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+						/>
 					)}
 				</div>
-				<Show when={props.variant === "recording"}>
+				<Show
+					when={props.variant === "recording" || props.variant === "screenshot"}
+				>
 					{/* Removed sticky footer button */}
 				</Show>
 			</div>
@@ -387,14 +430,16 @@ function Page() {
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
-	const activeMenu = createMemo<"display" | "window" | "recording" | null>(
-		() => {
-			if (displayMenuOpen()) return "display";
-			if (windowMenuOpen()) return "window";
-			if (recordingsMenuOpen()) return "recording";
-			return null;
-		},
-	);
+	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
+	const activeMenu = createMemo<
+		"display" | "window" | "recording" | "screenshot" | null
+	>(() => {
+		if (displayMenuOpen()) return "display";
+		if (windowMenuOpen()) return "window";
+		if (recordingsMenuOpen()) return "recording";
+		if (screenshotsMenuOpen()) return "screenshot";
+		return null;
+	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
 	const [hasOpenedWindowMenu, setHasOpenedWindowMenu] = createSignal(false);
 
@@ -412,6 +457,19 @@ function Page() {
 	}));
 
 	const recordings = useQuery(() => listRecordings);
+	const screenshots = useQuery(() =>
+		queryOptions({
+			queryKey: ["screenshots"],
+			queryFn: async () => {
+				const result = await commands
+					.listScreenshots()
+					.catch(() => [] as const);
+
+				return result.map(([path, meta]) => ({ ...meta, path }));
+			},
+			refetchInterval: 2000,
+		}),
+	);
 
 	const screens = useQuery(() => listScreens);
 	const windows = useQuery(() => listWindows);
@@ -455,6 +513,12 @@ function Page() {
 		return data
 			.slice(0, 20)
 			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
+	});
+
+	const screenshotsData = createMemo(() => {
+		const data = screenshots.data;
+		if (!data) return [];
+		return data.slice(0, 20) as ScreenshotWithPath[];
 	});
 
 	const displayMenuLoading = () =>
@@ -509,6 +573,7 @@ function Page() {
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
 		setRecordingsMenuOpen(false);
+		setScreenshotsMenuOpen(false);
 	});
 
 	createUpdateCheck();
@@ -889,6 +954,7 @@ function Page() {
 										if (next) {
 											setDisplayMenuOpen(false);
 											setWindowMenuOpen(false);
+											setScreenshotsMenuOpen(false);
 										}
 										return next;
 									});
@@ -901,11 +967,16 @@ function Page() {
 						<Tooltip content={<span>Screenshots</span>}>
 							<button
 								type="button"
-								onClick={async () => {
-									await commands.showWindow({
-										Settings: { page: "screenshots" },
+								onClick={() => {
+									setScreenshotsMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setDisplayMenuOpen(false);
+											setWindowMenuOpen(false);
+											setRecordingsMenuOpen(false);
+										}
+										return next;
 									});
-									getCurrentWindow().hide();
 								}}
 								class="flex justify-center items-center size-5"
 							>
@@ -1020,7 +1091,7 @@ function Page() {
 										windowTriggerRef?.focus();
 									}}
 								/>
-							) : (
+							) : variant === "recording" ? (
 								<TargetMenuPanel
 									variant="recording"
 									targets={recordingsData()}
@@ -1047,6 +1118,33 @@ function Page() {
 									onViewAll={async () => {
 										await commands.showWindow({
 											Settings: { page: "recordings" },
+										});
+										getCurrentWindow().hide();
+									}}
+								/>
+							) : (
+								<TargetMenuPanel
+									variant="screenshot"
+									targets={screenshotsData()}
+									isLoading={screenshots.isPending}
+									errorMessage={
+										screenshots.error ? "Failed to load screenshots" : undefined
+									}
+									onSelect={async (screenshot) => {
+										await commands.showWindow({
+											ScreenshotEditor: {
+												path: screenshot.path,
+											},
+										});
+										// getCurrentWindow().hide(); // Maybe keep open?
+									}}
+									disabled={isRecording()}
+									onBack={() => {
+										setScreenshotsMenuOpen(false);
+									}}
+									onViewAll={async () => {
+										await commands.showWindow({
+											Settings: { page: "screenshots" },
 										});
 										getCurrentWindow().hide();
 									}}
