@@ -1,13 +1,22 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use cap_project::RecordingMeta;
 use futures::StreamExt;
+use lazy_static::lazy_static;
 use tauri::AppHandle;
 use tokio::fs;
 
 use crate::recordings_path;
 
 const STORE_KEY: &str = "uuid_projects_migrated";
+
+lazy_static! {
+    static ref IN_FLIGHT_BASES: tokio::sync::Mutex<HashSet<String>> =
+        tokio::sync::Mutex::new(HashSet::new());
+}
 
 pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_store::StoreExt;
@@ -186,7 +195,39 @@ async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult,
         }
     };
 
-    match migrate_project_filename_async(&path, &meta).await {
+    // Lock on the base sanitized name to prevent concurrent migrations with same target
+    let base_name = sanitize_filename::sanitize(meta.pretty_name.replace(":", "."));
+    {
+        let mut in_flight = IN_FLIGHT_BASES.lock().await;
+        let mut wait_count = 0;
+        while !in_flight.insert(base_name.clone()) {
+            wait_count += 1;
+            if wait_count == 1 {
+                tracing::debug!(
+                    "Project {} waiting for concurrent migration of base name \"{}\"",
+                    filename,
+                    base_name
+                );
+            }
+            drop(in_flight);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            in_flight = IN_FLIGHT_BASES.lock().await;
+        }
+        if wait_count > 0 {
+            tracing::debug!(
+                "Project {} acquired lock for \"{}\" after {} waits",
+                filename,
+                base_name,
+                wait_count
+            );
+        }
+    }
+
+    let result = migrate_project_filename_async(&path, &meta).await;
+    
+    IN_FLIGHT_BASES.lock().await.remove(&base_name);
+    
+    match result {
         Ok(new_path) => {
             if new_path != path {
                 let new_name = new_path.file_name().unwrap().to_string_lossy();

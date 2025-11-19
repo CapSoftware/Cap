@@ -35,16 +35,25 @@ pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
 /// # Example
 ///
 /// ```rust
-/// let unique_name = ensure_unique_filename("My Recording.cap", &recordings_dir);
+/// let unique_name = ensure_unique_filename("My Recording.cap", &recordings_dir,);
 /// // If "My Recording.cap" exists, returns "My Recording (1).cap"
 /// // If that exists too, returns "My Recording (2).cap", etc.
 ///
 /// let unique_name = ensure_unique_filename("document.pdf", &documents_dir);
 /// // If "document.pdf" exists, returns "document (1).pdf"
 /// ```
+#[inline]
 pub fn ensure_unique_filename(
     base_filename: &str,
     parent_dir: &std::path::Path,
+) -> Result<String, String> {
+    ensure_unique_filename_with_attempts(base_filename, parent_dir, 20)
+}
+
+pub fn ensure_unique_filename_with_attempts(
+    base_filename: &str,
+    parent_dir: &std::path::Path,
+    attempts: i32,
 ) -> Result<String, String> {
     let initial_path = parent_dir.join(base_filename);
 
@@ -82,7 +91,7 @@ pub fn ensure_unique_filename(
         counter += 1;
 
         // prevent infinite loop
-        if counter > 1000 {
+        if counter > attempts {
             return Err(
                 "Too many filename conflicts, unable to create unique filename".to_string(),
             );
