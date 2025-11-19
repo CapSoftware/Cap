@@ -259,16 +259,16 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							</>
 						}
 					>
-						<Button
-							variant="ghost"
-							class="w-full text-xs h-full justify-start pl-2 text-gray-11 hover:text-gray-12"
+						<button
+							type="button"
+							class="flex w-full items-center justify-start h-full pl-2 text-xs text-gray-11 transition-colors rounded hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 							onClick={() => {
 								if ("onViewAll" in props) props.onViewAll();
 							}}
 						>
 							<IconLucideSquarePlay class="mr-2 size-3" />
 							View All Recordings
-						</Button>
+						</button>
 					</Show>
 				</div>
 			</div>
