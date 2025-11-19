@@ -185,7 +185,7 @@ impl Default for GeneralSettingsStore {
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
             recording_picker_preference_set: false,
-            post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
+            post_deletion_behaviour: PostDeletionBehaviour::ReopenRecordingWindow,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,
