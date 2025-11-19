@@ -444,6 +444,7 @@ function Inner() {
 
 					onMount(() => {
 						let processing = false;
+						let raf: number;
 
 						const loop = async () => {
 							const target = targetState();
@@ -471,9 +472,9 @@ function Inner() {
 									processing = false;
 								}
 							}
-							requestAnimationFrame(loop);
+							raf = requestAnimationFrame(loop);
 						};
-						const raf = requestAnimationFrame(loop);
+						raf = requestAnimationFrame(loop);
 						onCleanup(() => cancelAnimationFrame(raf));
 					});
 
