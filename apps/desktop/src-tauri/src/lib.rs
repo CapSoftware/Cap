@@ -2444,7 +2444,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
-            update_project_names::migrate_if_needed(&app)?;
+
+            if let Err(err) = update_project_names::migrate_if_needed(&app) {
+                tracing::error!("Failed to migrate project file names: {}", err);
+            }
+
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
