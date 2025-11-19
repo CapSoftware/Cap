@@ -360,7 +360,12 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Windowing/permissions are handled in Rust; keep UI logic in Solid and avoid mixing IPC with rendering logic.
 
 ## Conventions
-- No code comments: Never add inline, block, or docstring comments in any language. Code must be self-explanatory through naming, types, and structure. Use docs/READMEs for explanations when necessary.
+- **CRITICAL: NO CODE COMMENTS**: Never add any form of comments to code. This includes:
+  - Single-line comments: `//` (JavaScript/TypeScript/Rust), `#` (Python/Shell)
+  - Multi-line comments: `/* */` (JavaScript/TypeScript), `/* */` (Rust)
+  - Documentation comments: `///`, `//!` (Rust), `/** */` (JSDoc)
+  - Any other comment syntax in any language
+  - Code must be self-explanatory through naming, types, and structure. Use docs/READMEs for explanations when necessary.
 - Directory naming: lower-case-dashed
 - Components: PascalCase; hooks: camelCase starting with `use`
 - Strict TypeScript; avoid `any`; leverage shared types
@@ -414,3 +419,11 @@ Transcription/AI Enhancement → Database Storage
 - **Monorepo Guide**: Turborepo documentation
 - **Effect System**: Used in web-backend packages
 - **Media Processing**: FFmpeg documentation for Rust bindings
+
+## Code Formatting
+
+Always format code before completing work:
+- **TypeScript/JavaScript**: Run `pnpm format` to format all code with Biome
+- **Rust**: Run `cargo fmt` to format all Rust code with rustfmt
+
+These commands should be run regularly during development and always at the end of a coding session to ensure consistent formatting across the codebase.

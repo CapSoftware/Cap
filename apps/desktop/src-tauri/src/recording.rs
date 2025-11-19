@@ -47,7 +47,6 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
-    apply_camera_input, apply_mic_input,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -56,13 +55,12 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
-    recording_settings::RecordingSettingsStore,
     thumbnails::*,
     upload::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
     },
     web_api::ManagerExt,
-    windows::{CapWindowDef, CapWindow},
+    windows::{CapWindow, CapWindowDef},
 };
 
 #[derive(Clone)]
@@ -351,41 +349,6 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
-async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableState<'_, App>) {
-    let guard = state.read().await;
-    let recording_active = !matches!(guard.recording_state, RecordingState::None);
-    let needs_mic = guard.selected_mic_label.is_none();
-    let needs_camera = guard.selected_camera_id.is_none();
-    drop(guard);
-
-    if recording_active || (!needs_mic && !needs_camera) {
-        return;
-    }
-
-    let settings = match RecordingSettingsStore::get(app) {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "Failed to load recording settings while restoring inputs");
-            return;
-        }
-    };
-
-    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
-        match apply_mic_input(app.state(), Some(mic)).await {
-            Err(err) => warn!(%err, "Failed to restore microphone input"),
-            Ok(_) => {}
-        }
-    }
-
-    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
-        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
-            Err(err) => warn!(%err, "Failed to restore camera input"),
-            Ok(_) => {}
-        }
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -394,26 +357,8 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
-    restore_inputs_from_store_if_missing(&app, &state_mtx).await;
-
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
-    }
-
-    let has_camera_selected = {
-        let guard = state_mtx.read().await;
-        guard.selected_camera_id.is_some()
-    };
-    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
-    let should_open_camera_preview =
-        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
-
-    if should_open_camera_preview {
-        ShowCapWindow::Camera
-            .show(&app)
-            .await
-            .map_err(|err| error!("Failed to show camera preview window: {err}"))
-            .ok();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -600,15 +545,56 @@ pub async fn start_recording(
         let inputs = inputs.clone();
         async move {
             fail!("recording::spawn_actor");
-            let mut state = state_mtx.write().await;
-
             use kameo::error::SendError;
 
-            let camera_feed = match state.camera_feed.ask(camera::Lock).await {
-                Ok(lock) => Some(Arc::new(lock)),
-                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+            // Initialize camera if selected but not active
+            let (camera_feed_actor, selected_camera_id) = {
+                let state = state_mtx.read().await;
+                (state.camera_feed.clone(), state.selected_camera_id.clone())
+            };
+
+            let camera_lock_result = camera_feed_actor.ask(camera::Lock).await;
+
+            let camera_feed_lock = match camera_lock_result {
+                Ok(lock) => Some(lock),
+                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => {
+                    if let Some(id) = selected_camera_id {
+                        info!(
+                            "Camera selected but not initialized, initializing: {:?}",
+                            id
+                        );
+                        match camera_feed_actor
+                            .ask(camera::SetInput { id: id.clone() })
+                            .await
+                        {
+                            Ok(fut) => match fut.await {
+                                Ok(_) => match camera_feed_actor.ask(camera::Lock).await {
+                                    Ok(lock) => Some(lock),
+                                    Err(e) => {
+                                        warn!("Failed to lock camera after initialization: {}", e);
+                                        None
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Failed to initialize camera: {}", e);
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                warn!("Failed to ask SetInput: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
                 Err(e) => return Err(anyhow!(e.to_string())),
             };
+
+            let mut state = state_mtx.write().await;
+
+            let camera_feed = camera_feed_lock.map(Arc::new);
 
             state.camera_in_use = camera_feed.is_some();
 
@@ -1087,6 +1073,9 @@ async fn handle_recording_end(
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
+        app.selected_mic_label = None;
+        app.selected_camera_id = None;
+        app.camera_in_use = false;
         if let Some(win) = CapWindowDef::Camera.get(&handle) {
             win.close().ok();
         }

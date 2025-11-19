@@ -28,13 +28,9 @@ static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 // Basically poor man's MSAA
 static GPU_SURFACE_SCALE: u32 = 4;
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "lowercase")]
-pub enum CameraPreviewSize {
-    #[default]
-    Sm,
-    Lg,
-}
+pub const MIN_CAMERA_SIZE: f32 = 150.0;
+pub const MAX_CAMERA_SIZE: f32 = 600.0;
+pub const DEFAULT_CAMERA_SIZE: f32 = 230.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -45,11 +41,25 @@ pub enum CameraPreviewShape {
     Full,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct CameraPreviewState {
-    size: CameraPreviewSize,
+    size: f32,
     shape: CameraPreviewShape,
     mirrored: bool,
+}
+
+impl Default for CameraPreviewState {
+    fn default() -> Self {
+        Self {
+            size: DEFAULT_CAMERA_SIZE,
+            shape: CameraPreviewShape::default(),
+            mirrored: false,
+        }
+    }
+}
+
+fn clamp_size(size: f32) -> f32 {
+    size.clamp(MIN_CAMERA_SIZE, MAX_CAMERA_SIZE)
 }
 
 pub struct CameraPreviewManager {
@@ -70,17 +80,22 @@ impl CameraPreviewManager {
 
     /// Get the current state of the camera window.
     pub fn get_state(&self) -> anyhow::Result<CameraPreviewState> {
-        Ok(self
+        let mut state: CameraPreviewState = self
             .store
             .as_ref()
             .map_err(|err| anyhow!("{err}"))?
             .get("state")
-            .and_then(|v| serde_json::from_value(v).ok().unwrap_or_default())
-            .unwrap_or_default())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        state.size = clamp_size(state.size);
+        Ok(state)
     }
 
     /// Save the current state of the camera window.
-    pub fn set_state(&self, state: CameraPreviewState) -> anyhow::Result<()> {
+    pub fn set_state(&self, mut state: CameraPreviewState) -> anyhow::Result<()> {
+        state.size = clamp_size(state.size);
+
         let store = self.store.as_ref().map_err(|err| anyhow!("{err}"))?;
         store.set("state", serde_json::to_value(&state)?);
         store.save()?;
@@ -171,8 +186,8 @@ impl InitializedCameraPreview {
             1.0
         };
 
-        let size =
-            resize_window(&window, default_state, aspect).context("Error resizing Tauri window")?;
+        let size = resize_window(&window, default_state, aspect, true)
+            .context("Error resizing Tauri window")?;
 
         let (tx, rx) = oneshot::channel();
         window
@@ -562,7 +577,7 @@ impl Renderer {
 
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
                     self.update_state_uniforms(&state);
-                    if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio)
+                    if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio, false)
                         .map_err(|err| error!("Error resizing camera preview window: {err}"))
                     {
                         self.reconfigure_gpu_surface(width, height);
@@ -607,16 +622,17 @@ impl Renderer {
 
     /// Update the uniforms which hold the camera preview state
     fn update_state_uniforms(&self, state: &CameraPreviewState) {
+        let clamped_size = clamp_size(state.size);
+        let normalized_size =
+            (clamped_size - MIN_CAMERA_SIZE) / (MAX_CAMERA_SIZE - MIN_CAMERA_SIZE);
+
         let state_uniforms = StateUniforms {
             shape: match state.shape {
                 CameraPreviewShape::Round => 0.0,
                 CameraPreviewShape::Square => 1.0,
                 CameraPreviewShape::Full => 2.0,
             },
-            size: match state.size {
-                CameraPreviewSize::Sm => 0.0,
-                CameraPreviewSize::Lg => 1.0,
-            },
+            size: normalized_size,
             mirrored: if state.mirrored { 1.0 } else { 0.0 },
             _padding: 0.0,
         };
@@ -646,7 +662,7 @@ impl Renderer {
                 bytemuck::cast_slice(&[camera_uniforms]),
             );
 
-            if let Ok((width, height)) = resize_window(window, state, aspect_ratio)
+            if let Ok((width, height)) = resize_window(window, state, aspect_ratio, false)
                 .map_err(|err| error!("Error resizing camera preview window: {err}"))
             {
                 self.reconfigure_gpu_surface(width, height);
@@ -661,14 +677,11 @@ fn resize_window(
     window: &WebviewWindow,
     state: &CameraPreviewState,
     aspect: f32,
+    should_move: bool,
 ) -> tauri::Result<(u32, u32)> {
     trace!("CameraPreview/resize_window");
 
-    let base: f32 = if state.size == CameraPreviewSize::Sm {
-        230.0
-    } else {
-        400.0
-    };
+    let base = clamp_size(state.size);
     let window_width = if state.shape == CameraPreviewShape::Full {
         if aspect >= 1.0 { base * aspect } else { base }
     } else {
@@ -680,25 +693,68 @@ fn resize_window(
         base
     } + TOOLBAR_HEIGHT;
 
-    let (monitor_size, monitor_offset, monitor_scale_factor): (
-        PhysicalSize<u32>,
-        LogicalPosition<u32>,
-        _,
-    ) = if let Some(monitor) = window.current_monitor()? {
-        let size = monitor.position().to_logical(monitor.scale_factor());
-        (*monitor.size(), size, monitor.scale_factor())
-    } else {
-        (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
-    };
+    if should_move {
+        let (monitor_size, monitor_offset, monitor_scale_factor): (
+            PhysicalSize<u32>,
+            LogicalPosition<u32>,
+            _,
+        ) = if let Some(monitor) = window.current_monitor()? {
+            let size = monitor.position().to_logical(monitor.scale_factor());
+            (*monitor.size(), size, monitor.scale_factor())
+        } else {
+            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+        };
 
-    let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0) as u32
-        + monitor_offset.x;
-    let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
-        as u32
-        + monitor_offset.y;
+        let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
+            as u32
+            + monitor_offset.x;
+        let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
+            as u32
+            + monitor_offset.y;
+
+        window.set_position(LogicalPosition::new(x, y))?;
+    } else if let Some(monitor) = window.current_monitor()? {
+        // Ensure the window stays within the monitor bounds when resizing
+        let scale_factor = monitor.scale_factor();
+        let monitor_pos = monitor.position().to_logical::<f64>(scale_factor);
+        let monitor_size = monitor.size().to_logical::<f64>(scale_factor);
+
+        let current_pos = window
+            .outer_position()
+            .map(|p| p.to_logical::<f64>(scale_factor))
+            .unwrap_or(monitor_pos);
+
+        let mut new_x = current_pos.x;
+        let mut new_y = current_pos.y;
+        let new_width = window_width as f64;
+        let new_height = window_height as f64;
+
+        // Check right edge
+        if new_x + new_width > monitor_pos.x + monitor_size.width {
+            new_x = monitor_pos.x + monitor_size.width - new_width;
+        }
+
+        // Check bottom edge
+        if new_y + new_height > monitor_pos.y + monitor_size.height {
+            new_y = monitor_pos.y + monitor_size.height - new_height;
+        }
+
+        // Check left edge
+        if new_x < monitor_pos.x {
+            new_x = monitor_pos.x;
+        }
+
+        // Check top edge
+        if new_y < monitor_pos.y {
+            new_y = monitor_pos.y;
+        }
+
+        if (new_x - current_pos.x).abs() > 1.0 || (new_y - current_pos.y).abs() > 1.0 {
+            window.set_position(LogicalPosition::new(new_x, new_y))?;
+        }
+    }
 
     window.set_size(LogicalSize::new(window_width, window_height))?;
-    window.set_position(LogicalPosition::new(x, y))?;
 
     Ok((window_width as u32, window_height as u32))
 }

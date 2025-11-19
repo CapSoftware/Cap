@@ -22,13 +22,14 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, apply_camera_input, apply_mic_input, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
-    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
+use cap_recording::feeds;
 
 #[cfg(target_os = "macos")]
 use crate::platform::{self, WebviewWindowExt};
@@ -313,8 +314,6 @@ impl CapWindow {
                     ))
                     .build()?;
 
-                restore_recording_inputs_if_idle(app);
-
                 #[cfg(target_os = "macos")]
                 {
                     if new_recording_flow {
@@ -533,6 +532,13 @@ impl CapWindow {
                     let window = builder.build()?;
 
                     if enable_native_camera_preview {
+                        if let Some(id) = state.selected_camera_id.clone()
+                            && !state.camera_in_use
+                        {
+                            let _ = state.camera_feed.ask(feeds::camera::SetInput { id }).await;
+                            state.camera_in_use = true;
+                        }
+
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview
