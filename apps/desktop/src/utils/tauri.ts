@@ -134,11 +134,11 @@ async uploadExportedVideo(path: string, mode: UploadMode, channel: TAURI_CHANNEL
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
-async createScreenshotEditorInstance(path: string) : Promise<SerializedScreenshotEditorInstance> {
-    return await TAURI_INVOKE("create_screenshot_editor_instance", { path });
+async createScreenshotEditorInstance() : Promise<SerializedScreenshotEditorInstance> {
+    return await TAURI_INVOKE("create_screenshot_editor_instance");
 },
-async updateScreenshotConfig(config: ProjectConfiguration) : Promise<null> {
-    return await TAURI_INVOKE("update_screenshot_config", { config });
+async updateScreenshotConfig(config: ProjectConfiguration, save: boolean) : Promise<null> {
+    return await TAURI_INVOKE("update_screenshot_config", { config, save });
 },
 async getRecordingMeta(path: string, fileType: FileType) : Promise<RecordingMetaWithMetadata> {
     return await TAURI_INVOKE("get_recording_meta", { path, fileType });
@@ -481,7 +481,7 @@ export type SceneSegment = { start: number; end: number; mode?: SceneMode }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
-export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string }
+export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }

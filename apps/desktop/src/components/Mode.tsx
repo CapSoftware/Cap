@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { commands } from "~/utils/tauri";
+import IconCapImageFilled from "~icons/cap/image-filled";
 
 const Mode = () => {
 	const { rawOptions, setOptions } = useRecordingOptions();
@@ -80,7 +81,7 @@ const Mode = () => {
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
-						<IconCapCamera class="size-3.5 invert dark:invert-0" />
+						<IconCapImageFilled class="size-[19px] invert dark:invert-0" />
 					</div>
 				</Tooltip>
 			)}
@@ -123,7 +124,7 @@ const Mode = () => {
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
-						<IconCapCamera class="size-3.5 invert dark:invert-0" />
+						<IconCapImageFilled class="size-[19px] invert dark:invert-0" />
 					</div>
 				</>
 			)}

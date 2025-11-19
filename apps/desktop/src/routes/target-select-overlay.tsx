@@ -479,6 +479,7 @@ function Inner() {
 					});
 
 					createEffect(async () => {
+						if (options.mode === "screenshot") return;
 						const bounds = crop();
 						const interacting = isInteracting();
 
@@ -688,6 +689,43 @@ function Inner() {
 						});
 					});
 
+					const [wasInteracting, setWasInteracting] = createSignal(false);
+					createEffect(async () => {
+						const interacting = isInteracting();
+						const was = wasInteracting();
+						setWasInteracting(interacting);
+
+						if (was && !interacting) {
+							if (options.mode === "screenshot" && isValid()) {
+								const target: ScreenCaptureTarget = {
+									variant: "area",
+									screen: displayId(),
+									bounds: {
+										position: {
+											x: crop().x,
+											y: crop().y,
+										},
+										size: {
+											width: crop().width,
+											height: crop().height,
+										},
+									},
+								};
+
+								try {
+									const path = await invoke<string>("take_screenshot", {
+										target,
+									});
+									// @ts-expect-error
+									await commands.showWindow({ ScreenshotEditor: { path } });
+									await commands.closeTargetSelectOverlays();
+								} catch (e) {
+									console.error("Failed to take screenshot", e);
+								}
+							}
+						}
+					});
+
 					return (
 						<div class="fixed w-screen h-screen bg-black/60">
 							<div
@@ -696,25 +734,27 @@ function Inner() {
 								style={controlsStyle()}
 							>
 								<div class="flex flex-col items-center">
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: displayId(),
-											bounds: {
-												position: {
-													x: crop().x,
-													y: crop().y,
+									<Show when={options.mode !== "screenshot"}>
+										<RecordingControls
+											target={{
+												variant: "area",
+												screen: displayId(),
+												bounds: {
+													position: {
+														x: crop().x,
+														y: crop().y,
+													},
+													size: {
+														width: crop().width,
+														height: crop().height,
+													},
 												},
-												size: {
-													width: crop().width,
-													height: crop().height,
-												},
-											},
-										}}
-										disabled={!isValid()}
-										showBackground={controllerInside()}
-										onRecordingStart={() => setOriginalCameraBounds(null)}
-									/>
+											}}
+											disabled={!isValid()}
+											showBackground={controllerInside()}
+											onRecordingStart={() => setOriginalCameraBounds(null)}
+										/>
+									</Show>
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
 											<p>Minimum size is 150 x 150</p>
