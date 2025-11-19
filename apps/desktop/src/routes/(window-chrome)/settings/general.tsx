@@ -743,9 +743,9 @@ function DefaultProjectNameCard(props: {
 						size="sm"
 						variant="dark"
 						disabled={isSaveDisabled()}
-						onClick={() => {
-							props.onChange(inputValue() ?? null);
-							updatePreview();
+						onClick={async () => {
+							await props.onChange(inputValue() ?? null);
+							await updatePreview();
 						}}
 					>
 						Save

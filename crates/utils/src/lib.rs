@@ -1,4 +1,10 @@
-use std::{borrow::Cow, future::Future, path::PathBuf, sync::LazyLock};
+use std::{
+    borrow::Cow,
+    future::Future,
+    num::{NonZero, NonZeroI16, NonZeroI32},
+    path::PathBuf,
+    sync::LazyLock,
+};
 
 use aho_corasick::{AhoCorasickBuilder, MatchKind};
 use tracing::Instrument;
@@ -47,13 +53,18 @@ pub fn ensure_unique_filename(
     base_filename: &str,
     parent_dir: &std::path::Path,
 ) -> Result<String, String> {
-    ensure_unique_filename_with_attempts(base_filename, parent_dir, 20)
+    ensure_unique_filename_with_attempts(
+        base_filename,
+        parent_dir,
+        // SAFETY: 20 is non zero
+        unsafe { NonZero::new_unchecked(50) },
+    )
 }
 
 pub fn ensure_unique_filename_with_attempts(
     base_filename: &str,
     parent_dir: &std::path::Path,
-    attempts: i32,
+    attempts: NonZeroI32,
 ) -> Result<String, String> {
     let initial_path = parent_dir.join(base_filename);
 
@@ -73,6 +84,7 @@ pub fn ensure_unique_filename_with_attempts(
         (base_filename, String::new())
     };
 
+    let max_attemps = attempts.get();
     let mut counter = 1;
 
     loop {
@@ -91,7 +103,7 @@ pub fn ensure_unique_filename_with_attempts(
         counter += 1;
 
         // prevent infinite loop
-        if counter > attempts {
+        if counter > max_attemps {
             return Err(
                 "Too many filename conflicts, unable to create unique filename".to_string(),
             );
@@ -162,10 +174,6 @@ pub fn ensure_unique_filename_with_attempts(
 /// // 12-hour format with full names
 /// DDDD, MMMM DD at h:mm A → %A, %B %d at %-I:%M %p
 /// // Output: "Monday, January 15 at 2:30 PM"
-///
-/// // ISO week date
-/// YYYY-Www-D → %G-W%V-%u
-/// // Output: "2025-W03-1"
 /// ```
 ///
 /// # Note
