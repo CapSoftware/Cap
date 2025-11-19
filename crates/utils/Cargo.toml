@@ -30,5 +30,8 @@ directories = "5.0"
 aho-corasick.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

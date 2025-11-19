@@ -53,12 +53,8 @@ pub fn ensure_unique_filename(
     base_filename: &str,
     parent_dir: &std::path::Path,
 ) -> Result<String, String> {
-    ensure_unique_filename_with_attempts(
-        base_filename,
-        parent_dir,
-        // SAFETY: 50 is non zero
-        unsafe { NonZero::new_unchecked(50) },
-    )
+    const DEFAULT_MAX_ATTEMPTS: NonZero<i32> = NonZero::new(50).unwrap();
+    ensure_unique_filename_with_attempts(base_filename, parent_dir, DEFAULT_MAX_ATTEMPTS)
 }
 
 pub fn ensure_unique_filename_with_attempts(
@@ -66,6 +62,10 @@ pub fn ensure_unique_filename_with_attempts(
     parent_dir: &std::path::Path,
     attempts: NonZeroI32,
 ) -> Result<String, String> {
+    if base_filename.contains('/') || base_filename.contains('\\') {
+        return Err("Filename cannot contain path separators".to_string());
+    }
+
     let initial_path = parent_dir.join(base_filename);
 
     if !initial_path.exists() {
@@ -220,23 +220,192 @@ pub fn moment_format_to_chrono(template_format: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    // moment_format_to_chrono tests
 
     #[test]
-    fn moment_format_to_chrono_converts_and_preserves_borrowed_when_unchanged() {
+    fn moment_format_converts_all_patterns() {
         let input = "YYYY-MM-DD HH:mm:ss A a DDDD - DD - MMMM";
         let out = moment_format_to_chrono(input);
         let expected = "%Y-%m-%d %H:%M:%S %p %P %A - %d - %B";
-        assert_eq!(
-            out, expected,
-            "Converted format must match expected chrono format"
-        );
+        assert_eq!(out, expected);
+    }
 
-        // Identity / borrowed case: no tokens -> should return Cow::Borrowed
-        let unchanged = "--";
-        let out2 = moment_format_to_chrono(unchanged);
-        match out2 {
-            Cow::Borrowed(s) => assert_eq!(s, unchanged),
-            Cow::Owned(_) => panic!("Expected Cow::Borrowed for unchanged input"),
+    #[test]
+    fn moment_format_handles_overlapping_patterns() {
+        // MMMM should be matched before MMM, MM, M
+        assert_eq!(moment_format_to_chrono("MMMM"), "%B");
+        assert_eq!(moment_format_to_chrono("MMM"), "%b");
+        assert_eq!(moment_format_to_chrono("MM"), "%m");
+        assert_eq!(moment_format_to_chrono("M"), "%-m");
+
+        // DDDD should be matched before DDD, DD, D
+        assert_eq!(moment_format_to_chrono("DDDD"), "%A");
+        assert_eq!(moment_format_to_chrono("DDD"), "%a");
+        assert_eq!(moment_format_to_chrono("DD"), "%d");
+        assert_eq!(moment_format_to_chrono("D"), "%-d");
+    }
+
+    #[test]
+    fn moment_format_handles_adjacent_tokens() {
+        // No separator between tokens
+        assert_eq!(moment_format_to_chrono("YYYYMMDD"), "%Y%m%d");
+        assert_eq!(moment_format_to_chrono("HHmmss"), "%H%M%S");
+        assert_eq!(
+            moment_format_to_chrono("DDDDMMMMYYYYHHmmss"),
+            "%A%B%Y%H%M%S"
+        );
+    }
+
+    #[test]
+    fn moment_format_handles_12_and_24_hour() {
+        assert_eq!(moment_format_to_chrono("HH:mm"), "%H:%M"); // 24-hour
+        assert_eq!(moment_format_to_chrono("hh:mm A"), "%I:%M %p"); // 12-hour
+        assert_eq!(moment_format_to_chrono("H"), "%-H"); // No padding
+        assert_eq!(moment_format_to_chrono("h"), "%-I"); // No padding
+    }
+
+    #[test]
+    fn moment_format_handles_padding_variants() {
+        // Padded versions
+        assert_eq!(moment_format_to_chrono("DD"), "%d");
+        assert_eq!(moment_format_to_chrono("MM"), "%m");
+        assert_eq!(moment_format_to_chrono("HH"), "%H");
+
+        // Unpadded versions
+        assert_eq!(moment_format_to_chrono("D"), "%-d");
+        assert_eq!(moment_format_to_chrono("M"), "%-m");
+        assert_eq!(moment_format_to_chrono("H"), "%-H");
+    }
+
+    #[test]
+    fn moment_format_empty_string() {
+        let out = moment_format_to_chrono("");
+        match out {
+            Cow::Borrowed(s) => assert_eq!(s, ""),
+            Cow::Owned(_) => panic!("Expected Cow::Borrowed for empty string"),
         }
+    }
+
+    // ensure_unique_filename tests
+
+    #[test]
+    fn unique_filename_when_no_conflict() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let result = ensure_unique_filename("test.cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "test.cap");
+    }
+
+    #[test]
+    fn unique_filename_appends_counter_on_conflict() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create existing file
+        fs::write(temp_dir.path().join("test.cap"), "").unwrap();
+
+        let result = ensure_unique_filename("test.cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "test (1).cap");
+    }
+
+    #[test]
+    fn unique_filename_increments_counter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create existing files
+        fs::write(temp_dir.path().join("test.cap"), "").unwrap();
+        fs::write(temp_dir.path().join("test (1).cap"), "").unwrap();
+        fs::write(temp_dir.path().join("test (2).cap"), "").unwrap();
+
+        let result = ensure_unique_filename("test.cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "test (3).cap");
+    }
+
+    #[test]
+    fn unique_filename_handles_no_extension() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        fs::write(temp_dir.path().join("README"), "").unwrap();
+
+        let result = ensure_unique_filename("README", temp_dir.path()).unwrap();
+        assert_eq!(result, "README (1)");
+    }
+
+    #[test]
+    fn unique_filename_handles_multiple_dots() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        fs::write(temp_dir.path().join("archive.tar.gz"), "").unwrap();
+
+        let result = ensure_unique_filename("archive.tar.gz", temp_dir.path()).unwrap();
+        // Only the last extension is considered
+        assert_eq!(result, "archive.tar (1).gz");
+    }
+
+    #[test]
+    fn unique_filename_respects_max_attempts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create base file
+        fs::write(temp_dir.path().join("test.cap"), "").unwrap();
+
+        // Try with only 3 attempts
+        let attempts = NonZero::new(3).unwrap();
+
+        // Create conflicts for attempts 1, 2, 3
+        fs::write(temp_dir.path().join("test (1).cap"), "").unwrap();
+        fs::write(temp_dir.path().join("test (2).cap"), "").unwrap();
+        fs::write(temp_dir.path().join("test (3).cap"), "").unwrap();
+
+        let result = ensure_unique_filename_with_attempts("test.cap", temp_dir.path(), attempts);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Too many filename conflicts"));
+    }
+
+    #[test]
+    fn unique_filename_handles_directories_as_conflicts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create a directory with the target name
+        fs::create_dir(temp_dir.path().join("test.cap")).unwrap();
+
+        let result = ensure_unique_filename("test.cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "test (1).cap");
+    }
+
+    #[test]
+    fn unique_filename_handles_special_characters() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        fs::write(temp_dir.path().join("My Recording (2024).cap"), "").unwrap();
+
+        let result = ensure_unique_filename("My Recording (2024).cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "My Recording (2024) (1).cap");
+    }
+
+    #[test]
+    fn unique_filename_handles_spaces() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        fs::write(temp_dir.path().join("My Project.cap"), "").unwrap();
+
+        let result = ensure_unique_filename("My Project.cap", temp_dir.path()).unwrap();
+        assert_eq!(result, "My Project (1).cap");
+    }
+
+    #[test]
+    fn unique_filename_finds_gap_in_sequence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create files with a gap in numbering
+        fs::write(temp_dir.path().join("test.cap"), "").unwrap();
+        fs::write(temp_dir.path().join("test (1).cap"), "").unwrap();
+        // Gap: test (2).cap doesn't exist
+        fs::write(temp_dir.path().join("test (3).cap"), "").unwrap();
+
+        let result = ensure_unique_filename("test.cap", temp_dir.path()).unwrap();
+        // Should find the gap at (2)
+        assert_eq!(result, "test (2).cap");
     }
 }
