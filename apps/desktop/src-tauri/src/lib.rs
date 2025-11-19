@@ -22,6 +22,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
@@ -58,6 +59,7 @@ use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
+use screenshot_editor::{create_screenshot_editor_instance, update_screenshot_config};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -2257,6 +2259,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             permissions::request_permission,
             upload_exported_video,
             upload_screenshot,
+            create_screenshot_editor_instance,
+            update_screenshot_config,
             get_recording_meta,
             save_file_dialog,
             list_recordings,

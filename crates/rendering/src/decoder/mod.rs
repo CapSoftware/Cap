@@ -17,6 +17,14 @@ pub struct DecodedFrame {
 }
 
 impl DecodedFrame {
+    pub fn new(data: Vec<u8>, width: u32, height: u32) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+        }
+    }
+
     pub fn data(&self) -> &[u8] {
         &self.data
     }
