@@ -408,7 +408,7 @@ pub fn format_project_name<'a>(
         static ref TIME_REGEX: Regex = Regex::new(r"\{time(?::([^}]+))?\}").unwrap();
         static ref MOMENT_REGEX: Regex = Regex::new(r"\{moment(?::([^}]+))?\}").unwrap();
         static ref AC: aho_corasick::AhoCorasick = {
-            aho_corasick::AhoCorasick::new(&[
+            aho_corasick::AhoCorasick::new([
                 "{recording_mode}",
                 "{mode}",
                 "{target_kind}",
@@ -426,7 +426,7 @@ pub fn format_project_name<'a>(
     };
 
     let result = AC
-        .try_replace_all(&haystack, &[recording_mode, mode, target_kind, target_name])
+        .try_replace_all(haystack, &[recording_mode, mode, target_kind, target_name])
         .expect("AhoCorasick replace should never fail with default configuration");
 
     let result = DATE_REGEX.replace_all(&result, |caps: &regex::Captures| {
