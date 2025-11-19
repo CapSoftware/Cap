@@ -36,6 +36,8 @@ pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+use std::time::Instant;
+
 /// Performs a one-time migration of all UUID-named projects to pretty name-based naming.
 pub async fn migrate(app: &AppHandle) -> Result<(), String> {
     let recordings_dir = recordings_path(app);
@@ -61,37 +63,77 @@ pub async fn migrate(app: &AppHandle) -> Result<(), String> {
     let concurrency_limit = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4)
-        .max(2)
-        .min(16)
+        .clamp(2, 16)
         .min(total_found);
     tracing::debug!("Using concurrency limit of {}", concurrency_limit);
 
+    let wall_start = Instant::now();
+
+    // (project_name, result, duration)
     let migration_results = futures::stream::iter(uuid_projects)
-        .map(migrate_single_project)
+        .map(|project_path| async move {
+            let project_name = project_path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| project_path.display().to_string());
+
+            let start = Instant::now();
+            let res = migrate_single_project(project_path).await;
+            let dur = start.elapsed();
+
+            (project_name, res, dur)
+        })
         .buffer_unordered(concurrency_limit)
         .collect::<Vec<_>>()
         .await;
 
-    // Aggregate results
-    let mut migrated = 0;
-    let mut skipped = 0;
-    let mut failed = 0;
+    let wall_elapsed = wall_start.elapsed();
 
-    for result in migration_results {
+    let mut migrated = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+
+    let mut total_ms: u128 = 0;
+    let mut per_project: Vec<(String, std::time::Duration)> =
+        Vec::with_capacity(migration_results.len());
+
+    for (name, result, dur) in migration_results.into_iter() {
         match result {
             Ok(ProjectMigrationResult::Migrated) => migrated += 1,
             Ok(ProjectMigrationResult::Skipped) => skipped += 1,
             Err(_) => failed += 1,
         }
+        total_ms += dur.as_millis();
+        per_project.push((name, dur));
     }
+
+    let avg_ms = if total_found > 0 {
+        (total_ms as f64) / (total_found as f64)
+    } else {
+        0.0
+    };
+
+    // Sort by duration descending to pick slowest
+    per_project.sort_by(|a, b| b.1.cmp(&a.1));
 
     tracing::info!(
         total_found = total_found,
         migrated = migrated,
         skipped = skipped,
         failed = failed,
+        wall_ms = wall_elapsed.as_millis(),
+        avg_per_project_ms = ?avg_ms,
         "Migration complete"
     );
+
+    // Log top slowest N (choose 5 or less)
+    let top_n = 5.min(per_project.len());
+    if top_n > 0 {
+        tracing::info!("Top {} slowest project migrations:", top_n);
+        for (name, dur) in per_project.into_iter().take(top_n) {
+            tracing::info!(project = %name, ms = dur.as_millis());
+        }
+    }
 
     Ok(())
 }
@@ -166,7 +208,7 @@ async fn migrate_project_filename_async(
     project_path: &Path,
     meta: &RecordingMeta,
 ) -> Result<PathBuf, String> {
-    let sanitized = sanitize_filename::sanitize(&meta.pretty_name.replace(":", "."));
+    let sanitized = sanitize_filename::sanitize(meta.pretty_name.replace(":", "."));
 
     let filename = if sanitized.ends_with(".cap") {
         sanitized
