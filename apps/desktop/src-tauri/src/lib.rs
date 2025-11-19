@@ -3059,9 +3059,9 @@ async fn write_clipboard_string(
         .map_err(|e| format!("Failed to write text to clipboard: {e}"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
-async fn format_project_name(
+fn format_project_name(
     template: Option<String>,
     target_name: String,
     target_kind: String,
