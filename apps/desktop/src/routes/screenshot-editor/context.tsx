@@ -1,7 +1,18 @@
 import { createContextProvider } from "@solid-primitives/context";
-import { createSignal } from "solid-js";
+import { trackStore } from "@solid-primitives/deep";
+import { createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore } from "solid-js/store";
-import type { AspectRatio, BackgroundConfiguration, XY } from "~/utils/tauri";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+	type AspectRatio,
+	type BackgroundConfiguration,
+	commands,
+	type XY,
+} from "~/utils/tauri";
+import {
+	normalizeProject,
+	serializeProjectConfiguration,
+} from "../editor/context";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -48,6 +59,53 @@ export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
 			open: false,
 		});
 
+		const [latestFrame, setLatestFrame] = createLazySignal<{
+			width: number;
+			data: ImageData;
+		}>();
+
+		const [editorInstance] = createResource(async () => {
+			const instance = await commands.createScreenshotEditorInstance(
+				props.path,
+			);
+
+			const [_ws, isConnected] = createImageDataWS(
+				instance.framesSocketUrl,
+				setLatestFrame,
+			);
+
+			return instance;
+		});
+
+		createEffect(
+			on(
+				() => trackStore(project),
+				async () => {
+					const instance = editorInstance();
+					if (!instance) return;
+
+					// Convert ScreenshotProject to ProjectConfiguration
+					// We need to construct a full ProjectConfiguration from the partial ScreenshotProject
+					// For now, we can use a default one and override background
+					const config = serializeProjectConfiguration({
+						...normalizeProject({
+							// @ts-expect-error - partial config
+							background: project.background,
+							// @ts-expect-error - partial config
+							camera: {
+								source: { type: "none" },
+							},
+						}),
+						// @ts-expect-error
+						aspectRatio: project.aspectRatio,
+					});
+
+					await commands.updateScreenshotConfig(instance, config);
+				},
+				{ defer: true },
+			),
+		);
+
 		// Mock history for now or implement if needed
 		const projectHistory = {
 			pause: () => () => {},
@@ -66,5 +124,7 @@ export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
 			projectHistory,
 			dialog,
 			setDialog,
+			latestFrame,
+			editorInstance,
 		};
 	}, null!);
