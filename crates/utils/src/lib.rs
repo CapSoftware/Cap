@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     future::Future,
-    num::{NonZero, NonZeroI16, NonZeroI32},
+    num::{NonZero, NonZeroI32},
     path::PathBuf,
     sync::LazyLock,
 };
@@ -56,7 +56,7 @@ pub fn ensure_unique_filename(
     ensure_unique_filename_with_attempts(
         base_filename,
         parent_dir,
-        // SAFETY: 20 is non zero
+        // SAFETY: 50 is non zero
         unsafe { NonZero::new_unchecked(50) },
     )
 }
@@ -84,7 +84,7 @@ pub fn ensure_unique_filename_with_attempts(
         (base_filename, String::new())
     };
 
-    let max_attemps = attempts.get();
+    let max_attempts = attempts.get();
     let mut counter = 1;
 
     loop {
@@ -103,7 +103,7 @@ pub fn ensure_unique_filename_with_attempts(
         counter += 1;
 
         // prevent infinite loop
-        if counter > max_attemps {
+        if counter > max_attempts {
             return Err(
                 "Too many filename conflicts, unable to create unique filename".to_string(),
             );
@@ -111,10 +111,13 @@ pub fn ensure_unique_filename_with_attempts(
     }
 }
 
-/// Converts user-friendly moment template format strings to chrono format strings.
+/// Converts moment-style template format strings to chrono format strings.
 ///
-/// This function translates common template format patterns to chrono format specifiers,
-/// allowing users to write intuitive date/time formats that get converted to chrono's format.
+/// This function translates a custom subset of date/time patterns to chrono format specifiers.
+///
+/// **Note**: This is NOT fully compatible with moment.js. Notably, `DDD`/`DDDD` map to
+/// weekday names here, whereas in moment.js they represent day-of-year. Day-of-year and
+/// ISO week tokens are not supported.
 ///
 /// # Supported Format Patterns
 ///

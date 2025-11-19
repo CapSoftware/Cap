@@ -1,22 +1,17 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use cap_project::RecordingMeta;
 use futures::StreamExt;
-use lazy_static::lazy_static;
 use tauri::AppHandle;
-use tokio::fs;
+use tokio::{fs, sync::Mutex};
 
 use crate::recordings_path;
 
 const STORE_KEY: &str = "uuid_projects_migrated";
-
-lazy_static! {
-    static ref IN_FLIGHT_BASES: tokio::sync::Mutex<HashSet<String>> =
-        tokio::sync::Mutex::new(HashSet::new());
-}
 
 pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
     use tauri_plugin_store::StoreExt;
@@ -77,20 +72,24 @@ pub async fn migrate(app: &AppHandle) -> Result<(), String> {
     tracing::debug!("Using concurrency limit of {}", concurrency_limit);
 
     let wall_start = Instant::now();
+    let in_flight_bases = Arc::new(Mutex::new(HashSet::new()));
 
     // (project_name, result, duration)
     let migration_results = futures::stream::iter(uuid_projects)
-        .map(|project_path| async move {
-            let project_name = project_path
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| project_path.display().to_string());
+        .map(|project_path| {
+            let in_flight = in_flight_bases.clone();
+            async move {
+                let project_name = project_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| project_path.display().to_string());
 
-            let start = Instant::now();
-            let res = migrate_single_project(project_path).await;
-            let dur = start.elapsed();
+                let start = Instant::now();
+                let res = migrate_single_project(project_path, in_flight).await;
+                let dur = start.elapsed();
 
-            (project_name, res, dur)
+                (project_name, res, dur)
+            }
         })
         .buffer_unordered(concurrency_limit)
         .collect::<Vec<_>>()
@@ -181,7 +180,10 @@ enum ProjectMigrationResult {
     Skipped,
 }
 
-async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult, String> {
+async fn migrate_single_project(
+    path: PathBuf,
+    in_flight_basis: Arc<Mutex<HashSet<String>>>,
+) -> Result<ProjectMigrationResult, String> {
     let filename = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -198,7 +200,7 @@ async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult,
     // Lock on the base sanitized name to prevent concurrent migrations with same target
     let base_name = sanitize_filename::sanitize(meta.pretty_name.replace(":", "."));
     {
-        let mut in_flight = IN_FLIGHT_BASES.lock().await;
+        let mut in_flight = in_flight_basis.lock().await;
         let mut wait_count = 0;
         while !in_flight.insert(base_name.clone()) {
             wait_count += 1;
@@ -211,7 +213,7 @@ async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult,
             }
             drop(in_flight);
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            in_flight = IN_FLIGHT_BASES.lock().await;
+            in_flight = in_flight_basis.lock().await;
         }
         if wait_count > 0 {
             tracing::debug!(
@@ -225,7 +227,7 @@ async fn migrate_single_project(path: PathBuf) -> Result<ProjectMigrationResult,
 
     let result = migrate_project_filename_async(&path, &meta).await;
 
-    IN_FLIGHT_BASES.lock().await.remove(&base_name);
+    in_flight_basis.lock().await.remove(&base_name);
 
     match result {
         Ok(new_path) => {
