@@ -88,11 +88,12 @@ manual_clamp = "deny"
 
 # Optimize for smaller binary size
 [profile.release]
-panic = "abort"   # Strip expensive panic clean-up logic
-codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
-opt-level = "s"   # Optimize for binary size
-debug = true
+codegen-units = 8 # Compile crates one after another so the compiler can optimize better
+# panic = "abort"   # Strip expensive panic clean-up logic
+# codegen-units = 1 # Compile crates one after another so the compiler can optimize better
+# lto = true        # Enables link to optimizations
+# opt-level = "s"   # Optimize for binary size
+# debug = true
 
 [patch.crates-io]
 # screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
