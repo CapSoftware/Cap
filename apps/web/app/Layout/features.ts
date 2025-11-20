@@ -1,6 +1,8 @@
 import { Effect, Store, useStore } from "@tanstack/react-store";
 
-const defaultFeatureFlags = {};
+const defaultFeatureFlags = {
+	enableEffectOnUploadButton: false,
+};
 
 type FeatureFlags = typeof defaultFeatureFlags;
 

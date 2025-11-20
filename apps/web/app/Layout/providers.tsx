@@ -191,6 +191,22 @@ function CapDevtools() {
 				</label>
 			</div>*/}
 			<div className="space-y-2">
+				<h1 className="text-lg font-semibold">Features</h1>
+				<label className="flex items-center space-x-2">
+					<input
+						type="checkbox"
+						checked={flags.enableEffectOnUploadButton}
+						onChange={(e) =>
+							featureFlags.setState((prev) => ({
+								...prev,
+								enableEffectOnUploadButton: e.target.checked,
+							}))
+						}
+					/>
+					<span>Enable Effect on Upload Button</span>
+				</label>
+			</div>
+			<div className="space-y-2">
 				<h1 className="text-lg font-semibold">Cap Pro</h1>
 				<p className="text-xs text-muted-foreground">
 					Toggle the current user's Pro status (dev only)
