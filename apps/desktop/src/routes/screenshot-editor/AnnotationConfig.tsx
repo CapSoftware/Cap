@@ -1,5 +1,5 @@
 import { Popover } from "@kobalte/core/popover";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { BACKGROUND_COLORS, hexToRgb, RgbInput, rgbToHex } from "./ColorPicker";
 import { type Annotation, useScreenshotEditorContext } from "./context";
@@ -30,12 +30,13 @@ export function AnnotationConfig() {
 		<Show when={selected()}>
 			{(ann) => {
 				const type = ann().type;
+				const isMask = type === "mask";
 				const maskType = () => ann().maskType ?? "blur";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
 					<Portal>
 						<div class="fixed left-1/2 -translate-x-1/2 top-20 z-[100] flex items-center gap-3 p-2 rounded-xl border border-gray-3 bg-gray-1/90 backdrop-blur-md shadow-xl animate-in fade-in slide-in-from-top-2">
-							<Show when={type !== "mask"}>
+							<Show when={!isMask}>
 								<div class="flex flex-col gap-1">
 									<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider">
 										{type === "text" ? "Color" : "Stroke"}
@@ -47,7 +48,7 @@ export function AnnotationConfig() {
 								</div>
 							</Show>
 
-							<Show when={type !== "text" && type !== "mask"}>
+							<Show when={type !== "text" && !isMask}>
 								<div class="flex flex-col gap-1 w-24">
 									<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
 										Width <span>{ann().strokeWidth}px</span>
@@ -76,7 +77,7 @@ export function AnnotationConfig() {
 								</div>
 							</Show>
 
-							<Show when={type !== "mask"}>
+							<Show when={!isMask}>
 								<div class="flex flex-col gap-1 w-24">
 									<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
 										Opacity <span>{Math.round(ann().opacity * 100)}%</span>

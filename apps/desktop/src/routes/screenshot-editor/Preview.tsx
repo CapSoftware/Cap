@@ -217,6 +217,48 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 						let maskCanvasRef: HTMLCanvasElement | undefined;
 
+						const blurRegion = (
+							ctx: CanvasRenderingContext2D,
+							source: HTMLCanvasElement,
+							startX: number,
+							startY: number,
+							regionWidth: number,
+							regionHeight: number,
+							level: number,
+						) => {
+							const scale = Math.max(2, Math.round(level / 4));
+							const temp = document.createElement("canvas");
+							temp.width = Math.max(1, Math.floor(regionWidth / scale));
+							temp.height = Math.max(1, Math.floor(regionHeight / scale));
+							const tempCtx = temp.getContext("2d");
+							if (!tempCtx) return;
+
+							tempCtx.imageSmoothingEnabled = true;
+							tempCtx.drawImage(
+								source,
+								startX,
+								startY,
+								regionWidth,
+								regionHeight,
+								0,
+								0,
+								temp.width,
+								temp.height,
+							);
+
+							ctx.drawImage(
+								temp,
+								0,
+								0,
+								temp.width,
+								temp.height,
+								startX,
+								startY,
+								regionWidth,
+								regionHeight,
+							);
+						};
+
 						const renderMaskOverlays = () => {
 							const frameData = latestFrame();
 							if (!maskCanvasRef) return;
@@ -308,23 +350,15 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 									continue;
 								}
 
-								ctx.save();
-								ctx.beginPath();
-								ctx.rect(startX, startY, regionWidth, regionHeight);
-								ctx.clip();
-								ctx.filter = `blur(${level}px)`;
-								ctx.drawImage(
+								blurRegion(
+									ctx,
 									source,
 									startX,
 									startY,
 									regionWidth,
 									regionHeight,
-									startX,
-									startY,
-									regionWidth,
-									regionHeight,
+									level,
 								);
-								ctx.restore();
 							}
 
 							ctx.filter = "none";
