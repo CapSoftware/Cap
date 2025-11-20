@@ -806,48 +806,6 @@ impl CapWindow {
     }
 }
 
-fn restore_recording_inputs_if_idle(app: &AppHandle<Wry>) {
-    let settings = match RecordingSettingsStore::get(app) {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "Failed to load recording settings while restoring inputs");
-            return;
-        }
-    };
-
-    let mic_name = settings.mic_name.clone();
-    let camera_id = settings.camera_id.clone();
-
-    if mic_name.is_none() && camera_id.is_none() {
-        return;
-    }
-
-    let app_handle = app.clone();
-    let state = app_handle.state::<ArcLock<App>>();
-    let app_state = state.inner().clone();
-
-    tauri::async_runtime::spawn(async move {
-        if app_state.read().await.is_recording_active_or_pending() {
-            return;
-        }
-
-        if let Some(mic) = mic_name {
-            match apply_mic_input(app_handle.state(), Some(mic)).await {
-                Err(err) => warn!(%err, "Failed to restore microphone input"),
-                Ok(_) => {}
-            }
-        }
-
-        if let Some(camera) = camera_id {
-            match apply_camera_input(app_handle.clone(), app_handle.state(), Some(camera)).await {
-                Err(err) => warn!(%err, "Failed to restore camera input"),
-                Ok(_) => {}
-            }
-        }
-    });
-}
-
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(window))]
