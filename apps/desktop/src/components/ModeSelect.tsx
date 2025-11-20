@@ -68,6 +68,13 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 				"Records at the highest quality and framerate, completely locally. Captures both your screen and camera separately for editing and exporting later.",
 			icon: IconCapFilmCut,
 		},
+		{
+			mode: "screenshot" as const,
+			title: "Screenshot Mode",
+			description:
+				"Capture high-quality screenshots of your screen or specific windows. Annotate and share instantly.",
+			icon: IconCapCamera,
+		},
 	];
 
 	return (

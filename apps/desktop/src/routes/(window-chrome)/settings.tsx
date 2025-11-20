@@ -38,8 +38,13 @@ export default function Settings(props: RouteSectionProps) {
 							},
 							{
 								href: "recordings",
-								name: "Previous Recordings",
+								name: "Recordings",
 								icon: IconLucideSquarePlay,
+							},
+							{
+								href: "screenshots",
+								name: "Screenshots",
+								icon: IconLucideImage,
 							},
 							{
 								href: "integrations",

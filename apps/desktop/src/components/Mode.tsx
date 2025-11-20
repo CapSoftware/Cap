@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { commands } from "~/utils/tauri";
+import IconCapImageFilled from "~icons/cap/image-filled";
 
 const Mode = () => {
 	const { rawOptions, setOptions } = useRecordingOptions();
@@ -63,6 +64,28 @@ const Mode = () => {
 				</Tooltip>
 			)}
 
+			{!isInfoHovered() && (
+				<Tooltip
+					placement="top"
+					content="Screenshot mode"
+					openDelay={0}
+					closeDelay={0}
+				>
+					<div
+						onClick={() => {
+							setOptions({ mode: "screenshot" });
+						}}
+						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
+							rawOptions.mode === "screenshot"
+								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-500"
+								: "bg-gray-3 hover:bg-gray-7"
+						}`}
+					>
+						<IconCapImageFilled class="size-3.5 invert dark:invert-0" />
+					</div>
+				</Tooltip>
+			)}
+
 			{isInfoHovered() && (
 				<>
 					<div
@@ -89,6 +112,19 @@ const Mode = () => {
 						}`}
 					>
 						<IconCapFilmCut class="size-3.5 invert dark:invert-0" />
+					</div>
+
+					<div
+						onClick={() => {
+							setOptions({ mode: "screenshot" });
+						}}
+						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
+							rawOptions.mode === "screenshot"
+								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-5 hover:bg-gray-7 ring-blue-10"
+								: "bg-gray-3 hover:bg-gray-7"
+						}`}
+					>
+						<IconCapImageFilled class="size-3.5 invert dark:invert-0" />
 					</div>
 				</>
 			)}

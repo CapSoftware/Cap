@@ -1,9 +1,9 @@
-import { Tooltip as KTooltip } from "@kobalte/core";
+import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import type { ComponentProps, JSX } from "solid-js";
 
-interface Props extends ComponentProps<typeof KTooltip.Root> {
+interface Props extends ComponentProps<typeof KTooltip> {
 	content?: JSX.Element;
 	childClass?: string;
 	kbd?: string[];
@@ -23,8 +23,8 @@ const kbdSymbolModifier = (key: string, os: Os) => {
 export default function Tooltip(props: Props) {
 	const os = ostype();
 	return (
-		<KTooltip.Root {...props} openDelay={props.openDelay ?? 200}>
-			<KTooltip.Trigger class={cx(props.childClass)}>
+		<KTooltip {...props} openDelay={props.openDelay ?? 200}>
+			<KTooltip.Trigger class={cx(props.childClass)} as="div">
 				{props.children}
 			</KTooltip.Trigger>
 			<KTooltip.Portal>
@@ -42,6 +42,6 @@ export default function Tooltip(props: Props) {
 					<KTooltip.Arrow size={16} />
 				</KTooltip.Content>
 			</KTooltip.Portal>
-		</KTooltip.Root>
+		</KTooltip>
 	);
 }

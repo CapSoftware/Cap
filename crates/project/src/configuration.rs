@@ -111,17 +111,6 @@ impl<T: Sub<Output = T> + Copy> Sub<T> for XY<T> {
     }
 }
 
-impl<T: Mul<Output = T> + Copy> Mul<T> for XY<T> {
-    type Output = Self;
-
-    fn mul(self, other: T) -> Self {
-        Self {
-            x: self.x * other,
-            y: self.y * other,
-        }
-    }
-}
-
 impl<T: Mul<Output = T> + Copy> Mul<XY<T>> for XY<T> {
     type Output = Self;
 
@@ -129,6 +118,17 @@ impl<T: Mul<Output = T> + Copy> Mul<XY<T>> for XY<T> {
         Self {
             x: self.x * other.x,
             y: self.y * other.y,
+        }
+    }
+}
+
+impl<T: Mul<Output = T> + Copy> Mul<T> for XY<T> {
+    type Output = Self;
+
+    fn mul(self, other: T) -> Self {
+        Self {
+            x: self.x * other,
+            y: self.y * other,
         }
     }
 }
@@ -289,6 +289,7 @@ pub struct CameraPosition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
@@ -668,6 +669,45 @@ pub struct ClipConfiguration {
     pub offsets: ClipOffsets,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnnotationType {
+    Arrow,
+    Circle,
+    Rectangle,
+    Text,
+    Mask,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskType {
+    Blur,
+    Pixelate,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotation {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub annotation_type: AnnotationType,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub stroke_color: String,
+    pub stroke_width: f64,
+    pub fill_color: String,
+    pub opacity: f64,
+    pub rotation: f64,
+    pub text: Option<String>,
+    #[serde(default)]
+    pub mask_type: Option<MaskType>,
+    #[serde(default)]
+    pub mask_level: Option<f64>,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
@@ -683,6 +723,8 @@ pub struct ProjectConfiguration {
     pub captions: Option<CaptionsData>,
     #[serde(default)]
     pub clips: Vec<ClipConfiguration>,
+    #[serde(default)]
+    pub annotations: Vec<Annotation>,
 }
 
 impl ProjectConfiguration {

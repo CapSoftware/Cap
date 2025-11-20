@@ -22,6 +22,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
@@ -58,6 +59,9 @@ use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
+use screenshot_editor::{
+    ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -84,7 +88,9 @@ use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
-use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
+use windows::{
+    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, set_window_transparent,
+};
 
 use crate::{
     camera::CameraPreviewManager,
@@ -2223,6 +2229,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::resume_recording,
             recording::restart_recording,
             recording::delete_recording,
+            recording::take_screenshot,
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_displays,
@@ -2256,6 +2263,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             permissions::request_permission,
             upload_exported_video,
             upload_screenshot,
+            create_screenshot_editor_instance,
+            update_screenshot_config,
             get_recording_meta,
             save_file_dialog,
             list_recordings,
@@ -2431,6 +2440,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
+                    label if label.starts_with("screenshot-editor-") => "screenshot-editor",
                     label if label.starts_with("window-capture-occluder-") => {
                         "window-capture-occluder"
                     }
@@ -2448,6 +2458,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            app.manage(ScreenshotEditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             app.manage(http_client::HttpClient::default());
@@ -2682,6 +2693,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     reopen_main_window(&app);
                                 }
                             }
+                            CapWindowId::ScreenshotEditor { id } => {
+                                let window_ids =
+                                    ScreenshotEditorWindowIds::get(window.app_handle());
+                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+
+                                tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
+
+                                #[cfg(target_os = "windows")]
+                                if CapWindowId::Settings.get(&app).is_none() {
+                                    reopen_main_window(&app);
+                                }
+                            }
                             CapWindowId::Settings => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label)
@@ -2792,6 +2815,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tauri::RunEvent::Reopen { .. } => {
                 let has_window = _handle.webview_windows().iter().any(|(label, _)| {
                     label.starts_with("editor-")
+                        || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
                 });
@@ -2802,6 +2826,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         .iter()
                         .find(|(label, _)| {
                             label.starts_with("editor-")
+                                || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
                         })
