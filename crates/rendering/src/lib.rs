@@ -691,15 +691,14 @@ impl ProjectUniforms {
         basis as f64 * padding_factor
     }
 
-    pub fn get_output_size(
+    pub fn get_base_size(
         options: &RenderOptions,
         project: &ProjectConfiguration,
-        resolution_base: XY<u32>,
     ) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
         let crop_aspect = crop.aspect_ratio();
 
-        let (base_width, base_height) = match &project.aspect_ratio {
+        match &project.aspect_ratio {
             None => {
                 let padding_basis = u32::max(crop.size.x, crop.size.y) as f64;
                 let padding =
@@ -744,7 +743,15 @@ impl ProjectUniforms {
                     (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
                 }
             }
-        };
+        }
+    }
+
+    pub fn get_output_size(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> (u32, u32) {
+        let (base_width, base_height) = Self::get_base_size(options, project);
 
         let width_scale = resolution_base.x as f32 / base_width as f32;
         let height_scale = resolution_base.y as f32 / base_height as f32;

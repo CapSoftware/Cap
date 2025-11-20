@@ -213,12 +213,15 @@ impl ScreenshotEditorInstances {
                             recording_time: 0.0,
                         };
 
+                        let (base_w, base_h) =
+                            ProjectUniforms::get_base_size(&constants.options, &current_config);
+
                         let uniforms = ProjectUniforms::new(
                             &constants,
                             &current_config,
                             0,
                             30,
-                            cap_project::XY::new(width, height),
+                            cap_project::XY::new(base_w, base_h),
                             &cap_project::CursorEvents::default(),
                             &segment_frames,
                         );

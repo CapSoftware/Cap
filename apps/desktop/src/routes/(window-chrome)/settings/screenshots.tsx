@@ -27,11 +27,8 @@ import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideEdit from "~icons/lucide/edit";
 import IconLucideFolder from "~icons/lucide/folder";
 
-type Screenshot = {
-	meta: RecordingMeta;
-	path: string; // png path
-	prettyName: string;
-	thumbnailPath: string;
+type Screenshot = RecordingMeta & {
+	path: string;
 };
 
 const Tabs: { id: string; label: string; icon?: JSX.Element }[] = [
@@ -45,22 +42,7 @@ const screenshotsQuery = queryOptions({
 	queryKey: ["screenshots"],
 	queryFn: async () => {
 		const result = await commands.listScreenshots().catch(() => [] as const);
-
-		const screenshots = await Promise.all(
-			result.map(async (file) => {
-				const [path, meta] = file;
-				// path is the png path.
-				// thumbnail is the same as path for screenshots.
-
-				return {
-					meta,
-					path,
-					prettyName: meta.pretty_name,
-					thumbnailPath: path,
-				};
-			}),
-		);
-		return screenshots;
+		return result.map(([path, meta]) => ({ ...meta, path }));
 	},
 	reconcile: (old, n) => reconcile(n)(old),
 	refetchInterval: 2000,
@@ -193,14 +175,12 @@ function ScreenshotItem(props: {
 					<img
 						class="object-cover rounded size-12"
 						alt="Screenshot thumbnail"
-						src={`${convertFileSrc(
-							props.screenshot.thumbnailPath,
-						)}?t=${Date.now()}`}
+						src={`${convertFileSrc(props.screenshot.path)}?t=${Date.now()}`}
 						onError={() => setImageExists(false)}
 					/>
 				</Show>
 				<div class="flex flex-col gap-2">
-					<span>{props.screenshot.prettyName}</span>
+					<span>{props.screenshot.pretty_name}</span>
 				</div>
 			</div>
 			<div class="flex gap-2 items-center">

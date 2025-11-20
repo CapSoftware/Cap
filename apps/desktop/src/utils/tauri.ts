@@ -89,6 +89,9 @@ async copyVideoToClipboard(path: string) : Promise<null> {
 async copyScreenshotToClipboard(path: string) : Promise<null> {
     return await TAURI_INVOKE("copy_screenshot_to_clipboard", { path });
 },
+async copyImageToClipboard(data: number[]) : Promise<null> {
+    return await TAURI_INVOKE("copy_image_to_clipboard", { data });
+},
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },

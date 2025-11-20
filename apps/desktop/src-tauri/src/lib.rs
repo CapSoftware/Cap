@@ -1115,6 +1115,25 @@ async fn copy_screenshot_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
+#[instrument(skip(clipboard, data))]
+async fn copy_image_to_clipboard(
+    clipboard: MutableState<'_, ClipboardContext>,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    println!("Copying image to clipboard ({} bytes)", data.len());
+
+    let img_data = clipboard_rs::RustImageData::from_bytes(&data)
+        .map_err(|e| format!("Failed to create image data from bytes: {e}"))?;
+    clipboard
+        .write()
+        .await
+        .set_image(img_data)
+        .map_err(|err| format!("Failed to copy image to clipboard: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(_app))]
 async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
@@ -2248,6 +2267,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
+            copy_image_to_clipboard,
             open_file_path,
             get_video_metadata,
             create_editor_instance,

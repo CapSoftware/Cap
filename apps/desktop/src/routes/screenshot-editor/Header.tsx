@@ -21,6 +21,7 @@ import IconLucideSave from "~icons/lucide/save";
 import { AnnotationTools } from "./AnnotationTools";
 import { useScreenshotEditorContext } from "./context";
 import PresetsSubMenu from "./PresetsDropdown";
+import { useScreenshotExport } from "./useScreenshotExport";
 import { AspectRatioSelect } from "./popovers/AspectRatioSelect";
 import { BackgroundSettingsPopover } from "./popovers/BackgroundSettingsPopover";
 import { BorderPopover } from "./popovers/BorderPopover";
@@ -39,6 +40,8 @@ import {
 export function Header() {
 	const { path, setDialog, project, latestFrame } =
 		useScreenshotEditorContext();
+
+	const { exportImage, isExporting } = useScreenshotExport();
 
 	const cropDialogHandler = () => {
 		const frame = latestFrame();
@@ -93,9 +96,10 @@ export function Header() {
 
 				<EditorButton
 					onClick={() => {
-						commands.copyScreenshotToClipboard(path);
+						exportImage("clipboard");
 					}}
 					tooltipText="Copy to Clipboard"
+					disabled={isExporting()}
 					leftIcon={<IconLucideCopy class="w-4" />}
 				/>
 
