@@ -1,32 +1,34 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { cx } from "cva";
 import { Suspense } from "solid-js";
-import IconCapChevronDown from "~icons/cap/chevron-down";
 import IconCapCirclePlus from "~icons/cap/circle-plus";
 import IconCapPresets from "~icons/cap/presets";
+import IconLucideChevronRight from "~icons/lucide/chevron-right";
 import {
 	DropdownItem,
-	EditorButton,
 	MenuItemList,
 	PopperContent,
-	topCenterAnimateClasses,
+	topSlideAnimateClasses,
 } from "./ui";
 
-export function PresetsDropdown() {
+export function PresetsSubMenu() {
 	return (
-		<KDropdownMenu gutter={8} placement="bottom">
-			<EditorButton<typeof KDropdownMenu.Trigger>
-				as={KDropdownMenu.Trigger}
-				leftIcon={<IconCapPresets />}
-				rightIcon={<IconCapChevronDown />}
+		<KDropdownMenu.Sub gutter={8} placement="right-start">
+			<KDropdownMenu.SubTrigger
+				as={DropdownItem}
+				class="justify-between cursor-default"
 			>
-				Presets
-			</EditorButton>
+				<div class="flex items-center gap-2">
+					<IconCapPresets />
+					<span>Presets</span>
+				</div>
+				<IconLucideChevronRight class="size-3 text-gray-10" />
+			</KDropdownMenu.SubTrigger>
 			<KDropdownMenu.Portal>
 				<Suspense>
-					<PopperContent<typeof KDropdownMenu.Content>
-						as={KDropdownMenu.Content}
-						class={cx("w-72 max-h-56", topCenterAnimateClasses)}
+					<PopperContent<typeof KDropdownMenu.SubContent>
+						as={KDropdownMenu.SubContent}
+						class={cx("w-72 max-h-56", topSlideAnimateClasses)}
 					>
 						<MenuItemList<typeof KDropdownMenu.Group>
 							as={KDropdownMenu.Group}
@@ -48,8 +50,8 @@ export function PresetsDropdown() {
 					</PopperContent>
 				</Suspense>
 			</KDropdownMenu.Portal>
-		</KDropdownMenu>
+		</KDropdownMenu.Sub>
 	);
 }
 
-export default PresetsDropdown;
+export default PresetsSubMenu;

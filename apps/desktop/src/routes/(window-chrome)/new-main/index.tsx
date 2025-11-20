@@ -58,10 +58,15 @@ import {
 	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
+import IconCapLogoFull from "~icons/cap/logo-full";
+import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
+import IconCapSettings from "~icons/cap/settings";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
+import IconLucideBug from "~icons/lucide/bug";
 import IconLucideImage from "~icons/lucide/image";
 import IconLucideSearch from "~icons/lucide/search";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";

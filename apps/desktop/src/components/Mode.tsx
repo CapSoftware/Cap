@@ -81,7 +81,7 @@ const Mode = () => {
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
-						<IconCapImageFilled class="size-[19px] invert dark:invert-0" />
+						<IconCapImageFilled class="size-3.5 invert dark:invert-0" />
 					</div>
 				</Tooltip>
 			)}
@@ -124,7 +124,7 @@ const Mode = () => {
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
-						<IconCapImageFilled class="size-[19px] invert dark:invert-0" />
+						<IconCapImageFilled class="size-3.5 invert dark:invert-0" />
 					</div>
 				</>
 			)}

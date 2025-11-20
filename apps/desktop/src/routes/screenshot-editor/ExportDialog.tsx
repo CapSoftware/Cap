@@ -1,53 +1,196 @@
 import { Button } from "@cap/ui-solid";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { createSignal, Show } from "solid-js";
+import { createSignal } from "solid-js";
 import toast from "solid-toast";
 import { commands } from "~/utils/tauri";
-import IconCapCircleX from "~icons/cap/circle-x";
 import IconCapCopy from "~icons/cap/copy";
 import IconCapFile from "~icons/cap/file";
-import { useScreenshotEditorContext } from "./context";
+import { type Annotation, useScreenshotEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 
 export function ExportDialog() {
-	const { dialog, setDialog, path, project } = useScreenshotEditorContext();
+	const { dialog, setDialog, path, latestFrame, annotations } =
+		useScreenshotEditorContext();
 	const [exporting, setExporting] = createSignal(false);
+
+	const drawAnnotations = (
+		ctx: CanvasRenderingContext2D,
+		annotations: Annotation[],
+	) => {
+		for (const ann of annotations) {
+			if (ann.type === "mask") continue;
+			ctx.save();
+			ctx.globalAlpha = ann.opacity;
+			ctx.strokeStyle = ann.strokeColor;
+			ctx.lineWidth = ann.strokeWidth;
+			ctx.fillStyle = ann.fillColor;
+
+			if (ann.type === "rectangle") {
+				if (ann.fillColor !== "transparent") {
+					ctx.fillRect(ann.x, ann.y, ann.width, ann.height);
+				}
+				ctx.strokeRect(ann.x, ann.y, ann.width, ann.height);
+			} else if (ann.type === "circle") {
+				ctx.beginPath();
+				const cx = ann.x + ann.width / 2;
+				const cy = ann.y + ann.height / 2;
+				const rx = Math.abs(ann.width / 2);
+				const ry = Math.abs(ann.height / 2);
+				ctx.ellipse(cx, cy, rx, ry, 0, 0, 2 * Math.PI);
+				if (ann.fillColor !== "transparent") {
+					ctx.fill();
+				}
+				ctx.stroke();
+			} else if (ann.type === "arrow") {
+				ctx.beginPath();
+				const x1 = ann.x;
+				const y1 = ann.y;
+				const x2 = ann.x + ann.width;
+				const y2 = ann.y + ann.height;
+
+				// Line
+				ctx.moveTo(x1, y1);
+				ctx.lineTo(x2, y2);
+				ctx.stroke();
+
+				// Arrowhead
+				const angle = Math.atan2(y2 - y1, x2 - x1);
+				const headLen = 10 + ann.strokeWidth; // scale with stroke?
+				ctx.beginPath();
+				ctx.moveTo(x2, y2);
+				ctx.lineTo(
+					x2 - headLen * Math.cos(angle - Math.PI / 6),
+					y2 - headLen * Math.sin(angle - Math.PI / 6),
+				);
+				ctx.lineTo(
+					x2 - headLen * Math.cos(angle + Math.PI / 6),
+					y2 - headLen * Math.sin(angle + Math.PI / 6),
+				);
+				ctx.lineTo(x2, y2);
+				ctx.fillStyle = ann.strokeColor;
+				ctx.fill();
+			} else if (ann.type === "text" && ann.text) {
+				ctx.fillStyle = ann.strokeColor; // Text uses stroke color
+				ctx.font = `${ann.height}px sans-serif`;
+				ctx.fillText(ann.text, ann.x, ann.y + ann.height); // text baseline bottomish
+			}
+
+			ctx.restore();
+		}
+	};
+
+	const applyMaskAnnotations = (
+		ctx: CanvasRenderingContext2D,
+		source: HTMLCanvasElement,
+		annotations: Annotation[],
+	) => {
+		for (const ann of annotations) {
+			if (ann.type !== "mask") continue;
+
+			const startX = Math.max(0, Math.min(ann.x, ann.x + ann.width));
+			const startY = Math.max(0, Math.min(ann.y, ann.y + ann.height));
+			const endX = Math.min(source.width, Math.max(ann.x, ann.x + ann.width));
+			const endY = Math.min(source.height, Math.max(ann.y, ann.y + ann.height));
+
+			const regionWidth = endX - startX;
+			const regionHeight = endY - startY;
+			if (regionWidth <= 0 || regionHeight <= 0) continue;
+
+			const level = Math.max(1, ann.maskLevel ?? 16);
+			const type = ann.maskType ?? "blur";
+
+			if (type === "pixelate") {
+				const blockSize = Math.max(2, Math.round(level));
+				const temp = document.createElement("canvas");
+				temp.width = Math.max(1, Math.floor(regionWidth / blockSize));
+				temp.height = Math.max(1, Math.floor(regionHeight / blockSize));
+				const tempCtx = temp.getContext("2d");
+				if (!tempCtx) continue;
+				tempCtx.imageSmoothingEnabled = false;
+				tempCtx.drawImage(
+					source,
+					startX,
+					startY,
+					regionWidth,
+					regionHeight,
+					0,
+					0,
+					temp.width,
+					temp.height,
+				);
+				const previousSmoothing = ctx.imageSmoothingEnabled;
+				ctx.imageSmoothingEnabled = false;
+				ctx.drawImage(
+					temp,
+					0,
+					0,
+					temp.width,
+					temp.height,
+					startX,
+					startY,
+					regionWidth,
+					regionHeight,
+				);
+				ctx.imageSmoothingEnabled = previousSmoothing;
+				continue;
+			}
+
+			ctx.save();
+			ctx.beginPath();
+			ctx.rect(startX, startY, regionWidth, regionHeight);
+			ctx.clip();
+			ctx.filter = `blur(${level}px)`;
+			ctx.drawImage(
+				source,
+				startX,
+				startY,
+				regionWidth,
+				regionHeight,
+				startX,
+				startY,
+				regionWidth,
+				regionHeight,
+			);
+			ctx.restore();
+		}
+		ctx.filter = "none";
+	};
 
 	const exportImage = async (destination: "file" | "clipboard") => {
 		setExporting(true);
 		try {
-			// 1. Load the image
-			const img = new Image();
-			img.src = convertFileSrc(path);
-			await new Promise((resolve, reject) => {
-				img.onload = resolve;
-				img.onerror = reject;
-			});
-
-			// 2. Create canvas with appropriate dimensions
-			// We need to account for padding, crop, etc.
-			// For now, let's assume simple export of the original image + background settings
-			// This is a simplified implementation. A robust one would replicate the CSS effects on canvas.
-
 			const canvas = document.createElement("canvas");
 			const ctx = canvas.getContext("2d");
 			if (!ctx) throw new Error("Could not get canvas context");
 
-			// Calculate dimensions based on project settings
-			// This logic needs to match Preview.tsx
-			const padding = project.background.padding * 2; // Scale factor?
-			// In Preview.tsx: padding: `${padding * 2}px`
-			// But here we are working with actual pixels.
-			// Let's assume padding is in pixels relative to the image size?
-			// Or we need a consistent scale.
-			// For simplicity, let's just use the image size + padding.
+			const frame = latestFrame();
+			if (frame) {
+				canvas.width = frame.width;
+				canvas.height = frame.data.height;
+				ctx.putImageData(frame.data, 0, 0);
+			} else {
+				// Fallback to loading file
+				const img = new Image();
+				img.src = convertFileSrc(path);
+				await new Promise((resolve, reject) => {
+					img.onload = resolve;
+					img.onerror = reject;
+				});
+				canvas.width = img.width;
+				canvas.height = img.height;
+				ctx.drawImage(img, 0, 0);
+			}
 
-			// TODO: Implement proper rendering logic matching CSS
-			// For now, we'll just export the original image to demonstrate the flow
-			canvas.width = img.width;
-			canvas.height = img.height;
-			ctx.drawImage(img, 0, 0);
+			const sourceCanvas = document.createElement("canvas");
+			sourceCanvas.width = canvas.width;
+			sourceCanvas.height = canvas.height;
+			const sourceCtx = sourceCanvas.getContext("2d");
+			if (!sourceCtx) throw new Error("Could not get source canvas context");
+			sourceCtx.drawImage(canvas, 0, 0);
+
+			applyMaskAnnotations(ctx, sourceCanvas, annotations);
+			drawAnnotations(ctx, annotations);
 
 			// 3. Export
 			const blob = await new Promise<Blob | null>((resolve) =>

@@ -2,7 +2,7 @@ import { Collapsible as KCollapsible } from "@kobalte/core/collapsible";
 import { cx } from "cva";
 import { createSignal } from "solid-js";
 import IconCapChevronDown from "~icons/cap/chevron-down";
-import { Field, Slider } from "./ui";
+import { Field, Slider } from "../ui";
 
 interface Props {
 	size: {

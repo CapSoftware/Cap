@@ -155,7 +155,6 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 												enterToClass="scale-100 opacity-100"
 												exitActiveClass="transition duration-200"
 												exitClass="scale-100"
-												exitToClass="scale-100"
 												exitToClass="scale-95"
 											>
 												<div

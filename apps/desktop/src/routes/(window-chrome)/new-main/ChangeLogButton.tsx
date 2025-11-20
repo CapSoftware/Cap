@@ -6,6 +6,7 @@ import { createStore } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
 import { apiClient } from "~/utils/web-api";
+import IconLucideBell from "~icons/lucide/bell";
 
 const ChangelogButton = () => {
 	const [changelogState, setChangelogState] = makePersisted(

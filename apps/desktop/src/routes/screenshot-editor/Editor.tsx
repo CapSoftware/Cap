@@ -4,7 +4,14 @@ import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
-import { createSignal, Match, Show, Switch } from "solid-js";
+import {
+	createEffect,
+	createSignal,
+	Match,
+	onCleanup,
+	Show,
+	Switch,
+} from "solid-js";
 import { Transition } from "solid-transition-group";
 import {
 	CROP_ZERO,
@@ -18,7 +25,6 @@ import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import IconCapCircleX from "~icons/cap/circle-x";
 import IconLucideMaximize from "~icons/lucide/maximize";
 import IconLucideRatio from "~icons/lucide/ratio";
-import { ConfigSidebar } from "./ConfigSidebar";
 import { useScreenshotEditorContext } from "./context";
 import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
@@ -26,17 +32,98 @@ import { Preview } from "./Preview";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 export function Editor() {
+	const [zoom, setZoom] = createSignal(1);
+	const {
+		projectHistory,
+		setActiveTool,
+		setProject,
+		project,
+		setSelectedAnnotationId,
+	} = useScreenshotEditorContext();
+
+	createEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			// Ignore if typing in an input or contenteditable
+			const target = e.target as HTMLElement;
+			if (
+				target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.isContentEditable
+			) {
+				return;
+			}
+
+			const isMod = e.metaKey || e.ctrlKey;
+			const isShift = e.shiftKey;
+
+			// Undo / Redo
+			if (isMod && e.key.toLowerCase() === "z") {
+				e.preventDefault();
+				if (isShift) {
+					projectHistory.redo();
+				} else {
+					projectHistory.undo();
+				}
+				return;
+			}
+			if (isMod && e.key.toLowerCase() === "y") {
+				e.preventDefault();
+				projectHistory.redo();
+				return;
+			}
+
+			// Tools (No modifiers)
+			if (!isMod && !isShift) {
+				switch (e.key.toLowerCase()) {
+					case "a":
+						setActiveTool("arrow");
+						setSelectedAnnotationId(null);
+						break;
+					case "r":
+						setActiveTool("rectangle");
+						setSelectedAnnotationId(null);
+						break;
+					case "c":
+					case "o": // Support 'o' for oval/circle too
+						setActiveTool("circle");
+						setSelectedAnnotationId(null);
+						break;
+					case "t":
+						setActiveTool("text");
+						setSelectedAnnotationId(null);
+						break;
+					case "v":
+					case "s":
+					case "escape":
+						setActiveTool("select");
+						setSelectedAnnotationId(null);
+						break;
+					case "p": {
+						// Toggle Padding
+						// We need to push history here too if we want undo for padding
+						projectHistory.push();
+						const currentPadding = project.background.padding;
+						setProject("background", "padding", currentPadding === 0 ? 20 : 0);
+						break;
+					}
+				}
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+	});
+
 	return (
 		<>
-			<Header />
+			<Header zoom={zoom()} setZoom={setZoom} />
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-col flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
-					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 pb-0.5">
-						<Preview />
-						<ConfigSidebar />
+					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0">
+						<Preview zoom={zoom()} setZoom={setZoom} />
 					</div>
 				</div>
 				<Dialogs />

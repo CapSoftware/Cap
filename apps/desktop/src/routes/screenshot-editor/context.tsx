@@ -1,15 +1,15 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { debounce } from "@solid-primitives/scheduled";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
-	type AspectRatio,
+	type Annotation,
+	type AnnotationType,
 	type AudioConfiguration,
-	type BackgroundConfiguration,
 	type Camera,
-	type CameraPosition,
 	type CursorConfiguration,
 	commands,
 	type HotkeysConfiguration,
@@ -18,6 +18,7 @@ import {
 } from "~/utils/tauri";
 
 export type ScreenshotProject = ProjectConfiguration;
+export type { Annotation, AnnotationType };
 
 export type CurrentDialog =
 	| { type: "createPreset" }
@@ -39,7 +40,7 @@ const DEFAULT_CAMERA: Camera = {
 	advancedShadow: null,
 	shape: "square",
 	roundingType: "squircle",
-};
+} as unknown as Camera;
 
 const DEFAULT_AUDIO: AudioConfiguration = {
 	mute: false,
@@ -92,75 +93,228 @@ const DEFAULT_PROJECT: ScreenshotProject = {
 	timeline: null,
 	captions: null,
 	clips: [],
-};
+	annotations: [],
+} as unknown as ScreenshotProject;
 
-export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
-	createContextProvider(() => {
-		const [project, setProject] =
-			createStore<ScreenshotProject>(DEFAULT_PROJECT);
-		const [dialog, setDialog] = createSignal<DialogState>({
-			open: false,
-		});
+function createScreenshotEditorContext() {
+	const [project, setProject] = createStore<ScreenshotProject>(DEFAULT_PROJECT);
+	const [annotations, setAnnotations] = createStore<Annotation[]>([]);
+	const [selectedAnnotationId, setSelectedAnnotationId] = createSignal<
+		string | null
+	>(null);
+	const [activeTool, setActiveTool] = createSignal<AnnotationType | "select">(
+		"select",
+	);
 
-		const [latestFrame, setLatestFrame] = createLazySignal<{
-			width: number;
-			data: ImageData;
-		}>();
+	const [dialog, setDialog] = createSignal<DialogState>({
+		open: false,
+	});
 
-		const [editorInstance] = createResource(async () => {
-			// @ts-expect-error - types not updated yet
-			const instance = await commands.createScreenshotEditorInstance();
+	const [latestFrame, setLatestFrame] = createLazySignal<{
+		width: number;
+		data: ImageData;
+	}>();
 
-			if (instance.config) {
-				setProject(reconcile(instance.config));
+	const [editorInstance] = createResource(async () => {
+		const instance = await commands.createScreenshotEditorInstance();
+
+		if (instance.config) {
+			setProject(reconcile(instance.config));
+			if (instance.config.annotations) {
+				setAnnotations(reconcile(instance.config.annotations));
 			}
+		}
 
-			const [_ws, isConnected] = createImageDataWS(
-				instance.framesSocketUrl,
-				setLatestFrame,
-			);
+		// Load initial frame from disk in case WS fails or is slow
+		if (instance.path) {
+			const img = new Image();
+			img.crossOrigin = "anonymous";
+			img.src = convertFileSrc(instance.path);
+			img.onload = () => {
+				const canvas = document.createElement("canvas");
+				canvas.width = img.naturalWidth;
+				canvas.height = img.naturalHeight;
+				const ctx = canvas.getContext("2d");
+				if (ctx) {
+					ctx.drawImage(img, 0, 0);
+					const data = ctx.getImageData(
+						0,
+						0,
+						img.naturalWidth,
+						img.naturalHeight,
+					);
+					setLatestFrame({ width: img.naturalWidth, data });
+				}
+			};
+		}
 
-			return instance;
-		});
-
-		const saveConfig = debounce((config: ProjectConfiguration) => {
-			// @ts-expect-error - command signature update
-			commands.updateScreenshotConfig(config, true);
-		}, 1000);
-
-		createEffect(
-			on([() => trackStore(project), editorInstance], async ([, instance]) => {
-				if (!instance) return;
-
-				const config = unwrap(project);
-
-				// @ts-expect-error - command signature update
-				commands.updateScreenshotConfig(config, false);
-				saveConfig(config);
-			}),
+		const [_ws, _isConnected] = createImageDataWS(
+			instance.framesSocketUrl,
+			setLatestFrame,
 		);
 
-		// Mock history for now or implement if needed
-		const projectHistory = {
-			pause: () => () => {},
-			resume: () => {},
-			undo: () => {},
-			redo: () => {},
-			canUndo: () => false,
-			canRedo: () => false,
-			isPaused: () => false,
+		return instance;
+	});
+
+	const saveConfig = debounce((config: ProjectConfiguration) => {
+		commands.updateScreenshotConfig(config, true);
+	}, 1000);
+
+	createEffect(
+		on(
+			[
+				() => trackStore(project),
+				() => trackStore(annotations),
+				editorInstance,
+			],
+			async ([, , instance]) => {
+				if (!instance) return;
+
+				const config = {
+					...unwrap(project),
+					annotations: unwrap(annotations),
+				};
+
+				commands.updateScreenshotConfig(config, false);
+				saveConfig(config);
+			},
+		),
+	);
+
+	// History Implementation
+	const [history, setHistory] = createStore<{
+		past: { project: ScreenshotProject; annotations: Annotation[] }[];
+		future: { project: ScreenshotProject; annotations: Annotation[] }[];
+	}>({
+		past: [],
+		future: [],
+	});
+
+	type HistorySnapshot = {
+		project: ScreenshotProject;
+		annotations: Annotation[];
+	};
+
+	let pausedHistorySnapshot: HistorySnapshot | null = null;
+	let hasPausedHistoryChanges = false;
+	const [historyPauseCount, setHistoryPauseCount] = createSignal(0);
+
+	createEffect(
+		on([() => trackStore(project), () => trackStore(annotations)], () => {
+			if (historyPauseCount() > 0) {
+				hasPausedHistoryChanges = true;
+			}
+		}),
+	);
+
+	const pushHistory = (snapshot: HistorySnapshot | null = null) => {
+		const state = snapshot ?? {
+			project: structuredClone(unwrap(project)),
+			annotations: structuredClone(unwrap(annotations)),
+		};
+		setHistory("past", (p) => [...p, state]);
+		setHistory("future", []);
+	};
+
+	const pauseHistory = () => {
+		if (historyPauseCount() === 0) {
+			pausedHistorySnapshot = {
+				project: structuredClone(unwrap(project)),
+				annotations: structuredClone(unwrap(annotations)),
+			};
+			hasPausedHistoryChanges = false;
+		}
+
+		setHistoryPauseCount((count) => count + 1);
+
+		let resumed = false;
+
+		return () => {
+			if (resumed) return;
+			resumed = true;
+
+			setHistoryPauseCount((count) => {
+				const next = Math.max(0, count - 1);
+
+				if (next === 0) {
+					if (pausedHistorySnapshot && hasPausedHistoryChanges) {
+						pushHistory(pausedHistorySnapshot);
+					}
+
+					pausedHistorySnapshot = null;
+					hasPausedHistoryChanges = false;
+				}
+
+				return next;
+			});
+		};
+	};
+
+	const undo = () => {
+		if (history.past.length === 0) return;
+		const previous = history.past[history.past.length - 1];
+		const current = {
+			project: structuredClone(unwrap(project)),
+			annotations: structuredClone(unwrap(annotations)),
 		};
 
-		return {
-			get path() {
-				return editorInstance()?.path ?? "";
-			},
-			project,
-			setProject,
-			projectHistory,
-			dialog,
-			setDialog,
-			latestFrame,
-			editorInstance,
+		setHistory("past", (p) => p.slice(0, -1));
+		setHistory("future", (f) => [current, ...f]);
+
+		setProject(reconcile(previous.project));
+		setAnnotations(reconcile(previous.annotations));
+	};
+
+	const redo = () => {
+		if (history.future.length === 0) return;
+		const next = history.future[0];
+		const current = {
+			project: structuredClone(unwrap(project)),
+			annotations: structuredClone(unwrap(annotations)),
 		};
-	}, null!);
+
+		setHistory("future", (f) => f.slice(1));
+		setHistory("past", (p) => [...p, current]);
+
+		setProject(reconcile(next.project));
+		setAnnotations(reconcile(next.annotations));
+	};
+
+	const canUndo = () => history.past.length > 0;
+	const canRedo = () => history.future.length > 0;
+
+	const projectHistory = {
+		push: pushHistory,
+		undo,
+		redo,
+		canUndo,
+		canRedo,
+		pause: pauseHistory,
+		isPaused: () => historyPauseCount() > 0,
+	};
+
+	return {
+		get path() {
+			return editorInstance()?.path ?? "";
+		},
+		project,
+		setProject,
+		annotations,
+		setAnnotations,
+		selectedAnnotationId,
+		setSelectedAnnotationId,
+		activeTool,
+		setActiveTool,
+		projectHistory,
+		dialog,
+		setDialog,
+		latestFrame,
+		editorInstance,
+	};
+}
+
+export const [ScreenshotEditorProvider, useScreenshotEditorContext] =
+	createContextProvider(
+		createScreenshotEditorContext,
+		null as unknown as ReturnType<typeof createScreenshotEditorContext>,
+	);
