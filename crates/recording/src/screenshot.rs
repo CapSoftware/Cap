@@ -1,11 +1,12 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
 use anyhow::{Context, anyhow};
 use image::RgbImage;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
+#[cfg(target_os = "macos")]
 use tracing::error;
 
 #[cfg(target_os = "macos")]
@@ -137,16 +138,96 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
 
     #[cfg(target_os = "windows")]
     let mut capturer = {
-        // Windows implementation
-        // TODO: Implement Windows support similar to above
-        // For now return error on Windows
-        return Err(anyhow!("Windows screenshot not yet implemented"));
+        let item = match target.clone() {
+            ScreenCaptureTarget::Display { id } => {
+                let display = scap_targets::Display::from_id(&id)
+                    .ok_or_else(|| anyhow!("Display not found"))?;
+                display
+                    .raw_handle()
+                    .try_as_capture_item()
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+            }
+            ScreenCaptureTarget::Window { id } => {
+                let window = scap_targets::Window::from_id(&id)
+                    .ok_or_else(|| anyhow!("Window not found"))?;
+                window
+                    .raw_handle()
+                    .try_as_capture_item()
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+            }
+            ScreenCaptureTarget::Area { screen, .. } => {
+                let display = scap_targets::Display::from_id(&screen)
+                    .ok_or_else(|| anyhow!("Display not found"))?;
+                display
+                    .raw_handle()
+                    .try_as_capture_item()
+                    .map_err(|e| anyhow!("Failed to get capture item: {e:?}"))?
+            }
+        };
+
+        let settings = Settings {
+            is_cursor_capture_enabled: Some(true),
+            pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
+            ..Default::default()
+        };
+
+        Capturer::new(
+            item,
+            settings,
+            {
+                let tx = tx.clone();
+                move |frame| {
+                    if let Some(tx) = tx.lock().unwrap().take() {
+                        let res = (|| {
+                            let width = frame.width();
+                            let height = frame.height();
+                            let buffer = frame
+                                .as_buffer()
+                                .map_err(|e| anyhow!("Failed to get buffer: {e:?}"))?;
+                            let data = buffer.data();
+                            let stride = buffer.stride() as usize;
+                            let row_bytes = width as usize * 4;
+
+                            // R8G8B8A8Unorm is RGBA.
+                            // We need to convert to RgbImage (3 channels).
+                            let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+                            for y in 0..height as usize {
+                                let row_start = y * stride;
+                                let row_end = row_start + row_bytes;
+                                if row_end > data.len() {
+                                    break;
+                                }
+                                let row = &data[row_start..row_end];
+                                for chunk in row.chunks_exact(4) {
+                                    rgb_data.push(chunk[0]);
+                                    rgb_data.push(chunk[1]);
+                                    rgb_data.push(chunk[2]);
+                                }
+                            }
+
+                            RgbImage::from_raw(width, height, rgb_data)
+                                .ok_or_else(|| anyhow!("Failed to create RgbImage"))
+                        })();
+                        let _ = tx.send(res);
+                    }
+                    Ok(())
+                }
+            },
+            || Ok(()),
+            None,
+        )
+        .map_err(|e| anyhow!("Failed to create capturer: {e:?}"))?
     };
 
     #[cfg(target_os = "macos")]
     capturer
         .start()
         .await
+        .map_err(|e| anyhow!("Failed to start capturer: {e:?}"))?;
+
+    #[cfg(target_os = "windows")]
+    capturer
+        .start()
         .map_err(|e| anyhow!("Failed to start capturer: {e:?}"))?;
 
     // Wait for frame or timeout
@@ -160,6 +241,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
     capturer
         .stop()
         .await
+        .map_err(|e| anyhow!("Failed to stop capturer: {e:?}"))?;
+
+    #[cfg(target_os = "windows")]
+    capturer
+        .stop()
         .map_err(|e| anyhow!("Failed to stop capturer: {e:?}"))?;
 
     let image = result?;
@@ -179,7 +265,19 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         };
 
         #[cfg(target_os = "windows")]
-        let scale = 1.0; // TODO: Windows scale
+        let scale = {
+            let display = scap_targets::Display::from_id(&screen)
+                .ok_or_else(|| anyhow!("Display not found"))?;
+            let physical_width = display
+                .physical_size()
+                .map(|s| s.width())
+                .unwrap_or(1.0);
+            let logical_width = display
+                .logical_size()
+                .map(|s| s.width())
+                .unwrap_or(1.0);
+            physical_width / logical_width
+        };
 
         let x = (bounds.position().x() * scale) as u32;
         let y = (bounds.position().y() * scale) as u32;
@@ -202,6 +300,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
     Ok(image)
 }
 
+#[cfg(target_os = "macos")]
 fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result<RgbImage> {
     let mut scaler = ffmpeg::software::scaling::context::Context::get(
         frame.format(),

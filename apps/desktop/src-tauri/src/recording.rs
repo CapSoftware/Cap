@@ -1031,6 +1031,7 @@ pub async fn take_screenshot(
     use crate::NewScreenshotAdded;
     use crate::notifications;
     use cap_recording::screenshot::capture_screenshot;
+    use image::ImageEncoder;
 
     let image = capture_screenshot(target)
         .await
@@ -1053,9 +1054,24 @@ pub async fn take_screenshot(
     let image_filename = "original.png";
     let image_path = cap_dir.join(image_filename);
 
-    image
-        .save_with_format(&image_path, image::ImageFormat::Png)
-        .map_err(|e| format!("Failed to save screenshot: {e}"))?;
+    let file = std::fs::File::create(&image_path)
+        .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
+
+    // Use Best compression to keep file size small while maintaining lossless quality
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        file,
+        image::codecs::png::CompressionType::Best,
+        image::codecs::png::FilterType::Adaptive,
+    );
+
+    image::ImageEncoder::write_image(
+        encoder,
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        image::ColorType::Rgb8.into(),
+    )
+    .map_err(|e| format!("Failed to save screenshot: {e}"))?;
 
     // Create metadata
     let relative_path = relative_path::RelativePathBuf::from(image_filename);
