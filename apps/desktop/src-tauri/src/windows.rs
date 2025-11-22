@@ -34,10 +34,6 @@ use cap_recording::feeds;
 #[cfg(target_os = "macos")]
 use crate::platform::{self, WebviewWindowExt};
 
-#[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET_WITH_TOOLBAR: LogicalPosition<f64> =
-    LogicalPosition::new(20.0, 30.0);
-
 #[derive(Clone, Deserialize, Type)]
 pub enum CapWindowDef {
     // Contains onboarding + permissions
@@ -439,9 +435,6 @@ impl CapWindow {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
-
-                #[cfg(target_os = "macos")]
-                platform::add_recent_document(project_path);
 
                 self.window_builder(app, "/editor")
                     .maximizable(true)

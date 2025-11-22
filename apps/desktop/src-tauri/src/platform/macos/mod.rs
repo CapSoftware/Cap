@@ -40,11 +40,3 @@ impl WebviewWindowExt for WebviewWindow {
         }
     }
 }
-
-pub fn add_recent_document<P: AsRef<Path>>(path: P) {
-    if let Some(url) = NSURL::from_file_path(path) {
-        run_on_main(move |mtm| {
-            NSDocumentController::sharedDocumentController(mtm).noteNewRecentDocumentURL(&url)
-        })
-    }
-}
