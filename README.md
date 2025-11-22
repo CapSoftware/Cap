@@ -39,8 +39,8 @@ Cap Web 可透過 Docker 或 Railway 進行自行架設，想了解更多請參�
 
 ### 應用（Apps）：
 
-- `desktop`：一個 [Tauri](https://tauri.app)（Rust）應用，前端使用 [SolidStart](https://start.solidjs.com)。
-- `web`：一個 [Next.js](https://nextjs.org) 網站應用。
+- `desktop`： [Tauri](https://tauri.app)（Rust）app，前端使用 [SolidStart](https://start.solidjs.com)。
+- `web`： [Next.js](https://nextjs.org) web app。
 
 ### 套件（Packages）：
 
