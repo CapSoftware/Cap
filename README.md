@@ -4,13 +4,13 @@
   </p>
 	<h1 align="center"><b>Cap</b></h1>
 	<p align="center">
-		Loom 的開源替代方案
+		The open source Loom alternative.
     <br />
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
     <br />
-    <b>下載適用版本 </b>
-		<a href="https://cap.so/download">macOS 與 Windows</a>
+    <b>Downloads for </b>
+		<a href="https://cap.so/download">macOS & Windows</a>
     <br />
   </p>
 </p>
@@ -18,54 +18,55 @@
 
 [![Open Bounties](https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen)](https://console.algora.io/org/CapSoftware/bounties?status=open)
 
-Cap 是 Loom 的開源替代方案。它是一款視訊通話工具，能讓你在數秒內錄製、編輯並分享影片。
+Cap is the open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
 <img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png"/>
 
-# 自行架設（Self Hosting）
+# Self Hosting
 
-Cap Web 可透過 Docker 或 Railway 進行自行架設，想了解更多請參考我們的[self-hosting docs](https://cap.so/docs/self-hosting)。
-你也可以使用下方按鈕，將 Cap Web 部署到 Railway：
+Cap Web is available to self-host using Docker or Railway, see our [self-hosting docs](https://cap.so/docs/self-hosting) to learn more.
+You can also use the button below to deploy Cap Web to Railway:
 
-[![在 Railway 部署](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
 
-無論你是自行架設，或是[從我們的網站下載](https://cap.so/download)，Cap Desktop 都能連線到你自行架設的 Cap Web 。
+Cap Desktop can connect to your self-hosted Cap Web instance regardless of if you build it yourself or [download from our website](https://cap.so/download).
 
-# Monorepo 應用架構
+# Monorepo App Architecture
 
-這個由 Turborepo 驅動的 monorepo 使用 Rust、React（Next.js）、TypeScript、Tauri、Drizzle（ORM）、MySQL、TailwindCSS 等技術的組合。
+We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS throughout this Turborepo powered monorepo.
 
-> 關於資料庫的注意事項：目前程式碼僅設計支援 MySQL。MariaDB 或其他相容資料庫可能可部分運作，但未獲官方支援。
+> A note about database: The codebase is currently designed to work with MySQL only. MariaDB or other compatible databases might partially work but are not officially supported.
 
-### 應用（Apps）：
+### Apps:
 
-- `desktop`： [Tauri](https://tauri.app)（Rust），前端使用 [SolidStart](https://start.solidjs.com)。
-- `web`： [Next.js](https://nextjs.org) 。
+- `desktop`: A [Tauri](https://tauri.app) (Rust) app, using [SolidStart](https://start.solidjs.com) on the frontend.
+- `web`: A [Next.js](https://nextjs.org) web app.
 
-### 套件（Packages）：
+### Packages:
 
-- `ui`： [React](https://reactjs.org) 的共用元件庫。
-- `utils`： [React](https://reactjs.org) 的共用工具庫。
-- `tsconfig`：在整個 monorepo 中共用的 `tsconfig` 設定。
-- `database`： [React](https://reactjs.org) 與 [Drizzle ORM](https://orm.drizzle.team/) 的共用資料庫程式庫。
-- `config`：`eslint` 設定（包含 `eslint-config-next`、`eslint-config-prettier` 等在 monorepo 中使用的其他設定）。
+- `ui`: A [React](https://reactjs.org) Shared component library.
+- `utils`: A [React](https://reactjs.org) Shared utility library.
+- `tsconfig`: Shared `tsconfig` configurations used throughout the monorepo.
+- `database`: A [React](https://reactjs.org) and [Drizzle ORM](https://orm.drizzle.team/) Shared database library.
+- `config`: `eslint` configurations (includes `eslint-config-next`, `eslint-config-prettier` other configs used throughout the monorepo).
 
-### 授權（License）：
-本軟體的授權條款部分如下：
+### License:
+Portions of this software are licensed as follows:
 
-- `cap-camera*` 與 `scap-*` 系列 crate 中的所有程式碼皆採用 MIT 授權（見 [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT)）。
-- 所有第三方元件皆依其擁有者提供的原始授權條款授權。
-- 其餘未於上述提及的內容皆依 [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE) 中定義的 AGPLv3 授權提供。
+- All code residing in the `cap-camera*` and `scap-*` families of crates is licensed under the MIT License (see [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT)).
+- All third party components are licensed under the original license provided by the owner of the applicable component
+- All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE)
   
-# 貢獻（Contributing）
+# Contributing
 
-更多資訊請見 [CONTRIBUTING.md](CONTRIBUTING.md)。本指南仍在持續完善，會隨著應用成熟而定期更新。
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This guide is a work in progress, and is updated regularly as the app matures.
 
-## 分析（Tinybird）
+## Analytics (Tinybird)
 
-Cap 使用 [Tinybird](https://www.tinybird.co) 收集觀眾遙測資料以建立儀表板。Tinybird Admin Token（`TINYBIRD_ADMIN_TOKEN` 或 `TINYBIRD_TOKEN`）必須存在於你的環境中。當 Token 準備就緒後，你可以：
+Cap uses [Tinybird](https://www.tinybird.co) to ingest viewer telemetry for dashboards. The Tinybird admin token (`TINYBIRD_ADMIN_TOKEN` or `TINYBIRD_TOKEN`) must be available in your environment. Once the token is present you can:
 
-- 透過 `pnpm analytics:setup` 佈建需要的資料來源與實體化檢視。這個指令會在需要時安裝 Tinybird CLI；當缺少 `.tinyb` 認證檔案時執行 `tb login`；將該認證複製到 `scripts/analytics/tinybird`；最後在該目錄執行 `tb deploy --allow-destructive-operations --wait`。**它會把 Tinybird 工作區同步到 `scripts/analytics/tinybird` 定義的資源，並移除該工作區中任何其他的資料來源/管線。**
-- 透過 `pnpm analytics:check` 驗證資料結構與實體化檢視是否符合應用的預期。
+- Provision the required data sources and materialized views via `pnpm analytics:setup`. This command installs the Tinybird CLI (if needed), runs `tb login` when a `.tinyb` credential file is missing, copies that credential into `scripts/analytics/tinybird`, and finally executes `tb deploy --allow-destructive-operations --wait` from that directory. **It synchronizes the Tinybird workspace to the resources defined in `scripts/analytics/tinybird`, removing any other datasources/pipes in that workspace.**
+- Validate that the schema and materialized views match what the app expects via `pnpm analytics:check`.
 
-兩個指令都會針對由 `TINYBIRD_HOST` 指定的工作區（預設為 `https://api.tinybird.co`）。在執行 `analytics:setup` 之前，請務必了解部署步驟具破壞性所帶來的影響並確認你能接受。
+Both commands target the workspace pointed to by `TINYBIRD_HOST` (defaults to `https://api.tinybird.co`). Make sure you are comfortable with the destructive nature of the deploy step before running `analytics:setup`.
+
