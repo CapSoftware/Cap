@@ -39,15 +39,15 @@ Cap Web 可透過 Docker 或 Railway 進行自行架設，想了解更多請參�
 
 ### 應用（Apps）：
 
-- `desktop`： [Tauri](https://tauri.app)（Rust）app，前端使用 [SolidStart](https://start.solidjs.com)。
-- `web`： [Next.js](https://nextjs.org) web app。
+- `desktop`： [Tauri](https://tauri.app)（Rust），前端使用 [SolidStart](https://start.solidjs.com)。
+- `web`： [Next.js](https://nextjs.org) 。
 
 ### 套件（Packages）：
 
-- `ui`：一個 [React](https://reactjs.org) 的共用元件庫。
-- `utils`：一個 [React](https://reactjs.org) 的共用工具庫。
+- `ui`： [React](https://reactjs.org) 的共用元件庫。
+- `utils`： [React](https://reactjs.org) 的共用工具庫。
 - `tsconfig`：在整個 monorepo 中共用的 `tsconfig` 設定。
-- `database`：一個 [React](https://reactjs.org) 與 [Drizzle ORM](https://orm.drizzle.team/) 的共用資料庫程式庫。
+- `database`： [React](https://reactjs.org) 與 [Drizzle ORM](https://orm.drizzle.team/) 的共用資料庫程式庫。
 - `config`：`eslint` 設定（包含 `eslint-config-next`、`eslint-config-prettier` 等在 monorepo 中使用的其他設定）。
 
 ### 授權（License）：
