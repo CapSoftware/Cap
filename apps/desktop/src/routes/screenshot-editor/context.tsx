@@ -24,8 +24,7 @@ export type CurrentDialog =
 	| { type: "createPreset" }
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
-	| { type: "crop"; position: XY<number>; size: XY<number> }
-	| { type: "export" };
+	| { type: "crop"; position: XY<number>; size: XY<number> };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 

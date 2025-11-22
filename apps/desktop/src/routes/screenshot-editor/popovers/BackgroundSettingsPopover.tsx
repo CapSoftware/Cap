@@ -198,7 +198,7 @@ export function BackgroundSettingsPopover() {
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapImage class="size-4" />}
-				tooltipText="Background Settings"
+				tooltipText="Background"
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[400px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95">

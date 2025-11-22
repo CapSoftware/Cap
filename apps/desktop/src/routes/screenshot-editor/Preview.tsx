@@ -1,15 +1,11 @@
 import { createElementBounds } from "@solid-primitives/bounds";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { cx } from "cva";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import Tooltip from "~/components/Tooltip";
-import IconCapCrop from "~icons/cap/crop";
 import IconCapZoomIn from "~icons/cap/zoom-in";
 import IconCapZoomOut from "~icons/cap/zoom-out";
 import { ASPECT_RATIOS } from "../editor/projectConfig";
 import { EditorButton, Slider } from "../editor/ui";
+import { AnnotationLayer } from "./AnnotationLayer";
 import { useScreenshotEditorContext } from "./context";
-import { AspectRatioSelect } from "./popovers/AspectRatioSelect";
 
 // CSS for checkerboard grid
 const gridStyle = {
@@ -20,11 +16,8 @@ const gridStyle = {
 	"background-position": "0 0, 0 10px, 10px -10px, -10px 0px",
 };
 
-import { AnnotationLayer } from "./AnnotationLayer";
-
 export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
-	const { path, project, setDialog, latestFrame, annotations, activeTool } =
-		useScreenshotEditorContext();
+	const { project, latestFrame, annotations } = useScreenshotEditorContext();
 	let canvasRef: HTMLCanvasElement | undefined;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
@@ -56,6 +49,33 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
 				ctx.putImageData(frame.data, 0, 0);
+				const crop = project.background.crop;
+				if (crop) {
+					const width = canvasRef.width;
+					const height = canvasRef.height;
+					const cropX = Math.max(0, Math.round(crop.position.x));
+					const cropY = Math.max(0, Math.round(crop.position.y));
+					const cropW = Math.max(
+						0,
+						Math.min(Math.round(crop.size.x), width - cropX),
+					);
+					const cropH = Math.max(
+						0,
+						Math.min(Math.round(crop.size.y), height - cropY),
+					);
+					const topH = Math.max(0, cropY);
+					const bottomY = cropY + cropH;
+					const bottomH = Math.max(0, height - bottomY);
+					const leftW = Math.max(0, cropX);
+					const rightX = cropX + cropW;
+					const rightW = Math.max(0, width - rightX);
+					ctx.fillStyle = "white";
+					if (topH > 0) ctx.fillRect(0, 0, width, topH);
+					if (bottomH > 0) ctx.fillRect(0, bottomY, width, bottomH);
+					if (cropH > 0 && leftW > 0) ctx.fillRect(0, cropY, leftW, cropH);
+					if (cropH > 0 && rightW > 0)
+						ctx.fillRect(rightX, cropY, rightW, cropH);
+				}
 			}
 		}
 	});
@@ -111,12 +131,43 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 						const frameWidth = () => frame().width;
 						const frameHeight = () => frame().data.height;
 
+						const imageRect = createMemo(() => {
+							const crop = project.background.crop;
+							if (crop) {
+								return {
+									x: crop.position.x,
+									y: crop.position.y,
+									width: crop.size.x,
+									height: crop.size.y,
+								};
+							}
+							return {
+								x: 0,
+								y: 0,
+								width: frameWidth(),
+								height: frameHeight(),
+							};
+						});
+
 						const bounds = createMemo(() => {
 							const crop = project.background.crop;
-							let minX = crop ? crop.position.x : 0;
-							let minY = crop ? crop.position.y : 0;
-							let maxX = crop ? crop.position.x + crop.size.x : frameWidth();
-							let maxY = crop ? crop.position.y + crop.size.y : frameHeight();
+							const workspacePadding = crop
+								? Math.min(
+										500,
+										Math.max(
+											100,
+											Math.round(Math.max(crop.size.x, crop.size.y) * 0.5),
+										),
+									)
+								: 0;
+							let minX = crop ? crop.position.x - workspacePadding : 0;
+							let minY = crop ? crop.position.y - workspacePadding : 0;
+							let maxX = crop
+								? crop.position.x + crop.size.x + workspacePadding
+								: frameWidth();
+							let maxY = crop
+								? crop.position.y + crop.size.y + workspacePadding
+								: frameHeight();
 
 							for (const ann of annotations) {
 								const ax1 = ann.x;
@@ -285,22 +336,27 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 							if (!masks.length || !canvasRef) return;
 
 							const source = canvasRef;
+							const activeRect = imageRect();
+							const rectLeft = activeRect.x;
+							const rectTop = activeRect.y;
+							const rectRight = activeRect.x + activeRect.width;
+							const rectBottom = activeRect.y + activeRect.height;
 
 							for (const mask of masks) {
 								const startX = Math.max(
-									0,
+									rectLeft,
 									Math.min(mask.x, mask.x + mask.width),
 								);
 								const startY = Math.max(
-									0,
+									rectTop,
 									Math.min(mask.y, mask.y + mask.height),
 								);
 								const endX = Math.min(
-									frameData.width,
+									rectRight,
 									Math.max(mask.x, mask.x + mask.width),
 								);
 								const endY = Math.min(
-									frameData.data.height,
+									rectBottom,
 									Math.max(mask.y, mask.y + mask.height),
 								);
 
@@ -410,6 +466,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 										bounds={bounds()}
 										cssWidth={size().width * props.zoom}
 										cssHeight={size().height * props.zoom}
+										imageRect={imageRect()}
 									/>
 								</div>
 							</div>

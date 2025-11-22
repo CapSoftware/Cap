@@ -19,7 +19,10 @@ export function AnnotationPopover() {
 		annotations.find((a) => a.id === selectedAnnotationId()),
 	);
 
-	const updateSelected = (key: keyof Annotation, value: any) => {
+	const updateSelected = <K extends keyof Annotation>(
+		key: K,
+		value: Annotation[K],
+	) => {
 		const id = selectedAnnotationId();
 		if (!id) return;
 		setAnnotations((a) => a.id === id, key, value);

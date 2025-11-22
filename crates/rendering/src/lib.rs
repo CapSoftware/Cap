@@ -691,10 +691,7 @@ impl ProjectUniforms {
         basis as f64 * padding_factor
     }
 
-    pub fn get_base_size(
-        options: &RenderOptions,
-        project: &ProjectConfiguration,
-    ) -> (u32, u32) {
+    pub fn get_base_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
         let crop_aspect = crop.aspect_ratio();
 

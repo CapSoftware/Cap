@@ -9,6 +9,7 @@ import {
 	createSignal,
 	Match,
 	onCleanup,
+	onMount,
 	Show,
 	Switch,
 } from "solid-js";
@@ -26,10 +27,9 @@ import IconCapCircleX from "~icons/cap/circle-x";
 import IconLucideMaximize from "~icons/lucide/maximize";
 import IconLucideRatio from "~icons/lucide/ratio";
 import { useScreenshotEditorContext } from "./context";
-import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Preview } from "./Preview";
-import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { Dialog, EditorButton } from "./ui";
 
 export function Editor() {
 	const [zoom, setZoom] = createSignal(1);
@@ -83,6 +83,10 @@ export function Editor() {
 						setActiveTool("rectangle");
 						setSelectedAnnotationId(null);
 						break;
+					case "m":
+						setActiveTool("mask");
+						setSelectedAnnotationId(null);
+						break;
 					case "c":
 					case "o": // Support 'o' for oval/circle too
 						setActiveTool("circle");
@@ -116,7 +120,7 @@ export function Editor() {
 
 	return (
 		<>
-			<Header zoom={zoom()} setZoom={setZoom} />
+			<Header />
 			<div
 				class="flex overflow-y-hidden flex-col flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
@@ -133,8 +137,10 @@ export function Editor() {
 }
 
 function Dialogs() {
-	const { dialog, setDialog, project, setProject, path } =
+	const { dialog, setDialog, setProject, editorInstance } =
 		useScreenshotEditorContext();
+
+	const path = () => editorInstance()?.path ?? "";
 
 	return (
 		<Dialog.Root
@@ -143,11 +149,7 @@ function Dialogs() {
 				if ("type" in d && d.type === "crop") return "lg";
 				return "sm";
 			})()}
-			contentClass={(() => {
-				const d = dialog();
-				// if ("type" in d && d.type === "export") return "max-w-[740px]";
-				return "";
-			})()}
+			contentClass=""
 			open={dialog().open}
 			onOpenChange={(o) => {
 				if (!o) setDialog((d) => ({ ...d, open: false }));
@@ -159,27 +161,42 @@ function Dialogs() {
 					if ("type" in d) return d;
 				})()}
 			>
-				{(dialog) => (
+				{(dialogData) => (
 					<Switch>
-						<Match when={dialog().type === "export"}>
-							<ExportDialog />
-						</Match>
 						<Match
 							when={(() => {
-								const d = dialog();
+								const d = dialogData();
 								if (d.type === "crop") return d;
 							})()}
 						>
-							{(dialog) => {
+							{(cropDialog) => {
 								let cropperRef: CropperRef | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
+								const [windowSize, setWindowSize] = createSignal({
+									width: window.innerWidth,
+									height: window.innerHeight,
+								});
+
+								onMount(() => {
+									const handleResize = () => {
+										setWindowSize({
+											width: window.innerWidth,
+											height: window.innerHeight,
+										});
+									};
+									window.addEventListener("resize", handleResize);
+									onCleanup(() =>
+										window.removeEventListener("resize", handleResize),
+									);
+								});
+
 								const initialBounds = {
-									x: dialog().position.x,
-									y: dialog().position.y,
-									width: dialog().size.x,
-									height: dialog().size.y,
+									x: cropDialog().position.x,
+									y: cropDialog().position.y,
+									width: cropDialog().size.x,
+									height: cropDialog().size.y,
 								};
 
 								const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
@@ -243,11 +260,17 @@ function Dialogs() {
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
 													<span>Size</span>
 													<div class="w-[3.25rem]">
-														<BoundInput field="width" max={dialog().size.x} />
+														<BoundInput
+															field="width"
+															max={cropDialog().size.x}
+														/>
 													</div>
 													<span>×</span>
 													<div class="w-[3.25rem]">
-														<BoundInput field="height" max={dialog().size.y} />
+														<BoundInput
+															field="height"
+															max={cropDialog().size.y}
+														/>
 													</div>
 												</div>
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
@@ -298,8 +321,8 @@ function Dialogs() {
 													leftIcon={<IconLucideMaximize />}
 													onClick={() => cropperRef?.fill()}
 													disabled={
-														crop().width === dialog().size.x &&
-														crop().height === dialog().size.y
+														crop().width === cropDialog().size.x &&
+														crop().height === cropDialog().size.y
 													}
 												>
 													Full
@@ -311,10 +334,10 @@ function Dialogs() {
 														setAspect(null);
 													}}
 													disabled={
-														crop().x === dialog().position.x &&
-														crop().y === dialog().position.y &&
-														crop().width === dialog().size.x &&
-														crop().height === dialog().size.y
+														crop().x === cropDialog().position.x &&
+														crop().y === cropDialog().position.y &&
+														crop().width === cropDialog().size.x &&
+														crop().height === cropDialog().size.y
 													}
 												>
 													Reset
@@ -322,26 +345,52 @@ function Dialogs() {
 											</div>
 										</Dialog.Header>
 										<Dialog.Content>
-											<div class="flex flex-row justify-center">
-												<div class="rounded divide-black-transparent-10">
+											<div class="flex flex-row justify-center items-center">
+												<div
+													class="rounded overflow-hidden relative select-none"
+													style={{
+														width: (() => {
+															const srcW = cropDialog().size.x;
+															const srcH = cropDialog().size.y;
+															const maxW = Math.min(
+																windowSize().width * 0.8,
+																768,
+															);
+															const maxH = windowSize().height * 0.65;
+															const ratio = Math.min(maxW / srcW, maxH / srcH);
+															return `${srcW * ratio}px`;
+														})(),
+														height: (() => {
+															const srcW = cropDialog().size.x;
+															const srcH = cropDialog().size.y;
+															const maxW = Math.min(
+																windowSize().width * 0.8,
+																768,
+															);
+															const maxH = windowSize().height * 0.65;
+															const ratio = Math.min(maxW / srcW, maxH / srcH);
+															return `${srcH * ratio}px`;
+														})(),
+													}}
+												>
 													<Cropper
 														ref={cropperRef}
 														onCropChange={setCrop}
 														aspectRatio={aspect() ?? undefined}
 														targetSize={{
-															x: dialog().size.x,
-															y: dialog().size.y,
+															x: cropDialog().size.x,
+															y: cropDialog().size.y,
 														}}
 														initialCrop={initialBounds}
 														snapToRatioEnabled={snapToRatio()}
-														useBackdropFilter={true}
+														showBounds={true}
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
 														<img
-															class="shadow pointer-events-none max-h-[70vh]"
+															class="w-full h-full pointer-events-none select-none"
 															alt="screenshot"
-															src={convertFileSrc(path)}
+															src={convertFileSrc(path())}
 														/>
 													</Cropper>
 												</div>

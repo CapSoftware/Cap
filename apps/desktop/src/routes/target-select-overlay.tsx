@@ -716,7 +716,6 @@ function Inner() {
 									const path = await invoke<string>("take_screenshot", {
 										target,
 									});
-									// @ts-expect-error
 									await commands.showWindow({ ScreenshotEditor: { path } });
 									await commands.closeTargetSelectOverlays();
 								} catch (e) {
@@ -847,10 +846,8 @@ function RecordingControls(props: {
 				await CheckMenuItem.new({
 					text: "Screenshot Mode",
 					action: () => {
-						// @ts-expect-error
 						setOptions("mode", "screenshot");
 					},
-					// @ts-expect-error
 					checked: rawOptions.mode === "screenshot",
 				}),
 			],
@@ -918,7 +915,7 @@ function RecordingControls(props: {
 						<div
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
-							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
+							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
 							onClick={async () => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
@@ -948,13 +945,11 @@ function RecordingControls(props: {
 
 								props.onRecordingStart?.();
 
-								// @ts-expect-error
 								if (rawOptions.mode === "screenshot") {
 									try {
 										const path = await invoke<string>("take_screenshot", {
 											target: props.target,
 										});
-										// @ts-expect-error
 										commands.showWindow({ ScreenshotEditor: { path } });
 										commands.closeTargetSelectOverlays();
 									} catch (e) {
@@ -993,7 +988,6 @@ function RecordingControls(props: {
 										{(() => {
 											if (rawOptions.mode === "instant" && !auth.data)
 												return "Sign In To Use";
-											// @ts-expect-error
 											if (rawOptions.mode === "screenshot")
 												return "Take Screenshot";
 											return "Start Recording";

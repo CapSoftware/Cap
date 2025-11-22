@@ -268,14 +268,8 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         let scale = {
             let display = scap_targets::Display::from_id(&screen)
                 .ok_or_else(|| anyhow!("Display not found"))?;
-            let physical_width = display
-                .physical_size()
-                .map(|s| s.width())
-                .unwrap_or(1.0);
-            let logical_width = display
-                .logical_size()
-                .map(|s| s.width())
-                .unwrap_or(1.0);
+            let physical_width = display.physical_size().map(|s| s.width()).unwrap_or(1.0);
+            let logical_width = display.logical_size().map(|s| s.width()).unwrap_or(1.0);
             physical_width / logical_width
         };
 

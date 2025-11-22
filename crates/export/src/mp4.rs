@@ -41,7 +41,7 @@ impl Mp4ExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
-        mut on_progress: impl FnMut(u32) + Send + 'static,
+        mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
         let output_path = base.output_path.clone();
         let meta = &base.studio_meta;
@@ -149,7 +149,9 @@ impl Mp4ExportSettings {
                             }
                         };
 
-                    (on_progress)(frame_count);
+                    if !(on_progress)(frame_count) {
+                        return Err("Export cancelled".to_string());
+                    }
 
                     if frame_count == 0 {
                         first_frame = Some(frame.clone());

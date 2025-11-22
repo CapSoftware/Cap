@@ -9,6 +9,13 @@ export default createHandler(() => (
 					<meta charset="utf-8" />
 					<meta name="viewport" content="width=device-width, initial-scale=1" />
 					<link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
+					<script
+						innerHTML={`
+							if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+								document.documentElement.classList.add('dark');
+							}
+						`}
+					/>
 					{assets}
 				</head>
 				<body class="w-screen h-screen cursor-default select-none">

@@ -1,5 +1,5 @@
 import { cx } from "cva";
-import { Show } from "solid-js";
+import Tooltip from "~/components/Tooltip";
 import IconLucideArrowUpRight from "~icons/lucide/arrow-up-right";
 import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
@@ -17,16 +17,38 @@ export function AnnotationTools() {
 					tool="select"
 					icon={IconLucideMousePointer2}
 					label="Select"
+					shortcut="V"
 				/>
-				<ToolButton tool="arrow" icon={IconLucideArrowUpRight} label="Arrow" />
+				<ToolButton
+					tool="arrow"
+					icon={IconLucideArrowUpRight}
+					label="Arrow"
+					shortcut="A"
+				/>
 				<ToolButton
 					tool="rectangle"
 					icon={IconLucideSquare}
 					label="Rectangle"
+					shortcut="R"
 				/>
-				<ToolButton tool="mask" icon={IconLucideEyeOff} label="Mask" />
-				<ToolButton tool="circle" icon={IconLucideCircle} label="Circle" />
-				<ToolButton tool="text" icon={IconLucideType} label="Text" />
+				<ToolButton
+					tool="mask"
+					icon={IconLucideEyeOff}
+					label="Mask"
+					shortcut="M"
+				/>
+				<ToolButton
+					tool="circle"
+					icon={IconLucideCircle}
+					label="Circle"
+					shortcut="C"
+				/>
+				<ToolButton
+					tool="text"
+					icon={IconLucideType}
+					label="Text"
+					shortcut="T"
+				/>
 			</div>
 			<AnnotationConfig />
 		</>
@@ -39,27 +61,32 @@ function ToolButton(props: {
 	tool: AnnotationType | "select";
 	icon: Component<{ class?: string }>;
 	label: string;
+	shortcut?: string;
 }) {
 	const { activeTool, setActiveTool, setSelectedAnnotationId } =
 		useScreenshotEditorContext();
 	return (
-		<button
-			type="button"
-			onClick={() => {
-				setActiveTool(props.tool);
-				if (props.tool !== "select") {
-					setSelectedAnnotationId(null);
-				}
-			}}
-			class={cx(
-				"flex items-center justify-center rounded-[0.5rem] transition-all size-8",
-				activeTool() === props.tool
-					? "bg-blue-3 text-blue-11"
-					: "bg-transparent hover:bg-gray-3 text-gray-11",
-			)}
-			title={props.label}
+		<Tooltip
+			content={props.label}
+			kbd={props.shortcut ? [props.shortcut] : undefined}
 		>
-			<props.icon class="size-4" />
-		</button>
+			<button
+				type="button"
+				onClick={() => {
+					setActiveTool(props.tool);
+					if (props.tool !== "select") {
+						setSelectedAnnotationId(null);
+					}
+				}}
+				class={cx(
+					"flex items-center justify-center rounded-[0.5rem] transition-all size-8",
+					activeTool() === props.tool
+						? "bg-blue-3 text-blue-11"
+						: "bg-transparent hover:bg-gray-3 text-gray-11",
+				)}
+			>
+				<props.icon class="size-4" />
+			</button>
+		</Tooltip>
 	);
 }

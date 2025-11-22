@@ -3,8 +3,8 @@ import { Popover } from "@kobalte/core/popover";
 import { Toggle } from "~/components/Toggle";
 import IconCapEnlarge from "~icons/cap/enlarge";
 import IconCapImage from "~icons/cap/image";
-import IconCapSettings from "~icons/cap/settings";
 import IconCapShadow from "~icons/cap/shadow";
+import IconCapSquare from "~icons/cap/square";
 import { RgbInput } from "../ColorPicker";
 import { useScreenshotEditorContext } from "../context";
 import { EditorButton, Field, Slider } from "../ui";
@@ -16,7 +16,7 @@ export function BorderPopover() {
 		<Popover placement="bottom-start">
 			<Popover.Trigger
 				as={EditorButton}
-				leftIcon={<IconCapSettings class="size-4" />}
+				leftIcon={<IconCapSquare class="size-4" />}
 				tooltipText="Border"
 			/>
 			<Popover.Portal>

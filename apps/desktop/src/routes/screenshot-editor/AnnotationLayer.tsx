@@ -1,4 +1,3 @@
-import { cx } from "cva";
 import {
 	createEffect,
 	createMemo,
@@ -8,6 +7,7 @@ import {
 	Show,
 } from "solid-js";
 import { unwrap } from "solid-js/store";
+import { getArrowHeadPoints } from "./arrow";
 import {
 	type Annotation,
 	type AnnotationType,
@@ -19,6 +19,7 @@ export function AnnotationLayer(props: {
 	bounds: { x: number; y: number; width: number; height: number };
 	cssWidth: number;
 	cssHeight: number;
+	imageRect: { x: number; y: number; width: number; height: number };
 }) {
 	const {
 		project,
@@ -62,6 +63,9 @@ export function AnnotationLayer(props: {
 		null,
 	);
 
+	const clampValue = (value: number, min: number, max: number) =>
+		Math.min(Math.max(value, min), max);
+
 	// Delete key handler
 	createEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -77,6 +81,49 @@ export function AnnotationLayer(props: {
 		};
 		window.addEventListener("keydown", handleKeyDown);
 		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+	});
+
+	createEffect(() => {
+		const rect = props.imageRect;
+		if (rect.width <= 0 || rect.height <= 0) return;
+		for (const ann of annotations) {
+			if (ann.type !== "mask") continue;
+			const left = clampValue(
+				Math.min(ann.x, ann.x + ann.width),
+				rect.x,
+				rect.x + rect.width,
+			);
+			const right = clampValue(
+				Math.max(ann.x, ann.x + ann.width),
+				rect.x,
+				rect.x + rect.width,
+			);
+			const top = clampValue(
+				Math.min(ann.y, ann.y + ann.height),
+				rect.y,
+				rect.y + rect.height,
+			);
+			const bottom = clampValue(
+				Math.max(ann.y, ann.y + ann.height),
+				rect.y,
+				rect.y + rect.height,
+			);
+			const width = Math.max(0, right - left);
+			const height = Math.max(0, bottom - top);
+			if (
+				left !== Math.min(ann.x, ann.x + ann.width) ||
+				top !== Math.min(ann.y, ann.y + ann.height) ||
+				width !== Math.abs(ann.width) ||
+				height !== Math.abs(ann.height)
+			) {
+				setAnnotations((a) => a.id === ann.id, {
+					x: left,
+					y: top,
+					width,
+					height,
+				});
+			}
+		}
 	});
 
 	// Helper to get coordinates in SVG space
@@ -102,7 +149,9 @@ export function AnnotationLayer(props: {
 			setTextEditingId(null);
 		}
 
-		if (activeTool() === "select") {
+		const tool = activeTool();
+
+		if (tool === "select") {
 			if (e.target === e.currentTarget) {
 				setSelectedAnnotationId(null);
 			}
@@ -117,29 +166,49 @@ export function AnnotationLayer(props: {
 
 		const svg = e.currentTarget as SVGSVGElement;
 		const point = getSvgPoint(e, svg);
+		const startX =
+			tool === "mask"
+				? clampValue(
+						point.x,
+						props.imageRect.x,
+						props.imageRect.x + props.imageRect.width,
+					)
+				: point.x;
+		const startY =
+			tool === "mask"
+				? clampValue(
+						point.y,
+						props.imageRect.y,
+						props.imageRect.y + props.imageRect.height,
+					)
+				: point.y;
 
 		setIsDrawing(true);
 		const id = crypto.randomUUID();
 		const newAnn: Annotation = {
 			id,
-			type: activeTool() as AnnotationType,
-			x: point.x,
-			y: point.y,
+			type: tool as AnnotationType,
+			x: startX,
+			y: startY,
 			width: 0,
 			height: 0,
-			strokeColor: "#F05656", // Red default
-			strokeWidth: 4,
+			strokeColor: tool === "mask" ? "transparent" : "#F05656",
+			strokeWidth: tool === "mask" ? 0 : 4,
 			fillColor: "transparent",
 			opacity: 1,
 			rotation: 0,
-			text: activeTool() === "text" ? "Text" : null,
-			maskType: activeTool() === "mask" ? "blur" : null,
-			maskLevel: activeTool() === "mask" ? 16 : null,
+			text: tool === "text" ? "Text" : null,
+			maskType: tool === "mask" ? "blur" : null,
+			maskLevel: tool === "mask" ? 16 : null,
 		};
 
-		if (activeTool() === "text") {
+		if (tool === "text") {
 			newAnn.height = 40; // Default font size
 			newAnn.width = 150; // Default width
+		}
+
+		if (tool === "mask") {
+			setAnnotations((prev) => [...prev, newAnn]);
 		}
 
 		setTempAnnotation(newAnn);
@@ -150,14 +219,30 @@ export function AnnotationLayer(props: {
 		const point = getSvgPoint(e, svg);
 
 		if (isDrawing() && tempAnnotation()) {
-			const temp = tempAnnotation()!;
-			// Update temp annotation dimensions
+			const temp = tempAnnotation();
+			if (!temp) return;
 			if (temp.type === "text") return;
 
-			let width = point.x - temp.x;
-			let height = point.y - temp.y;
+			const currentX =
+				temp.type === "mask"
+					? clampValue(
+							point.x,
+							props.imageRect.x,
+							props.imageRect.x + props.imageRect.width,
+						)
+					: point.x;
+			const currentY =
+				temp.type === "mask"
+					? clampValue(
+							point.y,
+							props.imageRect.y,
+							props.imageRect.y + props.imageRect.height,
+						)
+					: point.y;
 
-			// Shift key for aspect ratio constraint
+			let width = currentX - temp.x;
+			let height = currentY - temp.y;
+
 			if (e.shiftKey) {
 				if (
 					temp.type === "rectangle" ||
@@ -168,7 +253,6 @@ export function AnnotationLayer(props: {
 					width = width < 0 ? -size : size;
 					height = height < 0 ? -size : size;
 				} else if (temp.type === "arrow") {
-					// Snap to 45 degree increments
 					const angle = Math.atan2(height, width);
 					const snap = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
 					const dist = Math.sqrt(width * width + height * height);
@@ -177,27 +261,46 @@ export function AnnotationLayer(props: {
 				}
 			}
 
-			setTempAnnotation({
-				...temp,
-				width,
-				height,
-			});
+			const next = { ...temp, width, height };
+			setTempAnnotation(next);
+			if (temp.type === "mask") {
+				setAnnotations((a) => a.id === temp.id, next);
+			}
 			return;
 		}
 
 		if (dragState()) {
-			const state = dragState()!;
+			const state = dragState();
+			if (!state) return;
 			const dx = point.x - state.startX;
 			const dy = point.y - state.startY;
 
 			if (state.action === "move") {
 				setAnnotations(
 					(a) => a.id === state.id,
-					(a) => ({
-						...a,
-						x: state.original.x + dx,
-						y: state.original.y + dy,
-					}),
+					(a) => {
+						const nextX =
+							a.type === "mask"
+								? clampValue(
+										state.original.x + dx,
+										props.imageRect.x,
+										props.imageRect.x + props.imageRect.width - a.width,
+									)
+								: state.original.x + dx;
+						const nextY =
+							a.type === "mask"
+								? clampValue(
+										state.original.y + dy,
+										props.imageRect.y,
+										props.imageRect.y + props.imageRect.height - a.height,
+									)
+								: state.original.y + dy;
+						return {
+							...a,
+							x: nextX,
+							y: nextY,
+						};
+					},
 				);
 			} else if (state.action === "resize" && state.handle) {
 				const original = state.original;
@@ -237,13 +340,32 @@ export function AnnotationLayer(props: {
 					) {
 						// This is complex for corner resizing, simplifying:
 						// Just force aspect ratio based on original
-						const ratio = original.width / original.height;
+						const _ratio = original.width / original.height;
 						if (state.handle.includes("e") || state.handle.includes("w")) {
 							// Width driven, adjust height
 							// This is tricky with 8 handles. Skipping proper aspect resize for now to save time/complexity
 							// Or simple implementation:
 						}
 					}
+				}
+
+				if (original.type === "mask") {
+					const rectLeft = props.imageRect.x;
+					const rectTop = props.imageRect.y;
+					const rectRight = props.imageRect.x + props.imageRect.width;
+					const rectBottom = props.imageRect.y + props.imageRect.height;
+					const left = Math.min(newX, newX + newW);
+					const right = Math.max(newX, newX + newW);
+					const top = Math.min(newY, newY + newH);
+					const bottom = Math.max(newY, newY + newH);
+					const clampedLeft = clampValue(left, rectLeft, rectRight);
+					const clampedRight = clampValue(right, rectLeft, rectRight);
+					const clampedTop = clampValue(top, rectTop, rectBottom);
+					const clampedBottom = clampValue(bottom, rectTop, rectBottom);
+					newX = clampedLeft;
+					newY = clampedTop;
+					newW = Math.max(0, clampedRight - clampedLeft);
+					newH = Math.max(0, clampedBottom - clampedTop);
 				}
 
 				setAnnotations((a) => a.id === state.id, {
@@ -257,9 +379,9 @@ export function AnnotationLayer(props: {
 	};
 
 	const handleMouseUp = () => {
-		if (isDrawing() && tempAnnotation()) {
-			const ann = tempAnnotation()!;
-			// Normalize rect/circle negative width/height
+		const tempAnn = tempAnnotation();
+		if (isDrawing() && tempAnn) {
+			const ann = { ...tempAnn };
 			if (
 				ann.type === "rectangle" ||
 				ann.type === "circle" ||
@@ -273,20 +395,47 @@ export function AnnotationLayer(props: {
 					ann.y += ann.height;
 					ann.height = Math.abs(ann.height);
 				}
+				if (ann.type === "mask") {
+					const rectLeft = props.imageRect.x;
+					const rectTop = props.imageRect.y;
+					const rectRight = props.imageRect.x + props.imageRect.width;
+					const rectBottom = props.imageRect.y + props.imageRect.height;
+					const clampedLeft = clampValue(ann.x, rectLeft, rectRight);
+					const clampedTop = clampValue(ann.y, rectTop, rectBottom);
+					const clampedRight = clampValue(
+						ann.x + ann.width,
+						rectLeft,
+						rectRight,
+					);
+					const clampedBottom = clampValue(
+						ann.y + ann.height,
+						rectTop,
+						rectBottom,
+					);
+					ann.x = clampedLeft;
+					ann.y = clampedTop;
+					ann.width = Math.max(0, clampedRight - clampedLeft);
+					ann.height = Math.max(0, clampedBottom - clampedTop);
+				}
 				if (ann.width < 5 && ann.height < 5) {
 					setTempAnnotation(null);
 					setIsDrawing(false);
-					drawSnapshot = null; // Cancel snapshot if too small
+					if (ann.type === "mask") {
+						setAnnotations((prev) => prev.filter((a) => a.id !== ann.id));
+					}
+					drawSnapshot = null;
 					return;
 				}
 			}
-			// For arrow, we keep negative width/height as vector
 
-			// Commit history
 			if (drawSnapshot) projectHistory.push(drawSnapshot);
 			drawSnapshot = null;
 
-			setAnnotations((prev) => [...prev, ann]);
+			if (ann.type === "mask") {
+				setAnnotations((a) => a.id === ann.id, ann);
+			} else {
+				setAnnotations((prev) => [...prev, ann]);
+			}
 			setTempAnnotation(null);
 			setIsDrawing(false);
 			setActiveTool("select");
@@ -313,7 +462,8 @@ export function AnnotationLayer(props: {
 		e.stopPropagation();
 		if (activeTool() !== "select") return;
 
-		const svg = (e.currentTarget as Element).closest("svg")!;
+		const svg = (e.currentTarget as Element).closest("svg");
+		if (!svg) return;
 		const point = getSvgPoint(e, svg);
 		const annotation = annotations.find((a) => a.id === id);
 
@@ -371,19 +521,6 @@ export function AnnotationLayer(props: {
 			onMouseMove={handleMouseMove}
 			onMouseUp={handleMouseUp}
 		>
-			<defs>
-				<marker
-					id="arrowhead"
-					markerWidth="10"
-					markerHeight="7"
-					refX="9"
-					refY="3.5"
-					orient="auto"
-				>
-					<polygon points="0 0, 10 3.5, 0 7" fill="context-stroke" />
-				</marker>
-			</defs>
-
 			<For each={annotations}>
 				{(ann) => (
 					<g
@@ -513,24 +650,45 @@ function RenderAnnotation(props: { annotation: Annotation }) {
 					opacity={props.annotation.opacity}
 				/>
 			)}
-			{props.annotation.type === "arrow" && (
-				<line
-					x1={props.annotation.x}
-					y1={props.annotation.y}
-					x2={props.annotation.x + props.annotation.width}
-					y2={props.annotation.y + props.annotation.height}
-					stroke={props.annotation.strokeColor}
-					stroke-width={props.annotation.strokeWidth}
-					marker-end="url(#arrowhead)"
-					opacity={props.annotation.opacity}
-				/>
-			)}
+			{props.annotation.type === "arrow" &&
+				(() => {
+					const x1 = props.annotation.x;
+					const y1 = props.annotation.y;
+					const x2 = props.annotation.x + props.annotation.width;
+					const y2 = props.annotation.y + props.annotation.height;
+					const angle = Math.atan2(y2 - y1, x2 - x1);
+					const head = getArrowHeadPoints(
+						x2,
+						y2,
+						angle,
+						props.annotation.strokeWidth,
+					);
+					return (
+						<>
+							<line
+								x1={x1}
+								y1={y1}
+								x2={head.base.x}
+								y2={head.base.y}
+								stroke={props.annotation.strokeColor}
+								stroke-width={props.annotation.strokeWidth}
+								stroke-linecap="round"
+								opacity={props.annotation.opacity}
+							/>
+							<polygon
+								points={head.points.map((p) => `${p.x},${p.y}`).join(" ")}
+								fill={props.annotation.strokeColor}
+								opacity={props.annotation.opacity}
+							/>
+						</>
+					);
+				})()}
 			{props.annotation.type === "text" && (
 				<text
 					x={props.annotation.x}
 					y={props.annotation.y + props.annotation.height} // SVG text y is baseline
 					fill={props.annotation.strokeColor}
-					font-size={props.annotation.height}
+					font-size={`${props.annotation.height}px`}
 					font-family="sans-serif"
 					opacity={props.annotation.opacity}
 					style={{ "user-select": "none", "white-space": "pre" }}
@@ -550,10 +708,10 @@ function RenderAnnotation(props: { annotation: Annotation }) {
 					)}
 					width={Math.abs(props.annotation.width)}
 					height={Math.abs(props.annotation.height)}
-					stroke={props.annotation.strokeColor}
-					stroke-width={props.annotation.strokeWidth}
-					fill={props.annotation.fillColor}
+					fill="none"
+					stroke="none"
 					opacity={props.annotation.opacity}
+					style={{ "pointer-events": "all" }}
 				/>
 			)}
 		</>

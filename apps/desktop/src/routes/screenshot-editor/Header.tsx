@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui-solid";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -6,14 +5,10 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { createEffect, createSignal, Suspense } from "solid-js";
-import Tooltip from "~/components/Tooltip";
+import { Suspense } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
-import { commands } from "~/utils/tauri";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
-import IconCapZoomIn from "~icons/cap/zoom-in";
-import IconCapZoomOut from "~icons/cap/zoom-out";
 import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideFolder from "~icons/lucide/folder";
 import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
@@ -21,7 +16,6 @@ import IconLucideSave from "~icons/lucide/save";
 import { AnnotationTools } from "./AnnotationTools";
 import { useScreenshotEditorContext } from "./context";
 import PresetsSubMenu from "./PresetsDropdown";
-import { useScreenshotExport } from "./useScreenshotExport";
 import { AspectRatioSelect } from "./popovers/AspectRatioSelect";
 import { BackgroundSettingsPopover } from "./popovers/BackgroundSettingsPopover";
 import { BorderPopover } from "./popovers/BorderPopover";
@@ -33,9 +27,9 @@ import {
 	EditorButton,
 	MenuItemList,
 	PopperContent,
-	Slider,
 	topSlideAnimateClasses,
 } from "./ui";
+import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
 	const { path, setDialog, project, latestFrame } =
@@ -104,8 +98,9 @@ export function Header() {
 				/>
 
 				<EditorButton
-					tooltipText="Export / Share"
-					onClick={() => setDialog({ type: "export", open: true })}
+					tooltipText="Save"
+					onClick={() => exportImage("file")}
+					disabled={isExporting()}
 					leftIcon={<IconLucideSave class="size-4" />}
 				/>
 
@@ -126,7 +121,7 @@ export function Header() {
 									class="p-1"
 								>
 									<DropdownItem
-										onClick={() => {
+										onSelect={() => {
 											revealItemInDir(path);
 										}}
 									>
@@ -134,7 +129,7 @@ export function Header() {
 										<span>Open Folder</span>
 									</DropdownItem>
 									<DropdownItem
-										onClick={async () => {
+										onSelect={async () => {
 											if (
 												await ask(
 													"Are you sure you want to delete this screenshot?",

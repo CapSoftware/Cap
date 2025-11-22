@@ -194,14 +194,9 @@ impl ScreenshotEditorInstances {
                     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
                     // Initial render
-                    println!("Initial screenshot render");
                     let mut current_config = config_rx.borrow().clone();
 
                     loop {
-                        println!(
-                            "Rendering screenshot frame with config: {:?}",
-                            current_config
-                        );
                         let segment_frames = DecodedSegmentFrames {
                             screen_frame: DecodedFrame::new(
                                 decoded_frame.data().to_vec(),
@@ -237,10 +232,6 @@ impl ScreenshotEditorInstances {
 
                         match rendered_frame {
                             Ok(frame) => {
-                                println!(
-                                    "Frame rendered successfully: {}x{}",
-                                    frame.width, frame.height
-                                );
                                 let _ = frame_tx.send(Some(WSFrame {
                                     data: frame.data,
                                     width: frame.width,
@@ -254,13 +245,10 @@ impl ScreenshotEditorInstances {
                         }
 
                         // Wait for config change
-                        println!("Waiting for config change");
                         if config_rx.changed().await.is_err() {
-                            println!("Config channel closed");
                             break;
                         }
                         current_config = config_rx.borrow().clone();
-                        println!("Config changed");
                     }
                 });
 

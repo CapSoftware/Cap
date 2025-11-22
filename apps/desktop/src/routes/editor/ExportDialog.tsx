@@ -8,7 +8,8 @@ import {
 } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { ask, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { remove } from "@tauri-apps/plugin-fs";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -194,6 +195,27 @@ export function ExportDialog() {
 		);
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
+	const [isCancelled, setIsCancelled] = createSignal(false);
+
+	const handleCancel = async () => {
+		if (
+			await ask("Are you sure you want to cancel the export?", {
+				title: "Cancel Export",
+				kind: "warning",
+			})
+		) {
+			setIsCancelled(true);
+			setExportState({ type: "idle" });
+			const path = outputPath();
+			if (path) {
+				try {
+					await remove(path);
+				} catch (e) {
+					console.error("Failed to delete cancelled file", e);
+				}
+			}
+		}
+	};
 
 	const projectPath = editorInstance.path;
 
@@ -222,12 +244,16 @@ export function ExportDialog() {
 
 	const copy = createMutation(() => ({
 		mutationFn: async () => {
+			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
 			setExportState(reconcile({ action: "copy", type: "starting" }));
 
 			const outputPath = await exportWithSettings((progress) => {
+				if (isCancelled()) return;
 				setExportState({ type: "rendering", progress });
 			});
+
+			if (isCancelled()) throw new SilentError("Cancelled");
 
 			setExportState({ type: "copying" });
 
@@ -265,6 +291,7 @@ export function ExportDialog() {
 
 	const save = createMutation(() => ({
 		mutationFn: async () => {
+			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
 
 			const extension = settings.format === "Gif" ? "gif" : "mp4";
@@ -293,8 +320,11 @@ export function ExportDialog() {
 			});
 
 			const videoPath = await exportWithSettings((progress) => {
+				if (isCancelled()) return;
 				setExportState({ type: "rendering", progress });
 			});
+
+			if (isCancelled()) throw new SilentError("Cancelled");
 
 			setExportState({ type: "copying" });
 
@@ -332,6 +362,7 @@ export function ExportDialog() {
 
 	const upload = createMutation(() => ({
 		mutationFn: async () => {
+			setIsCancelled(false);
 			if (exportState.type !== "idle") return;
 			setExportState(reconcile({ action: "upload", type: "starting" }));
 
@@ -371,9 +402,12 @@ export function ExportDialog() {
 				);
 			});
 
-			await exportWithSettings((progress) =>
-				setExportState({ type: "rendering", progress }),
-			);
+			await exportWithSettings((progress) => {
+				if (isCancelled()) return;
+				setExportState({ type: "rendering", progress });
+			});
+
+			if (isCancelled()) throw new SilentError("Cancelled");
 
 			setExportState({ type: "uploading", progress: 0 });
 
@@ -853,10 +887,20 @@ export function ExportDialog() {
 														keyed
 													>
 														{(copyState) => (
-															<RenderProgress
-																state={copyState}
-																format={settings.format}
-															/>
+															<>
+																<RenderProgress
+																	state={copyState}
+																	format={settings.format}
+																/>
+																<Button
+																	variant="ghost"
+																	size="sm"
+																	onClick={handleCancel}
+																	class="mt-4 hover:bg-red-9 hover:text-white"
+																>
+																	Cancel
+																</Button>
+															</>
 														)}
 													</Show>
 												</div>
@@ -895,10 +939,20 @@ export function ExportDialog() {
 																	keyed
 																>
 																	{(copyState) => (
-																		<RenderProgress
-																			state={copyState}
-																			format={settings.format}
-																		/>
+																		<>
+																			<RenderProgress
+																				state={copyState}
+																				format={settings.format}
+																			/>
+																			<Button
+																				variant="ghost"
+																				size="sm"
+																				onClick={handleCancel}
+																				class="mt-4 hover:bg-red-9 hover:text-white"
+																			>
+																				Cancel
+																			</Button>
+																		</>
 																	)}
 																</Show>
 															</>
@@ -967,10 +1021,20 @@ export function ExportDialog() {
 																		keyed
 																	>
 																		{(renderState) => (
-																			<RenderProgress
-																				state={renderState}
-																				format={settings.format}
-																			/>
+																			<>
+																				<RenderProgress
+																					state={renderState}
+																					format={settings.format}
+																				/>
+																				<Button
+																					variant="ghost"
+																					size="sm"
+																					onClick={handleCancel}
+																					class="mt-4 hover:bg-red-9 hover:text-white"
+																				>
+																					Cancel
+																				</Button>
+																			</>
 																		)}
 																	</Match>
 																</Switch>

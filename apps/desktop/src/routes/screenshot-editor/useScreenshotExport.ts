@@ -1,12 +1,15 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { createSignal } from "solid-js";
 import toast from "solid-toast";
 import { commands } from "~/utils/tauri";
+import { getArrowHeadPoints } from "./arrow";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 
 export function useScreenshotExport() {
-	const { path, latestFrame, annotations } = useScreenshotEditorContext();
+	const { path, latestFrame, annotations, dialog, setDialog, project } =
+		useScreenshotEditorContext();
 	const [isExporting, setIsExporting] = createSignal(false);
 
 	const drawAnnotations = (
@@ -39,30 +42,23 @@ export function useScreenshotExport() {
 				ctx.stroke();
 			} else if (ann.type === "arrow") {
 				ctx.beginPath();
+				ctx.lineCap = "round";
 				const x1 = ann.x;
 				const y1 = ann.y;
 				const x2 = ann.x + ann.width;
 				const y2 = ann.y + ann.height;
+				const angle = Math.atan2(y2 - y1, x2 - x1);
+				const head = getArrowHeadPoints(x2, y2, angle, ann.strokeWidth);
 
-				// Line
 				ctx.moveTo(x1, y1);
-				ctx.lineTo(x2, y2);
+				ctx.lineTo(head.base.x, head.base.y);
 				ctx.stroke();
 
-				// Arrowhead
-				const angle = Math.atan2(y2 - y1, x2 - x1);
-				const headLen = 10 + ann.strokeWidth; // scale with stroke?
 				ctx.beginPath();
-				ctx.moveTo(x2, y2);
-				ctx.lineTo(
-					x2 - headLen * Math.cos(angle - Math.PI / 6),
-					y2 - headLen * Math.sin(angle - Math.PI / 6),
-				);
-				ctx.lineTo(
-					x2 - headLen * Math.cos(angle + Math.PI / 6),
-					y2 - headLen * Math.sin(angle + Math.PI / 6),
-				);
-				ctx.lineTo(x2, y2);
+				ctx.moveTo(head.points[0].x, head.points[0].y);
+				ctx.lineTo(head.points[1].x, head.points[1].y);
+				ctx.lineTo(head.points[2].x, head.points[2].y);
+				ctx.closePath();
 				ctx.fillStyle = ann.strokeColor;
 				ctx.fill();
 			} else if (ann.type === "text" && ann.text) {
@@ -121,14 +117,20 @@ export function useScreenshotExport() {
 		ctx: CanvasRenderingContext2D,
 		source: HTMLCanvasElement,
 		annotations: Annotation[],
+		imageRect: { x: number; y: number; width: number; height: number },
 	) => {
 		for (const ann of annotations) {
 			if (ann.type !== "mask") continue;
 
-			const startX = Math.max(0, Math.min(ann.x, ann.x + ann.width));
-			const startY = Math.max(0, Math.min(ann.y, ann.y + ann.height));
-			const endX = Math.min(source.width, Math.max(ann.x, ann.x + ann.width));
-			const endY = Math.min(source.height, Math.max(ann.y, ann.y + ann.height));
+			const rectLeft = imageRect.x;
+			const rectTop = imageRect.y;
+			const rectRight = imageRect.x + imageRect.width;
+			const rectBottom = imageRect.y + imageRect.height;
+
+			const startX = Math.max(rectLeft, Math.min(ann.x, ann.x + ann.width));
+			const startY = Math.max(rectTop, Math.min(ann.y, ann.y + ann.height));
+			const endX = Math.min(rectRight, Math.max(ann.x, ann.x + ann.width));
+			const endY = Math.min(rectBottom, Math.max(ann.y, ann.y + ann.height));
 
 			const regionWidth = endX - startX;
 			const regionHeight = endY - startY;
@@ -210,11 +212,69 @@ export function useScreenshotExport() {
 			if (!sourceCtx) throw new Error("Could not get source canvas context");
 			sourceCtx.drawImage(canvas, 0, 0);
 
-			applyMaskAnnotations(ctx, sourceCanvas, annotations);
+			const crop = project.background.crop;
+			const imageRect = (() => {
+				if (crop) {
+					const cropX = Math.max(0, Math.round(crop.position.x));
+					const cropY = Math.max(0, Math.round(crop.position.y));
+					const cropWidth = Math.max(
+						0,
+						Math.min(Math.round(crop.size.x), canvas.width - cropX),
+					);
+					const cropHeight = Math.max(
+						0,
+						Math.min(Math.round(crop.size.y), canvas.height - cropY),
+					);
+					if (cropWidth > 0 && cropHeight > 0) {
+						return {
+							x: cropX,
+							y: cropY,
+							width: cropWidth,
+							height: cropHeight,
+						};
+					}
+				}
+				return {
+					x: 0,
+					y: 0,
+					width: canvas.width,
+					height: canvas.height,
+				};
+			})();
+
+			applyMaskAnnotations(ctx, sourceCanvas, annotations, imageRect);
 			drawAnnotations(ctx, annotations);
 
+			let minX = imageRect.x;
+			let minY = imageRect.y;
+			let maxX = imageRect.x + imageRect.width;
+			let maxY = imageRect.y + imageRect.height;
+
+			for (const ann of annotations) {
+				if (ann.type === "mask") continue;
+				const left = Math.min(ann.x, ann.x + ann.width);
+				const right = Math.max(ann.x, ann.x + ann.width);
+				const top = Math.min(ann.y, ann.y + ann.height);
+				const bottom = Math.max(ann.y, ann.y + ann.height);
+				minX = Math.min(minX, left);
+				maxX = Math.max(maxX, right);
+				minY = Math.min(minY, top);
+				maxY = Math.max(maxY, bottom);
+			}
+
+			const exportWidth = Math.max(1, Math.round(maxX - minX));
+			const exportHeight = Math.max(1, Math.round(maxY - minY));
+			const outputCanvas = document.createElement("canvas");
+			outputCanvas.width = exportWidth;
+			outputCanvas.height = exportHeight;
+			const outputCtx = outputCanvas.getContext("2d");
+			if (!outputCtx) throw new Error("Could not get output canvas context");
+			outputCtx.fillStyle = "white";
+			outputCtx.fillRect(0, 0, exportWidth, exportHeight);
+			outputCtx.drawImage(canvas, -minX, -minY);
+
 			const blob = await new Promise<Blob | null>((resolve) =>
-				canvas.toBlob(resolve, "image/png"),
+				outputCanvas.toBlob(resolve, "image/png"),
 			);
 			if (!blob) throw new Error("Failed to create blob");
 
@@ -227,13 +287,11 @@ export function useScreenshotExport() {
 					defaultPath: "screenshot.png",
 				});
 				if (savePath) {
-					await commands.writeFile(savePath, Array.from(uint8Array));
+					await writeFile(savePath, uint8Array);
 					toast.success("Screenshot saved!");
 					setDialog({ ...dialog(), open: false });
 				}
 			} else {
-				// Use the new copyImageToClipboard command
-				// @ts-ignore - commands type might not be updated yet
 				await commands.copyImageToClipboard(Array.from(uint8Array));
 				toast.success("Screenshot copied to clipboard!");
 				setDialog({ ...dialog(), open: false });

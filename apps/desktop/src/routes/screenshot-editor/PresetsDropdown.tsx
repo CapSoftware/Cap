@@ -13,7 +13,7 @@ import {
 
 export function PresetsSubMenu() {
 	return (
-		<KDropdownMenu.Sub gutter={8} placement="right-start">
+		<KDropdownMenu.Sub gutter={8}>
 			<KDropdownMenu.SubTrigger
 				as={DropdownItem}
 				class="justify-between cursor-default"
