@@ -69,4 +69,3 @@ Cap uses [Tinybird](https://www.tinybird.co) to ingest viewer telemetry for dash
 - Validate that the schema and materialized views match what the app expects via `pnpm analytics:check`.
 
 Both commands target the workspace pointed to by `TINYBIRD_HOST` (defaults to `https://api.tinybird.co`). Make sure you are comfortable with the destructive nature of the deploy step before running `analytics:setup`.
-
