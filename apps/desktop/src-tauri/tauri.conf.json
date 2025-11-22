@@ -65,10 +65,7 @@
 					"y": 140
 				}
 			},
-			"frameworks": ["../../../target/native-deps/Spacedrive.framework"],
-			"files": {
-				"PlugIns/*": "../../../macos/build/PlugIns/"
-			}
+			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
 		},
 		"windows": {
 			"nsis": {
