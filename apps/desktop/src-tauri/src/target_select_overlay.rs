@@ -236,12 +236,8 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             .owner_pid()
             .ok_or("Could not get window owner PID")?;
 
-        if let Some(app) =
-            unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
-        {
-            unsafe {
-                app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-            }
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
         }
     }
 

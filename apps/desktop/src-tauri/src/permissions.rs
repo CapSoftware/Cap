@@ -87,12 +87,12 @@ pub async fn request_permission(_permission: OSPermission) {
                     &[&*objc2_core_foundation::CFString::from_static_str(
                         "AXTrustedCheckOptionPrompt",
                     )],
-                    &[&*objc2_core_foundation::CFBoolean::new(true)],
+                    &[objc2_core_foundation::CFBoolean::new(true)],
                 );
                 // SAFETY: The AXIsProcessTrustedWithOptions function is safe to call with a valid CFDictionaryRef.
                 unsafe {
                     objc2_application_services::AXIsProcessTrustedWithOptions(Some(
-                        &*options.as_opaque(),
+                        options.as_opaque(),
                     ));
                 }
             }

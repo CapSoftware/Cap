@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde::{Deserialize, Serialize};
 use specta::Type;
 #[cfg(target_os = "windows")]

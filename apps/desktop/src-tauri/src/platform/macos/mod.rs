@@ -1,8 +1,4 @@
-use std::path::Path;
-
-use dispatch2::run_on_main;
-use objc2_app_kit::{NSDocumentController, NSWindow, NSWindowButton};
-use objc2_foundation::NSURL;
+use objc2_app_kit::{NSWindow, NSWindowButton};
 use tauri::WebviewWindow;
 
 mod sc_shareable_content;
