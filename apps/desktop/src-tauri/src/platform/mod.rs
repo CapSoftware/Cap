@@ -38,7 +38,7 @@ pub fn perform_haptic_feedback(
     _time: Option<HapticPerformanceTime>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    unsafe {
+    {
         use objc2_app_kit::{
             NSHapticFeedbackManager, NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime,
             NSHapticFeedbackPerformer,
