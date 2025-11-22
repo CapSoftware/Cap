@@ -191,7 +191,7 @@ impl CapWindowDef {
 
         match self {
             Self::RecordingControls => Some(NSMainMenuWindowLevel),
-            Self::TargetSelectOverlay { .. } | Self::CaptureArea => Some(NSPopUpMenuWindowLevel),
+            Self::TargetSelectOverlay { .. } | Self::CaptureArea => Some(45),
             Self::RecordingsOverlay | Self::WindowCaptureOccluder { .. } => {
                 Some(NSScreenSaverWindowLevel)
             }
@@ -315,7 +315,7 @@ impl CapWindow {
                     if new_recording_flow {
                         _ = window.run_on_main_thread({
                             let window = window.clone();
-                            move || window.objc2_nswindow().setLevel(110)
+                            move || window.objc2_nswindow().setLevel(50)
                         });
                     }
 
@@ -431,7 +431,7 @@ impl CapWindow {
 
                 builder.build()?
             }
-            Self::Editor { project_path } => {
+            Self::Editor { .. } => {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
