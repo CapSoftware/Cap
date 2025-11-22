@@ -2832,7 +2832,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 fn has_open_editor_window(app: &AppHandle) -> bool {
     app.webview_windows()
         .keys()
-        .any(|label| matches!(CapWindowId::from_str(label), Ok(CapWindowId::Editor { .. })))
+        .any(|label| matches!(CapWindow::from_str(label), Ok(CapWindow::Editor { .. })))
 }
 
 #[cfg(target_os = "windows")]
