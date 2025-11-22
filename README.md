@@ -29,7 +29,7 @@ Cap Web 可透過 Docker 或 Railway 進行自行架設，想了解更多請參�
 
 [![在 Railway 部署](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
 
-無論你是自行建置，或是[從我們的網站下載](https://cap.so/download)，Cap Desktop 都能連線到你自行架設的 Cap Web 執行個體。
+無論你是自行建置，或是[從我們的網站下載](https://cap.so/download)，Cap Desktop 都能連線到你自行架設的 Cap Web 。
 
 # Monorepo 應用架構
 
