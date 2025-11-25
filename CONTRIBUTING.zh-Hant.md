@@ -55,7 +55,7 @@ Cap 仍在早期開發階段，所以在我們完善這份指南的過程中，�
 #### 我錄製的影片存在哪裡?
 
 在 macOS 上，你可以在 `~/Library/Application Support/so.cap.desktop.dev/recordings` 找到你錄製的影片；
-在 macOS 上，則是在 `%programfiles%/so.cap.desktop.dev/recordings`
+在 Windows 上，則是在 `%programfiles%/so.cap.desktop.dev/recordings`
 
 ### `@cap/web` (cap.so 網站)
 
