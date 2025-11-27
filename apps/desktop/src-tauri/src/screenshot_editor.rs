@@ -186,6 +186,8 @@ impl ScreenshotEditorInstances {
 
                 let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
 
+                let render_shutdown_token = ws_shutdown_token.clone();
+
                 let instance = Arc::new(ScreenshotEditorInstance {
                     ws_port,
                     ws_shutdown_token,
@@ -204,6 +206,10 @@ impl ScreenshotEditorInstances {
                     let mut current_config = config_rx.borrow().clone();
 
                     loop {
+                        if render_shutdown_token.is_cancelled() {
+                            let _ = frame_tx.send(None);
+                            break;
+                        }
                         let segment_frames = DecodedSegmentFrames {
                             screen_frame: DecodedFrame::new(
                                 decoded_frame.data().to_vec(),
@@ -251,11 +257,19 @@ impl ScreenshotEditorInstances {
                             }
                         }
 
-                        // Wait for config change
-                        if config_rx.changed().await.is_err() {
-                            break;
+                        tokio::select! {
+                            res = config_rx.changed() => {
+                                if res.is_err() {
+                                    let _ = frame_tx.send(None);
+                                    break;
+                                }
+                                current_config = config_rx.borrow().clone();
+                            }
+                            _ = render_shutdown_token.cancelled() => {
+                                let _ = frame_tx.send(None);
+                                break;
+                            }
                         }
-                        current_config = config_rx.borrow().clone();
                     }
                 });
 
