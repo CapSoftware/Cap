@@ -175,7 +175,7 @@ function ScreenshotItem(props: {
 					<img
 						class="object-cover rounded size-12"
 						alt="Screenshot thumbnail"
-						src={`${convertFileSrc(props.screenshot.path)}?t=${Date.now()}`}
+						src={convertFileSrc(props.screenshot.path)}
 						onError={() => setImageExists(false)}
 					/>
 				</Show>
