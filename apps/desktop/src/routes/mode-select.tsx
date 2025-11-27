@@ -14,7 +14,11 @@ const ModeSelectWindow = () => {
 		const window = getCurrentWindow();
 
 		if (isWindows) {
-			unlistenResize = await initializeTitlebar();
+			try {
+				unlistenResize = await initializeTitlebar();
+			} catch (error) {
+				console.error("Failed to initialize titlebar:", error);
+			}
 		}
 
 		try {
