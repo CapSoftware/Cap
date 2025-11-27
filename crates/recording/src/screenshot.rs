@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 #[cfg(target_os = "macos")]
-use tracing::error;
+use tracing::{debug, error};
 
 #[cfg(target_os = "macos")]
 use scap_screencapturekit::{Capturer, StreamCfgBuilder};
@@ -15,7 +15,119 @@ use scap_screencapturekit::{Capturer, StreamCfgBuilder};
 #[cfg(target_os = "windows")]
 use scap_direct3d::{Capturer, PixelFormat, Settings};
 
+#[cfg(target_os = "macos")]
+fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
+    use core_graphics::display::{CGDisplayCreateImage, kCGWindowImageBoundsIgnoreFraming};
+    use core_graphics::window::CGWindowID;
+    use foreign_types_shared::ForeignType;
+
+    let start = std::time::Instant::now();
+
+    let cg_image = match target {
+        ScreenCaptureTarget::Display { id } => {
+            let display = scap_targets::Display::from_id(id)?;
+            let display_id = display.raw_handle().inner().id;
+            let image = unsafe { CGDisplayCreateImage(display_id) };
+            if image.is_null() {
+                return None;
+            }
+            unsafe { core_graphics::image::CGImage::from_ptr(image) }
+        }
+        ScreenCaptureTarget::Window { id } => {
+            use core_graphics::display::CGRectNull;
+
+            let window = scap_targets::Window::from_id(id)?;
+            let window_id: CGWindowID = window.id().to_string().parse().ok()?;
+
+            unsafe extern "C" {
+                fn CGWindowListCreateImage(
+                    screenBounds: core_graphics::display::CGRect,
+                    windowOption: u32,
+                    windowID: CGWindowID,
+                    imageOption: u32,
+                ) -> core_graphics::sys::CGImageRef;
+            }
+
+            let image = unsafe {
+                CGWindowListCreateImage(
+                    CGRectNull,
+                    0x00000008,
+                    window_id,
+                    kCGWindowImageBoundsIgnoreFraming,
+                )
+            };
+
+            if image.is_null() {
+                return None;
+            }
+            unsafe { core_graphics::image::CGImage::from_ptr(image) }
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let display = scap_targets::Display::from_id(screen)?;
+            let display_id = display.raw_handle().inner().id;
+            let image = unsafe { CGDisplayCreateImage(display_id) };
+            if image.is_null() {
+                return None;
+            }
+            unsafe { core_graphics::image::CGImage::from_ptr(image) }
+        }
+    };
+
+    let width = cg_image.width();
+    let height = cg_image.height();
+    let bytes_per_row = cg_image.bytes_per_row();
+
+    use core_foundation::data::CFData;
+    let cf_data: CFData = cg_image.data();
+    let data = cf_data.bytes();
+
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * bytes_per_row + x * 4;
+            if i + 2 < data.len() {
+                rgb.push(data[i + 2]);
+                rgb.push(data[i + 1]);
+                rgb.push(data[i]);
+            }
+        }
+    }
+
+    let image = RgbImage::from_raw(width as u32, height as u32, rgb)?;
+
+    if let ScreenCaptureTarget::Area { bounds, screen } = target {
+        let scale = scap_targets::Display::from_id(screen)
+            .and_then(|d| d.raw_handle().scale())
+            .unwrap_or(1.0);
+
+        let x = (bounds.position().x() * scale) as u32;
+        let y = (bounds.position().y() * scale) as u32;
+        let crop_width = (bounds.size().width() * scale) as u32;
+        let crop_height = (bounds.size().height() * scale) as u32;
+
+        let x = x.min(image.width());
+        let y = y.min(image.height());
+        let crop_width = crop_width.min(image.width() - x);
+        let crop_height = crop_height.min(image.height() - y);
+
+        let cropped = image::imageops::crop_imm(&image, x, y, crop_width, crop_height).to_image();
+        debug!("Fast capture completed in {:?}", start.elapsed());
+        return Some(cropped);
+    }
+
+    debug!("Fast capture completed in {:?}", start.elapsed());
+    Some(image)
+}
+
 pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(image) = try_fast_capture(&target) {
+            return Ok(image);
+        }
+        debug!("Fast capture failed, falling back to SCStream");
+    }
+
     let (tx, rx) = oneshot::channel::<anyhow::Result<RgbImage>>();
     let tx = Arc::new(Mutex::new(Some(tx)));
 

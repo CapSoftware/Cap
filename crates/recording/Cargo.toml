@@ -58,6 +58,9 @@ screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
 objc2-app-kit = "0.3.1"
+core-graphics = "0.24.0"
+core-foundation = "0.10.0"
+foreign-types-shared = "0.3"
 
 scap-screencapturekit = { path = "../scap-screencapturekit" }
 cap-enc-avfoundation = { path = "../enc-avfoundation" }

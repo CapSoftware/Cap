@@ -62,6 +62,9 @@ use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use screenshot_editor::{
     ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
 };
+
+mod gpu_context;
+pub use gpu_context::{PendingScreenshot, PendingScreenshots};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -2495,6 +2498,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
+            app.manage(PendingScreenshots::default());
+
+            gpu_context::prewarm_gpu();
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();

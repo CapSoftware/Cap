@@ -1,4 +1,6 @@
+use crate::PendingScreenshots;
 use crate::frame_ws::{WSFrame, create_watch_frame_ws};
+use crate::gpu_context;
 use crate::windows::{CapWindowId, ScreenshotEditorWindowIds};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
@@ -8,7 +10,7 @@ use cap_rendering::{
     DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectUniforms, RenderVideoConstants,
     RendererLayers,
 };
-use image::GenericImageView;
+use image::{GenericImageView, RgbImage, buffer::ConvertBuffer};
 use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
@@ -94,11 +96,26 @@ impl ScreenshotEditorInstances {
                 let (frame_tx, frame_rx) = watch::channel(None);
                 let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
 
-                // Load image
-                let img = image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
-                let (width, height) = img.dimensions();
-                let img_rgba = img.to_rgba8();
-                let data = img_rgba.into_raw();
+                let (data, width, height) = {
+                    let key = path
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let pending = window.try_state::<PendingScreenshots>();
+                    let pending_frame = pending.and_then(|p| p.remove(&key));
+
+                    if let Some(frame) = pending_frame {
+                        let rgb_img =
+                            RgbImage::from_raw(frame.width, frame.height, frame.data).unwrap();
+                        let rgba_img: image::RgbaImage = rgb_img.convert();
+                        (rgba_img.into_raw(), frame.width, frame.height)
+                    } else {
+                        let img =
+                            image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+                        let (w, h) = img.dimensions();
+                        (img.to_rgba8().into_raw(), w, h)
+                    }
+                };
 
                 // Try to load existing meta if in a .cap directory
                 let (recording_meta, loaded_config) = if let Some(parent) = path.parent() {
@@ -144,24 +161,38 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::HighPerformance,
-                        force_fallback_adapter: false,
-                        compatible_surface: None,
-                    })
-                    .await
-                    .map_err(|_| "No GPU adapter found".to_string())?;
+                let (instance, adapter, device, queue) =
+                    if let Some(shared) = gpu_context::get_shared_gpu().await {
+                        (
+                            shared.instance.clone(),
+                            shared.adapter.clone(),
+                            shared.device.clone(),
+                            shared.queue.clone(),
+                        )
+                    } else {
+                        let instance =
+                            Arc::new(wgpu::Instance::new(&wgpu::InstanceDescriptor::default()));
+                        let adapter = Arc::new(
+                            instance
+                                .request_adapter(&wgpu::RequestAdapterOptions {
+                                    power_preference: wgpu::PowerPreference::HighPerformance,
+                                    force_fallback_adapter: false,
+                                    compatible_surface: None,
+                                })
+                                .await
+                                .map_err(|_| "No GPU adapter found".to_string())?,
+                        );
 
-                let (device, queue) = adapter
-                    .request_device(&wgpu::DeviceDescriptor {
-                        label: Some("cap-rendering-device"),
-                        required_features: wgpu::Features::empty(),
-                        ..Default::default()
-                    })
-                    .await
-                    .map_err(|e| e.to_string())?;
+                        let (device, queue) = adapter
+                            .request_device(&wgpu::DeviceDescriptor {
+                                label: Some("cap-rendering-device"),
+                                required_features: wgpu::Features::empty(),
+                                ..Default::default()
+                            })
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        (instance, adapter, Arc::new(device), Arc::new(queue))
+                    };
 
                 let options = cap_rendering::RenderOptions {
                     screen_size: cap_project::XY::new(width, height),
@@ -175,10 +206,10 @@ impl ScreenshotEditorInstances {
                 };
 
                 let constants = RenderVideoConstants {
-                    _instance: instance,
-                    _adapter: adapter,
-                    queue,
-                    device,
+                    _instance: (*instance).clone(),
+                    _adapter: (*adapter).clone(),
+                    queue: (*queue).clone(),
+                    device: (*device).clone(),
                     options,
                     meta: studio_meta,
                     recording_meta: recording_meta.clone(),

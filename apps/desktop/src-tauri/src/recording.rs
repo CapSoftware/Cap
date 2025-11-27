@@ -1030,8 +1030,10 @@ pub async fn take_screenshot(
 ) -> Result<PathBuf, String> {
     use crate::NewScreenshotAdded;
     use crate::notifications;
+    use crate::{PendingScreenshot, PendingScreenshots};
     use cap_recording::screenshot::capture_screenshot;
     use image::ImageEncoder;
+    use std::time::Instant;
 
     let image = capture_screenshot(target)
         .await
@@ -1054,24 +1056,17 @@ pub async fn take_screenshot(
     let image_filename = "original.png";
     let image_path = cap_dir.join(image_filename);
 
-    let file = std::fs::File::create(&image_path)
-        .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
-    let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        std::io::BufWriter::new(file),
-        image::codecs::png::CompressionType::Fast,
-        image::codecs::png::FilterType::NoFilter,
+    let pending_screenshots = app.state::<PendingScreenshots>();
+    pending_screenshots.insert(
+        cap_dir.to_string_lossy().to_string(),
+        PendingScreenshot {
+            data: image.as_raw().clone(),
+            width: image.width(),
+            height: image.height(),
+            created_at: Instant::now(),
+        },
     );
 
-    ImageEncoder::write_image(
-        encoder,
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ColorType::Rgb8.into(),
-    )
-    .map_err(|e| format!("Failed to save screenshot: {e}"))?;
-
-    // Create metadata
     let relative_path = relative_path::RelativePathBuf::from(image_filename);
 
     let video_meta = cap_project::VideoMeta {
@@ -1104,6 +1099,45 @@ pub async fn take_screenshot(
     cap_project::ProjectConfiguration::default()
         .write(&cap_dir)
         .map_err(|e| format!("Failed to save project config: {e}"))?;
+
+    {
+        let app_clone = app.clone();
+        let cap_dir_clone = cap_dir.clone();
+        let image_path_clone = image_path.clone();
+        let image_data = image.as_raw().clone();
+        let image_width = image.width();
+        let image_height = image.height();
+        let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+            if let Ok(file) = std::fs::File::create(&image_path_clone) {
+                let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                    std::io::BufWriter::new(file),
+                    if is_large_capture {
+                        image::codecs::png::CompressionType::Fast
+                    } else {
+                        image::codecs::png::CompressionType::Default
+                    },
+                    image::codecs::png::FilterType::Adaptive,
+                );
+
+                if let Err(e) = ImageEncoder::write_image(
+                    encoder,
+                    &image_data,
+                    image_width,
+                    image_height,
+                    image::ColorType::Rgb8.into(),
+                ) {
+                    tracing::error!("Failed to encode PNG in background: {e}");
+                }
+            }
+
+            let pending = app_clone.state::<PendingScreenshots>();
+            pending.remove(&cap_dir_clone.to_string_lossy());
+        });
+    }
 
     let _ = NewScreenshotAdded {
         path: image_path.clone(),
