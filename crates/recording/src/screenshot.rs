@@ -103,7 +103,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
             .with_fps(60.0) // High FPS to get the first frame quickly
             .with_width(width)
             .with_height(height)
-            .with_shows_cursor(true)
+            .with_shows_cursor(false)
             .build();
 
         Capturer::builder(content_filter, config)
@@ -166,7 +166,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         };
 
         let settings = Settings {
-            is_cursor_capture_enabled: Some(true),
+            is_cursor_capture_enabled: Some(false),
             pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
             ..Default::default()
         };
