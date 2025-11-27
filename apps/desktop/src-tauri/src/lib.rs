@@ -563,6 +563,18 @@ fn spawn_device_watchers(app_handle: AppHandle) {
     spawn_camera_watcher(app_handle);
 }
 
+async fn cleanup_camera_window(app: AppHandle) {
+    let state = app.state::<ArcLock<App>>();
+    let mut app_state = state.write().await;
+
+    app_state.camera_preview.on_window_close();
+
+    if !app_state.is_recording_active_or_pending() {
+        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+        app_state.camera_in_use = false;
+    }
+}
+
 fn spawn_microphone_watcher(app_handle: AppHandle) {
     tokio::spawn(async move {
         let state = app_handle.state::<ArcLock<App>>();
@@ -2670,6 +2682,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             let app = window.app_handle();
 
             match event {
+                WindowEvent::CloseRequested { .. } => {
+                    if let Ok(CapWindowId::Camera) = CapWindowId::from_str(label) {
+                        tokio::spawn(cleanup_camera_window(app.clone()));
+                    }
+                }
                 WindowEvent::Destroyed => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
@@ -2766,21 +2783,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     .destroy(&display_id, app.global_shortcut());
                             }
                             CapWindowId::Camera => {
-                                let app = app.clone();
-                                tokio::spawn(async move {
-                                    let state = app.state::<ArcLock<App>>();
-                                    let mut app_state = state.write().await;
-
-                                    app_state.camera_preview.on_window_close();
-
-                                    if !app_state.is_recording_active_or_pending() {
-                                        let _ = app_state
-                                            .camera_feed
-                                            .ask(feeds::camera::RemoveInput)
-                                            .await;
-                                        app_state.camera_in_use = false;
-                                    }
-                                });
+                                tokio::spawn(cleanup_camera_window(app.clone()));
                             }
                             _ => {}
                         };
