@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -119,7 +117,7 @@ pub async fn create_watch_frame_ws(
     (port, cancel_token_child)
 }
 
-pub async fn create_frame_ws(frame_rx: flume::Receiver<WSFrame>) -> (u16, CancellationToken) {
+pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, CancellationToken) {
     use axum::{
         extract::{
             State,
@@ -129,17 +127,18 @@ pub async fn create_frame_ws(frame_rx: flume::Receiver<WSFrame>) -> (u16, Cancel
         routing::get,
     };
 
-    type RouterState = Arc<flume::Receiver<WSFrame>>;
+    type RouterState = broadcast::Sender<WSFrame>;
 
     #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
         State(state): State<RouterState>,
     ) -> impl IntoResponse {
-        ws.on_upgrade(move |socket| handle_socket(socket, state))
+        let rx = state.subscribe();
+        ws.on_upgrade(move |socket| handle_socket(socket, rx))
     }
 
-    async fn handle_socket(mut socket: WebSocket, camera_rx: RouterState) {
+    async fn handle_socket(mut socket: WebSocket, mut camera_rx: broadcast::Receiver<WSFrame>) {
         println!("socket connection established");
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
@@ -161,7 +160,7 @@ pub async fn create_frame_ws(frame_rx: flume::Receiver<WSFrame>) -> (u16, Cancel
                         }
                     }
                 },
-                incoming_frame = camera_rx.recv_async() => {
+                incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
                         Ok(mut frame) => {
                             frame.data.extend_from_slice(&frame.stride.to_le_bytes());
@@ -173,12 +172,15 @@ pub async fn create_frame_ws(frame_rx: flume::Receiver<WSFrame>) -> (u16, Cancel
                                 break;
                             }
                         }
-                        Err(e) => {
+                        Err(broadcast::error::RecvError::Closed) => {
                             tracing::error!(
-                                "Connection has been lost! Shutting down websocket server: {:?}",
-                                e
+                                "Connection has been lost! Shutting down websocket server"
                             );
                             break;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!("Missed {skipped} frames on websocket receiver");
+                            continue;
                         }
                     }
                 }
@@ -192,7 +194,7 @@ pub async fn create_frame_ws(frame_rx: flume::Receiver<WSFrame>) -> (u16, Cancel
 
     let router = axum::Router::new()
         .route("/", get(ws_handler))
-        .with_state(Arc::new(frame_rx));
+        .with_state(frame_tx);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
