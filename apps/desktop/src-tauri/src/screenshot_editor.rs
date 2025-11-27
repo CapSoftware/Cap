@@ -201,13 +201,13 @@ impl ScreenshotEditorInstances {
                 tokio::spawn(async move {
                     let mut frame_renderer = FrameRenderer::new(&constants);
                     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+                    let shutdown_token = render_shutdown_token;
 
                     // Initial render
                     let mut current_config = config_rx.borrow().clone();
 
                     loop {
-                        if render_shutdown_token.is_cancelled() {
-                            let _ = frame_tx.send(None);
+                        if shutdown_token.is_cancelled() {
                             break;
                         }
                         let segment_frames = DecodedSegmentFrames {
@@ -260,17 +260,16 @@ impl ScreenshotEditorInstances {
                         tokio::select! {
                             res = config_rx.changed() => {
                                 if res.is_err() {
-                                    let _ = frame_tx.send(None);
                                     break;
                                 }
                                 current_config = config_rx.borrow().clone();
                             }
-                            _ = render_shutdown_token.cancelled() => {
-                                let _ = frame_tx.send(None);
+                            _ = shutdown_token.cancelled() => {
                                 break;
                             }
                         }
                     }
+                    let _ = frame_tx.send(None);
                 });
 
                 entry.insert(instance.clone());
