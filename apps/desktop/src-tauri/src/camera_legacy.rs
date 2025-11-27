@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::frame_ws::{WSFrame, create_frame_ws};
 
 pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, CancellationToken) {
-    let (camera_tx, mut camera_rx) = flume::bounded::<FFmpegVideoFrame>(4);
+    let (camera_tx, camera_rx) = flume::bounded::<FFmpegVideoFrame>(4);
     let (frame_tx, _) = tokio::sync::broadcast::channel::<WSFrame>(4);
     let frame_tx_clone = frame_tx.clone();
     std::thread::spawn(move || {
