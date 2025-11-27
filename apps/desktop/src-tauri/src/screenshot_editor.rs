@@ -59,7 +59,14 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowScreenshotEditorInstance {
         let instances = window.state::<ScreenshotEditorInstances>();
         let instance = futures::executor::block_on(instances.0.read());
 
-        Ok(Self(instance.get(window.label()).cloned().unwrap()))
+        if let Some(instance) = instance.get(window.label()).cloned() {
+            Ok(Self(instance))
+        } else {
+            Err(tauri::InvokeError::from(format!(
+                "no ScreenshotEditor instance for window '{}'",
+                window.label(),
+            )))
+        }
     }
 }
 
