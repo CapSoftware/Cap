@@ -14,7 +14,10 @@ use serde::Serialize;
 use specta::Type;
 use std::str::FromStr;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
-use tauri::{Manager, Runtime, Window, ipc::CommandArg};
+use tauri::{
+    Manager, Runtime, Window,
+    ipc::{CommandArg, InvokeError},
+};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -51,9 +54,7 @@ impl Deref for WindowScreenshotEditorInstance {
 }
 
 impl<'de, R: Runtime> CommandArg<'de, R> for WindowScreenshotEditorInstance {
-    fn from_command(
-        command: tauri::ipc::CommandItem<'de, R>,
-    ) -> Result<Self, tauri::ipc::InvokeError> {
+    fn from_command(command: tauri::ipc::CommandItem<'de, R>) -> Result<Self, InvokeError> {
         let window = Window::from_command(command)?;
 
         let instances = window.state::<ScreenshotEditorInstances>();
@@ -62,7 +63,7 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowScreenshotEditorInstance {
         if let Some(instance) = instance.get(window.label()).cloned() {
             Ok(Self(instance))
         } else {
-            Err(tauri::InvokeError::from(format!(
+            Err(InvokeError::from(format!(
                 "no ScreenshotEditor instance for window '{}'",
                 window.label(),
             )))
