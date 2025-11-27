@@ -1,4 +1,5 @@
 import { cx } from "cva";
+import type { Component } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import IconLucideArrowUpRight from "~icons/lucide/arrow-up-right";
 import IconLucideCircle from "~icons/lucide/circle";
@@ -54,8 +55,6 @@ export function AnnotationTools() {
 		</>
 	);
 }
-
-import type { Component } from "solid-js";
 
 function ToolButton(props: {
 	tool: AnnotationType | "select";

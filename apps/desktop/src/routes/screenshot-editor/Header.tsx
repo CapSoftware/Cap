@@ -47,8 +47,8 @@ export function Header() {
 			},
 			size: {
 				...(project.background.crop?.size ?? {
-					x: frame?.width ?? 0,
-					y: frame?.data.height ?? 0,
+					x: frame?.data?.width ?? 0,
+					y: frame?.data?.height ?? 0,
 				}),
 			},
 		});
