@@ -1056,15 +1056,13 @@ pub async fn take_screenshot(
 
     let file = std::fs::File::create(&image_path)
         .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
-
-    // Use Best compression to keep file size small while maintaining lossless quality
     let encoder = image::codecs::png::PngEncoder::new_with_quality(
-        file,
-        image::codecs::png::CompressionType::Best,
-        image::codecs::png::FilterType::Adaptive,
+        std::io::BufWriter::new(file),
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::NoFilter,
     );
 
-    image::ImageEncoder::write_image(
+    ImageEncoder::write_image(
         encoder,
         image.as_raw(),
         image.width(),
