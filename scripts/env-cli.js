@@ -138,7 +138,6 @@ async function main() {
 
 		envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
 
-		// Set Tinybird defaults (no prompts needed)
 		if (!allEnvs.TINYBIRD_HOST) {
 			allEnvs.TINYBIRD_HOST = "https://api.tinybird.co";
 		}
