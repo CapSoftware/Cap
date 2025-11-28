@@ -31,6 +31,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import {
 	CROP_ZERO,
 	type CropBounds,
@@ -719,6 +720,8 @@ function Inner() {
 									await commands.showWindow({ ScreenshotEditor: { path } });
 									await commands.closeTargetSelectOverlays();
 								} catch (e) {
+									const message = e instanceof Error ? e.message : String(e);
+									toast.error(`Failed to take screenshot: ${message}`);
 									console.error("Failed to take screenshot", e);
 								}
 							}
@@ -953,6 +956,8 @@ function RecordingControls(props: {
 										commands.showWindow({ ScreenshotEditor: { path } });
 										commands.closeTargetSelectOverlays();
 									} catch (e) {
+										const message = e instanceof Error ? e.message : String(e);
+										toast.error(`Failed to take screenshot: ${message}`);
 										console.error("Failed to take screenshot", e);
 									}
 									return;
