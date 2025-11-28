@@ -5,7 +5,7 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { Suspense } from "solid-js";
+import { createEffect, onCleanup, Suspense } from "solid-js";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import IconCapCrop from "~icons/cap/crop";
 import IconCapTrash from "~icons/cap/trash";
@@ -36,6 +36,33 @@ export function Header() {
 		useScreenshotEditorContext();
 
 	const { exportImage, isExporting } = useScreenshotExport();
+
+	createEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (
+				target &&
+				(target.tagName === "INPUT" ||
+					target.tagName === "TEXTAREA" ||
+					target.isContentEditable)
+			) {
+				return;
+			}
+
+			if (!e.metaKey && !e.ctrlKey) return;
+			const key = e.key.toLowerCase();
+			if (key === "c") {
+				e.preventDefault();
+				if (!isExporting()) exportImage("clipboard");
+			} else if (key === "s") {
+				e.preventDefault();
+				if (!isExporting()) exportImage("file");
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+	});
 
 	const cropDialogHandler = () => {
 		const frame = latestFrame();
