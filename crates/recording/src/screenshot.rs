@@ -6,18 +6,100 @@ use scap_ffmpeg::AsFFmpeg;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tracing::debug;
 #[cfg(target_os = "macos")]
-use tracing::{debug, error};
+use tracing::error;
 
+#[cfg(target_os = "macos")]
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 #[cfg(target_os = "macos")]
 use scap_screencapturekit::{Capturer, StreamCfgBuilder};
 
 #[cfg(target_os = "windows")]
-use scap_direct3d::{Capturer, PixelFormat, Settings};
+use scap_direct3d::{Capturer, Frame, NewCapturerError, PixelFormat, Settings};
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{HMODULE, HWND};
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_BOX, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
+};
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SRCCOPY, SelectObject,
+};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{PW_RENDERFULLCONTENT, PrintWindow};
+
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPTURE_UNSUPPORTED: &str =
+    "Screen capture not supported on this device/driver. Update graphics drivers or OS.";
+
+#[cfg(target_os = "windows")]
+fn unsupported_error() -> anyhow::Error {
+    anyhow!(WINDOWS_CAPTURE_UNSUPPORTED)
+}
+
+#[derive(Clone, Copy)]
+enum ChannelOrder {
+    Rgba,
+    Bgra,
+}
+
+fn rgb_from_rgba(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    bytes_per_row: usize,
+    order: ChannelOrder,
+) -> Option<RgbImage> {
+    let row_bytes = width.checked_mul(4)?;
+    if bytes_per_row < row_bytes {
+        return None;
+    }
+
+    let required_len = height.checked_mul(bytes_per_row)?;
+    if data.len() < required_len {
+        return None;
+    }
+
+    let width_stride = width.checked_mul(3)?;
+    let rgb_len = height.checked_mul(width_stride)?;
+    let mut rgb = vec![0u8; rgb_len];
+
+    for y in 0..height {
+        let src_start = y.checked_mul(bytes_per_row)?;
+        let src_end = src_start.checked_add(row_bytes)?;
+        let dst_start = y.checked_mul(width_stride)?;
+        let dst_end = dst_start.checked_add(width_stride)?;
+
+        let src_row = data.get(src_start..src_end)?;
+        let dst_row = rgb.get_mut(dst_start..dst_end)?;
+
+        for (src, dst) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(3)) {
+            let (r, b) = match order {
+                ChannelOrder::Rgba => (src[0], src[2]),
+                ChannelOrder::Bgra => (src[2], src[0]),
+            };
+
+            dst[0] = r;
+            dst[1] = src[1];
+            dst[2] = b;
+        }
+    }
+
+    RgbImage::from_raw(width as u32, height as u32, rgb)
+}
 
 #[cfg(target_os = "macos")]
 fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
-    use core_graphics::display::{CGDisplayCreateImage, kCGWindowImageBoundsIgnoreFraming};
+    use core_graphics::display::{
+        CGDisplayCreateImage, CGDisplayCreateImageForRect, kCGWindowImageBoundsIgnoreFraming,
+    };
     use core_graphics::window::CGWindowID;
     use foreign_types_shared::ForeignType;
 
@@ -62,10 +144,20 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
             }
             unsafe { core_graphics::image::CGImage::from_ptr(image) }
         }
-        ScreenCaptureTarget::Area { screen, .. } => {
+        ScreenCaptureTarget::Area { screen, bounds } => {
             let display = scap_targets::Display::from_id(screen)?;
             let display_id = display.raw_handle().inner().id;
-            let image = unsafe { CGDisplayCreateImage(display_id) };
+            let scale = display.raw_handle().scale().unwrap_or(1.0) as f64;
+
+            let rect = CGRect::new(
+                &CGPoint::new(bounds.position().x() * scale, bounds.position().y() * scale),
+                &CGSize::new(
+                    bounds.size().width() * scale,
+                    bounds.size().height() * scale,
+                ),
+            );
+
+            let image = unsafe { CGDisplayCreateImageForRect(display_id, rect) };
             if image.is_null() {
                 return None;
             }
@@ -81,41 +173,402 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     let cf_data: CFData = cg_image.data();
     let data = cf_data.bytes();
 
-    let mut rgb = Vec::with_capacity(width * height * 3);
-    for y in 0..height {
-        for x in 0..width {
-            let i = y * bytes_per_row + x * 4;
-            if i + 2 < data.len() {
-                rgb.push(data[i + 2]);
-                rgb.push(data[i + 1]);
-                rgb.push(data[i]);
-            }
+    let image = rgb_from_rgba(data, width, height, bytes_per_row, ChannelOrder::Bgra)?;
+
+    debug!("Fast capture completed in {:?}", start.elapsed());
+    Some(image)
+}
+
+#[cfg(target_os = "windows")]
+fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
+    static DEVICE: OnceLock<ID3D11Device> = OnceLock::new();
+
+    DEVICE.get_or_try_init(|| {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                Default::default(),
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+        }
+        .map_err(|e| anyhow!("Failed to create D3D11 device: {e:?}"))?;
+
+        device.ok_or_else(|| anyhow!("D3D11 device unavailable"))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_fast_path_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *AVAILABLE.get_or_init(|| match scap_direct3d::is_supported() {
+        Ok(true) => shared_d3d_device().is_ok(),
+        _ => false,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn frame_to_rgb(frame: &Frame) -> anyhow::Result<RgbImage> {
+    let buffer = frame
+        .as_buffer()
+        .map_err(|e| anyhow!("Failed to get buffer: {e:?}"))?;
+
+    let order = match buffer.pixel_format() {
+        PixelFormat::R8G8B8A8Unorm => ChannelOrder::Rgba,
+        PixelFormat::B8G8R8A8Unorm => ChannelOrder::Bgra,
+    };
+
+    rgb_from_rgba(
+        buffer.data(),
+        buffer.width() as usize,
+        buffer.height() as usize,
+        buffer.stride() as usize,
+        order,
+    )
+    .ok_or_else(|| anyhow!("Failed to create RgbImage"))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capture_settings(target: &ScreenCaptureTarget) -> anyhow::Result<(Settings, bool)> {
+    let mut settings = Settings {
+        is_cursor_capture_enabled: Some(false),
+        pixel_format: PixelFormat::B8G8R8A8Unorm,
+        ..Default::default()
+    };
+
+    if let Ok(true) = Settings::can_is_border_required() {
+        settings.is_border_required = Some(false);
+    }
+
+    if let Ok(true) = Settings::can_is_cursor_capture_enabled() {
+        settings.is_cursor_capture_enabled = Some(false);
+    }
+
+    let mut cropped = false;
+
+    if let ScreenCaptureTarget::Area { bounds, screen } = target {
+        let display =
+            scap_targets::Display::from_id(screen).ok_or_else(|| anyhow!("Display not found"))?;
+        let physical = display
+            .physical_size()
+            .ok_or_else(|| anyhow!("Physical size not found"))?;
+        let logical = display
+            .logical_size()
+            .ok_or_else(|| anyhow!("Logical size not found"))?;
+
+        if logical.width() <= 0.0 || logical.height() <= 0.0 {
+            return Err(anyhow!("Display logical size invalid"));
+        }
+
+        let scale = physical.width() / logical.width();
+        let left = (bounds.position().x() * scale).floor();
+        let top = (bounds.position().y() * scale).floor();
+        let right = (left + bounds.size().width() * scale).ceil();
+        let bottom = (top + bounds.size().height() * scale).ceil();
+
+        let clamped_right = right.min(physical.width()).min(u32::MAX as f64).max(left);
+        let clamped_bottom = bottom.min(physical.height()).min(u32::MAX as f64).max(top);
+
+        if clamped_right > left && clamped_bottom > top {
+            settings.crop = Some(D3D11_BOX {
+                left: left.max(0.0) as u32,
+                top: top.max(0.0) as u32,
+                right: clamped_right as u32,
+                bottom: clamped_bottom as u32,
+                front: 0,
+                back: 1,
+            });
+            cropped = true;
         }
     }
 
-    let image = RgbImage::from_raw(width as u32, height as u32, rgb)?;
+    Ok((settings, cropped))
+}
 
-    if let ScreenCaptureTarget::Area { bounds, screen } = target {
-        let scale = scap_targets::Display::from_id(screen)
-            .and_then(|d| d.raw_handle().scale())
-            .unwrap_or(1.0);
-
-        let x = (bounds.position().x() * scale) as u32;
-        let y = (bounds.position().y() * scale) as u32;
-        let crop_width = (bounds.size().width() * scale) as u32;
-        let crop_height = (bounds.size().height() * scale) as u32;
-
-        let x = x.min(image.width());
-        let y = y.min(image.height());
-        let crop_width = crop_width.min(image.width() - x);
-        let crop_height = crop_height.min(image.height() - y);
-
-        let cropped = image::imageops::crop_imm(&image, x, y, crop_width, crop_height).to_image();
-        debug!("Fast capture completed in {:?}", start.elapsed());
-        return Some(cropped);
+#[cfg(target_os = "windows")]
+fn capture_bitmap_with(
+    base_dc: HDC,
+    width: i32,
+    height: i32,
+    mut fill: impl FnMut(HDC) -> anyhow::Result<()>,
+) -> anyhow::Result<Vec<u8>> {
+    if width <= 0 || height <= 0 {
+        return Err(unsupported_error());
     }
 
-    debug!("Fast capture completed in {:?}", start.elapsed());
+    if base_dc.0 == 0 {
+        return Err(unsupported_error());
+    }
+
+    let mem_dc = unsafe { CreateCompatibleDC(Some(base_dc)) };
+    if mem_dc.0 == 0 {
+        return Err(unsupported_error());
+    }
+
+    let mut info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB as u32,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        bmiColors: [Default::default(); 1],
+    };
+
+    let mut data = std::ptr::null_mut();
+    let bitmap = unsafe { CreateDIBSection(mem_dc, &mut info, DIB_RGB_COLORS, &mut data, None, 0) };
+    if bitmap.0 == 0 || data.is_null() {
+        unsafe {
+            DeleteDC(mem_dc);
+        }
+        return Err(unsupported_error());
+    }
+
+    let old_obj = unsafe { SelectObject(mem_dc, bitmap.into()) };
+
+    let result = (|| {
+        fill(mem_dc)?;
+
+        let width = usize::try_from(width).map_err(|_| unsupported_error())?;
+        let height = usize::try_from(height).map_err(|_| unsupported_error())?;
+        let row_bytes = width.checked_mul(4).ok_or_else(unsupported_error)?;
+        let len = height
+            .checked_mul(row_bytes)
+            .ok_or_else(unsupported_error)?;
+        let slice = unsafe { std::slice::from_raw_parts(data as *const u8, len) };
+
+        let mut buffer = vec![0u8; len];
+        buffer.copy_from_slice(slice);
+        Ok(buffer)
+    })();
+
+    unsafe {
+        SelectObject(mem_dc, old_obj);
+        DeleteObject(bitmap.into());
+        DeleteDC(mem_dc);
+    }
+
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn bgra_to_rgb(buffer: Vec<u8>, width: usize, height: usize) -> anyhow::Result<RgbImage> {
+    let stride = width.checked_mul(4).ok_or_else(unsupported_error)?;
+    rgb_from_rgba(&buffer, width, height, stride, ChannelOrder::Bgra)
+        .ok_or_else(|| unsupported_error())
+}
+
+#[cfg(target_os = "windows")]
+fn capture_display_bounds(
+    bounds: scap_targets::bounds::PhysicalBounds,
+) -> anyhow::Result<RgbImage> {
+    let width = bounds.size().width().round() as i32;
+    let height = bounds.size().height().round() as i32;
+    if width <= 0 || height <= 0 {
+        return Err(unsupported_error());
+    }
+    let src_x = bounds.position().x().round() as i32;
+    let src_y = bounds.position().y().round() as i32;
+
+    let screen_dc = unsafe { GetDC(None) };
+    let result = capture_bitmap_with(screen_dc, width, height, |mem_dc| {
+        let res = unsafe {
+            BitBlt(
+                mem_dc,
+                0,
+                0,
+                width,
+                height,
+                screen_dc,
+                src_x,
+                src_y,
+                SRCCOPY | CAPTUREBLT,
+            )
+        };
+
+        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+    });
+    unsafe {
+        ReleaseDC(None, screen_dc);
+    }
+
+    let buffer = result?;
+    let width = usize::try_from(width).map_err(|_| unsupported_error())?;
+    let height = usize::try_from(height).map_err(|_| unsupported_error())?;
+    bgra_to_rgb(buffer, width, height)
+}
+
+#[cfg(target_os = "windows")]
+fn capture_window_bitmap(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<Vec<u8>> {
+    let window_dc = unsafe { GetDC(hwnd) };
+    let result = capture_bitmap_with(window_dc, width, height, |mem_dc| {
+        let res = unsafe {
+            BitBlt(
+                mem_dc,
+                0,
+                0,
+                width,
+                height,
+                window_dc,
+                0,
+                0,
+                SRCCOPY | CAPTUREBLT,
+            )
+        };
+
+        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+    });
+    unsafe {
+        ReleaseDC(hwnd, window_dc);
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn capture_window_print(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<Vec<u8>> {
+    let window_dc = unsafe { GetDC(hwnd) };
+    let result = capture_bitmap_with(window_dc, width, height, |mem_dc| {
+        let res = unsafe { PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT.0 as u32) };
+
+        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+    });
+    unsafe {
+        ReleaseDC(hwnd, window_dc);
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
+    match target {
+        ScreenCaptureTarget::Display { id } => {
+            let display = scap_targets::Display::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let bounds = display
+                .raw_handle()
+                .physical_bounds()
+                .ok_or_else(|| unsupported_error())?;
+
+            let image = capture_display_bounds(bounds)?;
+            debug!("Windows GDI display capture");
+            Ok(image)
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let window = scap_targets::Window::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let bounds = window
+                .raw_handle()
+                .physical_bounds()
+                .ok_or_else(|| unsupported_error())?;
+
+            let width = bounds.size().width().round() as i32;
+            let height = bounds.size().height().round() as i32;
+            let hwnd = window.raw_handle().inner();
+
+            let mut buffer = capture_window_bitmap(hwnd, width, height)?;
+            let has_data = buffer.iter().any(|b| *b != 0);
+            if !has_data {
+                buffer = capture_window_print(hwnd, width, height)?;
+            }
+
+            let width = usize::try_from(width).map_err(|_| unsupported_error())?;
+            let height = usize::try_from(height).map_err(|_| unsupported_error())?;
+            let image = bgra_to_rgb(buffer, width, height)?;
+            debug!("Windows GDI window capture");
+            Ok(image)
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let display =
+                scap_targets::Display::from_id(&screen).ok_or_else(|| unsupported_error())?;
+            let bounds = display
+                .raw_handle()
+                .physical_bounds()
+                .ok_or_else(|| unsupported_error())?;
+
+            let image = capture_display_bounds(bounds)?;
+            debug!("Windows GDI area capture");
+            Ok(image)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn gdi_or_error(
+    target: &ScreenCaptureTarget,
+    base_error: anyhow::Error,
+) -> anyhow::Result<RgbImage> {
+    match capture_screenshot_fallback(target.clone()) {
+        Ok(image) => Ok(image),
+        Err(fallback_err) => Err(base_error
+            .context(fallback_err)
+            .context(WINDOWS_CAPTURE_UNSUPPORTED)),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
+    use std::sync::mpsc::sync_channel;
+
+    if !windows_fast_path_available() {
+        return None;
+    }
+
+    let start = std::time::Instant::now();
+
+    let item = match target.clone() {
+        ScreenCaptureTarget::Display { id } => {
+            let display = scap_targets::Display::from_id(&id)?;
+            display.raw_handle().try_as_capture_item().ok()?
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let window = scap_targets::Window::from_id(&id)?;
+            window.raw_handle().try_as_capture_item().ok()?
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let display = scap_targets::Display::from_id(&screen)?;
+            display.raw_handle().try_as_capture_item().ok()?
+        }
+    };
+
+    let (settings, _) = windows_capture_settings(target).ok()?;
+    let device = shared_d3d_device().ok().cloned();
+
+    let (tx, rx) = sync_channel(1);
+
+    let mut capturer = Capturer::new(
+        item,
+        settings,
+        {
+            move |frame| {
+                let res = frame_to_rgb(&frame);
+                let _ = tx.try_send(res);
+                Ok(())
+            }
+        },
+        || Ok(()),
+        device,
+    )
+    .ok()?;
+
+    capturer.start().ok()?;
+
+    let res = rx.recv_timeout(Duration::from_millis(500));
+    let _ = capturer.stop();
+
+    let image = res.ok()??;
+    debug!("Windows fast capture completed in {:?}", start.elapsed());
     Some(image)
 }
 
@@ -127,6 +580,25 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         }
         debug!("Fast capture failed, falling back to SCStream");
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        if !windows_fast_path_available() {
+            let fallback_image = gdi_or_error(
+                &target,
+                anyhow!("Windows.Graphics.Capture not supported on this system"),
+            )?;
+            return crop_area_if_needed(fallback_image, &target, false);
+        }
+
+        if let Some(image) = try_fast_capture(&target) {
+            return Ok(image);
+        }
+        debug!("Fast capture failed, falling back to Windows.Graphics.Capture");
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut cropped_in_capture = false;
 
     let (tx, rx) = oneshot::channel::<anyhow::Result<RgbImage>>();
     let tx = Arc::new(Mutex::new(Some(tx)));
@@ -277,58 +749,38 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
             }
         };
 
-        let settings = Settings {
-            is_cursor_capture_enabled: Some(false),
-            pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
-            ..Default::default()
-        };
+        let (settings, cropped) = windows_capture_settings(&target)?;
+        cropped_in_capture = cropped;
 
-        Capturer::new(
+        match Capturer::new(
             item,
             settings,
             {
                 let tx = tx.clone();
                 move |frame| {
                     if let Some(tx) = tx.lock().unwrap().take() {
-                        let res = (|| {
-                            let width = frame.width();
-                            let height = frame.height();
-                            let buffer = frame
-                                .as_buffer()
-                                .map_err(|e| anyhow!("Failed to get buffer: {e:?}"))?;
-                            let data = buffer.data();
-                            let stride = buffer.stride() as usize;
-                            let row_bytes = width as usize * 4;
-
-                            // R8G8B8A8Unorm is RGBA.
-                            // We need to convert to RgbImage (3 channels).
-                            let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
-                            for y in 0..height as usize {
-                                let row_start = y * stride;
-                                let row_end = row_start + row_bytes;
-                                if row_end > data.len() {
-                                    break;
-                                }
-                                let row = &data[row_start..row_end];
-                                for chunk in row.chunks_exact(4) {
-                                    rgb_data.push(chunk[0]);
-                                    rgb_data.push(chunk[1]);
-                                    rgb_data.push(chunk[2]);
-                                }
-                            }
-
-                            RgbImage::from_raw(width, height, rgb_data)
-                                .ok_or_else(|| anyhow!("Failed to create RgbImage"))
-                        })();
+                        let res = frame_to_rgb(&frame);
                         let _ = tx.send(res);
                     }
                     Ok(())
                 }
             },
             || Ok(()),
-            None,
-        )
-        .map_err(|e| anyhow!("Failed to create capturer: {e:?}"))?
+            shared_d3d_device().ok().cloned(),
+        ) {
+            Ok(capturer) => capturer,
+            Err(
+                e @ NewCapturerError::NotSupported
+                | e @ NewCapturerError::CreateDevice(_)
+                | e @ NewCapturerError::Direct3DDevice(_)
+                | e @ NewCapturerError::Context(_),
+            ) => {
+                let fallback_image =
+                    gdi_or_error(&target, anyhow!("Failed to create capturer: {e:?}"))?;
+                return crop_area_if_needed(fallback_image, &target, false);
+            }
+            Err(e) => return Err(anyhow!("Failed to create capturer: {e:?}")),
+        }
     };
 
     #[cfg(target_os = "macos")]
@@ -338,11 +790,11 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         .map_err(|e| anyhow!("Failed to start capturer: {e:?}"))?;
 
     #[cfg(target_os = "windows")]
-    capturer
-        .start()
-        .map_err(|e| anyhow!("Failed to start capturer: {e:?}"))?;
+    if let Err(e) = capturer.start() {
+        let fallback_image = gdi_or_error(&target, anyhow!("Failed to start capturer: {e:?}"))?;
+        return crop_area_if_needed(fallback_image, &target, false);
+    }
 
-    // Wait for frame or timeout
     let result = match tokio::time::timeout(Duration::from_secs(2), rx).await {
         Ok(Ok(res)) => res,
         Ok(Err(_)) => Err(anyhow!("Channel closed")),
@@ -360,25 +812,49 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         .stop()
         .map_err(|e| anyhow!("Failed to stop capturer: {e:?}"))?;
 
+    #[cfg(target_os = "windows")]
+    let image = match result {
+        Ok(img) => img,
+        Err(err) => {
+            let fallback_image = gdi_or_error(&target, err)?;
+            return crop_area_if_needed(fallback_image, &target, false);
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
     let image = result?;
 
-    // Handle Area cropping
-    if let ScreenCaptureTarget::Area { bounds, screen } = target {
-        // We need to calculate crop bounds relative to the captured image.
-        // The captured image is the full display.
-        // bounds are LogicalBounds.
+    #[cfg(target_os = "windows")]
+    let skip_crop = cropped_in_capture;
 
-        // On macOS, physical size is logical * scale.
+    #[cfg(not(target_os = "windows"))]
+    let skip_crop = false;
+
+    let final_image = crop_area_if_needed(image, &target, skip_crop)?;
+
+    Ok(final_image)
+}
+
+fn crop_area_if_needed(
+    image: RgbImage,
+    target: &ScreenCaptureTarget,
+    skip_crop: bool,
+) -> anyhow::Result<RgbImage> {
+    if let ScreenCaptureTarget::Area { bounds, screen } = target {
+        if skip_crop {
+            return Ok(image);
+        }
+
         #[cfg(target_os = "macos")]
         let scale = {
-            let display = scap_targets::Display::from_id(&screen)
+            let display = scap_targets::Display::from_id(screen)
                 .ok_or_else(|| anyhow!("Display not found"))?;
             display.raw_handle().scale().unwrap_or(1.0)
         };
 
         #[cfg(target_os = "windows")]
         let scale = {
-            let display = scap_targets::Display::from_id(&screen)
+            let display = scap_targets::Display::from_id(screen)
                 .ok_or_else(|| anyhow!("Display not found"))?;
             let physical_width = display.physical_size().map(|s| s.width()).unwrap_or(1.0);
             let logical_width = display.logical_size().map(|s| s.width()).unwrap_or(1.0);
@@ -390,7 +866,6 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         let width = (bounds.size().width() * scale) as u32;
         let height = (bounds.size().height() * scale) as u32;
 
-        // Ensure we don't crop out of bounds
         let img_width = image.width();
         let img_height = image.height();
 
@@ -398,6 +873,10 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
         let y = y.min(img_height);
         let width = width.min(img_width - x);
         let height = height.min(img_height - y);
+
+        if width == 0 || height == 0 {
+            return Ok(image);
+        }
 
         let cropped = image::imageops::crop_imm(&image, x, y, width, height).to_image();
         return Ok(cropped);

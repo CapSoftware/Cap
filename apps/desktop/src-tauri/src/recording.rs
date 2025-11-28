@@ -1039,6 +1039,10 @@ pub async fn take_screenshot(
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
 
+    let image_width = image.width();
+    let image_height = image.height();
+    let image_data = image.into_raw();
+
     let screenshots_dir = app.path().app_data_dir().unwrap().join("screenshots");
 
     std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
@@ -1055,14 +1059,15 @@ pub async fn take_screenshot(
 
     let image_filename = "original.png";
     let image_path = cap_dir.join(image_filename);
+    let cap_dir_key = cap_dir.to_string_lossy().to_string();
 
     let pending_screenshots = app.state::<PendingScreenshots>();
     pending_screenshots.insert(
-        cap_dir.to_string_lossy().to_string(),
+        cap_dir_key.clone(),
         PendingScreenshot {
-            data: image.as_raw().clone(),
-            width: image.width(),
-            height: image.height(),
+            data: image_data.clone(),
+            width: image_width,
+            height: image_height,
             created_at: Instant::now(),
         },
     );
@@ -1100,53 +1105,70 @@ pub async fn take_screenshot(
         .write(&cap_dir)
         .map_err(|e| format!("Failed to save project config: {e}"))?;
 
-    {
-        let app_clone = app.clone();
-        let cap_dir_clone = cap_dir.clone();
-        let image_path_clone = image_path.clone();
-        let image_data = image.as_raw().clone();
-        let image_width = image.width();
-        let image_height = image.height();
-        let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
+    let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
+    let compression = if is_large_capture {
+        image::codecs::png::CompressionType::Fast
+    } else {
+        image::codecs::png::CompressionType::Default
+    };
+    let image_path_for_emit = image_path.clone();
+    let image_path_for_write = image_path.clone();
+    let app_handle = app.clone();
+    let pending_state = PendingScreenshots(pending_screenshots.0.clone());
 
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tauri::async_runtime::spawn(async move {
+        let encode_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let file = std::fs::File::create(&image_path_for_write)
+                .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
+            let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                std::io::BufWriter::new(file),
+                compression,
+                image::codecs::png::FilterType::Adaptive,
+            );
 
-            if let Ok(file) = std::fs::File::create(&image_path_clone) {
-                let encoder = image::codecs::png::PngEncoder::new_with_quality(
-                    std::io::BufWriter::new(file),
-                    if is_large_capture {
-                        image::codecs::png::CompressionType::Fast
-                    } else {
-                        image::codecs::png::CompressionType::Default
-                    },
-                    image::codecs::png::FilterType::Adaptive,
+            ImageEncoder::write_image(
+                encoder,
+                &image_data,
+                image_width,
+                image_height,
+                image::ColorType::Rgb8.into(),
+            )
+            .map_err(|e| format!("Failed to encode PNG: {e}"))
+        })
+        .await;
+
+        pending_state.remove(&cap_dir_key);
+
+        match encode_result {
+            Ok(Ok(())) => {
+                let _ = NewScreenshotAdded {
+                    path: image_path_for_emit.clone(),
+                }
+                .emit(&app_handle);
+
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaved,
                 );
 
-                if let Err(e) = ImageEncoder::write_image(
-                    encoder,
-                    &image_data,
-                    image_width,
-                    image_height,
-                    image::ColorType::Rgb8.into(),
-                ) {
-                    tracing::error!("Failed to encode PNG in background: {e}");
-                }
+                AppSounds::StopRecording.play();
             }
-
-            let pending = app_clone.state::<PendingScreenshots>();
-            pending.remove(&cap_dir_clone.to_string_lossy());
-        });
-    }
-
-    let _ = NewScreenshotAdded {
-        path: image_path.clone(),
-    }
-    .emit(&app);
-
-    notifications::send_notification(&app, notifications::NotificationType::ScreenshotSaved);
-
-    AppSounds::StopRecording.play();
+            Ok(Err(e)) => {
+                error!("Failed to encode PNG: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+            Err(e) => {
+                error!("Failed to join screenshot encoding task: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+        }
+    });
 
     Ok(image_path)
 }
