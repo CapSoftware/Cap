@@ -429,6 +429,16 @@ fn convert_ffmpeg_frame_to_image(frame: &ffmpeg::frame::Video) -> anyhow::Result
     let dst_stride = width * 3;
     let src_stride = rgb_frame.stride(0);
 
+    if src_stride < dst_stride {
+        return Err(anyhow!(
+            "Source stride ({}) is less than destination stride ({}); width={}, height={}",
+            src_stride,
+            dst_stride,
+            width,
+            height
+        ));
+    }
+
     let mut img_buffer = vec![0u8; height * dst_stride];
 
     for y in 0..height {
