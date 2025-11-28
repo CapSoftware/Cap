@@ -375,6 +375,8 @@ pub async fn update_screenshot_config(
     config: ProjectConfiguration,
     save: bool,
 ) -> Result<(), String> {
+    config.validate().map_err(|error| error.to_string())?;
+
     let _ = instance.config_tx.send(config.clone());
 
     if save {
