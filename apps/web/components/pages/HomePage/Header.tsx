@@ -71,33 +71,12 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 	const headerContent = getHeaderContent();
 
 	return (
-		<div className="mt-[100px] mb-10 sm:mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[20vh]">
+		<div className="mt-[110px] mb-10 sm:mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[20vh]">
 			<div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
 				<div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
-					<motion.div
-						initial="hidden"
-						animate="visible"
-						custom={0}
-						variants={fadeIn}
-					>
-						<Link
-							href={homepageCopy.header.announcement.href}
-							className="flex gap-2 items-center px-3 py-2 mb-8 bg-white rounded-full border group border-gray-4 w-fit"
-						>
-							<p className="font-mono text-xs text-gray-12">
-								{homepageCopy.header.announcement.text}
-							</p>
-							<FontAwesomeIcon
-								fontWeight="light"
-								className="w-1.5 text-gray-12 group-hover:translate-x-0.5 transition-transform"
-								icon={faAngleRight}
-							/>
-						</Link>
-					</motion.div>
-
 					<div className="flex flex-col text-left w-full max-w-[650px]">
 						<motion.h1
-							className="text-[2.8rem] font-medium leading-[3rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4"
+							className="text-[2.25rem] font-medium leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4"
 							initial="hidden"
 							animate="visible"
 							custom={1}
