@@ -2698,7 +2698,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
             match event {
                 WindowEvent::CloseRequested { .. } => {
-                    if let Ok(CapWindowId::Camera) = CapWindowId::from_str(label) {
+                    if let Ok(CapWindowDef::Camera) = CapWindowDef::from_str(label) {
                         tokio::spawn(cleanup_camera_window(app.clone()));
                     }
                 }
@@ -2745,7 +2745,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     reopen_main_window(&app);
                                 }
                             }
-                            CapWindowId::ScreenshotEditor { id } => {
+                            CapWindowDef::ScreenshotEditor { id } => {
                                 let window_ids =
                                     ScreenshotEditorWindowIds::get(window.app_handle());
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
@@ -2753,11 +2753,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowId::Settings.get(&app).is_none() {
+                                if CapWindowDef::Settings.get(&app).is_none() {
                                     reopen_main_window(&app);
                                 }
                             }
-                            CapWindowId::Settings => {
+                            CapWindowDef::Settings => {
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowDef::from_str(&label)
                                         && matches!(

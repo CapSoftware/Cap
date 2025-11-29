@@ -136,7 +136,7 @@ impl CapWindowDef {
             Self::CaptureArea => "Cap Capture Area",
             Self::RecordingControls => "Cap Recording Controls",
             Self::Editor { .. } => "Cap Editor",
-            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
+            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor",
             Self::ModeSelect => "Cap Mode Selection",
             Self::Camera => "Cap Camera",
             Self::RecordingsOverlay => "Cap Recordings Overlay",
@@ -456,7 +456,7 @@ impl CapWindow {
                     .build()?
             }
             Self::ScreenshotEditor { path: _ } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
 
@@ -823,7 +823,7 @@ impl CapWindow {
                 let state = app.state::<ScreenshotEditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
-                CapWindowId::ScreenshotEditor { id }
+                CapWindowDef::ScreenshotEditor { id }
             }
         }
     }
