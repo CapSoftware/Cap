@@ -78,6 +78,14 @@ const getCurrentRecording = queryOptions({
 	queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
 });
 
+export const listRecordings = queryOptions({
+	queryKey: ["recordings"] as const,
+	queryFn: async () => {
+		return await commands.listRecordings();
+	},
+	initialData: [],
+});
+
 export const listVideoDevices = queryOptions({
 	queryKey: ["videoDevices"] as const,
 	queryFn: () => commands.listCameras(),

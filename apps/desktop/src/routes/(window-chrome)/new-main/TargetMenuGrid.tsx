@@ -5,7 +5,11 @@ import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
 } from "~/utils/tauri";
-import TargetCard, { TargetCardSkeleton } from "./TargetCard";
+import TargetCard, {
+	type RecordingWithPath,
+	type ScreenshotWithPath,
+	TargetCardSkeleton,
+} from "./TargetCard";
 
 const DEFAULT_SKELETON_COUNT = 6;
 
@@ -29,7 +33,19 @@ type WindowGridProps = BaseProps<CaptureWindowWithThumbnail> & {
 	variant: "window";
 };
 
-type TargetMenuGridProps = DisplayGridProps | WindowGridProps;
+type RecordingGridProps = BaseProps<RecordingWithPath> & {
+	variant: "recording";
+};
+
+type ScreenshotGridProps = BaseProps<ScreenshotWithPath> & {
+	variant: "screenshot";
+};
+
+type TargetMenuGridProps =
+	| DisplayGridProps
+	| WindowGridProps
+	| RecordingGridProps
+	| ScreenshotGridProps;
 
 export default function TargetMenuGrid(props: TargetMenuGridProps) {
 	const items = createMemo(() => props.targets ?? []);
@@ -97,7 +113,13 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 	};
 
 	const defaultEmptyMessage = () =>
-		props.variant === "display" ? "No displays found" : "No windows found";
+		props.variant === "display"
+			? "No displays found"
+			: props.variant === "window"
+				? "No windows found"
+				: props.variant === "recording"
+					? "No recordings found"
+					: "No screenshots found";
 
 	return (
 		<div
@@ -190,6 +212,76 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 														class="w-full"
 														data-target-menu-card="true"
 														highlightQuery={windowProps.highlightQuery}
+													/>
+												</div>
+											</Transition>
+										)}
+									</For>
+								);
+							})()}
+						</Match>
+						<Match when={props.variant === "recording"}>
+							{(() => {
+								const recordingProps = props as RecordingGridProps;
+								return (
+									<For each={items() as RecordingWithPath[]}>
+										{(item, index) => (
+											<Transition
+												appear
+												enterActiveClass="transition duration-200"
+												enterClass="scale-95 opacity-0"
+												enterToClass="scale-100 opacity-100"
+												exitActiveClass="transition duration-200"
+												exitClass="scale-100"
+												exitToClass="scale-95"
+											>
+												<div
+													style={{ "transition-delay": `${index() * 100}ms` }}
+												>
+													<TargetCard
+														variant="recording"
+														target={item}
+														onClick={() => recordingProps.onSelect?.(item)}
+														disabled={recordingProps.disabled}
+														onKeyDown={handleKeyDown}
+														class="w-full"
+														data-target-menu-card="true"
+														highlightQuery={recordingProps.highlightQuery}
+													/>
+												</div>
+											</Transition>
+										)}
+									</For>
+								);
+							})()}
+						</Match>
+						<Match when={props.variant === "screenshot"}>
+							{(() => {
+								const screenshotProps = props as ScreenshotGridProps;
+								return (
+									<For each={items() as ScreenshotWithPath[]}>
+										{(item, index) => (
+											<Transition
+												appear
+												enterActiveClass="transition duration-200"
+												enterClass="scale-95 opacity-0"
+												enterToClass="scale-100 opacity-100"
+												exitActiveClass="transition duration-200"
+												exitClass="scale-100"
+												exitToClass="scale-95"
+											>
+												<div
+													style={{ "transition-delay": `${index() * 100}ms` }}
+												>
+													<TargetCard
+														variant="screenshot"
+														target={item}
+														onClick={() => screenshotProps.onSelect?.(item)}
+														disabled={screenshotProps.disabled}
+														onKeyDown={handleKeyDown}
+														class="w-full"
+														data-target-menu-card="true"
+														highlightQuery={screenshotProps.highlightQuery}
 													/>
 												</div>
 											</Transition>

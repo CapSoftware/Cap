@@ -31,6 +31,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import {
 	CROP_ZERO,
 	type CropBounds,
@@ -479,6 +480,7 @@ function Inner() {
 					});
 
 					createEffect(async () => {
+						if (options.mode === "screenshot") return;
 						const bounds = crop();
 						const interacting = isInteracting();
 
@@ -688,6 +690,44 @@ function Inner() {
 						});
 					});
 
+					const [wasInteracting, setWasInteracting] = createSignal(false);
+					createEffect(async () => {
+						const interacting = isInteracting();
+						const was = wasInteracting();
+						setWasInteracting(interacting);
+
+						if (was && !interacting) {
+							if (options.mode === "screenshot" && isValid()) {
+								const target: ScreenCaptureTarget = {
+									variant: "area",
+									screen: displayId(),
+									bounds: {
+										position: {
+											x: crop().x,
+											y: crop().y,
+										},
+										size: {
+											width: crop().width,
+											height: crop().height,
+										},
+									},
+								};
+
+								try {
+									const path = await invoke<string>("take_screenshot", {
+										target,
+									});
+									await commands.showWindow({ ScreenshotEditor: { path } });
+									await commands.closeTargetSelectOverlays();
+								} catch (e) {
+									const message = e instanceof Error ? e.message : String(e);
+									toast.error(`Failed to take screenshot: ${message}`);
+									console.error("Failed to take screenshot", e);
+								}
+							}
+						}
+					});
+
 					return (
 						<div class="fixed w-screen h-screen bg-black/60">
 							<div
@@ -696,25 +736,27 @@ function Inner() {
 								style={controlsStyle()}
 							>
 								<div class="flex flex-col items-center">
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: displayId(),
-											bounds: {
-												position: {
-													x: crop().x,
-													y: crop().y,
+									<Show when={options.mode !== "screenshot"}>
+										<RecordingControls
+											target={{
+												variant: "area",
+												screen: displayId(),
+												bounds: {
+													position: {
+														x: crop().x,
+														y: crop().y,
+													},
+													size: {
+														width: crop().width,
+														height: crop().height,
+													},
 												},
-												size: {
-													width: crop().width,
-													height: crop().height,
-												},
-											},
-										}}
-										disabled={!isValid()}
-										showBackground={controllerInside()}
-										onRecordingStart={() => setOriginalCameraBounds(null)}
-									/>
+											}}
+											disabled={!isValid()}
+											showBackground={controllerInside()}
+											onRecordingStart={() => setOriginalCameraBounds(null)}
+										/>
+									</Show>
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
 											<p>Minimum size is 150 x 150</p>
@@ -804,6 +846,13 @@ function RecordingControls(props: {
 					},
 					checked: rawOptions.mode === "instant",
 				}),
+				await CheckMenuItem.new({
+					text: "Screenshot Mode",
+					action: () => {
+						setOptions("mode", "screenshot");
+					},
+					checked: rawOptions.mode === "screenshot",
+				}),
 			],
 		});
 
@@ -869,8 +918,8 @@ function RecordingControls(props: {
 						<div
 							data-inactive={rawOptions.mode === "instant" && !auth.data}
 							data-disabled={startDisabled()}
-							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 group"
-							onClick={() => {
+							class="flex flex-1 min-w-0 max-w-[15rem] overflow-hidden flex-row h-11 rounded-full text-white bg-gradient-to-r from-blue-10 via-blue-10 to-blue-11 dark:from-blue-9 dark:via-blue-9 dark:to-blue-10 group"
+							onClick={async () => {
 								if (rawOptions.mode === "instant" && !auth.data) {
 									emit("start-sign-in");
 									return;
@@ -899,6 +948,21 @@ function RecordingControls(props: {
 
 								props.onRecordingStart?.();
 
+								if (rawOptions.mode === "screenshot") {
+									try {
+										const path = await invoke<string>("take_screenshot", {
+											target: props.target,
+										});
+										commands.showWindow({ ScreenshotEditor: { path } });
+										commands.closeTargetSelectOverlays();
+									} catch (e) {
+										const message = e instanceof Error ? e.message : String(e);
+										toast.error(`Failed to take screenshot: ${message}`);
+										console.error("Failed to take screenshot", e);
+									}
+									return;
+								}
+
 								commands.startRecording({
 									capture_target: props.target,
 									mode: rawOptions.mode,
@@ -913,16 +977,26 @@ function RecordingControls(props: {
 										startDisabled(),
 								}}
 							>
-								{rawOptions.mode === "studio" ? (
-									<IconCapFilmCut class="size-4 flex-shrink-0" />
-								) : (
-									<IconCapInstant class="size-4 flex-shrink-0" />
-								)}
+								<Switch>
+									<Match when={rawOptions.mode === "studio"}>
+										<IconCapFilmCut class="size-4 flex-shrink-0" />
+									</Match>
+									<Match when={rawOptions.mode === "instant"}>
+										<IconCapInstant class="size-4 flex-shrink-0" />
+									</Match>
+									<Match when={(rawOptions.mode as string) === "screenshot"}>
+										<IconCapCamera class="size-4 flex-shrink-0" />
+									</Match>
+								</Switch>
 								<div class="flex flex-col mr-2 ml-3 min-w-0">
 									<span class="text-[0.95rem] font-medium text-white text-nowrap">
-										{rawOptions.mode === "instant" && !auth.data
-											? "Sign In To Use"
-											: "Start Recording"}
+										{(() => {
+											if (rawOptions.mode === "instant" && !auth.data)
+												return "Sign In To Use";
+											if (rawOptions.mode === "screenshot")
+												return "Take Screenshot";
+											return "Start Recording";
+										})()}
 									</span>
 									<span class="text-[11px] flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white/90 font-light -mt-0.5">
 										{`${capitalize(rawOptions.mode)} Mode`}
@@ -946,31 +1020,33 @@ function RecordingControls(props: {
 						</div>
 					</div>
 				</div>
-				<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
-					<div class="grid grid-cols-2 gap-2 w-full">
-						<CameraSelect
-							disabled={cameras.isPending}
-							options={cameras.data ?? []}
-							value={selectedCamera() ?? null}
-							onChange={(camera) => {
-								if (!camera) setCamera.mutate(null);
-								else if (camera.model_id)
-									setCamera.mutate({ ModelID: camera.model_id });
-								else setCamera.mutate({ DeviceID: camera.device_id });
-							}}
-						/>
-						<MicrophoneSelect
-							disabled={mics.isPending}
-							options={mics.isPending ? [] : (mics.data ?? [])}
-							value={
-								mics.isPending
-									? (rawOptions.micName ?? null)
-									: selectedMicName()
-							}
-							onChange={(value) => setMicInput.mutate(value)}
-						/>
+				<Show when={(rawOptions.mode as string) !== "screenshot"}>
+					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+						<div class="grid grid-cols-2 gap-2 w-full">
+							<CameraSelect
+								disabled={cameras.isPending}
+								options={cameras.data ?? []}
+								value={selectedCamera() ?? null}
+								onChange={(camera) => {
+									if (!camera) setCamera.mutate(null);
+									else if (camera.model_id)
+										setCamera.mutate({ ModelID: camera.model_id });
+									else setCamera.mutate({ DeviceID: camera.device_id });
+								}}
+							/>
+							<MicrophoneSelect
+								disabled={mics.isPending}
+								options={mics.isPending ? [] : (mics.data ?? [])}
+								value={
+									mics.isPending
+										? (rawOptions.micName ?? null)
+										: selectedMicName()
+								}
+								onChange={(value) => setMicInput.mutate(value)}
+							/>
+						</div>
 					</div>
-				</div>
+				</Show>
 			</div>
 			<div class="flex justify-center items-center w-full">
 				<div

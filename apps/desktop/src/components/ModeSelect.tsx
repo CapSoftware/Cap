@@ -68,13 +68,20 @@ const ModeSelect = (props: { onClose?: () => void; standalone?: boolean }) => {
 				"Records at the highest quality and framerate, completely locally. Captures both your screen and camera separately for editing and exporting later.",
 			icon: IconCapFilmCut,
 		},
+		{
+			mode: "screenshot" as const,
+			title: "Screenshot Mode",
+			description:
+				"Capture high-quality screenshots of your screen or specific windows. Annotate and share instantly.",
+			icon: IconCapScreenshot,
+		},
 	];
 
 	return (
 		<div
 			data-tauri-drag-region="none"
 			class={cx(
-				"grid grid-cols-2 gap-8 items-center text-center bg-gray-1",
+				"grid grid-cols-1 md:grid-cols-3 gap-8 items-center text-center bg-gray-1",
 				props.standalone
 					? "absolute z-10 border border-gray-3 p-16 rounded-xl"
 					: "",
