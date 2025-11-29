@@ -11,7 +11,7 @@ use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
     Win32::{
-        Foundation::E_NOTIMPL,
+        Foundation::{E_FAIL, E_NOTIMPL},
         Graphics::{
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
@@ -436,7 +436,8 @@ impl H264Encoder {
                         // This is a known contract violation by certain Media Foundation Transforms.
                         // We handle this gracefully by skipping the frame instead of panicking.
                         let mut output_buffers = [output_buffer];
-                        self.transform.ProcessOutput(0, &mut output_buffers, &mut status)?;
+                        self.transform
+                            .ProcessOutput(0, &mut output_buffers, &mut status)?;
 
                         // Use the sample directly without cloning to prevent memory leaks
                         if let Some(sample) = output_buffers[0].pSample.take() {
@@ -445,12 +446,10 @@ impl H264Encoder {
                         } else {
                             consecutive_empty_samples += 1;
                             if consecutive_empty_samples > MAX_CONSECUTIVE_EMPTY_SAMPLES {
-                                return Err(
-                                    windows::core::Error::new(
-                                        windows::core::HRESULT(0),
-                                        "Too many consecutive empty samples"
-                                    )
-                                );
+                                return Err(windows::core::Error::new(
+                                    windows::core::HRESULT(0),
+                                    "Too many consecutive empty samples",
+                                ));
                             }
                         }
                     }

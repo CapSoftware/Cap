@@ -4,7 +4,8 @@
 			"Bash(pnpm typecheck:*)",
 			"Bash(pnpm lint:*)",
 			"Bash(pnpm build:*)",
-			"Bash(cargo check:*)"
+			"Bash(cargo check:*)",
+			"Bash(cargo fmt:*)"
 		],
 		"deny": [],
 		"ask": []

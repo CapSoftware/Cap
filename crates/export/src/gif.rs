@@ -37,7 +37,7 @@ impl GifExportSettings {
     pub async fn export(
         self,
         base: ExporterBase,
-        mut on_progress: impl FnMut(u32) + Send + 'static,
+        mut on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
         let meta = &base.studio_meta;
 
@@ -86,7 +86,9 @@ impl GifExportSettings {
             let mut frame_count = 0;
 
             while let Some((frame, _frame_number)) = video_rx.blocking_recv() {
-                (on_progress)(frame_count);
+                if !(on_progress)(frame_count) {
+                    return Err(ExportError::Other("Export cancelled".to_string()));
+                }
 
                 if let Err(e) =
                     gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
