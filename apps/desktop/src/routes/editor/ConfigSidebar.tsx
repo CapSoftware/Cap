@@ -2143,16 +2143,16 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					step={0.1}
 					formatTooltip="%"
 				/>
-				</Field>
-				<Field name="Size During Zoom" icon={<IconCapEnlarge class="size-4" />}>
-					<Slider
-						value={[project.camera.zoomSize ?? 60]}
-						onChange={(v) => setProject("camera", "zoomSize", v[0])}
-						minValue={10}
-						maxValue={60}
-						step={0.1}
-						formatTooltip="%"
-					/>
+			</Field>
+			<Field name="Size During Zoom" icon={<IconCapEnlarge class="size-4" />}>
+				<Slider
+					value={[project.camera.zoomSize ?? 60]}
+					onChange={(v) => setProject("camera", "zoomSize", v[0])}
+					minValue={10}
+					maxValue={60}
+					step={0.1}
+					formatTooltip="%"
+				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<div class="flex flex-col gap-3">
@@ -2182,43 +2182,43 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 						formatTooltip="%"
 					/>
 					<ShadowSettings
-							scrollRef={props.scrollRef}
-							size={{
-								value: [project.camera.advancedShadow?.size ?? 50],
-								onChange: (v) => {
-									setProject("camera", "advancedShadow", {
-										...(project.camera.advancedShadow ?? {
-											size: 50,
-											opacity: 18,
-											blur: 50,
-										}),
-										size: v[0],
-									});
-								},
-							}}
-							opacity={{
-								value: [project.camera.advancedShadow?.opacity ?? 18],
-								onChange: (v) => {
-									setProject("camera", "advancedShadow", {
-										...(project.camera.advancedShadow ?? {
-											size: 50,
-											opacity: 18,
-											blur: 50,
-										}),
-										opacity: v[0],
-									});
-								},
-							}}
-							blur={{
-								value: [project.camera.advancedShadow?.blur ?? 50],
-								onChange: (v) => {
-									setProject("camera", "advancedShadow", {
-										...(project.camera.advancedShadow ?? {
-											size: 50,
-											opacity: 18,
-											blur: 50,
-										}),
-										blur: v[0],
+						scrollRef={props.scrollRef}
+						size={{
+							value: [project.camera.advancedShadow?.size ?? 50],
+							onChange: (v) => {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									size: v[0],
+								});
+							},
+						}}
+						opacity={{
+							value: [project.camera.advancedShadow?.opacity ?? 18],
+							onChange: (v) => {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									opacity: v[0],
+								});
+							},
+						}}
+						blur={{
+							value: [project.camera.advancedShadow?.blur ?? 50],
+							onChange: (v) => {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
+										size: 50,
+										opacity: 18,
+										blur: 50,
+									}),
+									blur: v[0],
 								});
 							},
 						}}
