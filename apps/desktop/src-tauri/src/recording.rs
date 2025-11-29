@@ -563,6 +563,7 @@ pub async fn start_recording(
             }
         }
         RecordingMode::Studio => None,
+        RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
     let meta = RecordingMeta {
@@ -581,6 +582,9 @@ pub async fn start_recording(
             }
             RecordingMode::Instant => {
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+            RecordingMode::Screenshot => {
+                return Err("Use take_screenshot for screenshots".to_string());
             }
         },
         sharing: None,
@@ -840,6 +844,9 @@ pub async fn start_recording(
                                 camera_feed: camera_feed.clone(),
                             })
                         }
+                        RecordingMode::Screenshot => Err(anyhow!(
+                            "Screenshot mode should be handled via take_screenshot"
+                        )),
                     }
                 }
                 .await;
@@ -1127,6 +1134,158 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
     }
 
     Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[tracing::instrument(name = "take_screenshot", skip(app))]
+pub async fn take_screenshot(
+    app: AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<PathBuf, String> {
+    use crate::NewScreenshotAdded;
+    use crate::notifications;
+    use crate::{PendingScreenshot, PendingScreenshots};
+    use cap_recording::screenshot::capture_screenshot;
+    use image::ImageEncoder;
+    use std::time::Instant;
+
+    let image = capture_screenshot(target)
+        .await
+        .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
+
+    let image_width = image.width();
+    let image_height = image.height();
+    let image_data = image.into_raw();
+
+    let screenshots_dir = app.path().app_data_dir().unwrap().join("screenshots");
+
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+
+    let date_time = if cfg!(windows) {
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let cap_dir = screenshots_dir.join(format!("{id}.cap"));
+    std::fs::create_dir_all(&cap_dir).map_err(|e| e.to_string())?;
+
+    let image_filename = "original.png";
+    let image_path = cap_dir.join(image_filename);
+    let cap_dir_key = cap_dir.to_string_lossy().to_string();
+
+    let pending_screenshots = app.state::<PendingScreenshots>();
+    pending_screenshots.insert(
+        cap_dir_key.clone(),
+        PendingScreenshot {
+            data: image_data.clone(),
+            width: image_width,
+            height: image_height,
+            created_at: Instant::now(),
+        },
+    );
+
+    let relative_path = relative_path::RelativePathBuf::from(image_filename);
+
+    let video_meta = cap_project::VideoMeta {
+        path: relative_path,
+        fps: 0,
+        start_time: Some(0.0),
+    };
+
+    let segment = cap_project::SingleSegment {
+        display: video_meta,
+        camera: None,
+        audio: None,
+        cursor: None,
+    };
+
+    let meta = cap_project::RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: cap_dir.clone(),
+        pretty_name: format!("Screenshot {}", date_time),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Studio(
+            cap_project::StudioRecordingMeta::SingleSegment { segment },
+        ),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+
+    cap_project::ProjectConfiguration::default()
+        .write(&cap_dir)
+        .map_err(|e| format!("Failed to save project config: {e}"))?;
+
+    let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
+    let compression = if is_large_capture {
+        image::codecs::png::CompressionType::Fast
+    } else {
+        image::codecs::png::CompressionType::Default
+    };
+    let image_path_for_emit = image_path.clone();
+    let image_path_for_write = image_path.clone();
+    let app_handle = app.clone();
+    let pending_state = PendingScreenshots(pending_screenshots.0.clone());
+
+    tauri::async_runtime::spawn(async move {
+        let encode_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let file = std::fs::File::create(&image_path_for_write)
+                .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
+            let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                std::io::BufWriter::new(file),
+                compression,
+                image::codecs::png::FilterType::Adaptive,
+            );
+
+            ImageEncoder::write_image(
+                encoder,
+                &image_data,
+                image_width,
+                image_height,
+                image::ColorType::Rgb8.into(),
+            )
+            .map_err(|e| format!("Failed to encode PNG: {e}"))
+        })
+        .await;
+
+        pending_state.remove(&cap_dir_key);
+
+        match encode_result {
+            Ok(Ok(())) => {
+                let _ = NewScreenshotAdded {
+                    path: image_path_for_emit.clone(),
+                }
+                .emit(&app_handle);
+
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaved,
+                );
+
+                AppSounds::StopRecording.play();
+            }
+            Ok(Err(e)) => {
+                error!("Failed to encode PNG: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+            Err(e) => {
+                error!("Failed to join screenshot encoding task: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+        }
+    });
+
+    Ok(image_path)
 }
 
 // runs when a recording ends, whether from success or failure

@@ -1,10 +1,12 @@
 use std::{
     env::temp_dir,
+    fmt,
     ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use specta::Type;
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -111,17 +113,6 @@ impl<T: Sub<Output = T> + Copy> Sub<T> for XY<T> {
     }
 }
 
-impl<T: Mul<Output = T> + Copy> Mul<T> for XY<T> {
-    type Output = Self;
-
-    fn mul(self, other: T) -> Self {
-        Self {
-            x: self.x * other,
-            y: self.y * other,
-        }
-    }
-}
-
 impl<T: Mul<Output = T> + Copy> Mul<XY<T>> for XY<T> {
     type Output = Self;
 
@@ -129,6 +120,17 @@ impl<T: Mul<Output = T> + Copy> Mul<XY<T>> for XY<T> {
         Self {
             x: self.x * other.x,
             y: self.y * other.y,
+        }
+    }
+}
+
+impl<T: Mul<Output = T> + Copy> Mul<T> for XY<T> {
+    type Output = Self;
+
+    fn mul(self, other: T) -> Self {
+        Self {
+            x: self.x * other,
+            y: self.y * other,
         }
     }
 }
@@ -289,21 +291,23 @@ pub struct CameraPosition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
     pub position: CameraPosition,
     pub size: f32,
+    #[serde(alias = "zoom_size")]
     pub zoom_size: Option<f32>,
     #[serde(default = "Camera::default_rounding")]
     pub rounding: f32,
     #[serde(default)]
     pub shadow: f32,
-    #[serde(default)]
+    #[serde(alias = "advanced_shadow", default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
     #[serde(default)]
     pub shape: CameraShape,
-    #[serde(default)]
+    #[serde(alias = "rounding_type", default)]
     pub rounding_type: CornerStyle,
 }
 
@@ -668,6 +672,128 @@ pub struct ClipConfiguration {
     pub offsets: ClipOffsets,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnnotationType {
+    Arrow,
+    Circle,
+    Rectangle,
+    Text,
+    Mask,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskType {
+    Blur,
+    Pixelate,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AnnotationValidationError {
+    MaskTypeMissing {
+        id: String,
+    },
+    MaskLevelMissing {
+        id: String,
+    },
+    MaskLevelInvalid {
+        id: String,
+        level: f64,
+    },
+    MaskDataNotAllowed {
+        id: String,
+        annotation_type: AnnotationType,
+    },
+}
+
+impl fmt::Display for AnnotationValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MaskTypeMissing { id } => {
+                write!(f, "annotation {id} of type mask is missing maskType")
+            }
+            Self::MaskLevelMissing { id } => {
+                write!(f, "annotation {id} of type mask is missing maskLevel")
+            }
+            Self::MaskLevelInvalid { id, level } => {
+                write!(f, "annotation {id} has invalid maskLevel {level}")
+            }
+            Self::MaskDataNotAllowed {
+                id,
+                annotation_type,
+            } => write!(
+                f,
+                "annotation {id} with type {:?} cannot include mask data",
+                annotation_type
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AnnotationValidationError {}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotation {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub annotation_type: AnnotationType,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub stroke_color: String,
+    pub stroke_width: f64,
+    pub fill_color: String,
+    pub opacity: f64,
+    pub rotation: f64,
+    pub text: Option<String>,
+    #[serde(default)]
+    pub mask_type: Option<MaskType>,
+    #[serde(default)]
+    pub mask_level: Option<f64>,
+}
+
+impl Annotation {
+    pub fn validate(&self) -> Result<(), AnnotationValidationError> {
+        match self.annotation_type {
+            AnnotationType::Mask => {
+                if self.mask_type.is_none() {
+                    return Err(AnnotationValidationError::MaskTypeMissing {
+                        id: self.id.clone(),
+                    });
+                }
+
+                let level =
+                    self.mask_level
+                        .ok_or_else(|| AnnotationValidationError::MaskLevelMissing {
+                            id: self.id.clone(),
+                        })?;
+
+                if !level.is_finite() || level <= 0.0 {
+                    return Err(AnnotationValidationError::MaskLevelInvalid {
+                        id: self.id.clone(),
+                        level,
+                    });
+                }
+
+                Ok(())
+            }
+            _ => {
+                if self.mask_type.is_some() || self.mask_level.is_some() {
+                    return Err(AnnotationValidationError::MaskDataNotAllowed {
+                        id: self.id.clone(),
+                        annotation_type: self.annotation_type,
+                    });
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
@@ -683,18 +809,63 @@ pub struct ProjectConfiguration {
     pub captions: Option<CaptionsData>,
     #[serde(default)]
     pub clips: Vec<ClipConfiguration>,
+    #[serde(default)]
+    pub annotations: Vec<Annotation>,
+}
+
+fn camera_config_needs_migration(value: &Value) -> bool {
+    value
+        .get("camera")
+        .and_then(|camera| camera.as_object())
+        .is_some_and(|camera| {
+            camera.contains_key("zoom_size")
+                || camera.contains_key("advanced_shadow")
+                || camera.contains_key("rounding_type")
+        })
 }
 
 impl ProjectConfiguration {
+    pub fn validate(&self) -> Result<(), AnnotationValidationError> {
+        for annotation in &self.annotations {
+            annotation.validate()?;
+        }
+
+        Ok(())
+    }
+
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
-        let config_str =
-            std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
-        let config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+        let project_path = project_path.as_ref();
+        let config_path = project_path.join("project-config.json");
+        let config_str = std::fs::read_to_string(&config_path)?;
+        let parsed_value = serde_json::from_str::<Value>(&config_str).ok();
+        let config: Self = serde_json::from_str(&config_str)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        config
+            .validate()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+
+        if parsed_value
+            .as_ref()
+            .map(camera_config_needs_migration)
+            .unwrap_or(false)
+        {
+            match config.write(project_path) {
+                Ok(_) => {
+                    eprintln!("Updated project-config.json camera keys to camelCase");
+                }
+                Err(error) => {
+                    eprintln!("Failed to migrate project-config.json: {error}");
+                }
+            }
+        }
 
         Ok(config)
     }
 
     pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+        self.validate()
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+
         let temp_path = temp_dir().join(uuid::Uuid::new_v4().to_string());
 
         // Write to temporary file first to ensure readers don't see partial files

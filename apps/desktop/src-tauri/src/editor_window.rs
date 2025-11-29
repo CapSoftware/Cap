@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{Manager, Runtime, Window, ipc::CommandArg};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -88,9 +88,9 @@ impl EditorInstances {
 
         match instances.entry(window.label().to_string()) {
             Entry::Vacant(entry) => {
-                let (frame_tx, frame_rx) = flume::bounded(4);
+                let (frame_tx, _) = broadcast::channel(4);
 
-                let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
+                let (ws_port, ws_shutdown_token) = create_frame_ws(frame_tx.clone()).await;
                 let instance = create_editor_instance_impl(
                     window.app_handle(),
                     path,

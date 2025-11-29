@@ -21,10 +21,21 @@ pub struct EncoderDevice {
 
 impl EncoderDevice {
     pub fn enumerate(major_type: GUID, subtype: GUID) -> Result<Vec<EncoderDevice>> {
-        Self::enumerate_with_flags(
+        let devices = Self::enumerate_with_flags(
             major_type,
             subtype,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY | MFT_ENUM_FLAG_SORTANDFILTER,
+        )?;
+
+        if !devices.is_empty() {
+            return Ok(devices);
+        }
+
+        // Fallback to software implementation if hardware encoding is not available
+        Self::enumerate_with_flags(
+            major_type,
+            subtype,
+            MFT_ENUM_FLAG_TRANSCODE_ONLY | MFT_ENUM_FLAG_SORTANDFILTER,
         )
     }
 

@@ -23,6 +23,9 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
+import themePreviewLegacyAuto from "~/assets/theme-previews/legacy-auto.jpg";
+import themePreviewLegacyDark from "~/assets/theme-previews/legacy-dark.jpg";
+import themePreviewLegacyLight from "~/assets/theme-previews/legacy-light.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
@@ -117,13 +120,35 @@ export default function GeneralSettings() {
 
 function AppearanceSection(props: {
 	currentTheme: AppTheme;
+	newRecordingFlow: boolean;
 	onThemeChange: (theme: AppTheme) => void;
 }) {
 	const options = [
-		{ id: "system", name: "System", preview: themePreviewAuto },
-		{ id: "light", name: "Light", preview: themePreviewLight },
-		{ id: "dark", name: "Dark", preview: themePreviewDark },
-	] satisfies { id: AppTheme; name: string; preview: string }[];
+		{
+			id: "system",
+			name: "System",
+		},
+		{
+			id: "light",
+			name: "Light",
+		},
+		{
+			id: "dark",
+			name: "Dark",
+		},
+	] satisfies { id: AppTheme; name: string }[];
+
+	const previews = createMemo(() => {
+		return {
+			system: props.newRecordingFlow
+				? themePreviewAuto
+				: themePreviewLegacyAuto,
+			light: props.newRecordingFlow
+				? themePreviewLight
+				: themePreviewLegacyLight,
+			dark: props.newRecordingFlow ? themePreviewDark : themePreviewLegacyDark,
+		};
+	});
 
 	return (
 		<div class="flex flex-col gap-4">
@@ -161,11 +186,16 @@ function AppearanceSection(props: {
 										aria-label={`Select theme: ${theme.name}`}
 									>
 										<div class="flex justify-center items-center w-full h-full">
-											<img
-												draggable={false}
-												src={theme.preview}
-												alt={`Preview of ${theme.name} theme`}
-											/>
+											<Show when={previews()[theme.id]} keyed>
+												{(preview) => (
+													<img
+														class="animate-in fade-in duration-300"
+														draggable={false}
+														src={preview}
+														alt={`Preview of ${theme.name} theme`}
+													/>
+												)}
+											</Show>
 										</div>
 									</div>
 									<span
@@ -382,6 +412,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			<div class="p-4 space-y-6">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
+					newRecordingFlow={settings.enableNewRecordingFlow}
 					onThemeChange={(newTheme) => {
 						setSettings("theme", newTheme);
 						generalSettingsStore.set({ theme: newTheme });

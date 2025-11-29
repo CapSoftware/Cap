@@ -2146,8 +2146,8 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 			</Field>
 			<Field name="Size During Zoom" icon={<IconCapEnlarge class="size-4" />}>
 				<Slider
-					value={[project.camera.zoom_size ?? 60]}
-					onChange={(v) => setProject("camera", "zoom_size", v[0])}
+					value={[project.camera.zoomSize ?? 60]}
+					onChange={(v) => setProject("camera", "zoomSize", v[0])}
 					minValue={10}
 					maxValue={60}
 					step={0.1}
@@ -2184,10 +2184,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 					<ShadowSettings
 						scrollRef={props.scrollRef}
 						size={{
-							value: [project.camera.advanced_shadow?.size ?? 50],
+							value: [project.camera.advancedShadow?.size ?? 50],
 							onChange: (v) => {
-								setProject("camera", "advanced_shadow", {
-									...(project.camera.advanced_shadow ?? {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
 										size: 50,
 										opacity: 18,
 										blur: 50,
@@ -2197,10 +2197,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 							},
 						}}
 						opacity={{
-							value: [project.camera.advanced_shadow?.opacity ?? 18],
+							value: [project.camera.advancedShadow?.opacity ?? 18],
 							onChange: (v) => {
-								setProject("camera", "advanced_shadow", {
-									...(project.camera.advanced_shadow ?? {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
 										size: 50,
 										opacity: 18,
 										blur: 50,
@@ -2210,10 +2210,10 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 							},
 						}}
 						blur={{
-							value: [project.camera.advanced_shadow?.blur ?? 50],
+							value: [project.camera.advancedShadow?.blur ?? 50],
 							onChange: (v) => {
-								setProject("camera", "advanced_shadow", {
-									...(project.camera.advanced_shadow ?? {
+								setProject("camera", "advancedShadow", {
+									...(project.camera.advancedShadow ?? {
 										size: 50,
 										opacity: 18,
 										blur: 50,

@@ -5,14 +5,15 @@ use tokio_util::sync::CancellationToken;
 use crate::frame_ws::{WSFrame, create_frame_ws};
 
 pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, CancellationToken) {
-    let (camera_tx, mut _camera_rx) = flume::bounded::<FFmpegVideoFrame>(4);
-    let (_camera_tx, camera_rx) = flume::bounded::<WSFrame>(4);
+    let (camera_tx, camera_rx) = flume::bounded::<FFmpegVideoFrame>(4);
+    let (frame_tx, _) = tokio::sync::broadcast::channel::<WSFrame>(4);
+    let frame_tx_clone = frame_tx.clone();
     std::thread::spawn(move || {
         use ffmpeg::format::Pixel;
 
         let mut converter: Option<(Pixel, ffmpeg::software::scaling::Context)> = None;
 
-        while let Ok(raw_frame) = _camera_rx.recv() {
+        while let Ok(raw_frame) = camera_rx.recv() {
             let mut frame = raw_frame.inner;
 
             if frame.format() != Pixel::RGBA || frame.width() > 1280 || frame.height() > 720 {
@@ -55,7 +56,7 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                 frame = new_frame;
             }
 
-            _camera_tx
+            frame_tx_clone
                 .send(WSFrame {
                     data: frame.data(0).to_vec(),
                     width: frame.width(),
@@ -66,7 +67,7 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
         }
     });
     // _shutdown needs to be kept alive to keep the camera ws running
-    let (camera_ws_port, _shutdown) = create_frame_ws(camera_rx.clone()).await;
+    let (camera_ws_port, _shutdown) = create_frame_ws(frame_tx).await;
 
     (camera_tx, camera_ws_port, _shutdown)
 }
