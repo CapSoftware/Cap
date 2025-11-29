@@ -7,7 +7,6 @@ use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
     RenderedFrame, SegmentVideoPaths, get_duration,
 };
-use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
 use tracing::{trace, warn};
@@ -198,45 +197,75 @@ impl EditorInstance {
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
+            let mut last_rendered_frame: Option<u32> = None;
+
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some((frame_number, fps, resolution_base)) = *preview_rx.borrow().deref()
-                else {
-                    continue;
-                };
 
-                let project = self.project_config.1.borrow().clone();
+                loop {
+                    let Some((frame_number, fps, resolution_base)) =
+                        *preview_rx.borrow_and_update()
+                    else {
+                        break;
+                    };
 
-                let Some((segment_time, segment)) =
-                    project.get_segment_time(frame_number as f64 / fps as f64)
-                else {
-                    continue;
-                };
+                    if last_rendered_frame == Some(frame_number) {
+                        break;
+                    }
 
-                let segment_medias = &self.segment_medias[segment.recording_clip as usize];
-                let clip_config = project
-                    .clips
-                    .iter()
-                    .find(|v| v.index == segment.recording_clip);
-                let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
+                    let project = self.project_config.1.borrow().clone();
 
-                if let Some(segment_frames) = segment_medias
-                    .decoders
-                    .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
-                    .await
-                {
-                    let uniforms = ProjectUniforms::new(
-                        &self.render_constants,
-                        &project,
-                        frame_number,
-                        fps,
-                        resolution_base,
-                        &segment_medias.cursor,
-                        &segment_frames,
+                    let Some((segment_time, segment)) =
+                        project.get_segment_time(frame_number as f64 / fps as f64)
+                    else {
+                        break;
+                    };
+
+                    let segment_medias = &self.segment_medias[segment.recording_clip as usize];
+                    let clip_config = project
+                        .clips
+                        .iter()
+                        .find(|v| v.index == segment.recording_clip);
+                    let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
+
+                    let get_frames_future = segment_medias.decoders.get_frames(
+                        segment_time as f32,
+                        !project.camera.hide,
+                        clip_offsets,
                     );
-                    self.renderer
-                        .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
-                        .await;
+
+                    tokio::select! {
+                        biased;
+
+                        _ = preview_rx.changed() => {
+                            continue;
+                        }
+
+                        segment_frames_opt = get_frames_future => {
+                            if preview_rx.has_changed().unwrap_or(false) {
+                                continue;
+                            }
+
+                            if let Some(segment_frames) = segment_frames_opt {
+                                let uniforms = ProjectUniforms::new(
+                                    &self.render_constants,
+                                    &project,
+                                    frame_number,
+                                    fps,
+                                    resolution_base,
+                                    &segment_medias.cursor,
+                                    &segment_frames,
+                                );
+                                self.renderer
+                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone(), frame_number)
+                                    .await;
+
+                                last_rendered_frame = Some(frame_number);
+                            }
+                        }
+                    }
+
+                    break;
                 }
             }
         })

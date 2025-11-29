@@ -146,7 +146,12 @@ impl Playback {
                     );
 
                     self.renderer
-                        .render_frame(segment_frames, uniforms, segment_media.cursor.clone())
+                        .render_frame(
+                            segment_frames,
+                            uniforms,
+                            segment_media.cursor.clone(),
+                            frame_number,
+                        )
                         .await;
                 }
 

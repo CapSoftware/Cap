@@ -2,20 +2,72 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { batch, createRoot, createSignal, For, onMount, Show } from "solid-js";
+import {
+	batch,
+	createRoot,
+	createSignal,
+	For,
+	type JSX,
+	onMount,
+	Show,
+} from "solid-js";
 import { produce } from "solid-js/store";
 
 import "./styles.css";
 
+import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
-import { FPS, OUTPUT_SIZE, useEditorContext } from "../context";
+import {
+	FPS,
+	OUTPUT_SIZE,
+	type TimelineTrackType,
+	useEditorContext,
+} from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
+import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
+const TRACK_GUTTER = 64;
+const TIMELINE_HEADER_HEIGHT = 32;
+const TRACK_MANAGER_BUTTON_SIZE = 36;
+
+const trackIcons: Record<TimelineTrackType, JSX.Element> = {
+	clip: <IconLucideClapperboard class="size-4" />,
+	zoom: <IconLucideSearch class="size-4" />,
+	scene: <IconLucideVideo class="size-4" />,
+};
+
+type TrackDefinition = {
+	type: TimelineTrackType;
+	label: string;
+	icon: JSX.Element;
+	locked: boolean;
+};
+
+const trackDefinitions: TrackDefinition[] = [
+	{
+		type: "clip",
+		label: "Clip",
+		icon: trackIcons.clip,
+		locked: true,
+	},
+	{
+		type: "zoom",
+		label: "Zoom",
+		icon: trackIcons.zoom,
+		locked: true,
+	},
+	{
+		type: "scene",
+		label: "Scene",
+		icon: trackIcons.scene,
+		locked: false,
+	},
+];
 
 export function Timeline() {
 	const {
@@ -37,6 +89,21 @@ export function Timeline() {
 	const timelineBounds = createElementBounds(timelineRef);
 
 	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+
+	const trackState = () => editorState.timeline.tracks;
+	const sceneAvailable = () => meta().hasCamera && !project.camera.hide;
+	const trackOptions = () =>
+		trackDefinitions.map((definition) => ({
+			...definition,
+			active: definition.type === "scene" ? trackState().scene : true,
+			available: definition.type === "scene" ? sceneAvailable() : true,
+		}));
+	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+
+	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
+		if (type !== "scene") return;
+		setEditorState("timeline", "tracks", "scene", next);
+	}
 
 	onMount(() => {
 		if (!project.timeline) {
@@ -197,9 +264,10 @@ export function Timeline() {
 				onMouseMove={(e) => {
 					const { left } = timelineBounds;
 					if (editorState.playing) return;
+					if (left == null) return;
 					setEditorState(
 						"previewTime",
-						transform().position + secsPerPixel() * (e.clientX - left!),
+						transform().position + secsPerPixel() * (e.clientX - left),
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
@@ -243,19 +311,35 @@ export function Timeline() {
 					}
 				}}
 			>
-				<TimelineMarkings />
+				<div class="relative" style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}>
+					<div class="absolute inset-0 flex items-end">
+						<TimelineMarkings />
+					</div>
+					<div
+						class="absolute bottom-0"
+						style={{ left: `${TRACK_GUTTER - TRACK_MANAGER_BUTTON_SIZE}px` }}
+					>
+						<Tooltip content="Add track">
+							<TrackManager
+								options={trackOptions()}
+								onToggle={handleToggleTrack}
+							/>
+						</Tooltip>
+					</div>
+				</div>
 				<Show when={!editorState.playing && editorState.previewTime}>
 					{(time) => (
 						<div
 							class={cx(
-								"flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+								"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
 								split() ? "from-red-300" : "from-gray-400",
 							)}
 							style={{
-								left: `${TIMELINE_PADDING}px`,
+								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
 								transform: `translateX(${
 									(time() - transform().position) / secsPerPixel() - 0.5
 								}px)`,
+								top: `${TIMELINE_HEADER_HEIGHT}px`,
 							}}
 						>
 							<div
@@ -269,40 +353,58 @@ export function Timeline() {
 				</Show>
 				<div
 					class={cx(
-						"absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+						"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
 						split() && "opacity-50",
 					)}
 					style={{
-						left: `${TIMELINE_PADDING}px`,
+						left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
 						transform: `translateX(${Math.min(
 							(editorState.playbackTime - transform().position) /
 								secsPerPixel(),
 							timelineBounds.width ?? 0,
 						)}px)`,
+						top: `${TIMELINE_HEADER_HEIGHT}px`,
 					}}
 				>
 					<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
 				</div>
-				<ClipTrack
-					ref={setTimelineRef}
-					handleUpdatePlayhead={handleUpdatePlayhead}
-				/>
-				<ZoomTrack
-					onDragStateChanged={(v) => {
-						zoomSegmentDragState = v;
-					}}
-					handleUpdatePlayhead={handleUpdatePlayhead}
-				/>
-				<Show when={meta().hasCamera && !project.camera.hide}>
-					<SceneTrack
+				<TrackRow icon={trackIcons.clip}>
+					<ClipTrack
+						ref={setTimelineRef}
+						handleUpdatePlayhead={handleUpdatePlayhead}
+					/>
+				</TrackRow>
+				<TrackRow icon={trackIcons.zoom}>
+					<ZoomTrack
 						onDragStateChanged={(v) => {
-							sceneSegmentDragState = v;
+							zoomSegmentDragState = v;
 						}}
 						handleUpdatePlayhead={handleUpdatePlayhead}
 					/>
+				</TrackRow>
+				<Show when={sceneTrackVisible()}>
+					<TrackRow icon={trackIcons.scene}>
+						<SceneTrack
+							onDragStateChanged={(v) => {
+								sceneSegmentDragState = v;
+							}}
+							handleUpdatePlayhead={handleUpdatePlayhead}
+						/>
+					</TrackRow>
 				</Show>
 			</div>
 		</TimelineContextProvider>
+	);
+}
+
+function TrackRow(props: { icon: JSX.Element; children: JSX.Element }) {
+	return (
+		<div class="flex items-stretch gap-2">
+			<TrackIcon icon={props.icon} />
+			<div class="flex-1 relative overflow-hidden min-w-0">
+				{props.children}
+			</div>
+		</div>
 	);
 }
 
@@ -321,7 +423,10 @@ function TimelineMarkings() {
 	};
 
 	return (
-		<div class="relative h-4 text-xs text-gray-9">
+		<div
+			class="relative flex-1 h-4 text-xs text-gray-9"
+			style={{ "margin-left": `${TRACK_GUTTER}px` }}
+		>
 			<For each={timelineMarkings()}>
 				{(second) => (
 					<Show when={second > 0}>

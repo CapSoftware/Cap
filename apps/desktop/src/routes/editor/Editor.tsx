@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
 import { trackDeep } from "@solid-primitives/deep";
-import { throttle } from "@solid-primitives/scheduled";
+import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -85,11 +85,12 @@ function Inner() {
 	const { project, editorState, setEditorState } = useEditorContext();
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
-		renderFrame.clear();
+		throttledRenderFrame.clear();
+		trailingRenderFrame.clear();
 		setEditorState("playbackTime", payload.playhead_position / FPS);
 	});
 
-	const renderFrame = throttle((time: number) => {
+	const emitRenderFrame = (time: number) => {
 		if (!editorState.playing) {
 			events.renderFrameEvent.emit({
 				frame_number: Math.max(Math.floor(time * FPS), 0),
@@ -97,7 +98,16 @@ function Inner() {
 				resolution_base: OUTPUT_SIZE,
 			});
 		}
-	}, 1000 / FPS);
+	};
+
+	const throttledRenderFrame = throttle(emitRenderFrame, 1000 / FPS);
+
+	const trailingRenderFrame = debounce(emitRenderFrame, 1000 / FPS + 16);
+
+	const renderFrame = (time: number) => {
+		throttledRenderFrame(time);
+		trailingRenderFrame(time);
+	};
 
 	const frameNumberToRender = createMemo(() => {
 		const preview = editorState.previewTime;
