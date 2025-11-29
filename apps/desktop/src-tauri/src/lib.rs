@@ -92,7 +92,7 @@ use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{
-    CapWindowDef, EditorWindowIds, ScreenshotEditorWindowIds, CapWindow, set_window_transparent,
+    CapWindow, CapWindowDef, EditorWindowIds, ScreenshotEditorWindowIds, set_window_transparent,
 };
 
 use crate::{
