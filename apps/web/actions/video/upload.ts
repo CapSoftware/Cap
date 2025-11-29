@@ -160,7 +160,6 @@ export async function createVideoAndGetUploadUrl({
 	supportsUploadProgress?: boolean;
 }) {
 	const user = await getCurrentUser();
-
 	if (!user) throw new Error("Unauthorized");
 
 	try {
