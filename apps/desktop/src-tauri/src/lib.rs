@@ -124,6 +124,7 @@ pub struct App {
     selected_mic_label: Option<String>,
     selected_camera_id: Option<DeviceOrModelID>,
     camera_in_use: bool,
+    camera_cleanup_done: bool,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
     logs_dir: PathBuf,
@@ -512,6 +513,9 @@ async fn set_camera_input(
         let app = &mut *state.write().await;
         app.selected_camera_id = id;
         app.camera_in_use = app.selected_camera_id.is_some();
+        if app.camera_in_use {
+            app.camera_cleanup_done = false;
+        }
         let cleared = app.disconnected_inputs.remove(&RecordingInputKind::Camera);
 
         if cleared {
@@ -570,6 +574,11 @@ async fn cleanup_camera_window(app: AppHandle) {
     let state = app.state::<ArcLock<App>>();
     let mut app_state = state.write().await;
 
+    if app_state.camera_cleanup_done {
+        return;
+    }
+
+    app_state.camera_cleanup_done = true;
     app_state.camera_preview.on_window_close();
 
     if !app_state.is_recording_active_or_pending() {
@@ -2582,6 +2591,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     selected_mic_label: None,
                     selected_camera_id: None,
                     camera_in_use: false,
+                    camera_cleanup_done: false,
                     camera_feed,
                     server_url,
                     logs_dir: logs_dir.clone(),
