@@ -15,7 +15,7 @@ use crate::{
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
-    bounds::{LogicalBounds, PhysicalSize},
+    bounds::{LogicalBounds, LogicalSize, PhysicalSize},
 };
 use serde::Serialize;
 use specta::Type;
@@ -42,6 +42,7 @@ pub struct WindowUnderCursor {
 pub struct DisplayInformation {
     name: Option<String>,
     physical_size: Option<PhysicalSize>,
+    logical_size: Option<LogicalSize>,
     refresh_rate: String,
 }
 
@@ -217,6 +218,7 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
     Ok(DisplayInformation {
         name: display.name(),
         physical_size: display.physical_size(),
+        logical_size: display.logical_size(),
         refresh_rate: display.refresh_rate().to_string(),
     })
 }

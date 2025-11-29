@@ -149,13 +149,35 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
             let display = scap_targets::Display::from_id(screen)?;
             let display_id = display.raw_handle().inner().id;
             let scale = display.raw_handle().scale().unwrap_or(1.0);
+            let display_bounds = display.raw_handle().logical_bounds();
+            let display_physical = display.physical_size();
+
+            tracing::info!(
+                "Area screenshot debug: display_id={}, display_logical_bounds={:?}, display_physical={:?}",
+                display_id,
+                display_bounds,
+                display_physical,
+            );
+            tracing::info!(
+                "Area screenshot: input logical bounds=({}, {}, {}x{}), scale={}",
+                bounds.position().x(),
+                bounds.position().y(),
+                bounds.size().width(),
+                bounds.size().height(),
+                scale,
+            );
 
             let rect = CGRect::new(
-                &CGPoint::new(bounds.position().x() * scale, bounds.position().y() * scale),
-                &CGSize::new(
-                    bounds.size().width() * scale,
-                    bounds.size().height() * scale,
-                ),
+                &CGPoint::new(bounds.position().x(), bounds.position().y()),
+                &CGSize::new(bounds.size().width(), bounds.size().height()),
+            );
+
+            tracing::info!(
+                "Area screenshot: CGRect for capture (logical/points) = origin({}, {}), size({}x{})",
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
             );
 
             let image = unsafe { CGDisplayCreateImageForRect(display_id, rect) };
@@ -169,6 +191,12 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     let width = cg_image.width();
     let height = cg_image.height();
     let bytes_per_row = cg_image.bytes_per_row();
+
+    tracing::info!(
+        "Fast capture result: image dimensions = {}x{}",
+        width,
+        height,
+    );
 
     use core_foundation::data::CFData;
     let cf_data: CFData = cg_image.data();
