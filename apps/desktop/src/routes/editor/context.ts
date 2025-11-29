@@ -50,6 +50,8 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
+export type TimelineTrackType = "clip" | "zoom" | "scene";
+
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
 
@@ -477,7 +479,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						);
 					},
 				},
-				hoveredTrack: null as null | "clip" | "zoom" | "scene",
+				tracks: {
+					clip: true,
+					zoom: true,
+					scene: true,
+				},
+				hoveredTrack: null as null | TimelineTrackType,
 			},
 		});
 
