@@ -50,6 +50,7 @@ pub enum CapWindowDef {
     Upgrade,
     ModeSelect,
     Debug,
+    ScreenshotEditor { id: u32 },
 }
 
 impl FromStr for CapWindowDef {
@@ -71,6 +72,12 @@ impl FromStr for CapWindowDef {
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
+            },
+            s if s.starts_with("screenshot-editor-") => Self::ScreenshotEditor {
+                id: s
+                    .replace("screenshot-editor-", "")
                     .parse::<u32>()
                     .map_err(|e| e.to_string())?,
             },
@@ -111,6 +118,7 @@ impl std::fmt::Display for CapWindowDef {
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
+            Self::ScreenshotEditor { id } => write!(f, "screenshot-editor-{id}"),
         }
     }
 }
@@ -128,6 +136,7 @@ impl CapWindowDef {
             Self::CaptureArea => "Cap Capture Area",
             Self::RecordingControls => "Cap Recording Controls",
             Self::Editor { .. } => "Cap Editor",
+            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection",
             Self::Camera => "Cap Camera",
             Self::RecordingsOverlay => "Cap Recordings Overlay",
@@ -141,6 +150,7 @@ impl CapWindowDef {
             Self::Setup
                 | Self::Main
                 | Self::Editor { .. }
+                | Self::ScreenshotEditor { .. }
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
@@ -203,7 +213,8 @@ impl CapWindowDef {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
-            Self::Settings => (650.0, 450.0),
+            Self::ScreenshotEditor { .. } => (800.0, 600.0),
+            Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (900.0, 500.0),
@@ -240,6 +251,9 @@ pub enum CapWindow {
     },
     Upgrade,
     ModeSelect,
+    ScreenshotEditor {
+        path: PathBuf,
+    },
 }
 
 impl CapWindow {
@@ -260,7 +274,6 @@ impl CapWindow {
         }
 
         let def = self.def(app);
-
         if let Some(window) = def.get(app) {
             window.show().ok();
             window.unminimize().ok();
@@ -437,6 +450,17 @@ impl CapWindow {
                 };
 
                 self.window_builder(app, "/editor")
+                    .maximizable(true)
+                    .inner_size(1240.0, 800.0)
+                    .center()
+                    .build()?
+            }
+            Self::ScreenshotEditor { path: _ } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
+                self.window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
@@ -795,6 +819,12 @@ impl CapWindow {
             CapWindow::InProgressRecording { .. } => CapWindowDef::RecordingControls,
             CapWindow::Upgrade => CapWindowDef::Upgrade,
             CapWindow::ModeSelect => CapWindowDef::ModeSelect,
+            CapWindow::ScreenshotEditor { path } => {
+                let state = app.state::<ScreenshotEditorWindowIds>();
+                let s = state.ids.lock().unwrap();
+                let id = s.iter().find(|(p, _)| p == path).unwrap().1;
+                CapWindowId::ScreenshotEditor { id }
+            }
         }
     }
 }
@@ -931,5 +961,17 @@ pub struct EditorWindowIds {
 impl EditorWindowIds {
     pub fn get(app: &AppHandle) -> Self {
         app.state::<EditorWindowIds>().deref().clone()
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct ScreenshotEditorWindowIds {
+    pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+    pub counter: Arc<AtomicU32>,
+}
+
+impl ScreenshotEditorWindowIds {
+    pub fn get(app: &AppHandle) -> Self {
+        app.state::<ScreenshotEditorWindowIds>().deref().clone()
     }
 }

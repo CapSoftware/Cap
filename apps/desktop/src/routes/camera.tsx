@@ -496,8 +496,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				frameDimensions()?.height,
 			] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
-			const monitor = await currentMonitor();
-
 			const BAR_HEIGHT = 56;
 			const base = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
 			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
@@ -507,13 +505,15 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
 			const totalHeight = windowHeight + BAR_HEIGHT;
 
-			if (!monitor) return;
+			const currentWindow = getCurrentWindow();
+			await currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
+
+			const monitor = await currentMonitor();
+			if (!monitor) return { size: base, windowWidth, windowHeight };
 
 			const scalingFactor = monitor.scaleFactor;
 			const width = monitor.size.width / scalingFactor - windowWidth - 100;
 			const height = monitor.size.height / scalingFactor - totalHeight - 100;
-
-			const currentWindow = getCurrentWindow();
 
 			if (!hasPositioned()) {
 				currentWindow.setPosition(
@@ -562,8 +562,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 					await currentWindow.setPosition(new LogicalPosition(newX, newY));
 				}
 			}
-
-			await currentWindow.setSize(new LogicalSize(windowWidth, totalHeight));
 
 			return { width, height, size: base, windowWidth, windowHeight };
 		},

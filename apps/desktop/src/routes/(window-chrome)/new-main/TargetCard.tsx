@@ -1,12 +1,26 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import type { ComponentProps } from "solid-js";
-import { createMemo, Show, splitProps } from "solid-js";
-import type {
-	CaptureDisplayWithThumbnail,
-	CaptureWindowWithThumbnail,
+import { createMemo, createSignal, Show, splitProps } from "solid-js";
+import toast from "solid-toast";
+import {
+	type CaptureDisplayWithThumbnail,
+	type CaptureWindowWithThumbnail,
+	commands,
+	type RecordingMeta,
+	type RecordingMetaWithMetadata,
 } from "~/utils/tauri";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
+import IconLucideCopy from "~icons/lucide/copy";
+import IconLucideEdit from "~icons/lucide/edit";
+import IconLucideImage from "~icons/lucide/image";
+import IconLucideSave from "~icons/lucide/save";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMdiMonitor from "~icons/mdi/monitor";
+
+export type RecordingWithPath = RecordingMetaWithMetadata & { path: string };
+export type ScreenshotWithPath = RecordingMeta & { path: string };
 
 function formatResolution(width?: number, height?: number) {
 	if (!width || !height) return undefined;
@@ -34,6 +48,14 @@ type TargetCardProps = (
 			variant: "window";
 			target: CaptureWindowWithThumbnail;
 	  }
+	| {
+			variant: "recording";
+			target: RecordingWithPath;
+	  }
+	| {
+			variant: "screenshot";
+			target: ScreenshotWithPath;
+	  }
 ) &
 	Omit<ComponentProps<"button">, "children"> & {
 		highlightQuery?: string;
@@ -47,6 +69,7 @@ export default function TargetCard(props: TargetCardProps) {
 		"disabled",
 		"highlightQuery",
 	]);
+	const [imageExists, setImageExists] = createSignal(true);
 
 	const displayTarget = createMemo(() => {
 		if (local.variant !== "display") return undefined;
@@ -58,21 +81,47 @@ export default function TargetCard(props: TargetCardProps) {
 		return local.target as CaptureWindowWithThumbnail;
 	});
 
+	const recordingTarget = createMemo(() => {
+		if (local.variant !== "recording") return undefined;
+		return local.target as RecordingWithPath;
+	});
+
+	const screenshotTarget = createMemo(() => {
+		if (local.variant !== "screenshot") return undefined;
+		return local.target as ScreenshotWithPath;
+	});
+
 	const renderIcon = (className: string) =>
 		local.variant === "display" ? (
 			<IconMdiMonitor class={className} />
-		) : (
+		) : local.variant === "window" ? (
 			<IconLucideAppWindowMac class={className} />
+		) : local.variant === "recording" ? (
+			<IconLucideSquarePlay class={className} />
+		) : (
+			<IconLucideImage class={className} />
 		);
 
 	const label = createMemo(() => {
 		const display = displayTarget();
 		if (display) return display.name;
 		const target = windowTarget();
-		return target?.name || target?.owner_name;
+		if (target) return target.name || target.owner_name;
+		const recording = recordingTarget();
+		if (recording) return recording.pretty_name;
+		const screenshot = screenshotTarget();
+		return screenshot?.pretty_name;
 	});
 
-	const subtitle = createMemo(() => windowTarget()?.owner_name);
+	const subtitle = createMemo(() => {
+		const target = windowTarget();
+		if (target) return target.owner_name;
+		const recording = recordingTarget();
+		if (recording) {
+			return recording.mode === "studio" ? "Studio Mode" : "Instant Mode";
+		}
+		return undefined;
+	});
 
 	const metadata = createMemo(() => {
 		if (local.variant === "window") {
@@ -94,6 +143,16 @@ export default function TargetCard(props: TargetCardProps) {
 	});
 
 	const thumbnailSrc = createMemo(() => {
+		const recording = recordingTarget();
+		if (recording) {
+			return `${convertFileSrc(
+				`${recording.path}/screenshots/display.jpg`,
+			)}?t=${Date.now()}`;
+		}
+		const screenshot = screenshotTarget();
+		if (screenshot) {
+			return `${convertFileSrc(screenshot.path)}?t=${Date.now()}`;
+		}
 		const target = displayTarget() ?? windowTarget();
 		if (!target?.thumbnail) return undefined;
 		return `data:image/png;base64,${target.thumbnail}`;
@@ -128,6 +187,53 @@ export default function TargetCard(props: TargetCardProps) {
 		});
 	};
 
+	const handleOpenEditor = (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		commands.showWindow({
+			ScreenshotEditor: {
+				path: screenshot.path,
+			},
+		});
+	};
+
+	const handleCopy = async (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		try {
+			await commands.copyScreenshotToClipboard(screenshot.path);
+			toast.success("Screenshot copied to clipboard");
+		} catch (error) {
+			console.error("Failed to copy screenshot:", error);
+			toast.error("Failed to copy screenshot");
+		}
+	};
+
+	const handleSave = async (e: MouseEvent) => {
+		e.stopPropagation();
+		const screenshot = screenshotTarget();
+		if (!screenshot) return;
+		try {
+			const path = await save({
+				defaultPath: `${screenshot.pretty_name}.png`,
+				filters: [
+					{
+						name: "Image",
+						extensions: ["png"],
+					},
+				],
+			});
+			if (!path) return;
+			await commands.copyFileToPath(screenshot.path, path);
+			toast.success("Screenshot saved");
+		} catch (error) {
+			console.error("Failed to save screenshot:", error);
+			toast.error("Failed to save screenshot");
+		}
+	};
+
 	return (
 		<button
 			type="button"
@@ -142,52 +248,90 @@ export default function TargetCard(props: TargetCardProps) {
 		>
 			<div class="relative h-[4.75rem] w-full overflow-hidden bg-gray-4/40">
 				<Show
-					when={thumbnailSrc()}
+					when={imageExists() ? thumbnailSrc() : undefined}
 					fallback={
 						<div class="flex justify-center items-center w-full h-full bg-gray-4">
 							{renderIcon("size-6 text-gray-9 opacity-70")}
 						</div>
 					}
 				>
-					<img
-						src={thumbnailSrc()!}
-						alt={`${
-							local.variant === "display" ? "Display" : "Window"
-						} preview for ${label()}`}
-						class="object-cover w-full h-full"
-						loading="lazy"
-						draggable={false}
-					/>
+					{(src) => (
+						<img
+							src={src()}
+							alt={`${
+								local.variant === "display" ? "Display" : "Window"
+							} preview for ${label()}`}
+							class="object-cover w-full h-full"
+							loading="lazy"
+							draggable={false}
+							onError={() => setImageExists(false)}
+						/>
+					)}
 				</Show>
 				<Show when={appIconSrc()}>
-					<div class="flex absolute inset-0 justify-center items-center pointer-events-none bg-black/45">
-						<img
-							src={appIconSrc()!}
-							alt={`${label()} icon`}
-							class="h-16 w-16 max-h-[55%] max-w-[55%] rounded-lg border border-black/20 object-contain shadow-lg shadow-black/30"
-							draggable={false}
-						/>
-					</div>
+					{(src) => (
+						<div class="flex absolute inset-0 justify-center items-center pointer-events-none bg-black/45">
+							<img
+								src={src()}
+								alt={`${label()} icon`}
+								class="h-16 w-16 max-h-[55%] max-w-[55%] rounded-lg border border-black/20 object-contain shadow-lg shadow-black/30"
+								draggable={false}
+							/>
+						</div>
+					)}
 				</Show>
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
 				<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t to-transparent pointer-events-none from-black/40" />
 			</div>
-			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
-				<div class="flex-1 min-w-0">
-					<p class="truncate text-[11px] font-medium text-gray-12">
-						{highlight(label())}
-					</p>
-					<Show when={subtitle()}>
-						<p class="truncate text-[11px] text-gray-11">
-							{highlight(subtitle())}
+			<div class="flex flex-col w-full">
+				<div class="flex flex-row items-start gap-2 px-2 py-1.5">
+					<div class="flex-1 min-w-0">
+						<p class="truncate text-[11px] font-medium text-gray-12">
+							{highlight(label())}
 						</p>
-					</Show>
-					<Show when={metadata()}>
-						<p class="truncate text-[11px] text-gray-10">
-							{highlight(metadata())}
-						</p>
-					</Show>
+						<Show when={subtitle()}>
+							<p class="truncate text-[11px] text-gray-11">
+								{highlight(subtitle())}
+							</p>
+						</Show>
+						<Show when={metadata()}>
+							<p class="truncate text-[11px] text-gray-10">
+								{highlight(metadata())}
+							</p>
+						</Show>
+					</div>
 				</div>
+				<Show when={local.variant === "screenshot"}>
+					<div class="flex items-center justify-between px-2 pb-1.5 pt-0.5 gap-1">
+						<div
+							role="button"
+							tabIndex={-1}
+							onClick={handleOpenEditor}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Editor"
+						>
+							<IconLucideEdit class="size-3.5" />
+						</div>
+						<div
+							role="button"
+							tabIndex={-1}
+							onClick={handleCopy}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Copy to clipboard"
+						>
+							<IconLucideCopy class="size-3.5" />
+						</div>
+						<div
+							role="button"
+							tabIndex={-1}
+							onClick={handleSave}
+							class="flex-1 flex items-center justify-center p-1 rounded hover:bg-gray-5 text-gray-11 hover:text-gray-12 transition-colors"
+							title="Save as..."
+						>
+							<IconLucideSave class="size-3.5" />
+						</div>
+					</div>
+				</Show>
 			</div>
 		</button>
 	);

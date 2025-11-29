@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.84"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1499,11 +1499,14 @@ dependencies = [
  "chrono",
  "cidre",
  "cocoa",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
  "cpal 0.15.3 (git+https://github.com/CapSoftware/cpal?rev=3cc779a7b4ca)",
  "device_query",
  "either",
  "ffmpeg-next",
  "flume",
+ "foreign-types-shared 0.3.1",
  "futures",
  "hex",
  "image 0.25.8",

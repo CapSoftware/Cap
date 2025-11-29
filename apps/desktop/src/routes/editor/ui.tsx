@@ -65,9 +65,11 @@ export function Subfield(
 export function Slider(
 	props: ComponentProps<typeof KSlider> & {
 		formatTooltip?: string | ((v: number) => string);
+		history?: { pause: () => () => void };
 	},
 ) {
-	const { projectHistory: history } = useEditorContext();
+	const context = useEditorContext();
+	const history = props.history ?? context?.projectHistory;
 
 	// Pause history when slider is being dragged
 	let resumeHistory: (() => void) | null = null;
@@ -86,7 +88,7 @@ export function Slider(
 				props.class,
 			)}
 			onChange={(v) => {
-				if (!resumeHistory) resumeHistory = history.pause();
+				if (!resumeHistory && history) resumeHistory = history.pause();
 				props.onChange?.(v);
 			}}
 			onChangeEnd={(e) => {

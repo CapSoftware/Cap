@@ -113,7 +113,7 @@ export function serializeProjectConfiguration(
 		},
 		camera: {
 			...cameraRest,
-			rounding_type: cameraRoundingType,
+			roundingType: cameraRoundingType,
 		},
 	};
 }

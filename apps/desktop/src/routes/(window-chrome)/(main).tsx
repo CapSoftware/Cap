@@ -278,7 +278,7 @@ function Page() {
 							<IconCapSettings class="text-gray-11 size-5 hover:text-gray-12" />
 						</button>
 					</Tooltip>
-					<Tooltip content={<span>Previous Recordings</span>}>
+					<Tooltip content={<span>Recordings</span>}>
 						<button
 							type="button"
 							onClick={async () => {
