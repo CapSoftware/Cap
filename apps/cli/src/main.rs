@@ -172,6 +172,7 @@ impl Export {
             // print!("\rrendered frame {f}");
 
             stdout.flush().unwrap();
+            true
         })
         .await
         .map_err(|v| format!("Exporter error: {v}"))?;

@@ -817,7 +817,7 @@ fn camera_config_needs_migration(value: &Value) -> bool {
     value
         .get("camera")
         .and_then(|camera| camera.as_object())
-        .map_or(false, |camera| {
+        .is_some_and(|camera| {
             camera.contains_key("zoom_size")
                 || camera.contains_key("advanced_shadow")
                 || camera.contains_key("rounding_type")

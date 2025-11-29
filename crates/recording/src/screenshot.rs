@@ -46,6 +46,7 @@ fn unsupported_error() -> anyhow::Error {
 
 #[derive(Clone, Copy)]
 enum ChannelOrder {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Rgba,
     Bgra,
 }
@@ -147,7 +148,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
         ScreenCaptureTarget::Area { screen, bounds } => {
             let display = scap_targets::Display::from_id(screen)?;
             let display_id = display.raw_handle().inner().id;
-            let scale = display.raw_handle().scale().unwrap_or(1.0) as f64;
+            let scale = display.raw_handle().scale().unwrap_or(1.0);
 
             let rect = CGRect::new(
                 &CGPoint::new(bounds.position().x() * scale, bounds.position().y() * scale),

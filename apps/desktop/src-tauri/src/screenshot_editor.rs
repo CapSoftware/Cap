@@ -418,22 +418,26 @@ pub async fn update_screenshot_config(
 
     let _ = instance.config_tx.send(config.clone());
 
-    if save {
-        if let Some(parent) = instance.path.parent() {
-            if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let path = parent.to_path_buf();
-                if let Err(e) = config.write(&path) {
-                    eprintln!("Failed to save screenshot config: {}", e);
-                } else {
-                    println!("Saved screenshot config to {:?}", path);
-                }
-            } else {
-                println!(
-                    "Not saving config: parent {:?} is not a .cap directory",
-                    parent
-                );
-            }
+    if !save {
+        return Ok(());
+    }
+
+    let Some(parent) = instance.path.parent() else {
+        return Ok(());
+    };
+
+    if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
+        let path = parent.to_path_buf();
+        if let Err(e) = config.write(&path) {
+            eprintln!("Failed to save screenshot config: {}", e);
+        } else {
+            println!("Saved screenshot config to {:?}", path);
         }
+    } else {
+        println!(
+            "Not saving config: parent {:?} is not a .cap directory",
+            parent
+        );
     }
     Ok(())
 }

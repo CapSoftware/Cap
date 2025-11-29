@@ -15,6 +15,7 @@ import {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
+import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
 import {
 	createEffect,
@@ -355,11 +356,6 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 						/>
 					)}
 				</div>
-				<Show
-					when={props.variant === "recording" || props.variant === "screenshot"}
-				>
-					{/* Removed sticky footer button */}
-				</Show>
 			</div>
 		</div>
 	);
@@ -463,17 +459,20 @@ function Page() {
 
 	const recordings = useQuery(() => listRecordings);
 	const screenshots = useQuery(() =>
-		queryOptions({
+		queryOptions<ScreenshotWithPath[]>({
 			queryKey: ["screenshots"],
 			queryFn: async () => {
 				const result = await commands
 					.listScreenshots()
 					.catch(() => [] as const);
 
-				return result.map(([path, meta]) => ({ ...meta, path }));
+				return result.map(
+					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
+				);
 			},
 			refetchInterval: 2000,
 			reconcile: (old, next) => reconcile(next)(old),
+			initialData: [],
 		}),
 	);
 
