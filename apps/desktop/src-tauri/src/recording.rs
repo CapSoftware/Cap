@@ -352,47 +352,6 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
-/// Formats the project name using a template string.
-///
-/// # Template Variables
-///
-/// The template supports the following variables that will be replaced with actual values:
-///
-/// ## Recording Mode Variables
-/// - `{recording_mode}` - The recording mode: "Studio" or "Instant"
-/// - `{mode}` - Short form of recording mode: "studio" or "instant"
-///
-/// ## Target Variables
-/// - `{target_kind}` - The type of capture target: "Display", "Window", or "Area"
-/// - `{target_name}` - The specific name of the target (e.g., "Built-in Retina Display", "Chrome", etc.)
-///
-/// ## Date/Time Variables
-/// - `{date}` - Current date in YYYY-MM-DD format (e.g., "2025-09-11")
-/// - `{time}` - Current time in HH:MM AM/PM format (e.g., "3:23 PM")
-///
-/// ## Customizable Date/Time Formats
-/// You can customize date and time formats by adding moment format specifiers:
-/// - `{moment:YYYY-MM-DD}` - Custom date format
-/// - `{moment:HH:mm}` - 24-hour time format
-/// - `{moment:hh:mm A}` - 12-hour time with AM/PM
-/// - `{moment:YYYY-MM-DD HH:mm}` - Combined custom format
-///
-/// ## Example
-///
-/// `{recording_mode} Recording {target_kind} ({target_name}) {date} {time}`
-/// -> "Instant Recording Display (Built-in Retina Display) 2025-11-12 3:23 PM"
-///
-/// # Arguments
-///
-/// * `template` - The template string with variables to replace
-/// * `target_name` - The specific name of the capture target
-/// * `target_kind` - The type of capture target (Display, Window, or Area)
-/// * `recording_mode` - The recording mode (Studio or Instant)
-/// * `datetime` - Optional datetime to use for formatting; defaults to current time
-///
-/// # Returns
-///
-/// Returns `String` with the formatted project name
 pub fn format_project_name<'a>(
     template: Option<&str>,
     target_name: &'a str,
@@ -423,6 +382,7 @@ pub fn format_project_name<'a>(
     let (recording_mode, mode) = match recording_mode {
         RecordingMode::Studio => ("Studio", "studio"),
         RecordingMode::Instant => ("Instant", "instant"),
+        RecordingMode::Screenshot => ("Screenshot", "screenshot"),
     };
 
     let result = AC
@@ -660,7 +620,6 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         let general_settings = general_settings.cloned();
         let recording_dir = recording_dir.clone();
-        // let project_name = project_name.clone();
         let inputs = inputs.clone();
         async move {
             fail!("recording::spawn_actor");
