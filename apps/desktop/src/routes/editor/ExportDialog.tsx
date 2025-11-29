@@ -249,7 +249,7 @@ export function ExportDialog() {
 			setExportState(reconcile({ action: "copy", type: "starting" }));
 
 			const outputPath = await exportWithSettings((progress) => {
-				if (isCancelled()) return;
+				if (isCancelled()) throw new SilentError("Cancelled");
 				setExportState({ type: "rendering", progress });
 			});
 
@@ -320,7 +320,7 @@ export function ExportDialog() {
 			});
 
 			const videoPath = await exportWithSettings((progress) => {
-				if (isCancelled()) return;
+				if (isCancelled()) throw new SilentError("Cancelled");
 				setExportState({ type: "rendering", progress });
 			});
 
@@ -403,7 +403,7 @@ export function ExportDialog() {
 			});
 
 			await exportWithSettings((progress) => {
-				if (isCancelled()) return;
+				if (isCancelled()) throw new SilentError("Cancelled");
 				setExportState({ type: "rendering", progress });
 			});
 
