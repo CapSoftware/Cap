@@ -85,7 +85,6 @@ impl Renderer {
         }
 
         let mut pending_frame: Option<PendingFrame> = None;
-        let mut last_rendered_frame: Option<u32> = None;
 
         loop {
             let frame_to_render = if let Some(pending) = pending_frame.take() {
@@ -143,13 +142,6 @@ impl Renderer {
                 }
             }
 
-            if let Some(last) = last_rendered_frame {
-                if current.frame_number == last {
-                    let _ = current.finished.send(());
-                    continue;
-                }
-            }
-
             let frame = frame_renderer
                 .render(
                     current.segment_frames,
@@ -159,8 +151,6 @@ impl Renderer {
                 )
                 .await
                 .unwrap();
-
-            last_rendered_frame = Some(current.frame_number);
 
             (self.frame_cb)(frame);
 

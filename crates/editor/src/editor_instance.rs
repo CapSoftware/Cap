@@ -197,8 +197,6 @@ impl EditorInstance {
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            let mut last_rendered_frame: Option<u32> = None;
-
             loop {
                 preview_rx.changed().await.unwrap();
 
@@ -208,10 +206,6 @@ impl EditorInstance {
                     else {
                         break;
                     };
-
-                    if last_rendered_frame == Some(frame_number) {
-                        break;
-                    }
 
                     let project = self.project_config.1.borrow().clone();
 
@@ -259,8 +253,6 @@ impl EditorInstance {
                                 self.renderer
                                     .render_frame(segment_frames, uniforms, segment_medias.cursor.clone(), frame_number)
                                     .await;
-
-                                last_rendered_frame = Some(frame_number);
                             }
                         }
                     }
