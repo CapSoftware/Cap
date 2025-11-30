@@ -14,6 +14,7 @@ import {
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
+import { MaskOverlay } from "./MaskOverlay";
 import {
 	EditorButton,
 	MenuItem,
@@ -518,18 +519,27 @@ function PreviewCanvas() {
 
 					return (
 						<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
-							<canvas
+							<div
+								class="relative"
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
-									...gridStyle,
 								}}
-								class="rounded"
-								ref={canvasRef}
-								id="canvas"
-								width={frameWidth()}
-								height={frameHeight()}
-							/>
+							>
+								<canvas
+									style={{
+										width: `${size().width}px`,
+										height: `${size().height}px`,
+										...gridStyle,
+									}}
+									class="rounded"
+									ref={canvasRef}
+									id="canvas"
+									width={frameWidth()}
+									height={frameHeight()}
+								/>
+								<MaskOverlay size={size()} />
+							</div>
 						</div>
 					);
 				}}

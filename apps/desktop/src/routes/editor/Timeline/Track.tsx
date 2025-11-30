@@ -11,13 +11,19 @@ import {
 
 export function TrackRoot(props: ComponentProps<"div">) {
 	const [ref, setRef] = createSignal<HTMLDivElement>();
+	const height = "var(--track-height, 3.25rem)";
+	const style =
+		typeof props.style === "string"
+			? `${props.style};height:${height}`
+			: { height, ...(props.style ?? {}) };
 
 	return (
 		<TrackContextProvider ref={ref}>
 			<div
 				{...props}
 				ref={mergeRefs(setRef, props.ref)}
-				class={cx("flex flex-row relative h-[3.25rem]", props.class)}
+				class={cx("flex flex-row relative", props.class)}
+				style={style}
 			>
 				{props.children}
 			</div>

@@ -52,13 +52,20 @@ import {
 	type TimelineSegment,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideBoxSelect from "~icons/lucide/box-select";
+import IconLucideGauge from "~icons/lucide/gauge";
+import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideMoon from "~icons/lucide/moon";
+import IconLucideMove from "~icons/lucide/move";
 import IconLucideRabbit from "~icons/lucide/rabbit";
+import IconLucideScan from "~icons/lucide/scan";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
 import { type CornerRoundingType, useEditorContext } from "./context";
+import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -783,6 +790,73 @@ export function ConfigSidebar() {
 				<Show when={editorState.timeline.selection}>
 					{(selection) => (
 						<Suspense>
+							<Show
+								when={(() => {
+									const maskSelection = selection();
+									if (maskSelection.type !== "mask") return;
+
+									const segments = maskSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.maskSegments?.[index],
+										}))
+										.filter(
+											(item): item is { index: number; segment: MaskSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: maskSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} mask{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteMaskSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<MaskSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
 							<Show
 								when={(() => {
 									const zoomSelection = selection();
@@ -2302,6 +2376,164 @@ function CornerStyleSelect(props: {
 					</PopperContent>
 				</KSelect.Portal>
 			</KSelect>
+		</div>
+	);
+}
+
+function MaskSegmentConfig(props: {
+	segmentIndex: number;
+	segment: MaskSegment;
+}) {
+	const { setProject, editorState } = useEditorContext();
+
+	const updateSegment = (fn: (segment: MaskSegment) => void) => {
+		setProject(
+			"timeline",
+			"maskSegments",
+			produce((segments) => {
+				const target = segments?.[props.segmentIndex];
+				if (!target) return;
+				target.keyframes ??= { position: [], size: [], intensity: [] };
+				fn(target);
+			}),
+		);
+	};
+
+	createEffect(() => {
+		const keyframes = props.segment.keyframes;
+		if (
+			!keyframes ||
+			(keyframes.position.length === 0 &&
+				keyframes.size.length === 0 &&
+				keyframes.intensity.length === 0)
+		)
+			return;
+		updateSegment((segment) => {
+			segment.keyframes = { position: [], size: [], intensity: [] };
+		});
+	});
+
+	const currentAbsoluteTime = () =>
+		editorState.previewTime ?? editorState.playbackTime ?? props.segment.start;
+	const maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
+
+	const clearKeyframes = (segment: MaskSegment) => {
+		segment.keyframes.position = [];
+		segment.keyframes.size = [];
+		segment.keyframes.intensity = [];
+	};
+
+	const setPosition = (value: { x: number; y: number }) =>
+		updateSegment((segment) => {
+			segment.center = value;
+			clearKeyframes(segment);
+		});
+
+	const setSize = (value: { x: number; y: number }) =>
+		updateSegment((segment) => {
+			segment.size = value;
+			clearKeyframes(segment);
+		});
+
+	const setIntensity = (value: number) =>
+		updateSegment((segment) => {
+			segment.opacity = value;
+			clearKeyframes(segment);
+		});
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Mask ${props.segmentIndex + 1}`}
+				icon={<IconLucideBoxSelect class="size-4" />}
+			>
+				<div class="flex items-center justify-between gap-4">
+					<RadioGroup
+						class="grid grid-cols-2 gap-2"
+						value={props.segment.maskType}
+						onChange={(value) =>
+							updateSegment((segment) => {
+								segment.maskType = value as MaskKind;
+								if (segment.maskType === "highlight") {
+									segment.feather = 0;
+									segment.opacity = 1;
+								} else {
+									segment.feather = 0.1;
+								}
+							})
+						}
+					>
+						{[
+							{ value: "sensitive", label: "Sensitive" },
+							{ value: "highlight", label: "Highlight" },
+						].map((option) => (
+							<RadioGroup.Item
+								value={option.value}
+								class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+							>
+								<RadioGroup.ItemInput class="sr-only" />
+								<RadioGroup.ItemLabel class="flex cursor-pointer items-center gap-2 p-2 text-sm text-gray-12">
+									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+									{option.label}
+								</RadioGroup.ItemLabel>
+							</RadioGroup.Item>
+						))}
+					</RadioGroup>
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-gray-11">Enabled</span>
+						<Toggle
+							checked={props.segment.enabled}
+							onChange={(value) =>
+								updateSegment((segment) => {
+									segment.enabled = value;
+								})
+							}
+						/>
+					</div>
+				</div>
+			</Field>
+			<Show when={props.segment.maskType === "sensitive"}>
+				<Field name="Intensity" icon={<IconLucideGauge class="size-4" />}>
+					<Slider
+						value={[props.segment.opacity]}
+						onChange={([v]) => setIntensity(v)}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+						formatTooltip="%"
+					/>
+				</Field>
+			</Show>
+			<Show when={props.segment.maskType === "sensitive"}>
+				<Field name="Pixelation" icon={<IconLucideGrid class="size-4" />}>
+					<Slider
+						value={[props.segment.pixelation]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.pixelation = v;
+							})
+						}
+						minValue={1}
+						maxValue={80}
+						step={1}
+					/>
+				</Field>
+			</Show>
+			<Show when={props.segment.maskType === "highlight"}>
+				<Field name="Outside Darkness" icon={<IconLucideMoon class="size-4" />}>
+					<Slider
+						value={[props.segment.darkness]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.darkness = v;
+							})
+						}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+					/>
+				</Field>
+			</Show>
 		</div>
 	);
 }

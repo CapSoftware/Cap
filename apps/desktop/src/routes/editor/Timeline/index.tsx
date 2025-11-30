@@ -21,6 +21,7 @@ import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
@@ -28,10 +29,10 @@ import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
 const TIMELINE_HEADER_HEIGHT = 32;
-const TRACK_MANAGER_BUTTON_SIZE = 56;
 
 const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	clip: <IconLucideClapperboard class="size-4" />,
+	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
 };
@@ -49,6 +50,12 @@ const trackDefinitions: TrackDefinition[] = [
 		label: "Clip",
 		icon: trackIcons.clip,
 		locked: true,
+	},
+	{
+		type: "mask",
+		label: "Mask",
+		icon: trackIcons.mask,
+		locked: false,
 	},
 	{
 		type: "zoom",
@@ -91,14 +98,31 @@ export function Timeline() {
 	const trackOptions = () =>
 		trackDefinitions.map((definition) => ({
 			...definition,
-			active: definition.type === "scene" ? trackState().scene : true,
+			active:
+				definition.type === "scene"
+					? trackState().scene
+					: definition.type === "mask"
+						? trackState().mask
+						: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+	const visibleTrackCount = () =>
+		2 + (trackState().mask ? 1 : 0) + (sceneTrackVisible() ? 1 : 0);
+	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
-		if (type !== "scene") return;
-		setEditorState("timeline", "tracks", "scene", next);
+		if (type === "scene") {
+			setEditorState("timeline", "tracks", "scene", next);
+			return;
+		}
+
+		if (type === "mask") {
+			setEditorState("timeline", "tracks", "mask", next);
+			if (!next && editorState.timeline.selection?.type === "mask") {
+				setEditorState("timeline", "selection", null);
+			}
+		}
 	}
 
 	onMount(() => {
@@ -112,6 +136,9 @@ export function Timeline() {
 						end: duration(),
 					},
 				],
+				zoomSegments: [],
+				sceneSegments: [],
+				maskSegments: [],
 			});
 			resume();
 		}
@@ -148,19 +175,46 @@ export function Timeline() {
 						},
 					],
 					zoomSegments: [],
+					sceneSegments: [],
+					maskSegments: [],
 				};
+				project.timeline.sceneSegments ??= [];
+				project.timeline.maskSegments ??= [];
+				project.timeline.zoomSegments ??= [];
+			}),
+		);
+	}
+
+	if (!project.timeline?.maskSegments) {
+		setProject(
+			produce((project) => {
+				project.timeline ??= {
+					segments: [
+						{
+							start: 0,
+							end: duration(),
+							timescale: 1,
+						},
+					],
+					zoomSegments: [],
+					sceneSegments: [],
+					maskSegments: [],
+				};
+				project.timeline.maskSegments ??= [];
 			}),
 		);
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
+	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
 			zoomSegmentDragState.type !== "moving" &&
-			sceneSegmentDragState.type !== "moving"
+			sceneSegmentDragState.type !== "moving" &&
+			maskSegmentDragState.type !== "moving"
 		) {
 			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
 			if (left == null) return;
@@ -203,6 +257,8 @@ export function Timeline() {
 
 			if (selection.type === "zoom") {
 				projectActions.deleteZoomSegments(selection.indices);
+			} else if (selection.type === "mask") {
+				projectActions.deleteMaskSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]
@@ -283,12 +339,13 @@ export function Timeline() {
 			timelineBounds={timelineBounds}
 		>
 			<div
-				class="pt-[2rem] relative overflow-hidden flex flex-col gap-2"
+				class="pt-[2rem] relative overflow-hidden flex flex-col gap-2 h-full"
 				style={{
 					"padding-left": `${TIMELINE_PADDING}px`,
 					"padding-right": `${TIMELINE_PADDING}px`,
 					"mask-image": maskImage(),
 					"-webkit-mask-image": maskImage(),
+					"--track-height": trackHeight(),
 				}}
 				onMouseDown={(e) => {
 					createRoot((dispose) => {
@@ -371,71 +428,94 @@ export function Timeline() {
 						</Tooltip>
 					</div>
 				</div>
-				<Show when={!editorState.playing && editorState.previewTime}>
-					{(time) => (
-						<div
-							class={cx(
-								"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
-								split() ? "from-red-300" : "from-gray-400",
-							)}
-							style={{
-								left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
-								transform: `translateX(${
-									(time() - transform().position) / secsPerPixel() - 0.5
-								}px)`,
-								top: `${TIMELINE_HEADER_HEIGHT}px`,
-							}}
-						>
+				<div class="relative flex-1 min-h-0">
+					<Show when={!editorState.playing && editorState.previewTime}>
+						{(time) => (
 							<div
 								class={cx(
-									"absolute -top-2 rounded-full size-3",
-									split() ? "bg-red-300" : "bg-gray-10",
+									"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+									split() ? "from-red-300" : "from-gray-400",
 								)}
-							/>
-						</div>
-					)}
-				</Show>
-				<div
-					class={cx(
-						"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
-						split() && "opacity-50",
-					)}
-					style={{
-						left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
-						transform: `translateX(${Math.min(
-							(editorState.playbackTime - transform().position) /
-								secsPerPixel(),
-							timelineBounds.width ?? 0,
-						)}px)`,
-						top: `${TIMELINE_HEADER_HEIGHT}px`,
-					}}
-				>
-					<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
-				</div>
-				<TrackRow icon={trackIcons.clip}>
-					<ClipTrack
-						ref={setTimelineRef}
-						handleUpdatePlayhead={handleUpdatePlayhead}
-					/>
-				</TrackRow>
-				<TrackRow icon={trackIcons.zoom}>
-					<ZoomTrack
-						onDragStateChanged={(v) => {
-							zoomSegmentDragState = v;
+								style={{
+									left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+									transform: `translateX(${
+										(time() - transform().position) / secsPerPixel() - 0.5
+									}px)`,
+									top: "0px",
+								}}
+							>
+								<div
+									class={cx(
+										"absolute -top-2 rounded-full size-3",
+										split() ? "bg-red-300" : "bg-gray-10",
+									)}
+								/>
+							</div>
+						)}
+					</Show>
+					<div
+						class={cx(
+							"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+							split() && "opacity-50",
+						)}
+						style={{
+							left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+							transform: `translateX(${Math.min(
+								(editorState.playbackTime - transform().position) /
+									secsPerPixel(),
+								timelineBounds.width ?? 0,
+							)}px)`,
+							top: "0px",
 						}}
-						handleUpdatePlayhead={handleUpdatePlayhead}
-					/>
-				</TrackRow>
-				<Show when={sceneTrackVisible()}>
-					<TrackRow icon={trackIcons.scene}>
-						<SceneTrack
-							onDragStateChanged={(v) => {
-								sceneSegmentDragState = v;
-							}}
-							handleUpdatePlayhead={handleUpdatePlayhead}
-						/>
-					</TrackRow>
-				</Show>
+					>
+						<div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+					</div>
+					<div
+						class="absolute inset-0 overflow-y-auto overflow-x-hidden pr-1"
+						onWheel={(e) => {
+							if (!e.ctrlKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+								e.stopPropagation();
+							}
+						}}
+					>
+						<div class="flex flex-col gap-2 min-h-full">
+							<TrackRow icon={trackIcons.clip}>
+								<ClipTrack
+									ref={setTimelineRef}
+									handleUpdatePlayhead={handleUpdatePlayhead}
+								/>
+							</TrackRow>
+							<Show when={trackState().mask}>
+								<TrackRow icon={trackIcons.mask}>
+									<MaskTrack
+										onDragStateChanged={(v) => {
+											maskSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+							<TrackRow icon={trackIcons.zoom}>
+								<ZoomTrack
+									onDragStateChanged={(v) => {
+										zoomSegmentDragState = v;
+									}}
+									handleUpdatePlayhead={handleUpdatePlayhead}
+								/>
+							</TrackRow>
+							<Show when={sceneTrackVisible()}>
+								<TrackRow icon={trackIcons.scene}>
+									<SceneTrack
+										onDragStateChanged={(v) => {
+											sceneSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+						</div>
+					</div>
+				</div>
 			</div>
 		</TimelineContextProvider>
 	);

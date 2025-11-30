@@ -1,7 +1,8 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    CursorEvents, MaskKind, MaskSegment, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
+    XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -12,6 +13,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
+    MaskLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -26,6 +28,7 @@ mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
+mod mask;
 mod project_recordings;
 mod scene;
 mod spring_mass_damper;
@@ -36,6 +39,7 @@ pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
+use mask::interpolate_masks;
 use scene::*;
 use zoom::*;
 
@@ -52,6 +56,42 @@ fn rounding_type_value(style: CornerStyle) -> f32 {
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MaskRenderMode {
+    Sensitive,
+    Highlight,
+}
+
+impl MaskRenderMode {
+    fn from_kind(kind: MaskKind) -> Self {
+        match kind {
+            MaskKind::Sensitive => MaskRenderMode::Sensitive,
+            MaskKind::Highlight => MaskRenderMode::Highlight,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedMask {
+    pub center: XY<f32>,
+    pub size: XY<f32>,
+    pub feather: f32,
+    pub opacity: f32,
+    pub pixel_size: f32,
+    pub darkness: f32,
+    pub mode: MaskRenderMode,
+    pub output_size: XY<u32>,
+}
+
+impl PreparedMask {
+    fn mode_value(&self) -> u32 {
+        match self.mode {
+            MaskRenderMode::Sensitive => 0,
+            MaskRenderMode::Highlight => 1,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -382,6 +422,7 @@ pub struct ProjectUniforms {
     pub resolution_base: XY<u32>,
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
+    pub masks: Vec<PreparedMask>,
 }
 
 #[derive(Debug, Clone)]
@@ -1421,6 +1462,18 @@ impl ProjectUniforms {
                 }
             });
 
+        let masks = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                interpolate_masks(
+                    XY::new(output_size.0, output_size.1),
+                    frame_time as f64,
+                    &timeline.mask_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -1436,6 +1489,7 @@ impl ProjectUniforms {
             prev_cursor: prev_interpolated_cursor,
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: user_motion_blur,
+            masks,
         }
     }
 }
@@ -1500,6 +1554,7 @@ pub struct RendererLayers {
     cursor: CursorLayer,
     camera: CameraLayer,
     camera_only: CameraLayer,
+    mask: MaskLayer,
     #[allow(unused)]
     captions: CaptionsLayer,
 }
@@ -1513,6 +1568,7 @@ impl RendererLayers {
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
             camera_only: CameraLayer::new(device),
+            mask: MaskLayer::new(device),
             captions: CaptionsLayer::new(device, queue),
         }
     }
@@ -1583,6 +1639,7 @@ impl RendererLayers {
     pub fn render(
         &self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         session: &mut RenderSession,
         uniforms: &ProjectUniforms,
@@ -1644,6 +1701,12 @@ impl RendererLayers {
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
+        }
+
+        if !uniforms.masks.is_empty() {
+            for mask in &uniforms.masks {
+                self.mask.render(device, queue, session, encoder, mask);
+            }
         }
     }
 }
@@ -1807,7 +1870,13 @@ async fn produce_frame(
         }),
     );
 
-    layers.render(&constants.device, &mut encoder, session, &uniforms);
+    layers.render(
+        &constants.device,
+        &constants.queue,
+        &mut encoder,
+        session,
+        &uniforms,
+    );
 
     finish_encoder(
         session,

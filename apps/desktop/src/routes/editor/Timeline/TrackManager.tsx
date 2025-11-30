@@ -10,6 +10,7 @@ type TrackManagerOption = {
 	icon: JSX.Element;
 	active: boolean;
 	available: boolean;
+	locked: boolean;
 };
 
 export function TrackManager(props: {
@@ -22,7 +23,7 @@ export function TrackManager(props: {
 		try {
 			const items = await Promise.all(
 				props.options.map((option) => {
-					if (option.type === "scene") {
+					if (!option.locked) {
 						return CheckMenuItem.new({
 							text: option.label,
 							checked: option.active,
@@ -33,7 +34,7 @@ export function TrackManager(props: {
 
 					return CheckMenuItem.new({
 						text: option.label,
-						checked: true,
+						checked: option.active,
 						enabled: false,
 					});
 				}),

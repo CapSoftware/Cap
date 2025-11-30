@@ -1705,6 +1705,7 @@ fn project_config_from_recording(
         segments: timeline_segments,
         zoom_segments,
         scene_segments: Vec::new(),
+        mask_segments: Vec::new(),
     });
 
     config

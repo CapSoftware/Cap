@@ -28,10 +28,15 @@ import {
 	type MultipleSegments,
 	type ProjectConfiguration,
 	type RecordingMeta,
+	type SceneSegment,
 	type SerializedEditorInstance,
 	type SingleSegment,
+	type TimelineConfiguration,
+	type TimelineSegment,
 	type XY,
+	type ZoomSegment,
 } from "~/utils/tauri";
+import type { MaskSegment } from "./masks";
 import { createProgressBar } from "./utils";
 
 export type CurrentDialog =
@@ -67,7 +72,7 @@ export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "zoom" | "scene";
+export type TimelineTrackType = "clip" | "zoom" | "scene" | "mask";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -85,12 +90,21 @@ export type CornerRoundingType = "rounded" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
+type EditorTimelineConfiguration = Omit<
+	TimelineConfiguration,
+	"sceneSegments"
+> & {
+	sceneSegments?: SceneSegment[];
+	maskSegments: MaskSegment[];
+};
+
 export type EditorProjectConfiguration = Omit<
 	ProjectConfiguration,
-	"background" | "camera"
+	"background" | "camera" | "timeline"
 > & {
 	background: WithCornerStyle<ProjectConfiguration["background"]>;
 	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
+	timeline?: EditorTimelineConfiguration | null;
 };
 
 function withCornerDefaults<
@@ -109,8 +123,22 @@ function withCornerDefaults<
 export function normalizeProject(
 	config: ProjectConfiguration,
 ): EditorProjectConfiguration {
+	const timeline = config.timeline
+		? {
+				...config.timeline,
+				sceneSegments: config.timeline.sceneSegments ?? [],
+				maskSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							maskSegments?: MaskSegment[];
+						}
+					).maskSegments ?? [],
+			}
+		: undefined;
+
 	return {
 		...config,
+		timeline,
 		background: withCornerDefaults(config.background),
 		camera: withCornerDefaults(config.camera),
 	};
@@ -124,8 +152,16 @@ export function serializeProjectConfiguration(
 		background;
 	const { roundingType: cameraRoundingType, ...cameraRest } = camera;
 
+	const timeline = project.timeline
+		? {
+				...project.timeline,
+				maskSegments: project.timeline.maskSegments ?? [],
+			}
+		: project.timeline;
+
 	return {
 		...rest,
+		timeline: timeline as unknown as ProjectConfiguration["timeline"],
 		background: {
 			...backgroundRest,
 			roundingType: backgroundRoundingType,
@@ -242,6 +278,45 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitMaskSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"maskSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteMaskSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"maskSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			splitSceneSegment: (index: number, time: number) => {
 				setProject(
 					"timeline",
@@ -307,6 +382,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						for (const zoomSegment of timeline.zoomSegments) {
 							zoomSegment.start += diff(zoomSegment.start);
 							zoomSegment.end += diff(zoomSegment.end);
+						}
+
+						for (const maskSegment of timeline.maskSegments) {
+							maskSegment.start += diff(maskSegment.start);
+							maskSegment.end += diff(maskSegment.end);
 						}
 
 						segment.timescale = timescale;
@@ -455,6 +535,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			};
 		}
 
+		const initialMaskTrackEnabled =
+			(project.timeline?.maskSegments?.length ?? 0) > 0;
+
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
 			playbackTime: 0,
@@ -465,7 +548,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| null
 					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; indices: number[] }
-					| { type: "scene"; indices: number[] },
+					| { type: "scene"; indices: number[] }
+					| { type: "mask"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -506,6 +590,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					clip: true,
 					zoom: true,
 					scene: true,
+					mask: initialMaskTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},

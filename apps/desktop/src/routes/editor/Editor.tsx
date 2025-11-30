@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
@@ -44,6 +45,12 @@ import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
+const DEFAULT_TIMELINE_HEIGHT = 260;
+const MIN_PLAYER_CONTENT_HEIGHT = 320;
+const MIN_TIMELINE_HEIGHT = 240;
+const RESIZE_HANDLE_HEIGHT = 16;
+const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
+
 export function Editor() {
 	return (
 		<EditorInstanceContextProvider>
@@ -83,6 +90,58 @@ export function Editor() {
 function Inner() {
 	const { project, editorState, setEditorState, previewResolutionBase } =
 		useEditorContext();
+
+	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
+	const layoutBounds = createElementBounds(layoutRef);
+	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
+		createSignal(DEFAULT_TIMELINE_HEIGHT),
+		{ name: "editorTimelineHeight" },
+	);
+	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
+
+	const clampTimelineHeight = (value: number) => {
+		const available = layoutBounds.height ?? 0;
+		const maxHeight =
+			available > 0
+				? Math.max(MIN_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT)
+				: Number.POSITIVE_INFINITY;
+		const upperBound = Number.isFinite(maxHeight)
+			? maxHeight
+			: Math.max(value, MIN_TIMELINE_HEIGHT);
+		return Math.min(Math.max(value, MIN_TIMELINE_HEIGHT), upperBound);
+	};
+
+	const timelineHeight = createMemo(() =>
+		Math.round(clampTimelineHeight(storedTimelineHeight())),
+	);
+
+	const handleTimelineResizeStart = (event: MouseEvent) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		const startY = event.clientY;
+		const startHeight = timelineHeight();
+		setIsResizingTimeline(true);
+
+		const handleMove = (moveEvent: MouseEvent) => {
+			const delta = moveEvent.clientY - startY;
+			setStoredTimelineHeight(clampTimelineHeight(startHeight - delta));
+		};
+
+		const handleUp = () => {
+			setIsResizingTimeline(false);
+			window.removeEventListener("mousemove", handleMove);
+			window.removeEventListener("mouseup", handleUp);
+		};
+
+		window.addEventListener("mousemove", handleMove);
+		window.addEventListener("mouseup", handleUp);
+	};
+
+	createEffect(() => {
+		const available = layoutBounds.height;
+		if (!available) return;
+		setStoredTimelineHeight((height) => clampTimelineHeight(height));
+	});
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
 		throttledRenderFrame.clear();
@@ -139,12 +198,45 @@ function Inner() {
 				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
-				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
-					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 pb-0.5">
+				<div
+					ref={setLayoutRef}
+					class="flex overflow-hidden flex-col flex-1 min-h-0"
+				>
+					<div
+						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 relative"
+						style={{
+							"min-height": `${MIN_PLAYER_HEIGHT}px`,
+							"padding-bottom": `${RESIZE_HANDLE_HEIGHT}px`,
+						}}
+					>
 						<Player />
 						<ConfigSidebar />
+						<div
+							role="separator"
+							aria-orientation="horizontal"
+							class="absolute inset-x-0 bottom-0"
+							style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
+						>
+							<div
+								class="flex items-center h-full px-3 cursor-row-resize select-none group"
+								classList={{ "bg-gray-3": isResizingTimeline() }}
+								onMouseDown={handleTimelineResizeStart}
+							>
+								<div
+									class="h-1 w-full rounded-full bg-gray-5 transition-colors group-hover:bg-gray-7"
+									classList={{ "bg-gray-8": isResizingTimeline() }}
+								/>
+							</div>
+						</div>
 					</div>
-					<Timeline />
+					<div
+						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden"
+						style={{ height: `${timelineHeight()}px` }}
+					>
+						<div class="h-full">
+							<Timeline />
+						</div>
+					</div>
 				</div>
 				<Dialogs />
 			</div>

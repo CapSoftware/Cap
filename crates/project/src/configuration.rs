@@ -548,6 +548,71 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskKind {
+    Sensitive,
+    Highlight,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskScalarKeyframe {
+    pub time: f64,
+    pub value: f64,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskVectorKeyframe {
+    pub time: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskKeyframes {
+    #[serde(default)]
+    pub position: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub size: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub intensity: Vec<MaskScalarKeyframe>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "MaskSegment::default_enabled")]
+    pub enabled: bool,
+    pub mask_type: MaskKind,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    #[serde(default)]
+    pub feather: f64,
+    #[serde(default = "MaskSegment::default_opacity")]
+    pub opacity: f64,
+    #[serde(default)]
+    pub pixelation: f64,
+    #[serde(default)]
+    pub darkness: f64,
+    #[serde(default)]
+    pub keyframes: MaskKeyframes,
+}
+
+impl MaskSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_opacity() -> f64 {
+        1.0
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SceneMode {
@@ -573,6 +638,8 @@ pub struct TimelineConfiguration {
     pub zoom_segments: Vec<ZoomSegment>,
     #[serde(default)]
     pub scene_segments: Vec<SceneSegment>,
+    #[serde(default)]
+    pub mask_segments: Vec<MaskSegment>,
 }
 
 impl TimelineConfiguration {
