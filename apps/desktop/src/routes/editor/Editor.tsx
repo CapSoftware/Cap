@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
 import { trackDeep } from "@solid-primitives/deep";
-import { throttle } from "@solid-primitives/scheduled";
+import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -13,6 +13,7 @@ import {
 	createSignal,
 	Match,
 	on,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -85,19 +86,49 @@ function Inner() {
 	const { project, editorState, setEditorState } = useEditorContext();
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
-		renderFrame.clear();
+		renderFrameThrottled.clear();
 		setEditorState("playbackTime", payload.playhead_position / FPS);
 	});
 
-	const renderFrame = throttle((time: number) => {
-		if (!editorState.playing) {
-			events.renderFrameEvent.emit({
-				frame_number: Math.max(Math.floor(time * FPS), 0),
-				fps: FPS,
-				resolution_base: OUTPUT_SIZE,
-			});
+	let rafId: number | null = null;
+	let pendingFrameTime: number | null = null;
+
+	const emitFrame = (time: number) => {
+		events.renderFrameEvent.emit({
+			frame_number: Math.max(Math.floor(time * FPS), 0),
+			fps: FPS,
+			resolution_base: OUTPUT_SIZE,
+		});
+	};
+
+	const renderFrameThrottled = throttle((time: number) => {
+		if (editorState.playing) return;
+
+		if (rafId !== null) {
+			pendingFrameTime = time;
+			return;
 		}
-	}, 1000 / FPS);
+
+		rafId = requestAnimationFrame(() => {
+			rafId = null;
+			const frameTime = pendingFrameTime ?? time;
+			pendingFrameTime = null;
+			emitFrame(frameTime);
+		});
+	}, 1000 / 30);
+
+	const renderFrameDebounced = debounce((time: number) => {
+		if (editorState.playing) return;
+		emitFrame(time);
+	}, 50);
+
+	onCleanup(() => {
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+		}
+		renderFrameThrottled.clear();
+		renderFrameDebounced.clear();
+	});
 
 	const frameNumberToRender = createMemo(() => {
 		const preview = editorState.previewTime;
@@ -108,14 +139,23 @@ function Inner() {
 	createEffect(
 		on(frameNumberToRender, (number) => {
 			if (editorState.playing) return;
-			renderFrame(number);
+			renderFrameThrottled(number);
 		}),
 	);
 
+	let lastProjectUpdateTime = 0;
 	createEffect(
 		on(
 			() => trackDeep(project),
-			() => renderFrame(editorState.playbackTime),
+			() => {
+				const now = performance.now();
+				if (now - lastProjectUpdateTime < 100) {
+					renderFrameDebounced(editorState.playbackTime);
+				} else {
+					renderFrameThrottled(editorState.playbackTime);
+				}
+				lastProjectUpdateTime = now;
+			},
 		),
 	);
 
