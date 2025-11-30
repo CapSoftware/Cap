@@ -5,7 +5,7 @@ use crate::{
     },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{Mp4Muxer, OggMuxer},
+    ffmpeg::{FragmentedMp4Muxer, OggMuxer},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
@@ -512,6 +512,8 @@ async fn spawn_studio_recording_actor(
 
     trace!("creating recording actor");
 
+    write_in_progress_meta(&recording_dir)?;
+
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
     let segments_dir = ensure_dir(&content_dir.join("segments"))?;
@@ -578,6 +580,24 @@ pub struct CompletedRecording {
     pub project_path: PathBuf,
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
+}
+
+fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
+    use cap_project::*;
+
+    let meta = StudioRecordingMeta::MultipleSegments {
+        inner: MultipleSegments {
+            segments: Vec::new(),
+            cursors: Cursors::default(),
+            status: Some(StudioRecordingStatus::InProgress),
+        },
+    };
+
+    let meta_path = recording_dir.join("recording-meta-partial.json");
+    let meta_json = serde_json::to_string_pretty(&meta)?;
+    std::fs::write(&meta_path, meta_json)?;
+
+    Ok(())
 }
 
 async fn stop_recording(
@@ -654,12 +674,15 @@ async fn stop_recording(
         .write(&recording_dir)
         .map_err(RecordingError::from)?;
 
+    let partial_meta_path = recording_dir.join("recording-meta-partial.json");
+    if partial_meta_path.exists() {
+        let _ = std::fs::remove_file(partial_meta_path);
+    }
+
     Ok(CompletedRecording {
         project_path: recording_dir,
         meta,
         cursor_data: Default::default(),
-        // display_source: actor.options.capture_target,
-        // segments: actor.segments,
     })
 }
 
@@ -828,7 +851,7 @@ async fn create_segment_pipeline(
         OutputPipeline::builder(dir.join("camera.mp4"))
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
-            .build::<Mp4Muxer>(())
+            .build::<FragmentedMp4Muxer>(())
             .instrument(error_span!("camera-out"))
     }))
     .await

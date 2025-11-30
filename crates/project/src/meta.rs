@@ -57,6 +57,9 @@ impl Default for Platform {
 
         #[cfg(target_os = "macos")]
         return Self::MacOS;
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        return Self::MacOS;
     }
 }
 
@@ -196,6 +199,132 @@ impl RecordingMeta {
             RecordingMetaInner::Studio(meta) => Some(meta),
             _ => None,
         }
+    }
+
+    pub fn needs_recovery(project_path: &Path) -> bool {
+        let partial_meta_path = project_path.join("recording-meta-partial.json");
+        let full_meta_path = project_path.join("recording-meta.json");
+
+        partial_meta_path.exists() && !full_meta_path.exists()
+    }
+
+    pub fn try_recover(project_path: &Path, pretty_name: String) -> Result<Self, Box<dyn Error>> {
+        let segments_dir = project_path.join("content").join("segments");
+        let cursors_dir = project_path.join("content").join("cursors");
+
+        if !segments_dir.exists() {
+            return Err("No segments directory found".into());
+        }
+
+        let mut segments = Vec::new();
+        let mut segment_dirs: Vec<_> = std::fs::read_dir(&segments_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        segment_dirs.sort_by_key(|e| e.path());
+
+        for segment_entry in segment_dirs {
+            let segment_dir = segment_entry.path();
+
+            let display_path = segment_dir.join("display.mp4");
+            if !display_path.exists() {
+                warn!(
+                    "Skipping segment {:?} - no display.mp4 found",
+                    segment_dir.file_name()
+                );
+                continue;
+            }
+
+            let camera_path = segment_dir.join("camera.mp4");
+            let mic_path = segment_dir.join("audio-input.ogg");
+            let system_audio_path = segment_dir.join("system_audio.ogg");
+            let cursor_path = segment_dir.join("cursor.json");
+
+            let relative_base = segment_dir
+                .strip_prefix(project_path)
+                .map(|p| RelativePathBuf::from_path(p).ok())
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| RelativePathBuf::from("content/segments/segment-0"));
+
+            segments.push(MultipleSegment {
+                display: VideoMeta {
+                    path: relative_base.join("display.mp4"),
+                    fps: 30,
+                    start_time: None,
+                },
+                camera: camera_path.exists().then(|| VideoMeta {
+                    path: relative_base.join("camera.mp4"),
+                    fps: 30,
+                    start_time: None,
+                }),
+                mic: mic_path.exists().then(|| AudioMeta {
+                    path: relative_base.join("audio-input.ogg"),
+                    start_time: None,
+                }),
+                system_audio: system_audio_path.exists().then(|| AudioMeta {
+                    path: relative_base.join("system_audio.ogg"),
+                    start_time: None,
+                }),
+                cursor: cursor_path
+                    .exists()
+                    .then(|| relative_base.join("cursor.json")),
+            });
+        }
+
+        if segments.is_empty() {
+            return Err("No valid segments found for recovery".into());
+        }
+
+        let mut cursor_map = HashMap::new();
+        if cursors_dir.exists() {
+            for entry in std::fs::read_dir(&cursors_dir)?.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "png") {
+                    if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Some(id) = file_stem.strip_prefix("cursor_") {
+                            let relative_path = RelativePathBuf::from("content/cursors")
+                                .join(entry.file_name().to_string_lossy().as_ref());
+                            cursor_map.insert(
+                                id.to_string(),
+                                CursorMeta {
+                                    image_path: relative_path,
+                                    hotspot: XY { x: 0.0, y: 0.0 },
+                                    shape: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let meta = Self {
+            platform: Some(Platform::default()),
+            project_path: project_path.to_path_buf(),
+            pretty_name,
+            sharing: None,
+            inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments,
+                    cursors: Cursors::Correct(cursor_map),
+                    status: Some(StudioRecordingStatus::Complete),
+                },
+            }),
+            upload: None,
+        };
+
+        meta.save_for_project().map_err(|e| match e {
+            Either::Left(e) => Box::new(e) as Box<dyn Error>,
+            Either::Right(e) => Box::new(e) as Box<dyn Error>,
+        })?;
+
+        let partial_meta_path = project_path.join("recording-meta-partial.json");
+        if partial_meta_path.exists() {
+            let _ = std::fs::remove_file(partial_meta_path);
+        }
+
+        Ok(meta)
     }
 }
 

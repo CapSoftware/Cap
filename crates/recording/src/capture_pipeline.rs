@@ -8,6 +8,9 @@ use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
 
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::FragmentedMp4MuxerMacOS;
+
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -68,7 +71,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
-            .build::<AVFoundationMp4Muxer>(Default::default())
+            .build::<FragmentedMp4MuxerMacOS>(())
             .await
     }
 

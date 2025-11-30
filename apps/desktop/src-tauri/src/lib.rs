@@ -3046,6 +3046,22 @@ async fn create_editor_instance_impl(
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
+    if RecordingMeta::needs_recovery(&path) {
+        let pretty_name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.trim_end_matches(".cap").to_string())
+            .unwrap_or_else(|| "Recovered Recording".to_string());
+
+        tracing::info!("Attempting to recover incomplete recording: {:?}", path);
+        match RecordingMeta::try_recover(&path, pretty_name) {
+            Ok(_) => tracing::info!("Successfully recovered recording: {:?}", path),
+            Err(e) => {
+                return Err(format!("Failed to recover recording: {e}"));
+            }
+        }
+    }
+
     let instance = {
         let app = app.clone();
         EditorInstance::new(
