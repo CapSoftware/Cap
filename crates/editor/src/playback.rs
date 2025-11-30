@@ -9,8 +9,9 @@ use cpal::{
     BufferSize, SampleFormat, SupportedBufferSize,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use std::{collections::VecDeque, sync::Arc, time::Duration};
-use tokio::{sync::watch, time::Instant};
+use futures::stream::{FuturesUnordered, StreamExt};
+use std::{collections::{HashSet, VecDeque}, sync::Arc, time::Duration};
+use tokio::{sync::{mpsc as tokio_mpsc, watch}, time::Instant};
 use tracing::{error, info, trace, warn};
 
 use crate::{
@@ -20,8 +21,8 @@ use crate::{
     segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 12;
-const PREFETCH_AHEAD_FRAMES: u32 = 16;
+const PREFETCH_BUFFER_SIZE: usize = 16;
+const PARALLEL_DECODE_TASKS: usize = 4;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -79,6 +80,97 @@ impl Playback {
             event_rx,
         };
 
+        let (prefetch_tx, mut prefetch_rx) = tokio_mpsc::channel::<PrefetchedFrame>(PREFETCH_BUFFER_SIZE * 2);
+        let (frame_request_tx, mut frame_request_rx) = watch::channel(self.start_frame_number);
+
+        let prefetch_stop_rx = stop_rx.clone();
+        let prefetch_project = self.project.clone();
+        let prefetch_segment_medias = self.segment_medias.clone();
+        let prefetch_duration = if let Some(timeline) = &self.project.borrow().timeline {
+            timeline.duration()
+        } else {
+            f64::MAX
+        };
+
+        tokio::spawn(async move {
+            let mut next_prefetch_frame = *frame_request_rx.borrow();
+            let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+            let mut in_flight_frames: HashSet<u32> = HashSet::new();
+
+            loop {
+                if *prefetch_stop_rx.borrow() {
+                    break;
+                }
+
+                if let Ok(true) = frame_request_rx.has_changed() {
+                    let requested = *frame_request_rx.borrow_and_update();
+                    if requested > next_prefetch_frame {
+                        next_prefetch_frame = requested;
+                        in_flight_frames.retain(|&f| f >= requested);
+                    }
+                }
+
+                while in_flight.len() < PARALLEL_DECODE_TASKS {
+                    let frame_num = next_prefetch_frame;
+                    let prefetch_time = frame_num as f64 / fps_f64;
+                    
+                    if prefetch_time >= prefetch_duration {
+                        break;
+                    }
+                    
+                    if in_flight_frames.contains(&frame_num) {
+                        next_prefetch_frame += 1;
+                        continue;
+                    }
+
+                    let project = prefetch_project.borrow().clone();
+                    
+                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time) {
+                        if let Some(segment_media) = prefetch_segment_medias.get(segment.recording_clip as usize) {
+                            let clip_offsets = project
+                                .clips
+                                .iter()
+                                .find(|v| v.index == segment.recording_clip)
+                                .map(|v| v.offsets)
+                                .unwrap_or_default();
+
+                            let decoders = segment_media.decoders.clone();
+                            let hide_camera = project.camera.hide;
+                            let segment_index = segment.recording_clip;
+                            
+                            in_flight_frames.insert(frame_num);
+                            
+                            in_flight.push(async move {
+                                let result = decoders
+                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                    .await;
+                                (frame_num, segment_index, result)
+                            });
+                        }
+                    }
+                    
+                    next_prefetch_frame += 1;
+                }
+
+                tokio::select! {
+                    biased;
+                    
+                    Some((frame_num, segment_index, result)) = in_flight.next() => {
+                        in_flight_frames.remove(&frame_num);
+                        if let Some(segment_frames) = result {
+                            let _ = prefetch_tx.send(PrefetchedFrame {
+                                frame_number: frame_num,
+                                segment_frames,
+                                segment_index,
+                            }).await;
+                        }
+                    }
+                    
+                    _ = tokio::time::sleep(Duration::from_millis(1)), if in_flight.is_empty() => {}
+                }
+            }
+        });
+
         tokio::spawn(async move {
             let start = Instant::now();
 
@@ -100,41 +192,16 @@ impl Playback {
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
             let mut frame_number = self.start_frame_number;
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> = VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
-            let mut prefetch_frame = self.start_frame_number;
-            let mut last_rendered_frame: Option<u32> = None;
-            let max_frame_skip = 2u32;
+            let max_frame_skip = 3u32;
 
             'playback: loop {
-                while prefetch_buffer.len() < PREFETCH_BUFFER_SIZE && !*stop_rx.borrow() {
-                    let prefetch_time = prefetch_frame as f64 / fps_f64;
-                    if prefetch_time >= duration {
-                        break;
-                    }
-
-                    let project = self.project.borrow().clone();
-                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time) {
-                        if let Some(segment_media) = self.segment_medias.get(segment.recording_clip as usize) {
-                            let clip_offsets = project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
-                                .unwrap_or_default();
-
-                            if let Some(segment_frames) = segment_media
-                                .decoders
-                                .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
-                                .await
-                            {
-                                prefetch_buffer.push_back(PrefetchedFrame {
-                                    frame_number: prefetch_frame,
-                                    segment_frames,
-                                    segment_index: segment.recording_clip,
-                                });
-                            }
+                while let Ok(prefetched) = prefetch_rx.try_recv() {
+                    if prefetched.frame_number >= frame_number {
+                        prefetch_buffer.push_back(prefetched);
+                        if prefetch_buffer.len() > PREFETCH_BUFFER_SIZE {
+                            prefetch_buffer.pop_front();
                         }
                     }
-                    prefetch_frame = prefetch_frame.saturating_add(1);
                 }
 
                 let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
@@ -156,10 +223,10 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let prefetched = prefetch_buffer.iter().position(|p| p.frame_number == frame_number);
+                let prefetched_idx = prefetch_buffer.iter().position(|p| p.frame_number == frame_number);
                 
-                let segment_frames_opt = if let Some(idx) = prefetched {
-                    let prefetched = prefetch_buffer.remove(idx);
+                let segment_frames_opt = if let Some(idx) = prefetched_idx {
+                    let prefetched = prefetch_buffer.remove(idx).unwrap();
                     Some((prefetched.segment_frames, prefetched.segment_index))
                 } else {
                     let Some((segment_time, segment)) = project.get_segment_time(playback_time) else {
@@ -207,8 +274,6 @@ impl Playback {
                     self.renderer
                         .render_frame(segment_frames, uniforms, segment_media.cursor.clone())
                         .await;
-                    
-                    last_rendered_frame = Some(frame_number);
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
@@ -228,14 +293,8 @@ impl Playback {
                         trace!("Limiting frame skip to {} (was {} behind)", max_frame_skip, frames_behind);
                     }
 
-                    while let Some(front) = prefetch_buffer.front() {
-                        if front.frame_number < frame_number {
-                            prefetch_buffer.pop_front();
-                        } else {
-                            break;
-                        }
-                    }
-                    prefetch_frame = prefetch_frame.max(frame_number);
+                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                    let _ = frame_request_tx.send(frame_number);
                 }
             }
 
