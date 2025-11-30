@@ -133,30 +133,29 @@ impl Playback {
 
                     let project = prefetch_project.borrow().clone();
 
-                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time) {
-                        if let Some(segment_media) =
+                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time)
+                        && let Some(segment_media) =
                             prefetch_segment_medias.get(segment.recording_clip as usize)
-                        {
-                            let clip_offsets = project
-                                .clips
-                                .iter()
-                                .find(|v| v.index == segment.recording_clip)
-                                .map(|v| v.offsets)
-                                .unwrap_or_default();
+                    {
+                        let clip_offsets = project
+                            .clips
+                            .iter()
+                            .find(|v| v.index == segment.recording_clip)
+                            .map(|v| v.offsets)
+                            .unwrap_or_default();
 
-                            let decoders = segment_media.decoders.clone();
-                            let hide_camera = project.camera.hide;
-                            let segment_index = segment.recording_clip;
+                        let decoders = segment_media.decoders.clone();
+                        let hide_camera = project.camera.hide;
+                        let segment_index = segment.recording_clip;
 
-                            in_flight_frames.insert(frame_num);
+                        in_flight_frames.insert(frame_num);
 
-                            in_flight.push(async move {
-                                let result = decoders
-                                    .get_frames(segment_time as f32, !hide_camera, clip_offsets)
-                                    .await;
-                                (frame_num, segment_index, result)
-                            });
-                        }
+                        in_flight.push(async move {
+                            let result = decoders
+                                .get_frames(segment_time as f32, !hide_camera, clip_offsets)
+                                .await;
+                            (frame_num, segment_index, result)
+                        });
                     }
 
                     next_prefetch_frame += 1;
@@ -306,7 +305,7 @@ impl Playback {
                         frame_number = expected_frame;
                         trace!("Skipping {} frames to catch up", frames_behind);
                     } else {
-                        frame_number = frame_number + max_frame_skip;
+                        frame_number += max_frame_skip;
                         trace!(
                             "Limiting frame skip to {} (was {} behind)",
                             max_frame_skip, frames_behind
