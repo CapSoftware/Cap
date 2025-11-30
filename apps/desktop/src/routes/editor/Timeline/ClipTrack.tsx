@@ -10,6 +10,7 @@ import {
 	createRoot,
 	createSignal,
 	For,
+	Index,
 	Match,
 	onCleanup,
 	Show,
@@ -188,7 +189,7 @@ export function ClipTrack(
 		systemAudioWaveforms,
 	} = useEditorContext();
 
-	const { secsPerPixel, duration } = useTimelineContext();
+	const { secsPerPixel, duration, isSegmentVisible } = useTimelineContext();
 
 	const segments = (): Array<TimelineSegment> =>
 		project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
@@ -202,6 +203,21 @@ export function ClipTrack(
 			sum += (segs[idx].end - segs[idx].start) / segs[idx].timescale;
 		}
 		return offsets;
+	});
+
+	const visibleSegmentIndices = createMemo(() => {
+		const segs = segments();
+		const offsets = segmentOffsets();
+		const visible: number[] = [];
+		for (let i = 0; i < segs.length; i++) {
+			const seg = segs[i];
+			const segStart = offsets[i];
+			const segEnd = segStart + (seg.end - seg.start) / seg.timescale;
+			if (isSegmentVisible(segStart, segEnd)) {
+				visible.push(i);
+			}
+		}
+		return visible;
 	});
 
 	function onHandleReleased() {
@@ -223,8 +239,10 @@ export function ClipTrack(
 			onMouseEnter={() => setEditorState("timeline", "hoveredTrack", "clip")}
 			onMouseLeave={() => setEditorState("timeline", "hoveredTrack", null)}
 		>
-			<For each={segments()}>
-				{(segment, i) => {
+			<Index each={visibleSegmentIndices()}>
+				{(segmentIndex) => {
+					const i = segmentIndex;
+					const segment = () => segments()[i()];
 					const [startHandleDrag, setStartHandleDrag] = createSignal<null | {
 						offset: number;
 						initialStart: number;
@@ -235,14 +253,15 @@ export function ClipTrack(
 					const relativeSegment = createMemo(() => {
 						const ds = startHandleDrag();
 						const offset = ds?.offset ?? 0;
+						const seg = segment();
 
 						return {
 							start: Math.max(prevDuration() + offset, 0),
 							end:
 								prevDuration() +
-								(offset + (segment.end - segment.start)) / segment.timescale,
-							timescale: segment.timescale,
-							recordingSegment: segment.recordingSegment,
+								(offset + (seg.end - seg.start)) / seg.timescale,
+							timescale: seg.timescale,
+							recordingSegment: seg.recordingSegment,
 						};
 					});
 
@@ -269,9 +288,10 @@ export function ClipTrack(
 					const isSelected = createMemo(() => {
 						const selection = editorState.timeline.selection;
 						if (!selection || selection.type !== "clip") return false;
+						const seg = segment();
 
 						const segmentIndex = project.timeline?.segments?.findIndex(
-							(s) => s.start === segment.start && s.end === segment.end,
+							(s) => s.start === seg.start && s.end === seg.end,
 						);
 
 						if (segmentIndex === undefined || segmentIndex === -1) return false;
@@ -283,7 +303,7 @@ export function ClipTrack(
 						if (project.audio.micVolumeDb && project.audio.micVolumeDb < -30)
 							return;
 
-						const idx = segment.recordingSegment ?? i();
+						const idx = segment().recordingSegment ?? i();
 						return micWaveforms()?.[idx] ?? [];
 					};
 
@@ -294,7 +314,7 @@ export function ClipTrack(
 						)
 							return;
 
-						const idx = segment.recordingSegment ?? i();
+						const idx = segment().recordingSegment ?? i();
 						return systemAudioWaveforms()?.[idx] ?? [];
 					};
 
@@ -401,8 +421,9 @@ export function ClipTrack(
 									if (editorState.timeline.interactMode === "split") {
 										const rect = e.currentTarget.getBoundingClientRect();
 										const fraction = (e.clientX - rect.left) / rect.width;
+										const seg = segment();
 
-										const splitTime = fraction * (segment.end - segment.start);
+										const splitTime = fraction * (seg.end - seg.start);
 
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {
@@ -486,23 +507,24 @@ export function ClipTrack(
 									}
 								}}
 							>
-								{segment.timescale === 1 && (
+								{segment().timescale === 1 && (
 									<WaveformCanvas
 										micWaveform={micWaveform()}
 										systemWaveform={systemAudioWaveform()}
-										segment={segment}
+										segment={segment()}
 									/>
 								)}
 
-								<Markings segment={segment} prevDuration={prevDuration()} />
+								<Markings segment={segment()} prevDuration={prevDuration()} />
 
 								<SegmentHandle
 									position="start"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
 										if (split()) return;
+										const seg = segment();
 
-										const initialStart = segment.start;
+										const initialStart = seg.start;
 										setStartHandleDrag({
 											offset: 0,
 											initialStart,
@@ -510,17 +532,16 @@ export function ClipTrack(
 
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
-												segment.recordingSegment ?? 0
+												seg.recordingSegment ?? 0
 											].display.duration;
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
 											segments().reduce(
-												(acc, segment, segmentI) =>
+												(acc, s, segmentI) =>
 													segmentI === i()
 														? acc
-														: acc +
-															(segment.end - segment.start) / segment.timescale,
+														: acc + (s.end - s.start) / s.timescale,
 												0,
 											);
 
@@ -532,8 +553,7 @@ export function ClipTrack(
 										const prevSegment = segments()[i() - 1];
 										const prevSegmentIsSameClip =
 											prevSegment?.recordingSegment !== undefined
-												? prevSegment.recordingSegment ===
-													segment.recordingSegment
+												? prevSegment.recordingSegment === seg.recordingSegment
 												: false;
 
 										function update(event: MouseEvent) {
@@ -541,15 +561,15 @@ export function ClipTrack(
 												initialStart +
 												(event.clientX - downEvent.clientX) *
 													secsPerPixel() *
-													segment.timescale;
+													seg.timescale;
 
 											const clampedStart = Math.min(
 												Math.max(
 													newStart,
 													prevSegmentIsSameClip ? prevSegment.end : 0,
-													segment.end - maxDuration,
+													seg.end - maxDuration,
 												),
-												segment.end - 1,
+												seg.end - 1,
 											);
 
 											setStartHandleDrag({
@@ -590,22 +610,23 @@ export function ClipTrack(
 								<SegmentContent class="relative justify-center items-center">
 									{(() => {
 										const ctx = useSegmentContext();
+										const seg = segment();
 
 										return (
 											<Show when={ctx.width() > 100}>
 												<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-12">
 													<span class="text-white/70">
 														{hasMultipleRecordingSegments()
-															? `Clip ${segment.recordingSegment}`
+															? `Clip ${seg.recordingSegment}`
 															: "Clip"}
 													</span>
 													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
 														<IconLucideClock class="size-3.5" />{" "}
-														{formatTime(segment.end - segment.start)}
-														<Show when={segment.timescale !== 1}>
+														{formatTime(seg.end - seg.start)}
+														<Show when={seg.timescale !== 1}>
 															<div class="w-0.5" />
 															<IconLucideFastForward class="size-3" />
-															{segment.timescale}x
+															{seg.timescale}x
 														</Show>
 													</div>
 												</div>
@@ -617,37 +638,36 @@ export function ClipTrack(
 									position="end"
 									class="opacity-0 group-hover:opacity-100"
 									onMouseDown={(downEvent) => {
-										const end = segment.end;
+										const seg = segment();
+										const end = seg.end;
 
 										if (split()) return;
 										const maxSegmentDuration =
 											editorInstance.recordings.segments[
-												segment.recordingSegment ?? 0
+												seg.recordingSegment ?? 0
 											].display.duration;
 
 										const availableTimelineDuration =
 											editorInstance.recordingDuration -
 											segments().reduce(
-												(acc, segment, segmentI) =>
+												(acc, s, segmentI) =>
 													segmentI === i()
 														? acc
-														: acc +
-															(segment.end - segment.start) / segment.timescale,
+														: acc + (s.end - s.start) / s.timescale,
 												0,
 											);
 
 										const nextSegment = segments()[i() + 1];
 										const nextSegmentIsSameClip =
 											nextSegment?.recordingSegment !== undefined
-												? nextSegment.recordingSegment ===
-													segment.recordingSegment
+												? nextSegment.recordingSegment === seg.recordingSegment
 												: false;
 
 										function update(event: MouseEvent) {
 											const deltaRecorded =
 												(event.clientX - downEvent.clientX) *
 												secsPerPixel() *
-												segment.timescale;
+												seg.timescale;
 											const newEnd = end + deltaRecorded;
 
 											setProject(
@@ -658,13 +678,12 @@ export function ClipTrack(
 												Math.max(
 													Math.min(
 														newEnd,
-														// availableTimelineDuration is in timeline seconds; convert to recorded seconds
-														end + availableTimelineDuration * segment.timescale,
+														end + availableTimelineDuration * seg.timescale,
 														nextSegmentIsSameClip
 															? nextSegment.start
 															: maxSegmentDuration,
 													),
-													segment.start + 1,
+													seg.start + 1,
 												),
 											);
 										}
@@ -737,7 +756,7 @@ export function ClipTrack(
 						</>
 					);
 				}}
-			</For>
+			</Index>
 		</TrackRoot>
 	);
 }
