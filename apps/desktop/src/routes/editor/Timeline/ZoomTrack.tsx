@@ -420,9 +420,7 @@ export function ZoomTrack(props: {
 							class={cx(
 								"border duration-200 hover:border-gray-12 transition-colors group",
 								"bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
-								isSelected()
-									? "wobble-wrapper border-gray-12"
-									: "border-transparent",
+								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
 							innerClass="ring-red-5"
 							segment={segment}

@@ -33,7 +33,7 @@ import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 const TIMELINE_PADDING = 16;
 const TRACK_GUTTER = 64;
 const TIMELINE_HEADER_HEIGHT = 32;
-const TRACK_MANAGER_BUTTON_SIZE = 36;
+const TRACK_MANAGER_BUTTON_SIZE = 56;
 
 const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	clip: <IconLucideClapperboard class="size-4" />,
@@ -262,12 +262,17 @@ export function Timeline() {
 					});
 				}}
 				onMouseMove={(e) => {
-					const { left } = timelineBounds;
+					const { left, width } = timelineBounds;
 					if (editorState.playing) return;
-					if (left == null) return;
+					if (left == null || !width || width <= 0) return;
+					const offsetX = e.clientX - left;
+					if (offsetX < 0 || offsetX > width) {
+						setEditorState("previewTime", null);
+						return;
+					}
 					setEditorState(
 						"previewTime",
-						transform().position + secsPerPixel() * (e.clientX - left),
+						transform().position + secsPerPixel() * offsetX,
 					);
 				}}
 				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}

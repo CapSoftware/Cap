@@ -56,7 +56,7 @@ export function TrackManager(props: {
 			ref={(el) => {
 				addButton = el;
 			}}
-			class="flex h-8 w-9 items-center justify-center rounded-lg border border-gray-4/80 bg-gray-2 text-sm font-medium text-gray-12 transition-colors duration-150 hover:bg-gray-3 dark:border-gray-5/60 dark:bg-gray-4/50"
+			class="flex h-8 w-[3.5rem] items-center justify-center rounded-lg border border-gray-4/80 bg-gray-2 text-sm font-medium text-gray-12 transition-colors duration-150 hover:bg-gray-3 dark:border-gray-5/60 dark:bg-gray-4/50"
 			onClick={handleOpenMenu}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
