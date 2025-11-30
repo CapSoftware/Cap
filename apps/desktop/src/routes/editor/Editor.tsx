@@ -35,7 +35,6 @@ import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
 	FPS,
-	OUTPUT_SIZE,
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
@@ -82,7 +81,8 @@ export function Editor() {
 }
 
 function Inner() {
-	const { project, editorState, setEditorState } = useEditorContext();
+	const { project, editorState, setEditorState, previewResolutionBase } =
+		useEditorContext();
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
 		throttledRenderFrame.clear();
@@ -95,7 +95,7 @@ function Inner() {
 			events.renderFrameEvent.emit({
 				frame_number: Math.max(Math.floor(time * FPS), 0),
 				fps: FPS,
-				resolution_base: OUTPUT_SIZE,
+				resolution_base: previewResolutionBase(),
 			});
 		}
 	};
@@ -116,10 +116,13 @@ function Inner() {
 	});
 
 	createEffect(
-		on(frameNumberToRender, (number) => {
-			if (editorState.playing) return;
-			renderFrame(number);
-		}),
+		on(
+			() => [frameNumberToRender(), previewResolutionBase()],
+			([number]) => {
+				if (editorState.playing) return;
+				renderFrame(number);
+			},
+		),
 	);
 
 	createEffect(

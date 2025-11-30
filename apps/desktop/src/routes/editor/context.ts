@@ -50,6 +50,23 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
+export type PreviewQuality = "half" | "full";
+
+export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
+
+const previewQualityScale: Record<PreviewQuality, number> = {
+	full: 1,
+	half: 0.5,
+};
+
+export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
+	const scale = previewQualityScale[quality];
+	const width = (Math.max(2, Math.round(OUTPUT_SIZE.x * scale)) + 1) & ~1;
+	const height = (Math.max(2, Math.round(OUTPUT_SIZE.y * scale)) + 1) & ~1;
+
+	return { x: width, y: height };
+};
+
 export type TimelineTrackType = "clip" | "zoom" | "scene";
 
 export const MAX_ZOOM_IN = 3;
@@ -358,6 +375,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			),
 		);
 
+		const [previewQuality, setPreviewQuality] = createSignal<PreviewQuality>(
+			DEFAULT_PREVIEW_QUALITY,
+		);
+
+		const previewResolutionBase = () => getPreviewResolution(previewQuality());
+
 		const [dialog, setDialog] = createSignal<DialogState>({
 			open: false,
 		});
@@ -516,6 +539,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			setExportState,
 			micWaveforms,
 			systemAudioWaveforms,
+			previewQuality,
+			setPreviewQuality,
+			previewResolutionBase,
 		};
 	},
 	// biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -584,7 +610,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 					events.renderFrameEvent.emit({
 						frame_number: Math.floor(0),
 						fps: FPS,
-						resolution_base: OUTPUT_SIZE,
+						resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
 					});
 				}
 			});

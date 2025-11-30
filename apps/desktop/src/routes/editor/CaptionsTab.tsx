@@ -10,7 +10,7 @@ import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
 import type { CaptionSegment, CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
-import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
+import { FPS, useEditorContext } from "./context";
 import { TextInput } from "./TextInput";
 import {
 	Field,
@@ -166,8 +166,13 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 
 // Add scroll position preservation for the container
 export function CaptionsTab() {
-	const { project, setProject, editorInstance, editorState } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		editorInstance,
+		editorState,
+		previewResolutionBase,
+	} = useEditorContext();
 
 	// Scroll management
 	let scrollContainerRef: HTMLDivElement | undefined;
@@ -215,7 +220,7 @@ export function CaptionsTab() {
 				events.renderFrameEvent.emit({
 					frame_number: Math.floor(editorState.playbackTime * FPS),
 					fps: FPS,
-					resolution_base: OUTPUT_SIZE,
+					resolution_base: previewResolutionBase(),
 				});
 			});
 		}
@@ -248,7 +253,7 @@ export function CaptionsTab() {
 			events.renderFrameEvent.emit({
 				frame_number: Math.floor(editorState.playbackTime * FPS),
 				fps: FPS,
-				resolution_base: OUTPUT_SIZE,
+				resolution_base: previewResolutionBase(),
 			});
 		}
 	};
