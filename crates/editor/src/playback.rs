@@ -4,14 +4,14 @@ use cap_audio::{
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
-use cap_rendering::{ProjectUniforms, RenderVideoConstants};
+use cap_rendering::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
 use cpal::{
     BufferSize, SampleFormat, SupportedBufferSize,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::{sync::watch, time::Instant};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
@@ -19,6 +19,9 @@ use crate::{
     editor_instance::SegmentMedia,
     segments::get_audio_segments,
 };
+
+const PREFETCH_BUFFER_SIZE: usize = 12;
+const PREFETCH_AHEAD_FRAMES: u32 = 16;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -44,6 +47,12 @@ pub enum PlaybackEvent {
 pub struct PlaybackHandle {
     stop_tx: watch::Sender<bool>,
     event_rx: watch::Receiver<PlaybackEvent>,
+}
+
+struct PrefetchedFrame {
+    frame_number: u32,
+    segment_frames: DecodedSegmentFrames,
+    segment_index: u32,
 }
 
 impl Playback {
@@ -90,8 +99,44 @@ impl Playback {
 
             let frame_duration = Duration::from_secs_f64(1.0 / fps_f64);
             let mut frame_number = self.start_frame_number;
+            let mut prefetch_buffer: VecDeque<PrefetchedFrame> = VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
+            let mut prefetch_frame = self.start_frame_number;
+            let mut last_rendered_frame: Option<u32> = None;
+            let max_frame_skip = 2u32;
 
             'playback: loop {
+                while prefetch_buffer.len() < PREFETCH_BUFFER_SIZE && !*stop_rx.borrow() {
+                    let prefetch_time = prefetch_frame as f64 / fps_f64;
+                    if prefetch_time >= duration {
+                        break;
+                    }
+
+                    let project = self.project.borrow().clone();
+                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time) {
+                        if let Some(segment_media) = self.segment_medias.get(segment.recording_clip as usize) {
+                            let clip_offsets = project
+                                .clips
+                                .iter()
+                                .find(|v| v.index == segment.recording_clip)
+                                .map(|v| v.offsets)
+                                .unwrap_or_default();
+
+                            if let Some(segment_frames) = segment_media
+                                .decoders
+                                .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
+                                .await
+                            {
+                                prefetch_buffer.push_back(PrefetchedFrame {
+                                    frame_number: prefetch_frame,
+                                    segment_frames,
+                                    segment_index: segment.recording_clip,
+                                });
+                            }
+                        }
+                    }
+                    prefetch_frame = prefetch_frame.saturating_add(1);
+                }
+
                 let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
                 let next_deadline = start + frame_duration.mul_f64(frame_offset);
 
@@ -111,30 +156,44 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let Some((segment_time, segment)) = project.get_segment_time(playback_time) else {
-                    break;
+                let prefetched = prefetch_buffer.iter().position(|p| p.frame_number == frame_number);
+                
+                let segment_frames_opt = if let Some(idx) = prefetched {
+                    let prefetched = prefetch_buffer.remove(idx);
+                    Some((prefetched.segment_frames, prefetched.segment_index))
+                } else {
+                    let Some((segment_time, segment)) = project.get_segment_time(playback_time) else {
+                        break;
+                    };
+
+                    let Some(segment_media) = self.segment_medias.get(segment.recording_clip as usize) else {
+                        frame_number = frame_number.saturating_add(1);
+                        continue;
+                    };
+
+                    let clip_offsets = project
+                        .clips
+                        .iter()
+                        .find(|v| v.index == segment.recording_clip)
+                        .map(|v| v.offsets)
+                        .unwrap_or_default();
+
+                    let data = tokio::select! {
+                        _ = stop_rx.changed() => break 'playback,
+                        data = segment_media
+                            .decoders
+                            .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => data,
+                    };
+
+                    data.map(|frames| (frames, segment.recording_clip))
                 };
 
-                let Some(segment_media) = self.segment_medias.get(segment.recording_clip as usize)
-                else {
-                    continue;
-                };
+                if let Some((segment_frames, segment_index)) = segment_frames_opt {
+                    let Some(segment_media) = self.segment_medias.get(segment_index as usize) else {
+                        frame_number = frame_number.saturating_add(1);
+                        continue;
+                    };
 
-                let clip_offsets = project
-                    .clips
-                    .iter()
-                    .find(|v| v.index == segment.recording_clip)
-                    .map(|v| v.offsets)
-                    .unwrap_or_default();
-
-                let data = tokio::select! {
-                    _ = stop_rx.changed() => break 'playback,
-                    data = segment_media
-                        .decoders
-                        .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => data,
-                };
-
-                if let Some(segment_frames) = data {
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
                         &project,
@@ -148,6 +207,8 @@ impl Playback {
                     self.renderer
                         .render_frame(segment_frames, uniforms, segment_media.cursor.clone())
                         .await;
+                    
+                    last_rendered_frame = Some(frame_number);
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
@@ -158,7 +219,23 @@ impl Playback {
                     + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
-                    frame_number = expected_frame;
+                    let frames_behind = expected_frame - frame_number;
+                    if frames_behind <= max_frame_skip {
+                        frame_number = expected_frame;
+                        trace!("Skipping {} frames to catch up", frames_behind);
+                    } else {
+                        frame_number = frame_number + max_frame_skip;
+                        trace!("Limiting frame skip to {} (was {} behind)", max_frame_skip, frames_behind);
+                    }
+
+                    while let Some(front) = prefetch_buffer.front() {
+                        if front.frame_number < frame_number {
+                            prefetch_buffer.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+                    prefetch_frame = prefetch_frame.max(frame_number);
                 }
             }
 
