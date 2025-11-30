@@ -17,12 +17,7 @@ import "./styles.css";
 
 import Tooltip from "~/components/Tooltip";
 import { commands } from "~/utils/tauri";
-import {
-	FPS,
-	OUTPUT_SIZE,
-	type TimelineTrackType,
-	useEditorContext,
-} from "../context";
+import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
@@ -80,6 +75,7 @@ export function Timeline() {
 		editorState,
 		projectActions,
 		meta,
+		previewResolutionBase,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -187,7 +183,7 @@ export function Timeline() {
 						return;
 					}
 
-					await commands.startPlayback(FPS, OUTPUT_SIZE);
+					await commands.startPlayback(FPS, previewResolutionBase());
 					setEditorState("playing", true);
 				} catch (err) {
 					console.error("Failed to seek during playback:", err);
@@ -236,6 +232,50 @@ export function Timeline() {
 
 	const split = () => editorState.timeline.interactMode === "split";
 
+	const maskImage = () => {
+		const pos = transform().position;
+		const zoom = transform().zoom;
+		const total = totalDuration();
+		const secPerPx = secsPerPixel();
+
+		const FADE_WIDTH = 64;
+		const FADE_RAMP_PX = 50; // Pixels of scrolling over which the fade animates in
+		const LEFT_OFFSET = TIMELINE_PADDING + TRACK_GUTTER;
+		const RIGHT_PADDING = TIMELINE_PADDING;
+
+		// Calculate alpha for left fade (0 = fully faded, 1 = no fade)
+		// When pos is 0, we are at start -> no fade needed -> strength 0
+		// When pos increases, we want fade to appear -> strength 1
+		const scrollLeftPx = pos / secPerPx;
+		const leftFadeStrength = Math.min(1, scrollLeftPx / FADE_RAMP_PX);
+
+		// Calculate alpha for right fade
+		// When at end, right scroll is 0 -> no fade -> strength 0
+		const scrollRightPx = (total - (pos + zoom)) / secPerPx;
+		const rightFadeStrength = Math.min(1, scrollRightPx / FADE_RAMP_PX);
+
+		const leftStartColor = `rgba(0, 0, 0, ${1 - leftFadeStrength})`;
+		const rightEndColor = `rgba(0, 0, 0, ${1 - rightFadeStrength})`;
+
+		// Left stops:
+		// 0px to LEFT_OFFSET: Always black (icons area)
+		// LEFT_OFFSET: Starts fading. If strength is 0 (start), it's black. If strength is 1, it's transparent.
+		// LEFT_OFFSET + FADE_WIDTH: Always black (content fully visible)
+		const leftStops = `black 0px, black ${LEFT_OFFSET}px, ${leftStartColor} ${LEFT_OFFSET}px, black ${
+			LEFT_OFFSET + FADE_WIDTH
+		}px`;
+
+		// Right stops:
+		// calc(100% - (RIGHT_PADDING + FADE_WIDTH)): Always black (content fully visible)
+		// calc(100% - RIGHT_PADDING): Ends fading. If strength is 0 (end), it's black. If strength is 1, it's transparent.
+		// 100%: Transparent
+		const rightStops = `black calc(100% - ${
+			RIGHT_PADDING + FADE_WIDTH
+		}px), ${rightEndColor} calc(100% - ${RIGHT_PADDING}px), transparent 100%`;
+
+		return `linear-gradient(to right, ${leftStops}, ${rightStops})`;
+	};
+
 	return (
 		<TimelineContextProvider
 			duration={duration()}
@@ -247,6 +287,8 @@ export function Timeline() {
 				style={{
 					"padding-left": `${TIMELINE_PADDING}px`,
 					"padding-right": `${TIMELINE_PADDING}px`,
+					"mask-image": maskImage(),
+					"-webkit-mask-image": maskImage(),
 				}}
 				onMouseDown={(e) => {
 					createRoot((dispose) => {
@@ -320,10 +362,7 @@ export function Timeline() {
 					<div class="absolute inset-0 flex items-end">
 						<TimelineMarkings />
 					</div>
-					<div
-						class="absolute bottom-0"
-						style={{ left: `${TRACK_GUTTER - TRACK_MANAGER_BUTTON_SIZE}px` }}
-					>
+					<div class="absolute bottom-0">
 						<Tooltip content="Add track">
 							<TrackManager
 								options={trackOptions()}
