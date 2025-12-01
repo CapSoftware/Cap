@@ -188,18 +188,35 @@ impl Mp4ExportSettings {
                 }
 
                 if let Some(frame) = first_frame {
+                    // Calculate the unpadded width (RGBA = 4 bytes per pixel)
+                    let unpadded_width = (frame.width * 4) as usize;
+                    
+                    // Convert RGBA to RGB with bounds checking to prevent memory access violations
+                    let rgb_data: Vec<u8> = frame
+                        .data
+                        .chunks(frame.padded_bytes_per_row as usize)
+                        .flat_map(|row| {
+                            // Use min to safely handle edge cases where row might be shorter than expected
+                            let actual_width = row.len().min(unpadded_width);
+                            row[0..actual_width]
+                                .chunks(4)
+                                .take(frame.width as usize)
+                                .flat_map(|chunk| {
+                                    // Ensure chunk has at least 3 bytes (RGB) before accessing
+                                    if chunk.len() >= 3 {
+                                        vec![chunk[0], chunk[1], chunk[2]]
+                                    } else {
+                                        vec![]
+                                    }
+                                })
+                                .collect::<Vec<u8>>()
+                        })
+                        .collect();
+                    
                     let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
                         frame.width,
                         frame.height,
-                        frame
-                            .data
-                            .chunks(frame.padded_bytes_per_row as usize)
-                            .flat_map(|row| {
-                                row[0..(frame.width * 4) as usize]
-                                    .chunks(4)
-                                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                            })
-                            .collect::<Vec<_>>(),
+                        rgb_data,
                     )
                     .expect("Failed to create image from frame data");
 
