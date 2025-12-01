@@ -1,8 +1,7 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, MaskSegment, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
-    XY,
+    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -13,7 +12,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer,
+    MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -32,6 +31,7 @@ mod mask;
 mod project_recordings;
 mod scene;
 mod spring_mass_damper;
+mod text;
 mod zoom;
 
 pub use coord::*;
@@ -41,6 +41,7 @@ pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
 use mask::interpolate_masks;
 use scene::*;
+use text::{PreparedText, prepare_texts};
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
@@ -423,6 +424,7 @@ pub struct ProjectUniforms {
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
+    pub texts: Vec<PreparedText>,
 }
 
 #[derive(Debug, Clone)]
@@ -1474,6 +1476,19 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let texts = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_texts(
+                    XY::new(output_size.0, output_size.1),
+                    frame_time as f64,
+                    &timeline.text_segments,
+                    &project.hidden_text_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -1490,6 +1505,7 @@ impl ProjectUniforms {
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: user_motion_blur,
             masks,
+            texts,
         }
     }
 }
@@ -1555,6 +1571,7 @@ pub struct RendererLayers {
     camera: CameraLayer,
     camera_only: CameraLayer,
     mask: MaskLayer,
+    text: TextLayer,
     #[allow(unused)]
     captions: CaptionsLayer,
 }
@@ -1569,6 +1586,7 @@ impl RendererLayers {
             camera: CameraLayer::new(device),
             camera_only: CameraLayer::new(device),
             mask: MaskLayer::new(device),
+            text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
         }
     }
@@ -1631,6 +1649,13 @@ impl RendererLayers {
                     segment_frames.camera_frame.as_ref()?,
                 ))
             })(),
+        );
+
+        self.text.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            &uniforms.texts,
         );
 
         Ok(())
@@ -1707,6 +1732,11 @@ impl RendererLayers {
             for mask in &uniforms.masks {
                 self.mask.render(device, queue, session, encoder, mask);
             }
+        }
+
+        if !uniforms.texts.is_empty() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.text.render(&mut pass);
         }
     }
 }

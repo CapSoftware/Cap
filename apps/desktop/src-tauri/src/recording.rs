@@ -1706,6 +1706,7 @@ fn project_config_from_recording(
         zoom_segments,
         scene_segments: Vec::new(),
         mask_segments: Vec::new(),
+        text_segments: Vec::new(),
     });
 
     config

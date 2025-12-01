@@ -15,6 +15,7 @@ import {
 	createSignal,
 	on,
 	onCleanup,
+	untrack,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
@@ -37,6 +38,7 @@ import {
 	type ZoomSegment,
 } from "~/utils/tauri";
 import type { MaskSegment } from "./masks";
+import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
 
 export type CurrentDialog =
@@ -72,7 +74,7 @@ export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "zoom" | "scene" | "mask";
+export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -92,10 +94,11 @@ type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
 type EditorTimelineConfiguration = Omit<
 	TimelineConfiguration,
-	"sceneSegments"
+	"sceneSegments" | "maskSegments"
 > & {
 	sceneSegments?: SceneSegment[];
 	maskSegments: MaskSegment[];
+	textSegments: TextSegment[];
 };
 
 export type EditorProjectConfiguration = Omit<
@@ -105,6 +108,7 @@ export type EditorProjectConfiguration = Omit<
 	background: WithCornerStyle<ProjectConfiguration["background"]>;
 	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
 	timeline?: EditorTimelineConfiguration | null;
+	hiddenTextSegments?: number[];
 };
 
 function withCornerDefaults<
@@ -133,6 +137,12 @@ export function normalizeProject(
 							maskSegments?: MaskSegment[];
 						}
 					).maskSegments ?? [],
+				textSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							textSegments?: TextSegment[];
+						}
+					).textSegments ?? [],
 			}
 		: undefined;
 
@@ -156,6 +166,7 @@ export function serializeProjectConfiguration(
 		? {
 				...project.timeline,
 				maskSegments: project.timeline.maskSegments ?? [],
+				textSegments: project.timeline.textSegments ?? [],
 			}
 		: project.timeline;
 
@@ -317,6 +328,45 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitTextSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"textSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteTextSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"textSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			splitSceneSegment: (index: number, time: number) => {
 				setProject(
 					"timeline",
@@ -389,6 +439,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							maskSegment.end += diff(maskSegment.end);
 						}
 
+						for (const textSegment of timeline.textSegments) {
+							textSegment.start += diff(textSegment.start);
+							textSegment.end += diff(textSegment.end);
+						}
+
 						segment.timescale = timescale;
 					}),
 				);
@@ -412,7 +467,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			shouldResave = false;
 			hasPendingProjectSave = false;
 			try {
-				await commands.setProjectConfig(serializeProjectConfiguration(project));
+				const config = serializeProjectConfiguration(project);
+				await commands.setProjectConfig(config);
 			} catch (error) {
 				console.error("Failed to persist project config", error);
 			} finally {
@@ -537,6 +593,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
 		const initialMaskTrackEnabled =
 			(project.timeline?.maskSegments?.length ?? 0) > 0;
+		const initialTextTrackEnabled =
+			(project.timeline?.textSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -549,7 +607,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; indices: number[] }
 					| { type: "scene"; indices: number[] }
-					| { type: "mask"; indices: number[] },
+					| { type: "mask"; indices: number[] }
+					| { type: "text"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -591,6 +650,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					zoom: true,
 					scene: true,
 					mask: initialMaskTrackEnabled,
+					text: initialTextTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},

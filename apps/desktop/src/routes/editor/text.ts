@@ -1,0 +1,32 @@
+import type { XY } from "~/utils/tauri";
+
+export type TextSegment = {
+	start: number;
+	end: number;
+	enabled: boolean;
+	content: string;
+	center: XY<number>;
+	size: XY<number>;
+	fontFamily: string;
+	fontSize: number;
+	fontWeight: number;
+	italic: boolean;
+	color: string;
+};
+
+export const defaultTextSegment = (
+	start: number,
+	end: number,
+): TextSegment => ({
+	start,
+	end,
+	enabled: true,
+	content: "Text",
+	center: { x: 0.5, y: 0.5 },
+	size: { x: 0.35, y: 0.2 },
+	fontFamily: "sans-serif",
+	fontSize: 48,
+	fontWeight: 700,
+	italic: false,
+	color: "#ffffff",
+});

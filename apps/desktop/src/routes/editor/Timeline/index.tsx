@@ -23,6 +23,7 @@ import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
+import { type TextSegmentDragState, TextTrack } from "./TextTrack";
 import { TrackIcon, TrackManager } from "./TrackManager";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
@@ -32,6 +33,7 @@ const TIMELINE_HEADER_HEIGHT = 32;
 
 const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	clip: <IconLucideClapperboard class="size-4" />,
+	text: <IconLucideType class="size-4" />,
 	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
@@ -50,6 +52,12 @@ const trackDefinitions: TrackDefinition[] = [
 		label: "Clip",
 		icon: trackIcons.clip,
 		locked: true,
+	},
+	{
+		type: "text",
+		label: "Text",
+		icon: trackIcons.text,
+		locked: false,
 	},
 	{
 		type: "mask",
@@ -103,17 +111,30 @@ export function Timeline() {
 					? trackState().scene
 					: definition.type === "mask"
 						? trackState().mask
-						: true,
+						: definition.type === "text"
+							? trackState().text
+							: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
 	const visibleTrackCount = () =>
-		2 + (trackState().mask ? 1 : 0) + (sceneTrackVisible() ? 1 : 0);
+		2 +
+		(trackState().text ? 1 : 0) +
+		(trackState().mask ? 1 : 0) +
+		(sceneTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
 		if (type === "scene") {
 			setEditorState("timeline", "tracks", "scene", next);
+			return;
+		}
+
+		if (type === "text") {
+			setEditorState("timeline", "tracks", "text", next);
+			if (!next && editorState.timeline.selection?.type === "text") {
+				setEditorState("timeline", "selection", null);
+			}
 			return;
 		}
 
@@ -139,6 +160,7 @@ export function Timeline() {
 				zoomSegments: [],
 				sceneSegments: [],
 				maskSegments: [],
+				textSegments: [],
 			});
 			resume();
 		}
@@ -162,7 +184,9 @@ export function Timeline() {
 
 	if (
 		!project.timeline?.zoomSegments ||
-		project.timeline.zoomSegments.length < 1
+		project.timeline.zoomSegments.length < 1 ||
+		!project.timeline?.maskSegments ||
+		!project.timeline?.textSegments
 	) {
 		setProject(
 			produce((project) => {
@@ -177,30 +201,12 @@ export function Timeline() {
 					zoomSegments: [],
 					sceneSegments: [],
 					maskSegments: [],
+					textSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.maskSegments ??= [];
+				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
-			}),
-		);
-	}
-
-	if (!project.timeline?.maskSegments) {
-		setProject(
-			produce((project) => {
-				project.timeline ??= {
-					segments: [
-						{
-							start: 0,
-							end: duration(),
-							timescale: 1,
-						},
-					],
-					zoomSegments: [],
-					sceneSegments: [],
-					maskSegments: [],
-				};
-				project.timeline.maskSegments ??= [];
 			}),
 		);
 	}
@@ -208,13 +214,15 @@ export function Timeline() {
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
+	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
-			maskSegmentDragState.type !== "moving"
+			maskSegmentDragState.type !== "moving" &&
+			textSegmentDragState.type !== "moving"
 		) {
 			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
 			if (left == null) return;
@@ -251,6 +259,13 @@ export function Timeline() {
 	createEventListener(window, "keydown", (e) => {
 		const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
 
+		if (
+			document.activeElement instanceof HTMLInputElement ||
+			document.activeElement instanceof HTMLTextAreaElement
+		) {
+			return;
+		}
+
 		if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
@@ -259,6 +274,8 @@ export function Timeline() {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "mask") {
 				projectActions.deleteMaskSegments(selection.indices);
+			} else if (selection.type === "text") {
+				projectActions.deleteTextSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				// Delete all selected clips in reverse order
 				[...selection.indices]
@@ -485,6 +502,16 @@ export function Timeline() {
 									handleUpdatePlayhead={handleUpdatePlayhead}
 								/>
 							</TrackRow>
+							<Show when={trackState().text}>
+								<TrackRow icon={trackIcons.text}>
+									<TextTrack
+										onDragStateChanged={(v) => {
+											textSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
 							<Show when={trackState().mask}>
 								<TrackRow icon={trackIcons.mask}>
 									<MaskTrack

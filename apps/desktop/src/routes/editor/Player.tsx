@@ -15,6 +15,7 @@ import {
 	useEditorContext,
 } from "./context";
 import { MaskOverlay } from "./MaskOverlay";
+import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
 	MenuItem,
@@ -539,6 +540,7 @@ function PreviewCanvas() {
 									height={frameHeight()}
 								/>
 								<MaskOverlay size={size()} />
+								<TextOverlay size={size()} />
 							</div>
 						</div>
 					);
