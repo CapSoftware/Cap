@@ -209,6 +209,8 @@ impl RecordingMeta {
     }
 
     pub fn try_recover(project_path: &Path, pretty_name: String) -> Result<Self, Box<dyn Error>> {
+        info!("Attempting to recover recording at {:?}", project_path);
+
         let segments_dir = project_path.join("content").join("segments");
         let cursors_dir = project_path.join("content").join("cursors");
 
@@ -223,13 +225,22 @@ impl RecordingMeta {
             .collect();
         segment_dirs.sort_by_key(|e| e.path());
 
+        const MIN_VIDEO_SIZE: u64 = 1024;
+
+        let file_is_valid = |path: &Path, min_size: u64| -> bool {
+            path.exists()
+                && std::fs::metadata(path)
+                    .map(|m| m.len() >= min_size)
+                    .unwrap_or(false)
+        };
+
         for segment_entry in segment_dirs {
             let segment_dir = segment_entry.path();
 
             let display_path = segment_dir.join("display.mp4");
-            if !display_path.exists() {
+            if !file_is_valid(&display_path, MIN_VIDEO_SIZE) {
                 warn!(
-                    "Skipping segment {:?} - no display.mp4 found",
+                    "Skipping segment {:?} - display.mp4 missing or too small",
                     segment_dir.file_name()
                 );
                 continue;
@@ -253,7 +264,7 @@ impl RecordingMeta {
                     fps: 30,
                     start_time: None,
                 },
-                camera: camera_path.exists().then(|| VideoMeta {
+                camera: file_is_valid(&camera_path, MIN_VIDEO_SIZE).then(|| VideoMeta {
                     path: relative_base.join("camera.mp4"),
                     fps: 30,
                     start_time: None,
@@ -275,6 +286,8 @@ impl RecordingMeta {
         if segments.is_empty() {
             return Err("No valid segments found for recovery".into());
         }
+
+        let segment_count = segments.len();
 
         let mut cursor_map = HashMap::new();
         if cursors_dir.exists() {
@@ -323,6 +336,11 @@ impl RecordingMeta {
         if partial_meta_path.exists() {
             let _ = std::fs::remove_file(partial_meta_path);
         }
+
+        info!(
+            "Successfully recovered recording with {} segment(s)",
+            segment_count
+        );
 
         Ok(meta)
     }
