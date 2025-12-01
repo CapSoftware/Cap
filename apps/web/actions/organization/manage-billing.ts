@@ -2,21 +2,44 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { users } from "@cap/database/schema";
+import { organizations, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
-import { eq } from "drizzle-orm";
+import type { Organisation } from "@cap/web-domain";
+import { and, eq, isNull } from "drizzle-orm";
 import type Stripe from "stripe";
 
-export async function manageBilling() {
+export async function manageBilling(
+	organizationId?: Organisation.OrganisationId,
+) {
 	const user = await getCurrentUser();
-	let customerId = user?.stripeCustomerId;
 
 	if (!user) {
 		throw new Error("Unauthorized");
 	}
 
-	if (!user.stripeCustomerId) {
+	const targetOrgId = organizationId || user.activeOrganizationId;
+
+	let customerId: string | null = null;
+
+	if (targetOrgId) {
+		const [org] = await db()
+			.select({
+				stripeCustomerId: organizations.stripeCustomerId,
+			})
+			.from(organizations)
+			.where(eq(organizations.id, targetOrgId));
+
+		if (org?.stripeCustomerId) {
+			customerId = org.stripeCustomerId;
+		}
+	}
+
+	if (!customerId) {
+		customerId = user.stripeCustomerId || null;
+	}
+
+	if (!customerId) {
 		const existingCustomers = await stripe().customers.list({
 			email: user.email,
 			limit: 1,
@@ -48,11 +71,20 @@ export async function manageBilling() {
 			})
 			.where(eq(users.id, user.id));
 
+		if (targetOrgId) {
+			await db()
+				.update(organizations)
+				.set({
+					stripeCustomerId: customer.id,
+				})
+				.where(eq(organizations.id, targetOrgId));
+		}
+
 		customerId = customer.id;
 	}
 
 	const { url } = await stripe().billingPortal.sessions.create({
-		customer: customerId as string,
+		customer: customerId,
 		return_url: `${serverEnv().WEB_URL}/dashboard/settings/organization`,
 	});
 

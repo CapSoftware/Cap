@@ -1,26 +1,28 @@
+import type { OrganisationMemberSeatType } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 
-/**
- * Calculate organization seats information
- */
 export function calculateSeats(organization: {
-	inviteQuota?: number;
-	members?: { id: string }[];
+	paidSeats?: number;
+	members?: { id: string; seatType?: OrganisationMemberSeatType }[];
 	invites?: { id: string }[];
 }) {
-	const inviteQuota = organization?.inviteQuota ?? 1;
+	const paidSeats = organization?.paidSeats ?? 0;
 	const memberCount = organization?.members?.length ?? 0;
 	const pendingInvitesCount = organization?.invites?.length ?? 0;
-	const totalUsedSeats = memberCount + pendingInvitesCount;
-	const remainingSeats = buildEnv.NEXT_PUBLIC_IS_CAP
-		? Math.max(0, inviteQuota - totalUsedSeats)
+	const paidMemberCount =
+		organization?.members?.filter((m) => m.seatType === "paid").length ?? 0;
+	const usedPaidSeats = paidMemberCount;
+	const remainingPaidSeats = buildEnv.NEXT_PUBLIC_IS_CAP
+		? Math.max(0, paidSeats - usedPaidSeats)
 		: Number.MAX_SAFE_INTEGER;
 
 	return {
-		inviteQuota,
+		paidSeats,
 		memberCount,
 		pendingInvitesCount,
-		totalUsedSeats,
-		remainingSeats,
+		paidMemberCount,
+		usedPaidSeats,
+		remainingPaidSeats,
+		canInviteUnlimited: true,
 	};
 }

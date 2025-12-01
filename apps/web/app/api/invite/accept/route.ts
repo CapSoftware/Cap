@@ -4,6 +4,7 @@ import { nanoId } from "@cap/database/helpers";
 import {
 	organizationInvites,
 	organizationMembers,
+	organizations,
 	users,
 } from "@cap/database/schema";
 import { and, eq } from "drizzle-orm";
@@ -18,7 +19,6 @@ export async function POST(request: NextRequest) {
 	const { inviteId } = await request.json();
 
 	try {
-		// Find the invite
 		const [invite] = await db()
 			.select()
 			.from(organizationInvites)
@@ -32,19 +32,12 @@ export async function POST(request: NextRequest) {
 			return NextResponse.json({ error: "Email mismatch" }, { status: 403 });
 		}
 
-		const [organizationOwner] = await db()
+		const [org] = await db()
 			.select({
-				stripeSubscriptionId: users.stripeSubscriptionId,
+				stripeSubscriptionId: organizations.stripeSubscriptionId,
 			})
-			.from(users)
-			.where(eq(users.id, invite.invitedByUserId));
-
-		if (!organizationOwner || !organizationOwner.stripeSubscriptionId) {
-			return NextResponse.json(
-				{ error: "Organization owner not found or has no subscription" },
-				{ status: 404 },
-			);
-		}
+			.from(organizations)
+			.where(eq(organizations.id, invite.organizationId));
 
 		const [existingMembership] = await db()
 			.select({ id: organizationMembers.id })
@@ -63,6 +56,7 @@ export async function POST(request: NextRequest) {
 				organizationId: invite.organizationId,
 				userId: user.id,
 				role: invite.role,
+				seatType: "free",
 			});
 		}
 
@@ -76,7 +70,7 @@ export async function POST(request: NextRequest) {
 		await db()
 			.update(users)
 			.set({
-				thirdPartyStripeSubscriptionId: organizationOwner.stripeSubscriptionId,
+				thirdPartyStripeSubscriptionId: org?.stripeSubscriptionId || null,
 				activeOrganizationId: invite.organizationId,
 				defaultOrgId: invite.organizationId,
 				onboardingSteps,

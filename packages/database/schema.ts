@@ -199,6 +199,15 @@ export const organizations = mysqlTable(
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
 		workosConnectionId: varchar("workosConnectionId", { length: 255 }),
+		stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
+		stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+		stripeSubscriptionStatus: varchar("stripeSubscriptionStatus", {
+			length: 255,
+		}),
+		stripeSubscriptionPriceId: varchar("stripeSubscriptionPriceId", {
+			length: 255,
+		}),
+		paidSeats: int("paidSeats").notNull().default(0),
 	},
 	(table) => ({
 		ownerIdTombstoneIndex: index("owner_id_tombstone_idx").on(
@@ -210,6 +219,7 @@ export const organizations = mysqlTable(
 );
 
 export type OrganisationMemberRole = "owner" | "member";
+export type OrganisationMemberSeatType = "free" | "paid";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
@@ -221,6 +231,10 @@ export const organizationMembers = mysqlTable(
 		role: varchar("role", { length: 255 })
 			.notNull()
 			.$type<OrganisationMemberRole>(),
+		seatType: varchar("seatType", { length: 255 })
+			.notNull()
+			.default("free")
+			.$type<OrganisationMemberSeatType>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},

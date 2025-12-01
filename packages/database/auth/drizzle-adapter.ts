@@ -107,7 +107,7 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 					limit: 100,
 				});
 
-				const inviteQuota = subscriptions.data.reduce((total, sub) => {
+				const paidSeats = subscriptions.data.reduce((total, sub) => {
 					return (
 						total +
 						sub.items.data.reduce(
@@ -126,10 +126,22 @@ export function DrizzleAdapter(db: MySql2Database): Adapter {
 						...(mostRecentSubscription && {
 							stripeSubscriptionId: mostRecentSubscription.id,
 							stripeSubscriptionStatus: mostRecentSubscription.status,
-							inviteQuota: inviteQuota || 1,
+							inviteQuota: paidSeats || 1,
 						}),
 					})
 					.where(eq(users.id, row.id));
+
+				if (mostRecentSubscription && row.activeOrganizationId) {
+					await db
+						.update(organizations)
+						.set({
+							stripeCustomerId: customer.id,
+							stripeSubscriptionId: mostRecentSubscription.id,
+							stripeSubscriptionStatus: mostRecentSubscription.status,
+							paidSeats: paidSeats || 0,
+						})
+						.where(eq(organizations.id, row.activeOrganizationId));
+				}
 
 				const [updatedRow] = await db
 					.select()
