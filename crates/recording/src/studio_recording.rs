@@ -381,6 +381,7 @@ impl Pipeline {
 
 struct CursorPipeline {
     output_path: PathBuf,
+    stream_path: PathBuf,
     actor: CursorActor,
 }
 
@@ -891,6 +892,7 @@ async fn create_segment_pipeline(
                 cursor_crop_bounds,
                 display,
                 cursors_dir.to_path_buf(),
+                dir.join("cursor-stream.jsonl"),
                 prev_cursors,
                 next_cursors_id,
                 start_time,
@@ -898,6 +900,7 @@ async fn create_segment_pipeline(
 
             Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
                 output_path: dir.join("cursor.json"),
+                stream_path: dir.join("cursor-stream.jsonl"),
                 actor: cursor,
             })
         })

@@ -249,7 +249,9 @@ impl RecordingMeta {
             let camera_path = segment_dir.join("camera.mp4");
             let mic_path = segment_dir.join("audio-input.ogg");
             let system_audio_path = segment_dir.join("system_audio.ogg");
-            let cursor_path = segment_dir.join("cursor.json");
+            let cursor_json_path = segment_dir.join("cursor.json");
+            let cursor_stream_path = segment_dir.join("cursor-stream.jsonl");
+            let has_cursor_data = cursor_json_path.exists() || cursor_stream_path.exists();
 
             let relative_base = segment_dir
                 .strip_prefix(project_path)
@@ -277,9 +279,7 @@ impl RecordingMeta {
                     path: relative_base.join("system_audio.ogg"),
                     start_time: None,
                 }),
-                cursor: cursor_path
-                    .exists()
-                    .then(|| relative_base.join("cursor.json")),
+                cursor: has_cursor_data.then(|| relative_base.join("cursor.json")),
             });
         }
 
@@ -529,20 +529,22 @@ impl MultipleSegment {
     }
 
     pub fn cursor_events(&self, meta: &RecordingMeta) -> CursorEvents {
-        let Some(cursor_path) = &self.cursor else {
+        let segment_dir = self
+            .cursor
+            .as_ref()
+            .and_then(|p| meta.path(p).parent().map(|p| p.to_path_buf()))
+            .or_else(|| {
+                self.display
+                    .path
+                    .parent()
+                    .map(|p| meta.project_path.join(p.as_str()))
+            });
+
+        let Some(dir) = segment_dir else {
             return CursorEvents::default();
         };
 
-        let full_path = meta.path(cursor_path);
-
-        // Try to load the cursor data
-        let mut data = match CursorEvents::load_from_file(&full_path) {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to load cursor data: {e}");
-                return CursorEvents::default();
-            }
-        };
+        let mut data = CursorEvents::load_with_fallback(&dir);
 
         let pointer_ids = if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
             studio_meta.pointer_cursor_ids()

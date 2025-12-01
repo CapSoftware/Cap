@@ -75,6 +75,72 @@ impl CursorEvents {
         serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 
+    pub fn load_from_stream(path: &Path) -> Result<Self, String> {
+        use std::io::{BufRead, BufReader};
+
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor stream: {e}"))?;
+        let reader = BufReader::new(file);
+
+        let mut all_moves = Vec::new();
+        let mut all_clicks = Vec::new();
+
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Failed to read line: {e}"))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            #[derive(serde::Deserialize)]
+            struct Batch {
+                moves: Vec<CursorMoveEvent>,
+                clicks: Vec<CursorClickEvent>,
+            }
+
+            match serde_json::from_str::<Batch>(&line) {
+                Ok(batch) => {
+                    all_moves.extend(batch.moves);
+                    all_clicks.extend(batch.clicks);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse cursor batch: {}", e);
+                }
+            }
+        }
+
+        Ok(Self {
+            moves: all_moves,
+            clicks: all_clicks,
+        })
+    }
+
+    pub fn load_with_fallback(dir: &Path) -> Self {
+        let stream_path = dir.join("cursor-stream.jsonl");
+        let json_path = dir.join("cursor.json");
+
+        if stream_path.exists() {
+            match Self::load_from_stream(&stream_path) {
+                Ok(events) if !events.moves.is_empty() || !events.clicks.is_empty() => {
+                    return events;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to load cursor stream: {}", e);
+                }
+            }
+        }
+
+        if json_path.exists() {
+            match Self::load_from_file(&json_path) {
+                Ok(events) => return events,
+                Err(e) => {
+                    tracing::warn!("Failed to load cursor json: {}", e);
+                }
+            }
+        }
+
+        Self::default()
+    }
+
     pub fn stabilize_short_lived_cursor_shapes(
         &mut self,
         pointer_ids: Option<&HashSet<String>>,
