@@ -46,6 +46,7 @@ import {
 	type CameraShape,
 	type ClipOffsets,
 	type CursorAnimationStyle,
+	type CursorType,
 	commands,
 	type SceneSegment,
 	type StereoMode,
@@ -237,6 +238,19 @@ type CursorPresetValues = {
 };
 
 const DEFAULT_CURSOR_MOTION_BLUR = 0.5;
+
+const CURSOR_TYPE_OPTIONS = [
+	{
+		value: "auto" as CursorType,
+		label: "Auto",
+		description: "Uses the actual cursor from your recording.",
+	},
+	{
+		value: "circle" as CursorType,
+		label: "Circle",
+		description: "A touch-style circle cursor like mobile simulators.",
+	},
+];
 
 const CURSOR_ANIMATION_STYLE_OPTIONS = [
 	{
@@ -580,6 +594,35 @@ export function ConfigSidebar() {
 						}
 					/>
 					<Show when={!project.cursor.hide}>
+						<Field name="Cursor Type" icon={<IconCapCursor />}>
+							<RadioGroup
+								class="flex flex-col gap-2"
+								value={project.cursor.type}
+								onChange={(value) =>
+									setProject("cursor", "type", value as CursorType)
+								}
+							>
+								{CURSOR_TYPE_OPTIONS.map((option) => (
+									<RadioGroup.Item
+										value={option.value}
+										class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+									>
+										<RadioGroup.ItemInput class="sr-only" />
+										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
+											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+											<div class="flex flex-col text-left">
+												<span class="text-sm font-medium text-gray-12">
+													{option.label}
+												</span>
+												<span class="text-xs text-gray-11">
+													{option.description}
+												</span>
+											</div>
+										</RadioGroup.ItemLabel>
+									</RadioGroup.Item>
+								))}
+							</RadioGroup>
+						</Field>
 						<Field name="Size" icon={<IconCapEnlarge />}>
 							<Slider
 								value={[project.cursor.size]}

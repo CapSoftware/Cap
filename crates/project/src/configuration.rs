@@ -394,10 +394,11 @@ impl Default for AudioConfiguration {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CursorType {
     #[default]
+    Auto,
     Pointer,
     Circle,
 }
