@@ -270,8 +270,10 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
-    // Compute the signed distance to the rounded rect in pixel space so we can
-    // blend edges smoothly instead of hard-clipping them (which produced jaggies).
+    if uniforms.rounding_px < 0.5 {
+        return current_color;
+    }
+
     let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
     let half_size = uniforms.target_size * 0.5;
     let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.rounding_type);
