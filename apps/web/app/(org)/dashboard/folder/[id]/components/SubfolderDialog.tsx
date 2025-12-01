@@ -181,9 +181,10 @@ export const SubfolderDialog: React.FC<Props> = ({
 										folderRef.play("folder-close");
 									}}
 								>
-									{riveFile && option.component(
-										riveFile as RiveFile,
-										folderRefs.current[option.value],
+									{riveFile &&
+										option.component(
+											riveFile as RiveFile,
+											folderRefs.current[option.value],
 										)}
 									{!riveFile && (
 										<div className="w-[50px] h-[50px] rounded bg-gray-4 animate-pulse" />

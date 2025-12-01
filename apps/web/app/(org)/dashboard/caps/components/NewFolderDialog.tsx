@@ -83,8 +83,8 @@ export const NewFolderDialog: React.FC<Props> = ({
 		src: "/rive/dashboard.riv",
 	});
 
-	useEffect(() => { 
-			if (!open) {
+	useEffect(() => {
+		if (!open) {
 			setSelectedColor(null);
 			// Stop all animations when dialog closes
 			Object.values(folderRefs.current).forEach((ref) => {
@@ -176,10 +176,11 @@ export const NewFolderDialog: React.FC<Props> = ({
 										folderRef.play("folder-close");
 									}}
 								>
-									{riveFile && option.component(
-										riveFile as RiveFile,
-										folderRefs.current[option.value],
-									)}
+									{riveFile &&
+										option.component(
+											riveFile as RiveFile,
+											folderRefs.current[option.value],
+										)}
 									{!riveFile && (
 										<div className="w-[50px] h-[50px] bg-gray-4 rounded animate-pulse" />
 									)}
