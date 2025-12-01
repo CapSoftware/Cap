@@ -5,7 +5,9 @@
 			"Bash(pnpm lint:*)",
 			"Bash(pnpm build:*)",
 			"Bash(cargo check:*)",
-			"Bash(cargo fmt:*)"
+			"Bash(cargo fmt:*)",
+			"Bash(pnpm format:*)",
+			"Bash(pnpm exec biome check:*)"
 		],
 		"deny": [],
 		"ask": []

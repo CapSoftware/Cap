@@ -1473,6 +1473,17 @@ async fn set_project_config(
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(editor_instance))]
+async fn update_project_config_in_memory(
+    editor_instance: WindowEditorInstance,
+    config: ProjectConfiguration,
+) -> Result<(), String> {
+    editor_instance.project_config.0.send(config).ok();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
 async fn generate_zoom_segments_from_clicks(
     editor_instance: WindowEditorInstance,
 ) -> Result<Vec<ZoomSegment>, String> {
@@ -2301,6 +2312,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,

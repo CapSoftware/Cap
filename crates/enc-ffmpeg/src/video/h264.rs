@@ -81,9 +81,6 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
-            .ok_or(H264EncoderError::CodecNotFound)?;
-
         let (output_width, output_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
@@ -95,6 +92,48 @@ impl H264EncoderBuilder {
             });
         }
 
+        let candidates = get_codec_and_options(&input_config, self.preset);
+        if candidates.is_empty() {
+            return Err(H264EncoderError::CodecNotFound);
+        }
+
+        let mut last_error = None;
+
+        for (codec, encoder_options) in candidates {
+            let codec_name = codec.name().to_string();
+
+            match Self::build_with_codec(
+                codec,
+                encoder_options,
+                &input_config,
+                output,
+                output_width,
+                output_height,
+                self.bpp,
+            ) {
+                Ok(encoder) => {
+                    debug!("Using encoder {}", codec_name);
+                    return Ok(encoder);
+                }
+                Err(err) => {
+                    debug!("Encoder {} init failed: {:?}", codec_name, err);
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(H264EncoderError::CodecNotFound))
+    }
+
+    fn build_with_codec(
+        codec: Codec,
+        encoder_options: Dictionary<'static>,
+        input_config: &VideoInfo,
+        output: &mut format::context::Output,
+        output_width: u32,
+        output_height: u32,
+        bpp: f32,
+    ) -> Result<H264Encoder, H264EncoderError> {
         let encoder_supports_input_format = codec
             .video()
             .ok()
@@ -181,12 +220,11 @@ impl H264EncoderBuilder {
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
-        // let target_bitrate = compression.bitrate();
         let bitrate = get_bitrate(
             output_width,
             output_height,
             input_config.frame_rate.0 as f32 / input_config.frame_rate.1 as f32,
-            self.bpp,
+            bpp,
         );
 
         encoder.set_bit_rate(bitrate);
@@ -270,53 +308,78 @@ impl H264Encoder {
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
-) -> Option<(Codec, Dictionary<'_>)> {
-    let encoder_name = {
-        // if cfg!(target_os = "macos") {
-        //     "libx264"
-        //     // looks terrible rn :(
-        //     // "h264_videotoolbox"
-        // } else {
-        //     "libx264"
-        // }
+) -> Vec<(Codec, Dictionary<'static>)> {
+    let keyframe_interval_secs = 2;
+    let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
+    let keyframe_interval_str = keyframe_interval.to_string();
 
-        "libx264"
+    let encoder_priority: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "h264_videotoolbox",
+            "h264_qsv",
+            "h264_nvenc",
+            "h264_amf",
+            "h264_mf",
+            "libx264",
+        ]
+    } else {
+        &["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libx264"]
     };
 
-    if let Some(codec) = encoder::find_by_name(encoder_name) {
+    let mut encoders = Vec::new();
+
+    for encoder_name in encoder_priority {
+        let Some(codec) = encoder::find_by_name(encoder_name) else {
+            continue;
+        };
+
         let mut options = Dictionary::new();
 
-        if encoder_name == "h264_videotoolbox" {
-            options.set("realtime", "true");
-        } else if encoder_name == "libx264" {
-            let keyframe_interval_secs = 2;
-            let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
-            let keyframe_interval_str = keyframe_interval.to_string();
-
-            options.set(
-                "preset",
-                match preset {
-                    H264Preset::Slow => "slow",
-                    H264Preset::Medium => "medium",
-                    H264Preset::Ultrafast => "ultrafast",
-                },
-            );
-            if let H264Preset::Ultrafast = preset {
-                options.set("tune", "zerolatency");
+        match *encoder_name {
+            "h264_videotoolbox" => {
+                options.set("realtime", "true");
             }
-            options.set("vsync", "1");
-            options.set("g", &keyframe_interval_str);
-            options.set("keyint_min", &keyframe_interval_str);
-        } else if encoder_name == "h264_mf" {
-            options.set("hw_encoding", "true");
-            options.set("scenario", "4");
-            options.set("quality", "1");
+            "h264_nvenc" => {
+                options.set("preset", "fast");
+                options.set("g", &keyframe_interval_str);
+            }
+            "h264_qsv" => {
+                options.set("preset", "fast");
+                options.set("g", &keyframe_interval_str);
+            }
+            "h264_amf" => {
+                options.set("quality", "speed");
+                options.set("g", &keyframe_interval_str);
+            }
+            "h264_mf" => {
+                options.set("hw_encoding", "true");
+                options.set("scenario", "4");
+                options.set("quality", "1");
+                options.set("g", &keyframe_interval_str);
+            }
+            "libx264" => {
+                options.set(
+                    "preset",
+                    match preset {
+                        H264Preset::Slow => "slow",
+                        H264Preset::Medium => "medium",
+                        H264Preset::Ultrafast => "ultrafast",
+                    },
+                );
+                if let H264Preset::Ultrafast = preset {
+                    options.set("tune", "zerolatency");
+                }
+                options.set("vsync", "1");
+                options.set("g", &keyframe_interval_str);
+                options.set("keyint_min", &keyframe_interval_str);
+            }
+            _ => {}
         }
 
-        return Some((codec, options));
+        encoders.push((codec, options));
     }
 
-    None
+    encoders
 }
 
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {

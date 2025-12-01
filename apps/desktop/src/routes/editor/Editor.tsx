@@ -30,12 +30,13 @@ import {
 import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { events } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
 	FPS,
+	serializeProjectConfiguration,
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
@@ -124,7 +125,7 @@ function Inner() {
 
 		const handleMove = (moveEvent: MouseEvent) => {
 			const delta = moveEvent.clientY - startY;
-			setStoredTimelineHeight(clampTimelineHeight(startHeight - delta));
+			setStoredTimelineHeight(clampTimelineHeight(startHeight + delta));
 		};
 
 		const handleUp = () => {
@@ -179,15 +180,23 @@ function Inner() {
 			() => [frameNumberToRender(), previewResolutionBase()],
 			([number]) => {
 				if (editorState.playing) return;
-				renderFrame(number);
+				renderFrame(number as number);
 			},
 		),
 	);
 
+	const updateConfigAndRender = throttle(async (time: number) => {
+		const config = serializeProjectConfiguration(project);
+		await commands.updateProjectConfigInMemory(config);
+		renderFrame(time);
+	}, 1000 / FPS);
+
 	createEffect(
 		on(
 			() => trackDeep(project),
-			() => renderFrame(editorState.playbackTime),
+			() => {
+				updateConfigAndRender(editorState.playbackTime);
+			},
 		),
 	);
 
@@ -230,7 +239,7 @@ function Inner() {
 						</div>
 					</div>
 					<div
-						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden"
+						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
 						style={{ height: `${timelineHeight()}px` }}
 					>
 						<div class="h-full">
