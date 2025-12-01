@@ -4,6 +4,8 @@ export * from "./Database.ts";
 export * from "./Errors.ts";
 export * from "./Errors.ts";
 export * as Folder from "./Folder.ts";
+export * as GoogleDrive from "./GoogleDrive.ts";
+export { GoogleDriveError } from "./GoogleDrive.ts";
 export * as Http from "./Http/index.ts";
 export * as ImageUpload from "./ImageUpload.ts";
 export * as Loom from "./Loom.ts";

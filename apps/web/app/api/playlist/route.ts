@@ -1,3 +1,6 @@
+import { db } from "@cap/database";
+import { decrypt } from "@cap/database/crypto";
+import { googleDriveConfigs } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { provideOptionalAuth, S3Buckets, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
@@ -9,6 +12,7 @@ import {
 	HttpApiGroup,
 	HttpServerResponse,
 } from "@effect/platform";
+import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
@@ -16,6 +20,8 @@ import {
 	generateM3U8Playlist,
 	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
+
+const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 export const dynamic = "force-dynamic";
 
@@ -76,11 +82,82 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
+const getGoogleDriveVideoUrl = async (video: {
+	googleDriveConfigId: string;
+	googleDriveFileId: string;
+}): Promise<string | null> => {
+	try {
+		const [config] = await db()
+			.select()
+			.from(googleDriveConfigs)
+			.where(eq(googleDriveConfigs.id, video.googleDriveConfigId as any));
+
+		if (!config) {
+			return null;
+		}
+
+		let accessToken = await decrypt(config.accessToken);
+		const refreshToken = await decrypt(config.refreshToken);
+
+		const now = Math.floor(Date.now() / 1000);
+		if (config.expiresAt <= now) {
+			const clientId = process.env.GOOGLE_CLIENT_ID;
+			const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+			if (!clientId || !clientSecret) {
+				return null;
+			}
+
+			const tokenResponse = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+				method: "POST",
+				headers: { "Content-Type": "application/x-www-form-urlencoded" },
+				body: new URLSearchParams({
+					client_id: clientId,
+					client_secret: clientSecret,
+					refresh_token: refreshToken,
+					grant_type: "refresh_token",
+				}),
+			});
+
+			if (!tokenResponse.ok) {
+				return null;
+			}
+
+			const tokens = (await tokenResponse.json()) as {
+				access_token: string;
+				expires_in: number;
+			};
+
+			accessToken = tokens.access_token;
+		}
+
+		return `https://www.googleapis.com/drive/v3/files/${video.googleDriveFileId}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
+	} catch (error) {
+		console.error("Error getting Google Drive video URL:", error);
+		return null;
+	}
+};
+
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
 ) =>
 	Effect.gen(function* () {
+		const googleDriveConfigId = Option.getOrNull(video.googleDriveConfigId);
+		const googleDriveFileId = Option.getOrNull(video.googleDriveFileId);
+		if (googleDriveConfigId && googleDriveFileId) {
+			const googleDriveUrl = yield* Effect.promise(() =>
+				getGoogleDriveVideoUrl({
+					...video,
+					googleDriveConfigId,
+					googleDriveFileId,
+				}),
+			);
+			if (googleDriveUrl) {
+				return HttpServerResponse.redirect(googleDriveUrl);
+			}
+		}
+
 		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 		const isMp4Source =
 			video.source.type === "desktopMP4" || video.source.type === "webMP4";

@@ -392,6 +392,8 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 						source: { type: "webMP4" },
 						bucketId,
+						googleDriveConfigId: Option.none(),
+						googleDriveFileId: Option.none(),
 						folderId,
 						width,
 						height,

@@ -118,6 +118,119 @@ const protectedContract = c.router(
 			}),
 			responses: { 200: z.object({ success: z.literal(true) }) },
 		},
+		getGoogleDriveConfig: {
+			method: "GET",
+			path: "/desktop/google-drive/config/get",
+			responses: {
+				200: z.object({
+					config: z
+						.object({
+							id: z.string(),
+							email: z.string().nullable(),
+							folderId: z.string().nullable(),
+							folderName: z.string().nullable(),
+							connected: z.boolean(),
+						})
+						.nullable(),
+				}),
+			},
+		},
+		getGoogleDriveAuthUrl: {
+			method: "GET",
+			path: "/desktop/google-drive/config/auth-url",
+			responses: {
+				200: z.object({ authUrl: z.string() }),
+			},
+		},
+		exchangeGoogleDriveCode: {
+			method: "POST",
+			path: "/desktop/google-drive/config/exchange",
+			body: z.object({ code: z.string() }),
+			responses: {
+				200: z.object({
+					success: z.literal(true),
+					config: z.object({
+						id: z.string(),
+						email: z.string().nullable(),
+						connected: z.boolean(),
+					}),
+				}),
+			},
+		},
+		setGoogleDriveFolder: {
+			method: "POST",
+			path: "/desktop/google-drive/config/set-folder",
+			body: z.object({
+				folderId: z.string().nullable(),
+				folderName: z.string().nullable(),
+			}),
+			responses: { 200: z.object({ success: z.literal(true) }) },
+		},
+		getGoogleDriveFolders: {
+			method: "GET",
+			path: "/desktop/google-drive/config/folders",
+			responses: {
+				200: z.object({
+					folders: z.array(z.object({ id: z.string(), name: z.string() })),
+				}),
+			},
+		},
+		createGoogleDriveFolder: {
+			method: "POST",
+			path: "/desktop/google-drive/config/create-folder",
+			body: z.object({ name: z.string() }),
+			responses: {
+				200: z.object({
+					folder: z.object({ id: z.string(), name: z.string() }),
+				}),
+			},
+		},
+		deleteGoogleDriveConfig: {
+			method: "DELETE",
+			path: "/desktop/google-drive/config/delete",
+			responses: { 200: z.object({ success: z.literal(true) }) },
+		},
+		initiateGoogleDriveUpload: {
+			method: "POST",
+			path: "/desktop/google-drive/config/initiate-upload",
+			body: z.object({
+				videoId: z.string(),
+				fileName: z.string(),
+				mimeType: z.string().optional(),
+			}),
+			responses: {
+				200: z.object({
+					uploadUrl: z.string(),
+					accessToken: z.string(),
+					expiresAt: z.number(),
+				}),
+			},
+		},
+		completeGoogleDriveUpload: {
+			method: "POST",
+			path: "/desktop/google-drive/config/complete-upload",
+			body: z.object({
+				videoId: z.string(),
+				fileId: z.string(),
+			}),
+			responses: {
+				200: z.object({
+					success: z.literal(true),
+					fileId: z.string(),
+				}),
+			},
+		},
+		getGoogleDriveAccessToken: {
+			method: "GET",
+			path: "/desktop/google-drive/config/access-token",
+			responses: {
+				200: z.object({
+					accessToken: z.string(),
+					expiresAt: z.number(),
+					folderId: z.string().nullable(),
+				}),
+			},
+		},
 		getProSubscribeURL: {
 			method: "POST",
 			path: "/desktop/subscribe",

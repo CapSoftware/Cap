@@ -128,6 +128,8 @@ export default async function EmbedVideoPage(
 					effectiveCreatedAt: videos.effectiveCreatedAt,
 					updatedAt: videos.updatedAt,
 					bucket: videos.bucket,
+					googleDriveConfigId: videos.googleDriveConfigId,
+					googleDriveFileId: videos.googleDriveFileId,
 					metadata: videos.metadata,
 					public: videos.public,
 					videoStartTime: videos.videoStartTime,

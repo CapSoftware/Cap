@@ -2,6 +2,10 @@ export * from "./Auth.ts";
 export * from "./Aws.ts";
 export * from "./Database.ts";
 export { Folders } from "./Folders/index.ts";
+export {
+	GoogleDriveConfigsRepo,
+	GoogleDriveService,
+} from "./GoogleDrive/index.ts";
 export { HttpLive } from "./Http/Live.ts";
 export { ImageUploads } from "./ImageUploads/index.ts";
 export * from "./Loom/index.ts";
