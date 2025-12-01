@@ -86,7 +86,6 @@ export const NewFolderDialog: React.FC<Props> = ({
 	useEffect(() => {
 		if (!open) {
 			setSelectedColor(null);
-			// Stop all animations when dialog closes
 			Object.values(folderRefs.current).forEach((ref) => {
 				ref.current?.stop();
 			});

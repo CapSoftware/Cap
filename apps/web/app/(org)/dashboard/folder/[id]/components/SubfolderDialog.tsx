@@ -91,7 +91,6 @@ export const SubfolderDialog: React.FC<Props> = ({
 		if (!open) {
 			setSelectedColor(null);
 			setFolderName("");
-			// Stop any running animations when the dialog closes
 			Object.values(folderRefs.current).forEach((ref) => {
 				ref.current?.stop();
 			});
