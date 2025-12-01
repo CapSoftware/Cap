@@ -2,34 +2,6 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderSession, RenderingError};
 
-// pub struct FramePipelineState<'a> {
-//     pub constants: &'a RenderVideoConstants,
-//     pub uniforms: &'a ProjectUniforms,
-//     pub texture: &'a wgpu::Texture,
-//     pub texture_view: wgpu::TextureView,
-// }
-
-// impl<'a> FramePipelineState<'a> {
-//     pub fn new(
-//         constants: &'a RenderVideoConstants,
-//         uniforms: &'a ProjectUniforms,
-//         texture: &'a wgpu::Texture,
-//     ) -> Self {
-//         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-//         Self {
-//             constants,
-//             uniforms,
-//             texture,
-//             texture_view,
-//         }
-//     }
-// }
-
-// pub struct FramePipelineEncoder {
-//     pub encoder: wgpu::CommandEncoder,
-// }
-
 #[derive(Clone)]
 pub struct RenderedFrame {
     pub data: Vec<u8>,
@@ -38,36 +10,29 @@ pub struct RenderedFrame {
     pub padded_bytes_per_row: u32,
 }
 
-// impl FramePipelineEncoder {
-//     pub fn new(state: &FramePipelineState) -> Self {
-//         Self {
-//             encoder: state.constants.device.create_command_encoder(
-//                 &(wgpu::CommandEncoderDescriptor {
-//                     label: Some("Render Encoder"),
-//                 }),
-//             ),
-//         }
-//     }
-// }
-
 pub fn padded_bytes_per_row(output_size: (u32, u32)) -> u32 {
-    // Calculate the aligned bytes per row
     let align = COPY_BYTES_PER_ROW_ALIGNMENT;
     let unpadded_bytes_per_row = output_size.0 * 4;
     let padding = (align - (unpadded_bytes_per_row % align)) % align;
     let padded_bytes_per_row = unpadded_bytes_per_row + padding;
 
-    // Ensure the padded_bytes_per_row is a multiple of 4 (32 bits)
     (padded_bytes_per_row + 3) & !3
 }
 
-pub async fn finish_encoder(
+pub struct PendingReadback {
+    pub width: u32,
+    pub height: u32,
+    pub padded_bytes_per_row: u32,
+    pub receiver: tokio::sync::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
+pub fn submit_frame_for_readback(
     session: &mut RenderSession,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
-) -> Result<RenderedFrame, RenderingError> {
+) -> PendingReadback {
     let padded_bytes_per_row = padded_bytes_per_row(uniforms.output_size);
 
     queue.submit(std::iter::once(encoder.finish()));
@@ -82,13 +47,13 @@ pub async fn finish_encoder(
     session.ensure_readback_buffers(device, output_buffer_size);
     let output_buffer = session.current_readback_buffer();
 
-    let mut encoder = device.create_command_encoder(
+    let mut copy_encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Copy Encoder"),
         }),
     );
 
-    encoder.copy_texture_to_buffer(
+    copy_encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: session.current_texture(),
             mip_level: 0,
@@ -106,7 +71,7 @@ pub async fn finish_encoder(
         output_texture_size,
     );
 
-    queue.submit(std::iter::once(encoder.finish()));
+    queue.submit(std::iter::once(copy_encoder.finish()));
 
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -114,23 +79,51 @@ pub async fn finish_encoder(
         let _ = tx.send(result);
     });
 
+    session.swap_readback_buffers();
+
+    PendingReadback {
+        width: uniforms.output_size.0,
+        height: uniforms.output_size.1,
+        padded_bytes_per_row,
+        receiver: rx,
+    }
+}
+
+pub async fn collect_readback(
+    session: &RenderSession,
+    device: &wgpu::Device,
+    pending: PendingReadback,
+) -> Result<RenderedFrame, RenderingError> {
     device.poll(wgpu::PollType::Wait)?;
 
-    rx.await
+    pending
+        .receiver
+        .await
         .map_err(|_| RenderingError::BufferMapWaitingFailed)??;
 
+    let output_buffer = session.previous_readback_buffer();
+    let buffer_slice = output_buffer.slice(..);
     let data = buffer_slice.get_mapped_range();
     let data_vec = data.to_vec();
 
     drop(data);
     output_buffer.unmap();
 
-    session.swap_readback_buffers();
-
     Ok(RenderedFrame {
         data: data_vec,
-        padded_bytes_per_row,
-        width: uniforms.output_size.0,
-        height: uniforms.output_size.1,
+        padded_bytes_per_row: pending.padded_bytes_per_row,
+        width: pending.width,
+        height: pending.height,
     })
+}
+
+pub async fn finish_encoder(
+    session: &mut RenderSession,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    uniforms: &ProjectUniforms,
+    encoder: wgpu::CommandEncoder,
+) -> Result<RenderedFrame, RenderingError> {
+    let pending = submit_frame_for_readback(session, device, queue, uniforms, encoder);
+    collect_readback(session, device, pending).await
 }

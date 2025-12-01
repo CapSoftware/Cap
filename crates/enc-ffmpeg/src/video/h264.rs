@@ -267,53 +267,137 @@ impl H264Encoder {
     }
 }
 
+fn get_hw_encoder_names() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &["h264_videotoolbox"]
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        &["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"]
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        &["h264_nvenc", "h264_vaapi", "h264_qsv"]
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        &[]
+    }
+}
+
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
 ) -> Option<(Codec, Dictionary<'_>)> {
-    let encoder_name = {
-        // if cfg!(target_os = "macos") {
-        //     "libx264"
-        //     // looks terrible rn :(
-        //     // "h264_videotoolbox"
-        // } else {
-        //     "libx264"
-        // }
+    let try_hw_first = matches!(preset, H264Preset::Ultrafast);
 
-        "libx264"
+    let hw_encoders = get_hw_encoder_names();
+    let sw_encoder = "libx264";
+
+    let encoder_names: Vec<&str> = if try_hw_first {
+        hw_encoders
+            .iter()
+            .copied()
+            .chain(std::iter::once(sw_encoder))
+            .collect()
+    } else {
+        vec![sw_encoder]
     };
 
-    if let Some(codec) = encoder::find_by_name(encoder_name) {
-        let mut options = Dictionary::new();
+    for encoder_name in encoder_names {
+        if let Some(codec) = encoder::find_by_name(encoder_name) {
+            let mut options = Dictionary::new();
 
-        if encoder_name == "h264_videotoolbox" {
-            options.set("realtime", "true");
-        } else if encoder_name == "libx264" {
-            let keyframe_interval_secs = 2;
-            let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
-            let keyframe_interval_str = keyframe_interval.to_string();
+            match encoder_name {
+                "h264_videotoolbox" => {
+                    options.set("realtime", "false");
+                    options.set("allow_sw", "0");
+                    options.set("prio_speed", "1");
+                    options.set("profile", "high");
+                    options.set("level", "5.1");
+                    debug!("Using VideoToolbox hardware encoder");
+                    return Some((codec, options));
+                }
+                "h264_nvenc" => {
+                    options.set("preset", "p1");
+                    options.set("tune", "ll");
+                    options.set("rc", "vbr");
+                    options.set("multipass", "disabled");
+                    options.set("bf", "0");
+                    debug!("Using NVIDIA NVENC hardware encoder");
+                    return Some((codec, options));
+                }
+                "h264_amf" => {
+                    options.set("usage", "ultralowlatency");
+                    options.set("quality", "speed");
+                    options.set("rc", "vbr_latency");
+                    options.set("enforce_hrd", "0");
+                    debug!("Using AMD AMF hardware encoder");
+                    return Some((codec, options));
+                }
+                "h264_qsv" => {
+                    options.set("preset", "veryfast");
+                    options.set("look_ahead", "0");
+                    options.set("async_depth", "4");
+                    debug!("Using Intel QuickSync hardware encoder");
+                    return Some((codec, options));
+                }
+                "h264_vaapi" => {
+                    options.set("rc_mode", "VBR");
+                    options.set("async_depth", "4");
+                    debug!("Using VA-API hardware encoder (Linux)");
+                    return Some((codec, options));
+                }
+                "h264_mf" => {
+                    options.set("hw_encoding", "true");
+                    options.set("scenario", "4");
+                    options.set("quality", "1");
+                    debug!("Using MediaFoundation hardware encoder");
+                    return Some((codec, options));
+                }
+                "libx264" => {
+                    let keyframe_interval_secs = 2;
+                    let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
+                    let keyframe_interval_str = keyframe_interval.to_string();
+                    let thread_count = thread::available_parallelism()
+                        .map(|v| v.get())
+                        .unwrap_or(4);
 
-            options.set(
-                "preset",
-                match preset {
-                    H264Preset::Slow => "slow",
-                    H264Preset::Medium => "medium",
-                    H264Preset::Ultrafast => "ultrafast",
-                },
-            );
-            if let H264Preset::Ultrafast = preset {
-                options.set("tune", "zerolatency");
+                    options.set(
+                        "preset",
+                        match preset {
+                            H264Preset::Slow => "slow",
+                            H264Preset::Medium => "medium",
+                            H264Preset::Ultrafast => "ultrafast",
+                        },
+                    );
+                    if let H264Preset::Ultrafast = preset {
+                        options.set("tune", "zerolatency");
+                        options.set("bf", "0");
+                        options.set("refs", "1");
+                        options.set("rc-lookahead", "0");
+                        options.set("aq-mode", "0");
+                        options.set("sc_threshold", "0");
+                    }
+                    options.set("vsync", "1");
+                    options.set("g", &keyframe_interval_str);
+                    options.set("keyint_min", &keyframe_interval_str);
+                    options.set("threads", &thread_count.to_string());
+                    options.set("sliced-threads", "1");
+
+                    debug!(
+                        "Using libx264 software encoder with {} threads",
+                        thread_count
+                    );
+                    return Some((codec, options));
+                }
+                _ => continue,
             }
-            options.set("vsync", "1");
-            options.set("g", &keyframe_interval_str);
-            options.set("keyint_min", &keyframe_interval_str);
-        } else if encoder_name == "h264_mf" {
-            options.set("hw_encoding", "true");
-            options.set("scenario", "4");
-            options.set("quality", "1");
         }
-
-        return Some((codec, options));
     }
 
     None
