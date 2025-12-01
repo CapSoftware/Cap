@@ -25,7 +25,6 @@ import { removeOrganizationMember } from "@/actions/organization/remove-member";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
-import { calculateSeats } from "@/utils/organization";
 
 interface MembersCardProps {
 	isOwner: boolean;
@@ -44,7 +43,6 @@ export const MembersCard = ({
 }: MembersCardProps) => {
 	const router = useRouter();
 	const { activeOrganization } = useDashboardContext();
-	const { remainingSeats } = calculateSeats(activeOrganization || {});
 
 	const handleDeleteInvite = async (inviteId: string) => {
 		if (!isOwner) {
@@ -173,10 +171,6 @@ export const MembersCard = ({
 							onClick={() => {
 								if (!isOwner) {
 									showOwnerToast();
-								} else if (remainingSeats <= 0) {
-									toast.error(
-										"Invite limit reached, please purchase more seats",
-									);
 								} else {
 									setIsInviteDialogOpen(true);
 								}

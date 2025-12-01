@@ -11,7 +11,8 @@ import type Stripe from "stripe";
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
-	const { priceId, quantity, isOnBoarding } = await request.json();
+	const { priceId, quantity, isOnBoarding, organizationId } =
+		await request.json();
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -63,6 +64,8 @@ export async function POST(request: NextRequest) {
 			customerId = customer.id;
 		}
 
+		const targetOrgId = organizationId || user.activeOrganizationId;
+
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
@@ -78,6 +81,7 @@ export async function POST(request: NextRequest) {
 				platform: "web",
 				dubCustomerId: user.id,
 				isOnBoarding: isOnBoarding ? "true" : "false",
+				organizationId: targetOrgId || "",
 			},
 		});
 

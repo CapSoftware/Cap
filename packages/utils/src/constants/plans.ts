@@ -11,6 +11,15 @@ export const STRIPE_PLAN_IDS = {
 	},
 };
 
+export const isActiveSubscription = (status?: string | null): boolean => {
+	return (
+		status === "active" ||
+		status === "trialing" ||
+		status === "complete" ||
+		status === "paid"
+	);
+};
+
 export const userIsPro = (
 	user?: {
 		stripeSubscriptionStatus?: string | null;
@@ -23,16 +32,40 @@ export const userIsPro = (
 
 	const { stripeSubscriptionStatus, thirdPartyStripeSubscriptionId } = user;
 
-	// Check for third-party subscription first
 	if (thirdPartyStripeSubscriptionId) {
 		return true;
 	}
 
-	// Then check regular subscription status
+	return isActiveSubscription(stripeSubscriptionStatus);
+};
+
+export const orgIsPro = (
+	org?: {
+		stripeSubscriptionStatus?: string | null;
+		paidSeats?: number | null;
+	} | null,
+) => {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
+
+	if (!org) return false;
+
+	return isActiveSubscription(org.stripeSubscriptionStatus);
+};
+
+export const memberHasPaidSeat = (
+	member?: {
+		seatType?: string | null;
+	} | null,
+	org?: {
+		stripeSubscriptionStatus?: string | null;
+	} | null,
+) => {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
+
+	if (!member || !org) return false;
+
 	return (
-		stripeSubscriptionStatus === "active" ||
-		stripeSubscriptionStatus === "trialing" ||
-		stripeSubscriptionStatus === "complete" ||
-		stripeSubscriptionStatus === "paid"
+		member.seatType === "paid" &&
+		isActiveSubscription(org.stripeSubscriptionStatus)
 	);
 };

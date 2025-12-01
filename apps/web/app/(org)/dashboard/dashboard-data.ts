@@ -27,8 +27,8 @@ export type Organization = {
 		> & { image?: ImageUpload.ImageUrl | null };
 	})[];
 	invites: (typeof organizationInvites.$inferSelect)[];
-	inviteQuota: number;
-	totalInvites: number;
+	paidSeats: number;
+	totalMembers: number;
 };
 
 export type OrganizationSettings = NonNullable<
@@ -54,12 +54,12 @@ export async function getDashboardData(user: typeof userSelectProps) {
 				settings: organizations.settings,
 				member: organizationMembers,
 				iconUrl: organizations.iconUrl,
+				paidSeats: organizations.paidSeats,
 				user: {
 					id: users.id,
 					name: users.name,
 					lastName: users.lastName,
 					email: users.email,
-					inviteQuota: users.inviteQuota,
 					image: users.image,
 					defaultOrgId: users.defaultOrgId,
 				},
@@ -297,43 +297,16 @@ export async function getDashboardData(user: typeof userSelectProps) {
 								.where(eq(organizationMembers.organizationId, organization.id)),
 						);
 
-						const owner = yield* db.use((db) =>
+						const totalMembersResult = yield* db.use((db) =>
 							db
 								.select({
-									inviteQuota: users.inviteQuota,
+									value: count(organizationMembers.id),
 								})
-								.from(users)
-								.where(eq(users.id, organization.ownerId))
-								.then((result) => result[0]),
+								.from(organizationMembers)
+								.where(eq(organizationMembers.organizationId, organization.id)),
 						);
 
-						const totalInvitesResult = yield* db.use((db) =>
-							db
-								.select({
-									value: sql<number>`
-                ${count(organizationMembers.id)} + ${count(
-									organizationInvites.id,
-								)}
-              `,
-								})
-								.from(organizations)
-								.leftJoin(
-									organizationMembers,
-									eq(organizations.id, organizationMembers.organizationId),
-								)
-								.leftJoin(
-									organizationInvites,
-									eq(organizations.id, organizationInvites.organizationId),
-								)
-								.where(
-									and(
-										eq(organizations.ownerId, organization.ownerId),
-										isNull(organizations.tombstoneAt),
-									),
-								),
-						);
-
-						const totalInvites = totalInvitesResult[0]?.value || 0;
+						const totalMembers = totalMembersResult[0]?.value || 0;
 
 						return {
 							organization: {
@@ -361,8 +334,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 							invites: organizationInvitesData.filter(
 								(invite) => invite.organizationId === organization.id,
 							),
-							inviteQuota: owner?.inviteQuota || 1,
-							totalInvites,
+							paidSeats: organization.paidSeats || 0,
+							totalMembers,
 						};
 					}),
 				),

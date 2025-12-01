@@ -1,10 +1,10 @@
 import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
-import { users } from "@cap/database/schema";
+import { organizations, users } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { Organisation, User } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { PostHog } from "posthog-node";
 import type Stripe from "stripe";
@@ -43,6 +43,29 @@ async function createGuestUser(
 	}
 
 	return newUser;
+}
+
+async function findTargetOrganization(
+	userId: User.UserId,
+	orgId?: string,
+): Promise<typeof organizations.$inferSelect | null> {
+	if (orgId) {
+		const [org] = await db()
+			.select()
+			.from(organizations)
+			.where(eq(organizations.id, orgId as Organisation.OrganisationId));
+		if (org) return org;
+	}
+
+	const userOrgs = await db()
+		.select()
+		.from(organizations)
+		.where(
+			and(eq(organizations.ownerId, userId), isNull(organizations.tombstoneAt)),
+		)
+		.limit(1);
+
+	return userOrgs[0] ?? null;
 }
 
 async function findUserWithRetry(
@@ -227,20 +250,40 @@ export const POST = async (req: Request) => {
 					status: subscription.status,
 				});
 
-				const inviteQuota = subscription.items.data.reduce(
+				const paidSeats = subscription.items.data.reduce(
 					(total, item) => total + (item.quantity || 1),
 					0,
 				);
 				const isOnBoarding = session.metadata?.isOnBoarding === "true";
+				const orgId = session.metadata?.organizationId;
 
-				console.log("Updating user in database with:", {
-					subscriptionId: session.subscription,
-					status: subscription.status,
-					customerId: customer.id,
-					inviteQuota,
-				});
 				console.log("Session metadata:", session.metadata);
 				console.log("Is onboarding:", isOnBoarding);
+				console.log("Organization ID:", orgId);
+
+				const targetOrg = await findTargetOrganization(dbUser.id, orgId);
+
+				if (targetOrg) {
+					console.log("Updating organization billing:", {
+						orgId: targetOrg.id,
+						subscriptionId: session.subscription,
+						status: subscription.status,
+						customerId: customer.id,
+						paidSeats,
+					});
+
+					await db()
+						.update(organizations)
+						.set({
+							stripeSubscriptionId: session.subscription as string,
+							stripeSubscriptionStatus: subscription.status,
+							stripeCustomerId: customer.id,
+							paidSeats: paidSeats,
+						})
+						.where(eq(organizations.id, targetOrg.id));
+
+					console.log("Successfully updated organization billing");
+				}
 
 				await db()
 					.update(users)
@@ -248,7 +291,7 @@ export const POST = async (req: Request) => {
 						stripeSubscriptionId: session.subscription as string,
 						stripeSubscriptionStatus: subscription.status,
 						stripeCustomerId: customer.id,
-						inviteQuota: inviteQuota,
+						inviteQuota: paidSeats,
 						onboarding_completed_at: isOnBoarding ? new Date() : undefined,
 					})
 					.where(eq(users.id, dbUser.id));
@@ -269,13 +312,14 @@ export const POST = async (req: Request) => {
 						properties: {
 							subscription_id: subscription.id,
 							subscription_status: subscription.status,
-							invite_quota: inviteQuota,
+							paid_seats: paidSeats,
 							price_id: subscription.items.data[0]?.price.id,
-							quantity: inviteQuota,
+							quantity: paidSeats,
 							is_onboarding: session.metadata?.isOnBoarding === "true",
 							platform: session.metadata?.platform === "web",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
+							organization_id: targetOrg?.id,
 						},
 					});
 
@@ -341,16 +385,16 @@ export const POST = async (req: Request) => {
 					name: dbUser.name,
 				});
 
-				const subscriptions = await stripe().subscriptions.list({
+				const subscriptionsList = await stripe().subscriptions.list({
 					customer: customer.id,
 					status: "active",
 				});
 
 				console.log("Retrieved all active subscriptions:", {
-					count: subscriptions.data.length,
+					count: subscriptionsList.data.length,
 				});
 
-				const inviteQuota = subscriptions.data.reduce((total, sub) => {
+				const paidSeats = subscriptionsList.data.reduce((total, sub) => {
 					return (
 						total +
 						sub.items.data.reduce(
@@ -360,12 +404,46 @@ export const POST = async (req: Request) => {
 					);
 				}, 0);
 
-				console.log("Updating user in database with:", {
-					subscriptionId: subscription.id,
-					status: subscription.status,
-					customerId: customer.id,
-					inviteQuota,
-				});
+				const [orgWithSubscription] = await db()
+					.select()
+					.from(organizations)
+					.where(eq(organizations.stripeSubscriptionId, subscription.id))
+					.limit(1);
+
+				if (orgWithSubscription) {
+					console.log("Updating organization billing:", {
+						orgId: orgWithSubscription.id,
+						subscriptionId: subscription.id,
+						status: subscription.status,
+						paidSeats,
+					});
+
+					await db()
+						.update(organizations)
+						.set({
+							stripeSubscriptionId: subscription.id,
+							stripeSubscriptionStatus: subscription.status,
+							stripeCustomerId: customer.id,
+							paidSeats: paidSeats,
+						})
+						.where(eq(organizations.id, orgWithSubscription.id));
+
+					console.log("Successfully updated organization billing");
+				} else {
+					const targetOrg = await findTargetOrganization(dbUser.id);
+					if (targetOrg) {
+						await db()
+							.update(organizations)
+							.set({
+								stripeSubscriptionId: subscription.id,
+								stripeSubscriptionStatus: subscription.status,
+								stripeCustomerId: customer.id,
+								paidSeats: paidSeats,
+							})
+							.where(eq(organizations.id, targetOrg.id));
+						console.log("Updated fallback organization:", targetOrg.id);
+					}
+				}
 
 				await db()
 					.update(users)
@@ -373,13 +451,13 @@ export const POST = async (req: Request) => {
 						stripeSubscriptionId: subscription.id,
 						stripeSubscriptionStatus: subscription.status,
 						stripeCustomerId: customer.id,
-						inviteQuota: inviteQuota,
+						inviteQuota: paidSeats,
 					})
 					.where(eq(users.id, dbUser.id));
 
 				console.log(
-					"Successfully updated user in database with new invite quota:",
-					inviteQuota,
+					"Successfully updated user in database with new paid seats:",
+					paidSeats,
 				);
 			}
 
@@ -431,6 +509,28 @@ export const POST = async (req: Request) => {
 				if (!userResult || userResult.length === 0) {
 					console.log("No user found in database");
 					return new Response("No user found", { status: 400 });
+				}
+
+				const [orgWithSubscription] = await db()
+					.select()
+					.from(organizations)
+					.where(eq(organizations.stripeSubscriptionId, subscription.id))
+					.limit(1);
+
+				if (orgWithSubscription) {
+					await db()
+						.update(organizations)
+						.set({
+							stripeSubscriptionId: subscription.id,
+							stripeSubscriptionStatus: subscription.status,
+							paidSeats: 0,
+						})
+						.where(eq(organizations.id, orgWithSubscription.id));
+
+					console.log("Organization billing reset", {
+						orgId: orgWithSubscription.id,
+						paidSeats: 0,
+					});
 				}
 
 				await db()
