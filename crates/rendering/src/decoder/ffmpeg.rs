@@ -11,7 +11,10 @@ use tokio::sync::oneshot;
 
 use crate::DecodedFrame;
 
-use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
+use super::{
+    FRAME_CACHE_SIZE, PREFETCH_LOOKAHEAD, VideoDecoderMessage, frame_converter::FrameConverter,
+    pts_to_frame,
+};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -97,10 +100,44 @@ impl FfmpegDecoder {
 
             while let Ok(r) = rx.recv() {
                 match r {
+                    VideoDecoderMessage::PrefetchFrames(start_time_secs, prefetch_fps) => {
+                        let start_frame = (start_time_secs * prefetch_fps as f32).floor() as u32;
+                        let end_frame = start_frame + PREFETCH_LOOKAHEAD as u32;
+
+                        for target_frame in start_frame..end_frame {
+                            if cache.contains_key(&target_frame) {
+                                continue;
+                            }
+
+                            for frame in &mut frames {
+                                let Ok(frame) = frame else { continue };
+
+                                let current_frame =
+                                    pts_to_frame(frame.pts().unwrap() - start_time, time_base, fps);
+
+                                if current_frame >= start_frame && current_frame <= end_frame {
+                                    if cache.len() >= FRAME_CACHE_SIZE {
+                                        if let Some(&oldest) = cache.keys().next() {
+                                            cache.remove(&oldest);
+                                        }
+                                    }
+                                    cache.insert(
+                                        current_frame,
+                                        CachedFrame::Raw {
+                                            frame,
+                                            number: current_frame,
+                                        },
+                                    );
+                                }
+
+                                if current_frame >= end_frame {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
-                        // sender.send(black_frame.clone()).ok();
-                        // continue;
 
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&mut converter);
@@ -162,8 +199,6 @@ impl FfmpegDecoder {
                                 number: current_frame,
                             };
 
-                            // Handles frame skips.
-                            // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                             if let Some(most_recent_prev_frame) =
                                 cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
                                 && let Some(sender) = sender.take()
@@ -179,7 +214,6 @@ impl FfmpegDecoder {
                                     && let Some(sender) = sender.take()
                                 {
                                     let data = cache_frame.process(&mut converter);
-                                    // info!("sending frame {requested_frame}");
 
                                     (sender)(data);
 
@@ -212,23 +246,13 @@ impl FfmpegDecoder {
                             };
 
                             if current_frame > requested_frame && sender.is_some() {
-                                // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                                 let last_sent_frame = last_sent_frame.borrow().clone();
 
                                 if let Some((sender, last_sent_frame)) =
                                     last_sent_frame.and_then(|l| Some((sender.take()?, l)))
                                 {
-                                    // info!(
-                                    //     "sending previous frame {} for {requested_frame}",
-                                    //     last_sent_frame.0
-                                    // );
-
                                     (sender)(last_sent_frame);
                                 } else if let Some(sender) = sender.take() {
-                                    // info!(
-                                    //     "sending forward frame {current_frame} for {requested_frame}",
-                                    // );
-
                                     (sender)(cache_frame.process(&mut converter));
                                 }
                             }
@@ -240,15 +264,9 @@ impl FfmpegDecoder {
                             }
                         }
 
-                        // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                         let last_sent_frame = last_sent_frame.borrow().clone();
                         if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame)
                         {
-                            // info!(
-                            //     "sending hail mary frame {} for {requested_frame}",
-                            //     last_sent_frame.0
-                            // );
-
                             (sender)(last_sent_frame);
                         }
                     }

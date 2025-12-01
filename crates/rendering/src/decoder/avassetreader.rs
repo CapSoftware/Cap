@@ -16,7 +16,7 @@ use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 use crate::DecodedFrame;
 
 use super::frame_converter::{FrameConverter, copy_rgba_plane};
-use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
+use super::{FRAME_CACHE_SIZE, PREFETCH_LOOKAHEAD, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -227,6 +227,44 @@ impl AVAssetReaderDecoder {
 
         while let Ok(r) = rx.recv() {
             match r {
+                VideoDecoderMessage::PrefetchFrames(start_time_secs, prefetch_fps) => {
+                    let start_frame = (start_time_secs * prefetch_fps as f32).floor() as u32;
+                    let end_frame = start_frame + PREFETCH_LOOKAHEAD as u32;
+
+                    for frame in &mut frames {
+                        let Ok(frame) = frame else { continue };
+
+                        let current_frame = pts_to_frame(
+                            frame.pts().value,
+                            Rational::new(1, frame.pts().scale),
+                            fps,
+                        );
+
+                        if let Some(image_buf) = frame.image_buf() {
+                            if current_frame >= start_frame
+                                && current_frame <= end_frame
+                                && !cache.contains_key(&current_frame)
+                            {
+                                if cache.len() >= FRAME_CACHE_SIZE {
+                                    if let Some(&oldest) = cache.keys().next() {
+                                        cache.remove(&oldest);
+                                    }
+                                }
+                                cache.insert(
+                                    current_frame,
+                                    CachedFrame::Raw {
+                                        image_buf: image_buf.retained(),
+                                        number: current_frame,
+                                    },
+                                );
+                            }
+                        }
+
+                        if current_frame >= end_frame {
+                            break;
+                        }
+                    }
+                }
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
@@ -297,8 +335,6 @@ impl AVAssetReaderDecoder {
 
                         this.is_done = false;
 
-                        // Handles frame skips.
-                        // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
                             cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
                             && let Some(sender) = sender.take()
@@ -314,7 +350,6 @@ impl AVAssetReaderDecoder {
                                 && let Some(sender) = sender.take()
                             {
                                 let data = cache_frame.process(&mut processor);
-                                // info!("sending frame {requested_frame}");
 
                                 (sender)(data);
 
@@ -344,23 +379,13 @@ impl AVAssetReaderDecoder {
                         }
 
                         if current_frame > requested_frame && sender.is_some() {
-                            // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                             let last_sent_frame = last_sent_frame.borrow().clone();
 
                             if let Some((sender, last_sent_frame)) =
                                 last_sent_frame.and_then(|l| Some((sender.take()?, l)))
                             {
-                                // info!(
-                                //     "sending previous frame {} for {requested_frame}",
-                                //     last_sent_frame.0
-                                // );
-
                                 (sender)(last_sent_frame);
                             } else if let Some(sender) = sender.take() {
-                                // info!(
-                                //     "sending forward frame {current_frame} for {requested_frame}",
-                                // );
-
                                 (sender)(cache_frame.process(&mut processor));
                             }
                         }
@@ -374,14 +399,8 @@ impl AVAssetReaderDecoder {
 
                     this.is_done = true;
 
-                    // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                     let last_sent_frame = last_sent_frame.borrow().clone();
                     if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame) {
-                        // info!(
-                        //     "sending hail mary frame {} for {requested_frame}",
-                        //     last_sent_frame.0
-                        // );
-
                         (sender)(last_sent_frame);
                     }
                 }

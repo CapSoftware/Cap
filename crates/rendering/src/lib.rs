@@ -1,8 +1,7 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, MaskSegment, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
-    XY,
+    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -20,7 +19,6 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
-use tracing::error;
 
 mod composite_frame;
 mod coord;
@@ -36,7 +34,9 @@ mod zoom;
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
-pub use frame_pipeline::RenderedFrame;
+pub use frame_pipeline::{
+    PendingReadback, RenderedFrame, collect_readback, submit_frame_for_readback,
+};
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
 use mask::interpolate_masks;
@@ -229,6 +229,13 @@ pub struct RenderSegment {
     pub decoders: RecordingSegmentDecoders,
 }
 
+const PIPELINE_DEPTH: usize = 3;
+
+struct PipelinedFrame {
+    pending: PendingReadback,
+    frame_number: u32,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
@@ -250,74 +257,127 @@ pub async fn render_video_to_channel(
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
     let mut frame_number = 0;
-
-    let mut frame_renderer = FrameRenderer::new(constants);
-
     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let mut session: Option<RenderSession> = None;
+
+    let mut pending_frames: std::collections::VecDeque<PipelinedFrame> =
+        std::collections::VecDeque::with_capacity(PIPELINE_DEPTH);
 
     loop {
-        if frame_number >= total_frames {
+        while pending_frames.len() < PIPELINE_DEPTH && frame_number < total_frames {
+            let Some((segment_time, segment)) =
+                project.get_segment_time(frame_number as f64 / fps as f64)
+            else {
+                break;
+            };
+
+            let clip_config = project
+                .clips
+                .iter()
+                .find(|v| v.index == segment.recording_clip);
+
+            let current_frame_number = frame_number;
+            frame_number += 1;
+
+            let render_segment = &render_segments[segment.recording_clip as usize];
+
+            if let Some(segment_frames) = render_segment
+                .decoders
+                .get_frames(
+                    segment_time as f32,
+                    !project.camera.hide,
+                    clip_config.map(|v| v.offsets).unwrap_or_default(),
+                )
+                .await
+            {
+                let uniforms = ProjectUniforms::new(
+                    constants,
+                    project,
+                    current_frame_number,
+                    fps,
+                    resolution_base,
+                    &render_segment.cursor,
+                    &segment_frames,
+                );
+
+                if uniforms.output_size.0 == 0 || uniforms.output_size.1 == 0 {
+                    continue;
+                }
+
+                let render_session = session.get_or_insert_with(|| {
+                    RenderSession::new(
+                        &constants.device,
+                        uniforms.output_size.0,
+                        uniforms.output_size.1,
+                    )
+                });
+
+                render_session.update_texture_size(
+                    &constants.device,
+                    uniforms.output_size.0,
+                    uniforms.output_size.1,
+                );
+
+                layers
+                    .prepare(
+                        constants,
+                        &uniforms,
+                        &segment_frames,
+                        &render_segment.cursor,
+                    )
+                    .await?;
+
+                let mut encoder = constants.device.create_command_encoder(
+                    &(wgpu::CommandEncoderDescriptor {
+                        label: Some("Render Encoder"),
+                    }),
+                );
+
+                layers.render(
+                    &constants.device,
+                    &constants.queue,
+                    &mut encoder,
+                    render_session,
+                    &uniforms,
+                );
+
+                let pending = submit_frame_for_readback(
+                    render_session,
+                    &constants.device,
+                    &constants.queue,
+                    &uniforms,
+                    encoder,
+                );
+
+                pending_frames.push_back(PipelinedFrame {
+                    pending,
+                    frame_number: current_frame_number,
+                });
+            }
+        }
+
+        if pending_frames.is_empty() {
             break;
         }
 
-        let Some((segment_time, segment)) =
-            project.get_segment_time(frame_number as f64 / fps as f64)
-        else {
-            break;
-        };
+        let pipelined = pending_frames.pop_front().unwrap();
 
-        let clip_config = project
-            .clips
-            .iter()
-            .find(|v| v.index == segment.recording_clip);
+        if let Some(render_session) = &session {
+            let frame =
+                collect_readback(render_session, &constants.device, pipelined.pending).await?;
 
-        let frame_number = {
-            let prev = frame_number;
-            std::mem::replace(&mut frame_number, prev + 1)
-        };
-
-        let render_segment = &render_segments[segment.recording_clip as usize];
-
-        if let Some(segment_frames) = render_segment
-            .decoders
-            .get_frames(
-                segment_time as f32,
-                !project.camera.hide,
-                clip_config.map(|v| v.offsets).unwrap_or_default(),
-            )
-            .await
-        {
-            let uniforms = ProjectUniforms::new(
-                constants,
-                project,
-                frame_number,
-                fps,
-                resolution_base,
-                &render_segment.cursor,
-                &segment_frames,
-            );
-
-            let frame = frame_renderer
-                .render(
-                    segment_frames,
-                    uniforms,
-                    &render_segment.cursor,
-                    &mut layers,
-                )
-                .await?;
-
-            if frame.width == 0 || frame.height == 0 {
-                continue;
+            if frame.width > 0 && frame.height > 0 {
+                sender.send((frame, pipelined.frame_number)).await?;
             }
-
-            sender.send((frame, frame_number)).await?;
         }
     }
 
     let total_time = start_time.elapsed();
     println!(
-        "Render complete. Processed {frame_number} frames in {:?} seconds",
-        total_time.as_secs_f32()
+        "Render complete. Processed {} frames in {:.2?} ({:.1} fps)",
+        frame_number,
+        total_time,
+        frame_number as f32 / total_time.as_secs_f32()
     );
 
     Ok(())
@@ -1842,6 +1902,20 @@ impl RenderSession {
         } else {
             self.readback_buffers
                 .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        }
+    }
+
+    pub(crate) fn previous_readback_buffer(&self) -> &wgpu::Buffer {
+        if self.current_readback_is_left {
+            self.readback_buffers
+                .1
+                .as_ref()
+                .expect("readback buffer should be initialised")
+        } else {
+            self.readback_buffers
+                .0
                 .as_ref()
                 .expect("readback buffer should be initialised")
         }
