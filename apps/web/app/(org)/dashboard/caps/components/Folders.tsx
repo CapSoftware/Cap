@@ -29,11 +29,19 @@ export const NormalFolder = React.forwardRef<
 		() => ({
 			play: (animationName: string) => {
 				if (!rive) return;
-				rive.play(animationName);
+				try {
+					rive.play(animationName);
+				} catch (error) {
+					console.warn("Failed to play folder animation", error);
+				}
 			},
 			stop: () => {
 				if (!rive) return;
-				rive.stop();
+				try {
+					rive.stop();
+				} catch (error) {
+					console.warn("Failed to stop folder animation", error);
+				}
 			},
 		}),
 		[rive],
@@ -66,11 +74,19 @@ export const BlueFolder = React.forwardRef<
 		() => ({
 			play: (animationName: string) => {
 				if (!rive) return;
-				rive.play(animationName);
+				try {
+					rive.play(animationName);
+				} catch (error) {
+					console.warn("Failed to play folder animation", error);
+				}
 			},
 			stop: () => {
 				if (!rive) return;
-				rive.stop();
+				try {
+					rive.stop();
+				} catch (error) {
+					console.warn("Failed to stop folder animation", error);
+				}
 			},
 		}),
 		[rive],
@@ -98,11 +114,19 @@ export const RedFolder = React.forwardRef<
 		() => ({
 			play: (animationName: string) => {
 				if (!rive) return;
-				rive.play(animationName);
+				try {
+					rive.play(animationName);
+				} catch (error) {
+					console.warn("Failed to play folder animation", error);
+				}
 			},
 			stop: () => {
 				if (!rive) return;
-				rive.stop();
+				try {
+					rive.stop();
+				} catch (error) {
+					console.warn("Failed to stop folder animation", error);
+				}
 			},
 		}),
 		[rive],
@@ -130,11 +154,19 @@ export const YellowFolder = React.forwardRef<
 		() => ({
 			play: (animationName: string) => {
 				if (!rive) return;
-				rive.play(animationName);
+				try {
+					rive.play(animationName);
+				} catch (error) {
+					console.warn("Failed to play folder animation", error);
+				}
 			},
 			stop: () => {
 				if (!rive) return;
-				rive.stop();
+				try {
+					rive.stop();
+				} catch (error) {
+					console.warn("Failed to stop folder animation", error);
+				}
 			},
 		}),
 		[rive],
@@ -177,11 +209,19 @@ export const AllFolders = React.forwardRef<FolderHandle, AllFoldersProps>(
 			() => ({
 				play: (animationName: string) => {
 					if (!rive) return;
-					rive.play(animationName);
+					try {
+						rive.play(animationName);
+					} catch (error) {
+						console.warn("Failed to play folder animation", error);
+					}
 				},
 				stop: () => {
 					if (!rive) return;
-					rive.stop();
+					try {
+						rive.stop();
+					} catch (error) {
+						console.warn("Failed to stop folder animation", error);
+					}
 				},
 			}),
 			[rive],

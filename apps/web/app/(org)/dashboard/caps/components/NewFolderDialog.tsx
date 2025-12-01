@@ -83,8 +83,14 @@ export const NewFolderDialog: React.FC<Props> = ({
 		src: "/rive/dashboard.riv",
 	});
 
-	useEffect(() => {
-		if (!open) setSelectedColor(null);
+	useEffect(() => { 
+			if (!open) {
+			setSelectedColor(null);
+			// Stop all animations when dialog closes
+			Object.values(folderRefs.current).forEach((ref) => {
+				ref.current?.stop();
+			});
+		}
 	}, [open]);
 
 	const folderRefs = useRef(
@@ -156,21 +162,26 @@ export const NewFolderDialog: React.FC<Props> = ({
 										setSelectedColor(option.value);
 									}}
 									onMouseEnter={() => {
+										if (!riveFile) return;
 										const folderRef = folderRefs.current[option.value]?.current;
 										if (!folderRef) return;
 										folderRef.stop();
 										folderRef.play("folder-open");
 									}}
 									onMouseLeave={() => {
+										if (!riveFile) return;
 										const folderRef = folderRefs.current[option.value]?.current;
 										if (!folderRef) return;
 										folderRef.stop();
 										folderRef.play("folder-close");
 									}}
 								>
-									{option.component(
+									{riveFile && option.component(
 										riveFile as RiveFile,
 										folderRefs.current[option.value],
+									)}
+									{!riveFile && (
+										<div className="w-[50px] h-[50px] bg-gray-4 rounded animate-pulse" />
 									)}
 									<p className="text-xs text-gray-10">{option.label}</p>
 								</div>
