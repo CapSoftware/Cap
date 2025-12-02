@@ -1,12 +1,22 @@
 import { Button } from "@cap/ui-solid";
 import { createWritableMemo } from "@solid-primitives/memo";
-import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+import {
+	isPermissionGranted,
+	requestPermission,
+} from "@tauri-apps/plugin-notification";
 import { type OsType, type } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
 import { CheckMenuItem, Menu, MenuItem } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
-import { createEffect, createMemo, createResource, For, type ParentProps, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	For,
+	type ParentProps,
+	Show,
+} from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
@@ -77,7 +87,9 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	defaultWorkspaceId: undefined,
 });
 
-const deriveInitialSettings = (store: GeneralSettingsStore | null): ExtendedGeneralSettingsStore => {
+const deriveInitialSettings = (
+	store: GeneralSettingsStore | null,
+): ExtendedGeneralSettingsStore => {
 	const defaults = createDefaultGeneralSettings();
 	if (!store) return defaults;
 
@@ -129,8 +141,12 @@ function AppearanceSection(props: {
 
 	const previews = createMemo(() => {
 		return {
-			system: props.newRecordingFlow ? themePreviewAuto : themePreviewLegacyAuto,
-			light: props.newRecordingFlow ? themePreviewLight : themePreviewLegacyLight,
+			system: props.newRecordingFlow
+				? themePreviewAuto
+				: themePreviewLegacyAuto,
+			light: props.newRecordingFlow
+				? themePreviewLight
+				: themePreviewLegacyLight,
 			dark: props.newRecordingFlow ? themePreviewDark : themePreviewLegacyDark,
 		};
 	});
@@ -139,9 +155,14 @@ function AppearanceSection(props: {
 		<div class="flex flex-col gap-4">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">General</h2>
-				<p class="text-sm text-gray-10">General settings of your Cap application.</p>
+				<p class="text-sm text-gray-10">
+					General settings of your Cap application.
+				</p>
 			</div>
-			<div class="flex justify-start items-center text-gray-12" onContextMenu={(e) => e.preventDefault()}>
+			<div
+				class="flex justify-start items-center text-gray-12"
+				onContextMenu={(e) => e.preventDefault()}
+			>
 				<div class="flex flex-col gap-3">
 					<p class="text-sm text-gray-12">Appearance</p>
 					<div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
@@ -157,9 +178,11 @@ function AppearanceSection(props: {
 										class={cx(
 											`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
 											{
-												"ring-2 ring-gray-12 ring-offset-2": props.currentTheme === theme.id,
-												"group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5": props.currentTheme !== theme.id,
-											}
+												"ring-2 ring-gray-12 ring-offset-2":
+													props.currentTheme === theme.id,
+												"group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
+													props.currentTheme !== theme.id,
+											},
 										)}
 										aria-label={`Select theme: ${theme.name}`}
 									>
@@ -195,7 +218,9 @@ function AppearanceSection(props: {
 }
 
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
-	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(deriveInitialSettings(props.initialStore));
+	const [settings, setSettings] = createStore<ExtendedGeneralSettingsStore>(
+		deriveInitialSettings(props.initialStore),
+	);
 	const auth = authStore.createQuery();
 	const { setOptions: setRecordingOptions } = createOptionsQuery();
 
@@ -211,13 +236,13 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		},
 		{
 			initialValue: [] as CaptureWindow[],
-		}
+		},
 	);
 
 	const handleChange = async <K extends keyof typeof settings>(
 		key: K,
 		value: (typeof settings)[K],
-		extra?: Partial<GeneralSettingsStore>
+		extra?: Partial<GeneralSettingsStore>,
 	) => {
 		console.log(`Handling settings change for ${key}: ${value}`);
 
@@ -232,7 +257,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	const ostype: OsType = type();
 	const excludedWindows = createMemo(() => settings.excludedWindows ?? []);
-	const recordingWindowVariant = () => (settings.enableNewRecordingFlow === false ? "old" : "new");
+	const recordingWindowVariant = () =>
+		settings.enableNewRecordingFlow === false ? "old" : "new";
 
 	const updateRecordingWindowVariant = (variant: "new" | "old") => {
 		const shouldUseNew = variant === "new";
@@ -242,11 +268,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		});
 	};
 
-	const matchesExclusion = (exclusion: WindowExclusion, window: CaptureWindow) => {
-		const bundleMatch = exclusion.bundleIdentifier ? window.bundle_identifier === exclusion.bundleIdentifier : false;
+	const matchesExclusion = (
+		exclusion: WindowExclusion,
+		window: CaptureWindow,
+	) => {
+		const bundleMatch = exclusion.bundleIdentifier
+			? window.bundle_identifier === exclusion.bundleIdentifier
+			: false;
 		if (bundleMatch) return true;
 
-		const ownerMatch = exclusion.ownerName ? window.owner_name === exclusion.ownerName : false;
+		const ownerMatch = exclusion.ownerName
+			? window.owner_name === exclusion.ownerName
+			: false;
 
 		if (exclusion.ownerName && exclusion.windowTitle) {
 			return ownerMatch && window.name === exclusion.windowTitle;
@@ -345,7 +378,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	// Helper function to render select dropdown for recording behaviors
 	const SelectSettingItem = <
-		T extends MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | PostDeletionBehaviour | number
+		T extends
+			| MainWindowRecordingStartBehaviour
+			| PostStudioRecordingBehaviour
+			| PostDeletionBehaviour
+			| number,
 	>(props: {
 		label: string;
 		description: string;
@@ -365,7 +402,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 								text: option.text,
 								checked: currentValue === option.value,
 								action: () => props.onChange(option.value),
-							})
+							}),
 						);
 						const menu = await Menu.new({
 							items: await Promise.all(items),
@@ -376,7 +413,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				>
 					{(() => {
 						const currentValue = props.value;
-						const option = props.options.find((opt) => opt.value === currentValue);
+						const option = props.options.find(
+							(opt) => opt.value === currentValue,
+						);
 						return option ? option.text : currentValue;
 					})()}
 					<IconCapChevronDown class="size-4" />
@@ -392,7 +431,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		if (!settings.defaultWorkspaceId && workspacesList.length > 0) {
 			return workspacesList[0];
 		}
-		return workspacesList.find((w) => w.id === settings.defaultWorkspaceId) ?? workspacesList[0];
+		return (
+			workspacesList.find((w) => w.id === settings.defaultWorkspaceId) ??
+			workspacesList[0]
+		);
 	});
 
 	const WorkspaceSelectSettingItem = () => {
@@ -412,10 +454,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							workspacesList.map((workspace) =>
 								CheckMenuItem.new({
 									text: workspace.name,
-									action: () => handleChange("defaultWorkspaceId", workspace.id),
+									action: () =>
+										handleChange("defaultWorkspaceId", workspace.id),
 									checked: selectedWorkspace()?.id === workspace.id,
-								})
-							)
+								}),
+							),
 						);
 						const menu = await Menu.new({ items });
 						await menu.popup();
@@ -423,9 +466,15 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 					}}
 				>
 					<Show when={selectedWorkspace()?.avatarUrl}>
-						<img src={selectedWorkspace()?.avatarUrl ?? ""} alt="" class="size-4 rounded-full object-cover" />
+						<img
+							src={selectedWorkspace()?.avatarUrl ?? ""}
+							alt=""
+							class="size-4 rounded-full object-cover"
+						/>
 					</Show>
-					<span class="text-white">{selectedWorkspace()?.name ?? "Select workspace"}</span>
+					<span class="text-white">
+						{selectedWorkspace()?.name ?? "Select workspace"}
+					</span>
 					<DoubleArrowSwitcher class="size-3 text-gray-11" />
 				</button>
 			</SettingItem>
@@ -445,7 +494,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 				) : (
 					<button
 						class={`flex flex-row items-center justify-center h-8 px-2 rounded-[8px] text-white border border-white/5 ${
-							signIn.isPending ? "bg-white/[0.03] hover:bg-white/5" : "bg-blue-9 hover:bg-blue-10"
+							signIn.isPending
+								? "bg-white/[0.03] hover:bg-white/5"
+								: "bg-blue-9 hover:bg-blue-10"
 						}`}
 						onClick={() => {
 							if (signIn.isPending) {
@@ -545,7 +596,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						label="Video Resolution"
 						description=""
 						value={settings.instantModeMaxResolution ?? 1920}
-						onChange={(value) => handleChange("instantModeMaxResolution", value)}
+						onChange={(value) =>
+							handleChange("instantModeMaxResolution", value)
+						}
 						options={INSTANT_MODE_RESOLUTION_OPTIONS.map((option) => ({
 							text: option.label,
 							value: option.value,
@@ -629,10 +682,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	);
 }
 
-function SettingGroup(props: ParentProps<{ title: string; titleStyling?: string }>) {
+function SettingGroup(
+	props: ParentProps<{ title: string; titleStyling?: string }>,
+) {
 	return (
 		<div>
-			{props.title && <h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>{props.title}</h3>}
+			{props.title && (
+				<h3 class={cx("mb-3 text-sm text-gray-12 w-fit", props.titleStyling)}>
+					{props.title}
+				</h3>
+			)}
 			<div
 				class="px-4 rounded-xl border divide-y divide-gray-3 bg-white/5"
 				style={{
@@ -645,7 +704,10 @@ function SettingGroup(props: ParentProps<{ title: string; titleStyling?: string 
 	);
 }
 
-function ServerURLSetting(props: { value: string; onChange: (v: string) => void }) {
+function ServerURLSetting(props: {
+	value: string;
+	onChange: (v: string) => void;
+}) {
 	const [value, setValue] = createWritableMemo(() => props.value);
 
 	return (
@@ -657,7 +719,11 @@ function ServerURLSetting(props: { value: string; onChange: (v: string) => void 
 					description="This setting should only be changed if you are self hosting your own instance of Cap Web."
 				>
 					<div class="flex flex-col gap-2 items-end">
-						<Input class="bg-gray-3" value={value()} onInput={(e) => setValue(e.currentTarget.value)} />
+						<Input
+							class="bg-gray-3"
+							value={value()}
+							onInput={(e) => setValue(e.currentTarget.value)}
+						/>
 						<Button
 							size="sm"
 							class="mt-2"
@@ -719,8 +785,8 @@ function ExcludedWindowsCard(props: {
 						action: () => {
 							void props.onAdd(window);
 						},
-					})
-				)
+					}),
+				),
 			);
 
 			const menu = await Menu.new({ items });
@@ -750,11 +816,14 @@ function ExcludedWindowsCard(props: {
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
 				<div class="flex flex-col gap-1">
 					<p class="text-sm text-white">Excluded Windows</p>
-					<p class="text-xs text-white/80">Choose which windows Inflight hides in your recording</p>
+					<p class="text-xs text-white/80">
+						Choose which windows Inflight hides in your recording
+					</p>
 					<Show when={props.isWindows}>
 						<p class="text-xs text-white/80">
-							<span class="font-medium text-gray-11">Note:</span> Only Inflight related windows can be excluded on
-							Windows due to technical limitations.
+							<span class="font-medium text-gray-11">Note:</span> Only Inflight
+							related windows can be excluded on Windows due to technical
+							limitations.
 						</p>
 					</Show>
 				</div>
@@ -766,7 +835,10 @@ function ExcludedWindowsCard(props: {
 							void props.onReset();
 						}}
 						class="flex items-center justify-center gap-0 size-6 rounded-[6px] border border-white/5 bg-white/[0.03] hover:bg-white/5 group"
-						style={{ "box-shadow": "0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))" }}
+						style={{
+							"box-shadow":
+								"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+						}}
 					>
 						<RestartIcon class="size-4 text-neutral-300 group-hover:text-white" />
 					</button>
@@ -781,20 +853,34 @@ function ExcludedWindowsCard(props: {
 				</div>
 			</div>
 			<Show when={!props.isLoading} fallback={<ExcludedWindowsSkeleton />}>
-				<Show when={hasExclusions()} fallback={<p class="text-xs text-gray-10">No windows are currently excluded.</p>}>
+				<Show
+					when={hasExclusions()}
+					fallback={
+						<p class="text-xs text-gray-10">
+							No windows are currently excluded.
+						</p>
+					}
+				>
 					<div class="flex flex-wrap gap-2">
 						<For each={props.excludedWindows}>
 							{(entry, index) => (
 								<div
 									class="group flex items-center justify-between gap-1 px-2 py-1.5 rounded-[8px] border border-white/5 bg-white/[0.03]"
 									style={{
-										"box-shadow": "0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+										"box-shadow":
+											"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
 									}}
 								>
 									<div class="flex flex-col leading-tight px-1">
-										<span class="text-sm text-white">{getExclusionPrimaryLabel(entry)}</span>
+										<span class="text-sm text-white">
+											{getExclusionPrimaryLabel(entry)}
+										</span>
 										<Show when={getExclusionSecondaryLabel(entry)}>
-											{(label) => <span class="text-[0.65rem] text-gray-9">{label()}</span>}
+											{(label) => (
+												<span class="text-[0.65rem] text-gray-9">
+													{label()}
+												</span>
+											)}
 										</Show>
 									</div>
 									<button

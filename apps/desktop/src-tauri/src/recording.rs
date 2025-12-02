@@ -73,10 +73,10 @@ pub struct InProgressRecordingCommon {
 pub enum InProgressRecording {
     Instant {
         handle: instant_recording::ActorHandle,
-        progressive_upload: InstantMultipartUpload,
+        display_upload: InstantMultipartUpload,
+        camera_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
-        // camera isn't used as part of recording pipeline so we hold lock here
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
@@ -200,13 +200,15 @@ impl InProgressRecording {
         Ok(match self {
             Self::Instant {
                 handle,
-                progressive_upload,
+                display_upload,
+                camera_upload,
                 video_upload_info,
                 common,
                 ..
             } => CompletedRecording::Instant {
                 recording: handle.stop().await?,
-                progressive_upload,
+                display_upload,
+                camera_upload,
                 video_upload_info,
                 target_name: common.target_name,
             },
@@ -243,7 +245,8 @@ pub enum CompletedRecording {
     Instant {
         recording: instant_recording::CompletedRecording,
         target_name: String,
-        progressive_upload: InstantMultipartUpload,
+        display_upload: InstantMultipartUpload,
+        camera_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
@@ -546,7 +549,8 @@ pub async fn start_recording(
         }
     }
 
-    let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
+    let (finish_display_upload_tx, finish_display_upload_rx) = flume::bounded(1);
+    let (finish_camera_upload_tx, finish_camera_upload_rx) = flume::bounded(1);
 
     debug!("spawning start_recording actor");
 
@@ -696,6 +700,12 @@ pub async fn start_recording(
                                 inputs.capture_target.clone(),
                             )
                             .with_system_audio(inputs.capture_system_audio)
+                            .with_custom_cursor(
+                                general_settings
+                                    .as_ref()
+                                    .map(|s| s.custom_cursor_capture)
+                                    .unwrap_or_default(),
+                            )
                             .with_max_output_size(
                                 general_settings
                                     .as_ref()
@@ -706,6 +716,10 @@ pub async fn start_recording(
                             #[cfg(target_os = "macos")]
                             {
                                 builder = builder.with_excluded_windows(excluded_windows.clone());
+                            }
+
+                            if let Some(camera_feed) = camera_feed.clone() {
+                                builder = builder.with_camera_feed(camera_feed);
                             }
 
                             if let Some(mic_feed) = mic_feed.clone() {
@@ -723,17 +737,32 @@ pub async fn start_recording(
                                     e
                                 })?;
 
-                            let progressive_upload = InstantMultipartUpload::spawn(
+                            let display_upload = InstantMultipartUpload::spawn(
                                 app_handle.clone(),
-                                recording_dir.join("content/output.mp4"),
+                                recording_dir.join("content/display.mp4"),
                                 video_upload_info.clone(),
+                                "display.mp4".to_string(),
                                 recording_dir.clone(),
-                                Some(finish_upload_rx.clone()),
+                                Some(finish_display_upload_rx.clone()),
                             );
+
+                            let camera_upload = if camera_feed.is_some() {
+                                Some(InstantMultipartUpload::spawn(
+                                    app_handle.clone(),
+                                    recording_dir.join("content/camera.mp4"),
+                                    video_upload_info.clone(),
+                                    "camera.mp4".to_string(),
+                                    recording_dir.clone(),
+                                    Some(finish_camera_upload_rx.clone()),
+                                ))
+                            } else {
+                                None
+                            };
 
                             Ok(InProgressRecording::Instant {
                                 handle,
-                                progressive_upload,
+                                display_upload,
+                                camera_upload,
                                 video_upload_info,
                                 common: common.clone(),
                                 camera_feed: camera_feed.clone(),
@@ -803,7 +832,8 @@ pub async fn start_recording(
             info!("recording wait actor done: {:?}", &res);
             match res {
                 Ok(()) => {
-                    let _ = finish_upload_tx.send(());
+                    let _ = finish_display_upload_tx.send(());
+                    let _ = finish_camera_upload_tx.send(());
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
                 Err(e) => {
@@ -979,14 +1009,14 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         let video_id = match &recording {
             InProgressRecording::Instant {
                 video_upload_info,
-                progressive_upload,
+                display_upload,
                 ..
             } => {
                 debug!(
                     "User deleted recording. Aborting multipart upload for {:?}",
                     video_upload_info.id
                 );
-                progressive_upload.handle.abort();
+                display_upload.handle.abort();
 
                 Some(video_upload_info.id.clone())
             }
@@ -1279,13 +1309,13 @@ async fn handle_recording_finish(
             }
         },
         CompletedRecording::Instant { recording, .. } => {
-            recording.project_path.join("./content/output.mp4")
+            recording.project_path.join("content/display.mp4")
         }
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
     let screenshot_task = tokio::spawn(create_screenshot(
-        display_output_path,
+        display_output_path.clone(),
         display_screenshot.clone(),
         None,
     ));
@@ -1307,85 +1337,215 @@ async fn handle_recording_finish(
         }
         CompletedRecording::Instant {
             recording,
-            progressive_upload,
+            display_upload,
+            camera_upload,
             video_upload_info,
             ..
         } => {
             let app = app.clone();
-            let output_path = recording_dir.join("content/output.mp4");
 
             let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();
                 let recording_dir = recording_dir.clone();
+                let display_output_path = display_output_path.clone();
+                let camera_output_path = recording_dir.join("content/camera.mp4");
 
                 async move {
-                    let video_upload_succeeded = match progressive_upload
+                    let display_upload_succeeded = match display_upload
                         .handle
                         .await
                         .map_err(|e| e.to_string())
                         .and_then(|r| r.map_err(|v| v.to_string()))
                     {
                         Ok(()) => {
-                            info!(
-                                "Not attempting instant recording upload as progressive upload succeeded"
-                            );
+                            info!("Instant mode display.mp4 upload succeeded");
                             true
                         }
                         Err(e) => {
-                            error!("Progressive upload failed: {}", e);
+                            error!("Instant mode display.mp4 upload failed: {}", e);
                             false
                         }
                     };
 
+                    let mut camera_upload_succeeded = if let Some(camera_upload) = camera_upload {
+                        match camera_upload
+                            .handle
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r.map_err(|v| v.to_string()))
+                        {
+                            Ok(()) => {
+                                info!("Instant mode camera.mp4 upload succeeded");
+                                true
+                            }
+                            Err(e) => {
+                                error!("Instant mode camera.mp4 multipart upload failed: {}", e);
+                                false
+                            }
+                        }
+                    } else {
+                        true
+                    };
+
+                    if !camera_upload_succeeded && camera_output_path.exists() {
+                        const MAX_CAMERA_SIZE_MB: u64 = 75;
+                        const MAX_CAMERA_SIZE: u64 = MAX_CAMERA_SIZE_MB * 1024 * 1024;
+
+                        match tokio::fs::metadata(&camera_output_path).await {
+                            Ok(metadata) if metadata.len() > MAX_CAMERA_SIZE => {
+                                warn!(
+                                    "Camera file ({} MB) exceeds upload limit ({} MB). Skipping, file available locally.",
+                                    metadata.len() / 1024 / 1024,
+                                    MAX_CAMERA_SIZE_MB
+                                );
+                            }
+                            _ => {
+                                info!("Attempting singlepart upload for camera.mp4...");
+                                match tokio::fs::read(&camera_output_path).await {
+                                    Ok(camera_data) => {
+                                        let res = crate::upload::singlepart_uploader(
+                                            app.clone(),
+                                            crate::api::PresignedS3PutRequest {
+                                                video_id: video_upload_info.id.clone(),
+                                                subpath: "camera.mp4".to_string(),
+                                                method: PresignedS3PutRequestMethod::Put,
+                                                meta: None,
+                                            },
+                                            camera_data.len() as u64,
+                                            stream::once(async move {
+                                                Ok::<_, std::io::Error>(bytes::Bytes::from(
+                                                    camera_data,
+                                                ))
+                                            }),
+                                        )
+                                        .await;
+                                        match res {
+                                            Ok(()) => {
+                                                info!(
+                                                    "Instant mode camera.mp4 singlepart upload succeeded"
+                                                );
+                                                camera_upload_succeeded = true;
+                                            }
+                                            Err(err) => {
+                                                error!(
+                                                    "Instant mode camera.mp4 singlepart upload failed: {err}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "Failed to read camera.mp4 for fallback upload: {err}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let _ = screenshot_task.await;
 
-                    if video_upload_succeeded {
-                        if let Ok(bytes) =
-                            compress_image(display_screenshot).await
-                            .map_err(|err|
-                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
-                            ) {
-                                let res = crate::upload::singlepart_uploader(
-                                    app.clone(),
-                                    crate::api::PresignedS3PutRequest {
-                                        video_id: video_upload_info.id.clone(),
-                                        subpath: "screenshot/screen-capture.jpg".to_string(),
-                                        method: PresignedS3PutRequestMethod::Put,
-                                        meta: None,
-                                    },
-                                    bytes.len() as u64,
-                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
-                                )
-                                .await;
-                                if let Err(err) = res {
-	                                error!("Error updating thumbnail for instant mode progressive upload: {err}");
-	                                return;
+                    if display_upload_succeeded {
+                        let cursor_json_path = recording_dir.join("content/cursor.json");
+                        if let Ok(cursor_data) = tokio::fs::read(&cursor_json_path).await {
+                            let res = crate::upload::singlepart_uploader(
+                                app.clone(),
+                                crate::api::PresignedS3PutRequest {
+                                    video_id: video_upload_info.id.clone(),
+                                    subpath: "cursor.json".to_string(),
+                                    method: PresignedS3PutRequestMethod::Put,
+                                    meta: None,
+                                },
+                                cursor_data.len() as u64,
+                                stream::once(async move {
+                                    Ok::<_, std::io::Error>(bytes::Bytes::from(cursor_data))
+                                }),
+                            )
+                            .await;
+                            match res {
+                                Ok(()) => {
+                                    info!("Instant mode cursor.json upload succeeded");
                                 }
-
-                                if GeneralSettingsStore::get(&app).ok().flatten().unwrap_or_default().delete_instant_recordings_after_upload && let Err(err) = tokio::fs::remove_dir_all(&recording_dir).await {
-	                                	error!("Failed to remove recording files after upload: {err:?}");
-	                                }
-
+                                Err(err) => {
+                                    error!("Error uploading cursor.json for instant mode: {err}");
+                                }
                             }
-                    } else if let Ok(meta) = build_video_meta(&output_path)
+                        }
+
+                        if let Ok(bytes) =
+                            compress_image(display_screenshot.clone())
+                                .await
+                                .map_err(|err| {
+                                    error!("Error compressing thumbnail for instant mode: {err}")
+                                })
+                        {
+                            let res = crate::upload::singlepart_uploader(
+                                app.clone(),
+                                crate::api::PresignedS3PutRequest {
+                                    video_id: video_upload_info.id.clone(),
+                                    subpath: "screenshot.jpg".to_string(),
+                                    method: PresignedS3PutRequestMethod::Put,
+                                    meta: None,
+                                },
+                                bytes.len() as u64,
+                                stream::once(async move {
+                                    Ok::<_, std::io::Error>(bytes::Bytes::from(bytes))
+                                }),
+                            )
+                            .await;
+                            match res {
+                                Ok(()) => {
+                                    info!("Instant mode screenshot upload succeeded");
+                                }
+                                Err(err) => {
+                                    error!("Error uploading screenshot for instant mode: {err}");
+                                }
+                            }
+                        }
+                    } else if let Ok(meta) = build_video_meta(&display_output_path)
                         .map_err(|err| error!("Error getting video metadata: {}", err))
                     {
-                        // The upload_video function handles screenshot upload, so we can pass it along
+                        error!("Display multipart upload failed, attempting fallback upload...");
                         upload_video(
                             &app,
                             video_upload_info.id.clone(),
-                            output_path,
+                            display_output_path,
                             display_screenshot.clone(),
                             meta,
                             None,
                             video_upload_info.config.version_id.clone(),
                         )
                         .await
-                        .map(|_| info!("Final video upload with screenshot completed successfully"))
+                        .map(|_| {
+                            info!("Fallback display video upload with screenshot completed successfully");
+
+                            let cursor_json_path = recording_dir.join("content/cursor.json");
+                            if cursor_json_path.exists() {
+                                let app_clone = app.clone();
+                                let video_id = video_upload_info.id.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(cursor_data) = tokio::fs::read(&cursor_json_path).await {
+                                        let _ = crate::upload::singlepart_uploader(
+                                            app_clone,
+                                            crate::api::PresignedS3PutRequest {
+                                                video_id,
+                                                subpath: "cursor.json".to_string(),
+                                                method: PresignedS3PutRequestMethod::Put,
+                                                meta: None,
+                                            },
+                                            cursor_data.len() as u64,
+                                            stream::once(async move {
+                                                Ok::<_, std::io::Error>(bytes::Bytes::from(cursor_data))
+                                            }),
+                                        ).await;
+                                    }
+                                });
+                            }
+                        })
                         .map_err(|error| {
-                            error!("Error in upload_video: {error}");
+                            error!("Error in fallback display upload: {error}");
 
                             if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
                                 meta.upload = Some(UploadMeta::Failed {

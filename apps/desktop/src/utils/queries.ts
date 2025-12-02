@@ -1,13 +1,28 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
-import { createQuery, queryOptions, useMutation, useQuery } from "@tanstack/solid-query";
+import {
+	createQuery,
+	queryOptions,
+	useMutation,
+	useQuery,
+} from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
-import { authStore, generalSettingsStore, recordingSettingsStore } from "~/store";
+import {
+	authStore,
+	generalSettingsStore,
+	recordingSettingsStore,
+} from "~/store";
 import { createQueryInvalidate } from "./events";
-import { type CameraInfo, commands, type DeviceOrModelID, type RecordingMode, type ScreenCaptureTarget } from "./tauri";
+import {
+	type CameraInfo,
+	commands,
+	type DeviceOrModelID,
+	type RecordingMode,
+	type ScreenCaptureTarget,
+} from "./tauri";
 import { apiClient, orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
@@ -15,7 +30,11 @@ export const listWindows = queryOptions({
 	queryFn: async () => {
 		const w = await commands.listCaptureWindows();
 
-		w.sort((a, b) => a.owner_name.localeCompare(b.owner_name) || a.name.localeCompare(b.name));
+		w.sort(
+			(a, b) =>
+				a.owner_name.localeCompare(b.owner_name) ||
+				a.name.localeCompare(b.name),
+		);
 
 		return w;
 	},
@@ -35,7 +54,11 @@ export const listWindowsWithThumbnails = queryOptions({
 	queryFn: async () => {
 		const w = await commands.listWindowsWithThumbnails();
 
-		w.sort((a, b) => a.owner_name.localeCompare(b.owner_name) || a.name.localeCompare(b.name));
+		w.sort(
+			(a, b) =>
+				a.owner_name.localeCompare(b.owner_name) ||
+				a.name.localeCompare(b.name),
+		);
 
 		return w;
 	},
@@ -212,12 +235,15 @@ export function createCameraMutation() {
 		mutationFn: rawMutate,
 	}));
 
-	return new Proxy(setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate }, {
-		get(target, key) {
-			if (key === "rawMutate") return rawMutate;
-			return Reflect.get(target, key);
+	return new Proxy(
+		setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate },
+		{
+			get(target, key) {
+				if (key === "rawMutate") return rawMutate;
+				return Reflect.get(target, key);
+			},
 		},
-	});
+	);
 }
 
 export function createCustomDomainQuery() {
@@ -246,7 +272,10 @@ export function createOrganizationsQuery() {
 
 	// Refresh organizations if they're missing
 	createEffect(() => {
-		if (auth.data?.user_id && (!auth.data?.organizations || auth.data.organizations.length === 0)) {
+		if (
+			auth.data?.user_id &&
+			(!auth.data?.organizations || auth.data.organizations.length === 0)
+		) {
 			commands.updateAuthPlan().catch(console.error);
 		}
 	});
@@ -258,7 +287,10 @@ export function createWorkspacesQuery() {
 	const auth = authStore.createQuery();
 
 	createEffect(() => {
-		if (auth.data?.user_id && (!auth.data?.workspaces || auth.data.workspaces.length === 0)) {
+		if (
+			auth.data?.user_id &&
+			(!auth.data?.workspaces || auth.data.workspaces.length === 0)
+		) {
 			commands.updateAuthPlan().catch(console.error);
 		}
 	});

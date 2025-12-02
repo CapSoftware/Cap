@@ -2,20 +2,41 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import {
+	CheckMenuItem,
+	Menu,
+	MenuItem,
+	PredefinedMenuItem,
+} from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { type ComponentProps, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import {
+	type ComponentProps,
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	Show,
+} from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { TransitionGroup } from "solid-transition-group";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { createCurrentRecordingQuery, createOptionsQuery } from "~/utils/queries";
+import {
+	createCurrentRecordingQuery,
+	createOptionsQuery,
+} from "~/utils/queries";
 import { handleRecordingResult } from "~/utils/recording";
-import type { CameraInfo, CurrentRecording, DeviceOrModelID, RecordingInputKind } from "~/utils/tauri";
+import type {
+	CameraInfo,
+	CurrentRecording,
+	DeviceOrModelID,
+	RecordingInputKind,
+} from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 
 type State =
@@ -46,7 +67,7 @@ export default function () {
 					variant: "countdown",
 					from: window.COUNTDOWN,
 					current: window.COUNTDOWN,
-			  }
+				},
 	);
 	const [start, setStart] = createSignal(Date.now());
 	const [time, setTime] = createSignal(Date.now());
@@ -57,30 +78,45 @@ export default function () {
 	const auth = authStore.createQuery();
 
 	const audioLevel = createAudioInputLevel();
-	const [disconnectedInputs, setDisconnectedInputs] = createStore<RecordingInputState>({
-		microphone: false,
-		camera: false,
-	});
-	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(null);
+	const [disconnectedInputs, setDisconnectedInputs] =
+		createStore<RecordingInputState>({
+			microphone: false,
+			camera: false,
+		});
+	const [recordingFailure, setRecordingFailure] = createSignal<string | null>(
+		null,
+	);
 	const [issuePanelVisible, setIssuePanelVisible] = createSignal(false);
 	const [issueKey, setIssueKey] = createSignal("");
 	const [cameraWindowOpen, setCameraWindowOpen] = createSignal(false);
-	const [interactiveAreaRef, setInteractiveAreaRef] = createSignal<HTMLDivElement | null>(null);
+	const [interactiveAreaRef, setInteractiveAreaRef] =
+		createSignal<HTMLDivElement | null>(null);
 	const interactiveBounds = createElementBounds(interactiveAreaRef);
 	let settingsButtonRef: HTMLButtonElement | undefined;
-	const recordingMode = createMemo(() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode);
+	const recordingMode = createMemo(
+		() => currentRecording.data?.mode ?? optionsQuery.rawOptions.mode,
+	);
 	const canPauseRecording = createMemo(() => {
 		const mode = recordingMode();
 		const os = ostype();
-		return mode === "studio" || os === "macos" || (os === "windows" && mode === "instant");
+		return (
+			mode === "studio" ||
+			os === "macos" ||
+			(os === "windows" && mode === "instant")
+		);
 	});
 
-	const hasDisconnectedInput = () => disconnectedInputs.microphone || disconnectedInputs.camera;
+	const hasDisconnectedInput = () =>
+		disconnectedInputs.microphone || disconnectedInputs.camera;
 
 	const issueMessages = createMemo(() => {
 		const issues: string[] = [];
-		if (disconnectedInputs.microphone) issues.push("Microphone disconnected. Reconnect it to continue recording.");
-		if (disconnectedInputs.camera) issues.push("Camera disconnected. Reconnect it to continue recording.");
+		if (disconnectedInputs.microphone)
+			issues.push(
+				"Microphone disconnected. Reconnect it to continue recording.",
+			);
+		if (disconnectedInputs.camera)
+			issues.push("Camera disconnected. Reconnect it to continue recording.");
 		const failure = recordingFailure();
 		if (failure) issues.push(failure);
 		return issues;
@@ -97,12 +133,17 @@ export default function () {
 	const hasCameraInput = () => optionsQuery.rawOptions.cameraID != null;
 	const microphoneTitle = createMemo(() => {
 		if (disconnectedInputs.microphone) return "Microphone disconnected";
-		if (optionsQuery.rawOptions.micName) return `Microphone: ${optionsQuery.rawOptions.micName}`;
+		if (optionsQuery.rawOptions.micName)
+			return `Microphone: ${optionsQuery.rawOptions.micName}`;
 		return "Microphone not configured";
 	});
 
 	const [pauseResumes, setPauseResumes] = createStore<
-		[] | [...Array<{ pause: number; resume?: number }>, { pause: number; resume?: number }]
+		| []
+		| [
+				...Array<{ pause: number; resume?: number }>,
+				{ pause: number; resume?: number },
+		  ]
 	>([]);
 
 	createEffect(() => {
@@ -123,7 +164,8 @@ export default function () {
 		switch (payload.variant) {
 			case "Countdown":
 				setState((s) => {
-					if (s.variant === "countdown") return { ...s, current: payload.value };
+					if (s.variant === "countdown")
+						return { ...s, current: payload.value };
 
 					return s;
 				});
@@ -172,7 +214,7 @@ export default function () {
 			setTime(Date.now());
 		},
 		100,
-		setInterval
+		setInterval,
 	);
 	const refreshCameraWindowState = async () => {
 		try {
@@ -215,7 +257,7 @@ export default function () {
 			void refreshCameraWindowState();
 		},
 		2000,
-		setInterval
+		setInterval,
 	);
 
 	createEffect(() => {
@@ -242,7 +284,7 @@ export default function () {
 					produce((a) => {
 						if (a.length === 0) return a;
 						a[a.length - 1].resume = Date.now();
-					})
+					}),
 				);
 				setState({ variant: "recording" });
 			} else {
@@ -258,7 +300,7 @@ export default function () {
 		mutationFn: async () => {
 			const shouldRestart = await dialog.confirm(
 				"Are you sure you want to restart the recording? The current recording will be discarded.",
-				{ title: "Confirm Restart", okLabel: "Restart", cancelLabel: "Cancel" }
+				{ title: "Confirm Restart", okLabel: "Restart", cancelLabel: "Cancel" },
 			);
 
 			if (!shouldRestart) return;
@@ -272,11 +314,14 @@ export default function () {
 
 	const deleteRecording = createMutation(() => ({
 		mutationFn: async () => {
-			const shouldDelete = await dialog.confirm("Are you sure you want to delete the recording?", {
-				title: "Confirm Delete",
-				okLabel: "Delete",
-				cancelLabel: "Cancel",
-			});
+			const shouldDelete = await dialog.confirm(
+				"Are you sure you want to delete the recording?",
+				{
+					title: "Confirm Delete",
+					okLabel: "Delete",
+					cancelLabel: "Cancel",
+				},
+			);
 
 			if (!shouldDelete) return;
 
@@ -375,14 +420,16 @@ export default function () {
 						if (!startedWithCameraInput || !hasCameraInput()) return;
 						toggleCameraPreview.mutate();
 					},
-				})
+				}),
 			);
 			items.push(await PredefinedMenuItem.new({ item: "Separator" }));
 			items.push(
 				await MenuItem.new({
-					text: startedWithMicrophone ? "Microphone" : "Microphone (locked for this recording)",
+					text: startedWithMicrophone
+						? "Microphone"
+						: "Microphone (locked for this recording)",
 					enabled: false,
-				})
+				}),
 			);
 			items.push(
 				await CheckMenuItem.new({
@@ -390,7 +437,7 @@ export default function () {
 					checked: optionsQuery.rawOptions.micName == null,
 					enabled: startedWithMicrophone,
 					action: () => updateMicInput.mutate(null),
-				})
+				}),
 			);
 			for (const name of audioDevices) {
 				items.push(
@@ -399,15 +446,17 @@ export default function () {
 						checked: optionsQuery.rawOptions.micName === name,
 						enabled: startedWithMicrophone,
 						action: () => updateMicInput.mutate(name),
-					})
+					}),
 				);
 			}
 			items.push(await PredefinedMenuItem.new({ item: "Separator" }));
 			items.push(
 				await MenuItem.new({
-					text: startedWithCameraInput ? "Webcam" : "Webcam (locked for this recording)",
+					text: startedWithCameraInput
+						? "Webcam"
+						: "Webcam (locked for this recording)",
 					enabled: false,
-				})
+				}),
 			);
 			items.push(
 				await CheckMenuItem.new({
@@ -415,21 +464,25 @@ export default function () {
 					checked: !hasCameraInput(),
 					enabled: startedWithCameraInput,
 					action: () => updateCameraInput.mutate(null),
-				})
+				}),
 			);
 			for (const camera of videoDevices) {
 				items.push(
 					await CheckMenuItem.new({
 						text: camera.display_name,
-						checked: cameraMatchesSelection(camera, optionsQuery.rawOptions.cameraID ?? null),
+						checked: cameraMatchesSelection(
+							camera,
+							optionsQuery.rawOptions.cameraID ?? null,
+						),
 						enabled: startedWithCameraInput,
 						action: () => updateCameraInput.mutate(camera),
-					})
+					}),
 				);
 			}
 			const menu = await Menu.new({ items });
 			const rect = settingsButtonRef?.getBoundingClientRect();
-			if (rect) menu.popup(new LogicalPosition(rect.x, rect.y + rect.height + 4));
+			if (rect)
+				menu.popup(new LogicalPosition(rect.x, rect.y + rect.height + 4));
 			else menu.popup();
 		} catch (error) {
 			console.error("Failed to open recording settings menu", error);
@@ -437,7 +490,8 @@ export default function () {
 	};
 
 	const adjustedTime = () => {
-		if (state().variant === "countdown" || state().variant === "initializing") return 0;
+		if (state().variant === "countdown" || state().variant === "initializing")
+			return 0;
 		let t = time() - start();
 		for (const { pause, resume } of pauseResumes) {
 			if (pause && resume) t -= resume - pause;
@@ -457,7 +511,11 @@ export default function () {
 
 	let aborted = false;
 	createEffect(() => {
-		if (isMaxRecordingLimitEnabled() && adjustedTime() > MAX_RECORDING_FOR_FREE && !aborted) {
+		if (
+			isMaxRecordingLimitEnabled() &&
+			adjustedTime() > MAX_RECORDING_FOR_FREE &&
+			!aborted
+		) {
 			aborted = true;
 			stopRecording.mutate();
 		}
@@ -501,7 +559,9 @@ export default function () {
 						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
 							<div class="flex flex-1 flex-row justify-between">
 								<button
-									disabled={stopRecording.isPending || isInitializing() || isCountdown()}
+									disabled={
+										stopRecording.isPending || isInitializing() || isCountdown()
+									}
 									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
 									type="button"
 									onClick={() => stopRecording.mutate()}
@@ -528,7 +588,7 @@ export default function () {
 																	{
 																		duration: 300,
 																		easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-																	}
+																	},
 																);
 																a.finished.then(done);
 															}}
@@ -544,19 +604,26 @@ export default function () {
 																	{
 																		duration: 300,
 																		easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-																	}
+																	},
 																);
 																a.finished.then(done);
 															}}
 														>
 															<For each={[countdownCurrent()]}>
-																{(num) => <span class="absolute inset-0 flex items-center justify-center">{num}</span>}
+																{(num) => (
+																	<span class="absolute inset-0 flex items-center justify-center">
+																		{num}
+																	</span>
+																)}
 															</For>
 														</TransitionGroup>
 													</div>
 												}
 											>
-												<Show when={isMaxRecordingLimitEnabled()} fallback={formatTime(adjustedTime() / 1000)}>
+												<Show
+													when={isMaxRecordingLimitEnabled()}
+													fallback={formatTime(adjustedTime() / 1000)}
+												>
 													{formatTime(remainingRecordingTime() / 1000)}
 												</Show>
 											</Show>
@@ -590,7 +657,7 @@ export default function () {
 										<ActionButton
 											class={cx(
 												"text-red-10 hover:bg-red-3/40",
-												issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8"
+												issuePanelVisible() && "bg-red-3/40 ring-1 ring-red-8",
 											)}
 											onClick={() => toggleIssuePanel()}
 											title={issueMessages().join(", ")}
@@ -603,12 +670,28 @@ export default function () {
 
 									{canPauseRecording() && (
 										<ActionButton
-											disabled={togglePause.isPending || hasDisconnectedInput() || isCountdown()}
+											disabled={
+												togglePause.isPending ||
+												hasDisconnectedInput() ||
+												isCountdown()
+											}
 											onClick={() => togglePause.mutate()}
-											title={state().variant === "paused" ? "Resume recording" : "Pause recording"}
-											aria-label={state().variant === "paused" ? "Resume recording" : "Pause recording"}
+											title={
+												state().variant === "paused"
+													? "Resume recording"
+													: "Pause recording"
+											}
+											aria-label={
+												state().variant === "paused"
+													? "Resume recording"
+													: "Pause recording"
+											}
 										>
-											{state().variant === "paused" ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
+											{state().variant === "paused" ? (
+												<IconCapPlayCircle />
+											) : (
+												<IconCapPauseCircle />
+											)}
 										</ActionButton>
 									)}
 
@@ -665,7 +748,7 @@ function ActionButton(props: ComponentProps<"button">) {
 				"text-gray-11",
 				"h-8 w-8 flex items-center justify-center",
 				"disabled:opacity-50 disabled:cursor-not-allowed",
-				props.class
+				props.class,
 			)}
 			type="button"
 		/>
@@ -687,14 +770,20 @@ function createAudioInputLevel() {
 		const DB_MAX = 0;
 
 		const dbValue = dbs ?? DB_MIN;
-		const normalizedLevel = Math.max(0, Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN)));
+		const normalizedLevel = Math.max(
+			0,
+			Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN)),
+		);
 		setLevel(normalizedLevel);
 	});
 
 	return level;
 }
 
-function cameraMatchesSelection(camera: CameraInfo, selected?: DeviceOrModelID | null) {
+function cameraMatchesSelection(
+	camera: CameraInfo,
+	selected?: DeviceOrModelID | null,
+) {
 	if (!selected) return false;
 	if ("DeviceID" in selected) return selected.DeviceID === camera.device_id;
 	return camera.model_id != null && selected.ModelID === camera.model_id;
@@ -706,7 +795,9 @@ function cameraInfoToId(camera: CameraInfo | null): DeviceOrModelID | null {
 	return { DeviceID: camera.device_id };
 }
 
-function cloneDeviceOrModelId(id: DeviceOrModelID | null): DeviceOrModelID | null {
+function cloneDeviceOrModelId(
+	id: DeviceOrModelID | null,
+): DeviceOrModelID | null {
 	if (!id) return null;
 	if ("DeviceID" in id) return { DeviceID: id.DeviceID };
 	return { ModelID: id.ModelID };

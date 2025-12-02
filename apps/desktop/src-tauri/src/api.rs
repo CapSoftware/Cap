@@ -13,6 +13,7 @@ use crate::web_api::{AuthedApiError, ManagerExt};
 pub async fn upload_multipart_initiate(
     app: &AppHandle,
     video_id: &str,
+    subpath: &str,
 ) -> Result<String, AuthedApiError> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -26,6 +27,7 @@ pub async fn upload_multipart_initiate(
                 .header("Content-Type", "application/json")
                 .json(&serde_json::json!({
                     "videoId": video_id,
+                    "subpath": subpath,
                     "contentType": "video/mp4"
                 }))
         })
@@ -51,6 +53,7 @@ pub async fn upload_multipart_initiate(
 pub async fn upload_multipart_presign_part(
     app: &AppHandle,
     video_id: &str,
+    subpath: &str,
     upload_id: &str,
     part_number: u32,
     md5_sum: Option<&str>,
@@ -63,6 +66,7 @@ pub async fn upload_multipart_presign_part(
 
     let mut body = serde_json::Map::from_iter([
         ("videoId".to_string(), json!(video_id)),
+        ("subpath".to_string(), json!(subpath)),
         ("uploadId".to_string(), json!(upload_id)),
         ("partNumber".to_string(), json!(part_number)),
     ]);
@@ -120,6 +124,7 @@ pub struct S3VideoMeta {
 pub async fn upload_multipart_complete(
     app: &AppHandle,
     video_id: &str,
+    subpath: &str,
     upload_id: &str,
     parts: &[UploadedPart],
     meta: Option<S3VideoMeta>,
@@ -128,6 +133,7 @@ pub async fn upload_multipart_complete(
     #[serde(rename_all = "camelCase")]
     pub struct MultipartCompleteRequest<'a> {
         video_id: &'a str,
+        subpath: &'a str,
         upload_id: &'a str,
         parts: &'a [UploadedPart],
         #[serde(flatten)]
@@ -147,6 +153,7 @@ pub async fn upload_multipart_complete(
                 .header("Content-Type", "application/json")
                 .json(&MultipartCompleteRequest {
                     video_id,
+                    subpath,
                     upload_id,
                     parts,
                     meta,

@@ -828,7 +828,7 @@ async fn create_segment_pipeline(
         OutputPipeline::builder(dir.join("camera.mp4"))
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
-            .build::<Mp4Muxer>(())
+            .build::<Mp4Muxer>(Default::default())
             .instrument(error_span!("camera-out"))
     }))
     .await

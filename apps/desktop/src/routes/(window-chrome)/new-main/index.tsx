@@ -3,14 +3,30 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
-import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { getCurrentWindow, LogicalSize, primaryMonitor } from "@tauri-apps/api/window";
+import {
+	getAllWebviewWindows,
+	WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
+import {
+	getCurrentWindow,
+	LogicalSize,
+	primaryMonitor,
+} from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
-import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMount, Show, Suspense } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	ErrorBoundary,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+} from "solid-js";
 import { reconcile } from "solid-js/store";
 // Removed solid-motionone in favor of solid-transition-group
 import { Transition } from "solid-transition-group";
@@ -55,7 +71,10 @@ import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
-import { RecordingOptionsProvider, useRecordingOptions } from "../OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "../OptionsContext";
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
@@ -65,7 +84,14 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import HorizontalTargetButton from "./HorizontalTargetButton";
-import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
+import {
+	CloseIcon,
+	CropIcon,
+	DisplayIcon,
+	InflightLogo,
+	SettingsIcon,
+	WindowIcon,
+} from "~/icons";
 
 function getWindowSize() {
 	return {
@@ -77,13 +103,20 @@ function getWindowSize() {
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
 		if (!id) return false;
-		return "DeviceID" in id ? id.DeviceID === c.device_id : id.ModelID === c.model_id;
+		return "DeviceID" in id
+			? id.DeviceID === c.device_id
+			: id.ModelID === c.model_id;
 	});
 };
 
-type WindowListItem = Pick<CaptureWindow, "id" | "owner_name" | "name" | "bounds" | "refresh_rate">;
+type WindowListItem = Pick<
+	CaptureWindow,
+	"id" | "owner_name" | "name" | "bounds" | "refresh_rate"
+>;
 
-const createWindowSignature = (list?: readonly WindowListItem[]): string | undefined => {
+const createWindowSignature = (
+	list?: readonly WindowListItem[],
+): string | undefined => {
 	if (!list) return undefined;
 
 	return list
@@ -105,10 +138,14 @@ const createWindowSignature = (list?: readonly WindowListItem[]): string | undef
 
 type DisplayListItem = Pick<CaptureDisplay, "id" | "name" | "refresh_rate">;
 
-const createDisplaySignature = (list?: readonly DisplayListItem[]): string | undefined => {
+const createDisplaySignature = (
+	list?: readonly DisplayListItem[],
+): string | undefined => {
 	if (!list) return undefined;
 
-	return list.map((item) => [item.id, item.name, item.refresh_rate].join(":")).join("|");
+	return list
+		.map((item) => [item.id, item.name, item.refresh_rate].join(":"))
+		.join("|");
 };
 
 type TargetMenuPanelProps =
@@ -150,29 +187,34 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		props.variant === "display"
 			? "Search displays"
 			: props.variant === "window"
-			? "Search windows"
-			: props.variant === "recording"
-			? "Search recordings"
-			: "Search screenshots";
+				? "Search windows"
+				: props.variant === "recording"
+					? "Search recordings"
+					: "Search screenshots";
 	const noResultsMessage =
 		props.variant === "display"
 			? "No matching displays"
 			: props.variant === "window"
-			? "No matching windows"
-			: props.variant === "recording"
-			? "No matching recordings"
-			: "No matching screenshots";
+				? "No matching windows"
+				: props.variant === "recording"
+					? "No matching recordings"
+					: "No matching screenshots";
 
-	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(() => {
-		if (props.variant !== "display") return [];
-		const query = normalizedQuery();
-		const targets = props.targets ?? [];
-		if (!query) return targets;
+	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(
+		() => {
+			if (props.variant !== "display") return [];
+			const query = normalizedQuery();
+			const targets = props.targets ?? [];
+			if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+			const matchesQuery = (value?: string | null) =>
+				!!value && value.toLowerCase().includes(query);
 
-		return targets.filter((target) => matchesQuery(target.name) || matchesQuery(target.id));
-	});
+			return targets.filter(
+				(target) => matchesQuery(target.name) || matchesQuery(target.id),
+			);
+		},
+	);
 
 	const filteredWindowTargets = createMemo<CaptureWindowWithThumbnail[]>(() => {
 		if (props.variant !== "window") return [];
@@ -180,10 +222,14 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter(
-			(target) => matchesQuery(target.name) || matchesQuery(target.owner_name) || matchesQuery(target.id)
+			(target) =>
+				matchesQuery(target.name) ||
+				matchesQuery(target.owner_name) ||
+				matchesQuery(target.id),
 		);
 	});
 
@@ -193,7 +239,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
@@ -204,7 +251,8 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		const targets = props.targets ?? [];
 		if (!query) return targets;
 
-		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+		const matchesQuery = (value?: string | null) =>
+			!!value && value.toLowerCase().includes(query);
 
 		return targets.filter((target) => matchesQuery(target.pretty_name));
 	});
@@ -223,7 +271,9 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 				</div>
 				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
 					<Show
-						when={props.variant === "recording" || props.variant === "screenshot"}
+						when={
+							props.variant === "recording" || props.variant === "screenshot"
+						}
 						fallback={
 							<>
 								<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
@@ -260,13 +310,18 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							) : (
 								<IconLucideImage class="mr-2 size-3" />
 							)}
-							{props.variant === "recording" ? "View All Recordings" : "View All Screenshots"}
+							{props.variant === "recording"
+								? "View All Recordings"
+								: "View All Screenshots"}
 						</button>
 					</Show>
 				</div>
 			</div>
 			<div class="pt-4">
-				<div class="px-2 custom-scroll" style="max-height: calc(256px - 100px - 1rem)">
+				<div
+					class="px-2 custom-scroll"
+					style="max-height: calc(256px - 100px - 1rem)"
+				>
 					{props.variant === "display" ? (
 						<TargetMenuGrid
 							variant="display"
@@ -350,7 +405,7 @@ function createUpdateCheck() {
 
 		const shouldUpdate = await dialog.confirm(
 			`Version ${update.version} of Cap is available, would you like to install it?`,
-			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" }
+			{ title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" },
 		);
 
 		if (!shouldUpdate) return;
@@ -364,7 +419,8 @@ function Page() {
 	const isRecording = () => !!currentRecording.data;
 	const auth = authStore.createQuery();
 
-	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] = createSignal(false);
+	const [hasHiddenMainWindowForPicker, setHasHiddenMainWindowForPicker] =
+		createSignal(false);
 	createEffect(() => {
 		const pickerActive = rawOptions.targetMode != null;
 		const hasHidden = hasHiddenMainWindowForPicker();
@@ -388,7 +444,9 @@ function Page() {
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
-	const activeMenu = createMemo<"display" | "window" | "recording" | "screenshot" | null>(() => {
+	const activeMenu = createMemo<
+		"display" | "window" | "recording" | "screenshot" | null
+	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
@@ -416,14 +474,18 @@ function Page() {
 		queryOptions<ScreenshotWithPath[]>({
 			queryKey: ["screenshots"],
 			queryFn: async () => {
-				const result = await commands.listScreenshots().catch(() => [] as const);
+				const result = await commands
+					.listScreenshots()
+					.catch(() => [] as const);
 
-				return result.map(([path, meta]) => ({ ...meta, path } as ScreenshotWithPath));
+				return result.map(
+					([path, meta]) => ({ ...meta, path }) as ScreenshotWithPath,
+				);
 			},
 			refetchInterval: 2000,
 			reconcile: (old, next) => reconcile(next)(old),
 			initialData: [],
-		})
+		}),
 	);
 
 	const screens = useQuery(() => listScreens);
@@ -465,7 +527,9 @@ function Page() {
 		// See list_recordings in apps/desktop/src-tauri/src/lib.rs
 		// b_time.cmp(&a_time) ensures newest first.
 		// So we just need to take the top 20.
-		return data.slice(0, 20).map(([path, meta]) => ({ ...meta, path } as RecordingWithPath));
+		return data
+			.slice(0, 20)
+			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
 	});
 
 	const screenshotsData = createMemo(() => {
@@ -475,9 +539,13 @@ function Page() {
 	});
 
 	const displayMenuLoading = () =>
-		!hasDisplayTargetsData() && (displayTargets.status === "pending" || displayTargets.fetchStatus === "fetching");
+		!hasDisplayTargetsData() &&
+		(displayTargets.status === "pending" ||
+			displayTargets.fetchStatus === "fetching");
 	const windowMenuLoading = () =>
-		!hasWindowTargetsData() && (windowTargets.status === "pending" || windowTargets.fetchStatus === "fetching");
+		!hasWindowTargetsData() &&
+		(windowTargets.status === "pending" ||
+			windowTargets.fetchStatus === "fetching");
 
 	const displayErrorMessage = () => {
 		if (!displayTargets.error) return undefined;
@@ -490,7 +558,10 @@ function Page() {
 	};
 
 	const selectDisplayTarget = (target: CaptureDisplayWithThumbnail) => {
-		setOptions("captureTarget", reconcile({ variant: "display", id: target.id }));
+		setOptions(
+			"captureTarget",
+			reconcile({ variant: "display", id: target.id }),
+		);
 		setOptions("targetMode", "display");
 		commands.openTargetSelectOverlays({ variant: "display", id: target.id });
 		setDisplayMenuOpen(false);
@@ -498,7 +569,10 @@ function Page() {
 	};
 
 	const selectWindowTarget = async (target: CaptureWindowWithThumbnail) => {
-		setOptions("captureTarget", reconcile({ variant: "window", id: target.id }));
+		setOptions(
+			"captureTarget",
+			reconcile({ variant: "window", id: target.id }),
+		);
 		setOptions("targetMode", "window");
 		commands.openTargetSelectOverlays({ variant: "window", id: target.id });
 		setWindowMenuOpen(false);
@@ -535,13 +609,15 @@ function Page() {
 		const size = getWindowSize();
 		currentWindow.setSize(new LogicalSize(size.width, size.height));
 
-		const unlistenFocus = currentWindow.onFocusChanged(({ payload: focused }) => {
-			if (focused) {
-				const size = getWindowSize();
+		const unlistenFocus = currentWindow.onFocusChanged(
+			({ payload: focused }) => {
+				if (focused) {
+					const size = getWindowSize();
 
-				currentWindow.setSize(new LogicalSize(size.width, size.height));
-			}
-		});
+					currentWindow.setSize(new LogicalSize(size.width, size.height));
+				}
+			},
+		);
 
 		const unlistenResize = currentWindow.onResized(() => {
 			const size = getWindowSize();
@@ -563,10 +639,16 @@ function Page() {
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
 
-	const windowListSignature = createMemo(() => createWindowSignature(windows.data));
-	const displayListSignature = createMemo(() => createDisplaySignature(screens.data));
-	const [windowThumbnailsSignature, setWindowThumbnailsSignature] = createSignal<string | undefined>();
-	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] = createSignal<string | undefined>();
+	const windowListSignature = createMemo(() =>
+		createWindowSignature(windows.data),
+	);
+	const displayListSignature = createMemo(() =>
+		createDisplaySignature(screens.data),
+	);
+	const [windowThumbnailsSignature, setWindowThumbnailsSignature] =
+		createSignal<string | undefined>();
+	const [displayThumbnailsSignature, setDisplayThumbnailsSignature] =
+		createSignal<string | undefined>();
 
 	createEffect(() => {
 		if (windowTargets.status !== "success") return;
@@ -617,10 +699,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen =
+					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+				screen =
+					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
 			}
 
 			return screen;
@@ -680,7 +764,10 @@ function Page() {
 		if (!screen) return;
 
 		if (target.variant === "window" && windows.data?.length === 0) {
-			setOptions("captureTarget", reconcile({ variant: "display", id: screen.id }));
+			setOptions(
+				"captureTarget",
+				reconcile({ variant: "display", id: screen.id }),
+			);
 		}
 	});
 
@@ -695,7 +782,9 @@ function Page() {
 
 	onMount(() => {
 		if (rawOptions.micName) {
-			setMicInput.mutateAsync(rawOptions.micName).catch((error) => console.error("Failed to set mic input:", error));
+			setMicInput
+				.mutateAsync(rawOptions.micName)
+				.catch((error) => console.error("Failed to set mic input:", error));
 		}
 
 		if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
@@ -725,8 +814,10 @@ function Page() {
 				/>
 				<MicrophoneSelect
 					disabled={mics.isPending}
-					options={mics.isPending ? [] : mics.data ?? []}
-					value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+					options={mics.isPending ? [] : (mics.data ?? [])}
+					value={
+						mics.isPending ? rawOptions.micName : (options.micName() ?? null)
+					}
 					onChange={(v) => setMicInput.mutate(v)}
 				/>
 				<SystemAudio />
@@ -744,7 +835,9 @@ function Page() {
 					disabled={isRecording()}
 					onClick={() => {
 						if (isRecording()) return;
-						setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+						setOptions("targetMode", (v) =>
+							v === "display" ? null : "display",
+						);
 						if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
 						else commands.closeTargetSelectOverlays();
 					}}
@@ -824,7 +917,10 @@ function Page() {
 		>
 			<WindowChromeHeader hideMaximize>
 				<div
-					class={cx("flex items-center justify-between px-3 w-full", ostype() === "macos" && "flex-row")}
+					class={cx(
+						"flex items-center justify-between px-3 w-full",
+						ostype() === "macos" && "flex-row",
+					)}
 					data-tauri-drag-region
 				>
 					<button
@@ -981,7 +1077,9 @@ function Page() {
 									variant="recording"
 									targets={recordingsData()}
 									isLoading={recordings.isPending}
-									errorMessage={recordings.error ? "Failed to load recordings" : undefined}
+									errorMessage={
+										recordings.error ? "Failed to load recordings" : undefined
+									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
 											await commands.showWindow({
@@ -1010,7 +1108,9 @@ function Page() {
 									variant="screenshot"
 									targets={screenshotsData()}
 									isLoading={screenshots.isPending}
-									errorMessage={screenshots.error ? "Failed to load screenshots" : undefined}
+									errorMessage={
+										screenshots.error ? "Failed to load screenshots" : undefined
+									}
 									onSelect={async (screenshot) => {
 										await commands.showWindow({
 											ScreenshotEditor: {

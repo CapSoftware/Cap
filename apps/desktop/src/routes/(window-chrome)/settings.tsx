@@ -2,7 +2,15 @@ import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
-import { createEffect, createResource, createSignal, For, onMount, Show, Suspense } from "solid-js";
+import {
+	createEffect,
+	createResource,
+	createSignal,
+	For,
+	onMount,
+	Show,
+	Suspense,
+} from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore } from "~/store";
@@ -46,7 +54,8 @@ export default function Settings(props: RouteSectionProps) {
 
 		if (activeIndex !== -1 && tabRefs[activeIndex]) {
 			const activeTab = tabRefs[activeIndex];
-			const parentRect = activeTab.parentElement?.parentElement?.getBoundingClientRect();
+			const parentRect =
+				activeTab.parentElement?.parentElement?.getBoundingClientRect();
 			const tabRect = activeTab.getBoundingClientRect();
 
 			if (parentRect) {

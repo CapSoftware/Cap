@@ -98,6 +98,7 @@ pub enum UploadMeta {
         video_id: String,
         // Data for resuming
         file_path: PathBuf,
+        subpath: String,
         pre_created_video: VideoUploadInfo,
         recording_dir: PathBuf,
     },

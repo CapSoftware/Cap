@@ -71,7 +71,7 @@ pub async fn upload_video(
     info!("Uploading video {video_id}...");
 
     let start = Instant::now();
-    let upload_id = api::upload_multipart_initiate(app, &video_id).await?;
+    let upload_id = api::upload_multipart_initiate(app, &video_id, "display.mp4").await?;
 
     let video_fut = async {
         let stream = progress(
@@ -80,6 +80,7 @@ pub async fn upload_video(
             multipart_uploader(
                 app.clone(),
                 video_id.clone(),
+                "display.mp4".to_string(),
                 upload_id.clone(),
                 from_pending_file_to_chunks(file_path.clone(), None),
             ),
@@ -105,8 +106,15 @@ pub async fn upload_video(
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(app, &video_id, &upload_id, &parts, metadata.clone())
-            .await?;
+        api::upload_multipart_complete(
+            app,
+            &video_id,
+            "display.mp4",
+            &upload_id,
+            &parts,
+            metadata.clone(),
+        )
+        .await?;
 
         Ok(metadata)
     };
@@ -117,7 +125,7 @@ pub async fn upload_video(
         app.clone(),
         PresignedS3PutRequest {
             video_id: video_id.clone(),
-            subpath: "screenshot/screen-capture.jpg".to_string(),
+            subpath: "screenshot.jpg".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
@@ -352,6 +360,7 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
+        subpath: String,
         recording_dir: PathBuf,
         realtime_upload_done: Option<Receiver<()>>,
     ) -> Self {
@@ -362,6 +371,7 @@ impl InstantMultipartUpload {
                     app,
                     file_path.clone(),
                     pre_created_video,
+                    subpath,
                     recording_dir,
                     realtime_upload_done,
                 )
@@ -392,11 +402,12 @@ impl InstantMultipartUpload {
         app: AppHandle,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
+        subpath: String,
         recording_dir: PathBuf,
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<Option<S3VideoMeta>, AuthedApiError> {
         let video_id = pre_created_video.id.clone();
-        debug!("Initiating multipart upload for {video_id}...");
+        debug!("Initiating multipart upload for {video_id} ({subpath})...");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             format!("Error reading project meta from {recording_dir:?} for upload init: {err}")
@@ -404,6 +415,7 @@ impl InstantMultipartUpload {
         project_meta.upload = Some(UploadMeta::MultipartUpload {
             video_id: video_id.clone(),
             file_path: file_path.clone(),
+            subpath: subpath.clone(),
             pre_created_video: pre_created_video.clone(),
             recording_dir: recording_dir.clone(),
         });
@@ -412,7 +424,7 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to save recording meta: {e}"))
             .ok();
 
-        let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
+        let upload_id = api::upload_multipart_initiate(&app, &video_id, &subpath).await?;
 
         let mut parts = progress(
             app.clone(),
@@ -420,6 +432,7 @@ impl InstantMultipartUpload {
             multipart_uploader(
                 app.clone(),
                 video_id.clone(),
+                subpath.clone(),
                 upload_id.clone(),
                 from_pending_file_to_chunks(file_path.clone(), realtime_video_done),
             ),
@@ -439,8 +452,15 @@ impl InstantMultipartUpload {
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata.clone())
-            .await?;
+        api::upload_multipart_complete(
+            &app,
+            &video_id,
+            &subpath,
+            &upload_id,
+            &parts,
+            metadata.clone(),
+        )
+        .await?;
         info!("Multipart upload complete for {video_id}.");
 
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
@@ -618,6 +638,7 @@ pub fn from_pending_file_to_chunks(
 fn multipart_uploader(
     app: AppHandle,
     video_id: String,
+    subpath: String,
     upload_id: String,
     stream: impl Stream<Item = io::Result<Chunk>> + Send + 'static,
 ) -> impl Stream<Item = Result<UploadedPart, AuthedApiError>> + 'static {
@@ -636,6 +657,7 @@ fn multipart_uploader(
             move |(mut stream, expected_part_number)| {
                 let app = app.clone();
                 let video_id = video_id.clone();
+                let subpath = subpath.clone();
                 let upload_id = upload_id.clone();
                 let first_chunk_presigned_url = first_chunk_presigned_url.clone();
 
@@ -652,6 +674,7 @@ fn multipart_uploader(
                         api::upload_multipart_presign_part(
                             &app,
                             &video_id,
+                            &subpath,
                             &upload_id,
                             expected_part_number,
                             None,
@@ -705,6 +728,7 @@ fn multipart_uploader(
                                 api::upload_multipart_presign_part(
                                     &app,
                                     &video_id,
+                                    &subpath,
                                     &upload_id,
                                     part_number,
                                     md5_sum.as_deref(),

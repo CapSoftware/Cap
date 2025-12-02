@@ -1,6 +1,11 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
-import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import {
+	currentMonitor,
+	getCurrentWindow,
+	LogicalPosition,
+	LogicalSize,
+} from "@tauri-apps/api/window";
 import { type } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
@@ -21,7 +26,10 @@ import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import { RecordingOptionsProvider, useRecordingOptions } from "./(window-chrome)/OptionsContext";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -40,21 +48,29 @@ export default function () {
 	document.documentElement.classList.toggle("dark", true);
 
 	const generalSettings = generalSettingsStore.createQuery();
-	const isNativePreviewEnabled = (type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) || false;
+	const isNativePreviewEnabled =
+		(type() !== "windows" && generalSettings.data?.enableNativeCameraPreview) ||
+		false;
 
 	const [cameraDisconnected, setCameraDisconnected] = createSignal(false);
 
 	createTauriEventListener(events.recordingEvent, (payload) => {
 		if (payload.variant === "InputLost" && payload.input === "camera") {
 			setCameraDisconnected(true);
-		} else if (payload.variant === "InputRestored" && payload.input === "camera") {
+		} else if (
+			payload.variant === "InputRestored" &&
+			payload.input === "camera"
+		) {
 			setCameraDisconnected(false);
 		}
 	});
 
 	return (
 		<RecordingOptionsProvider>
-			<Show when={isNativePreviewEnabled} fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}>
+			<Show
+				when={isNativePreviewEnabled}
+				fallback={<LegacyCameraPreviewPage disconnected={cameraDisconnected} />}
+			>
 				<NativeCameraPreviewPage disconnected={cameraDisconnected} />
 			</Show>
 		</RecordingOptionsProvider>
@@ -68,7 +84,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			shape: "round",
 			mirrored: false,
 		}),
-		{ name: "cameraWindowState" }
+		{ name: "cameraWindowState" },
 	);
 
 	const [isResizing, setIsResizing] = createSignal(false);
@@ -83,24 +99,31 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		// Support for legacy size strings.
 		let currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
-			currentSize = currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE;
+			currentSize =
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE;
 			setState("size", currentSize);
 			return;
 		}
 
-		const clampedSize = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, currentSize));
+		const clampedSize = Math.max(
+			CAMERA_MIN_SIZE,
+			Math.min(CAMERA_MAX_SIZE, currentSize),
+		);
 		if (clampedSize !== currentSize) {
 			setState("size", clampedSize);
 		}
 		commands.setCameraPreviewState(state);
 	});
 
-	const [cameraPreviewReady] = createResource(() => commands.awaitCameraPreviewReady());
+	const [cameraPreviewReady] = createResource(() =>
+		commands.awaitCameraPreviewReady(),
+	);
 
 	const setCamera = createCameraMutation();
 
 	const scale = () => {
-		const normalized = (state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
+		const normalized =
+			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
 
@@ -136,7 +159,10 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			delta = -deltaY;
 		}
 
-		const newSize = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, start.size + delta));
+		const newSize = Math.max(
+			CAMERA_MIN_SIZE,
+			Math.min(CAMERA_MAX_SIZE, start.size + delta),
+		);
 		setState("size", newSize);
 	};
 
@@ -156,7 +182,10 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	return (
-		<div data-tauri-drag-region class="flex relative flex-col w-screen h-screen cursor-move group">
+		<div
+			data-tauri-drag-region
+			class="flex relative flex-col w-screen h-screen cursor-move group"
+		>
 			<Show when={props.disconnected()}>
 				<CameraDisconnectedOverlay />
 			</Show>
@@ -172,20 +201,34 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						<ControlButton
 							pressed={state.size >= CAMERA_PRESET_LARGE}
 							onClick={() => {
-								setState("size", state.size < CAMERA_PRESET_LARGE ? CAMERA_PRESET_LARGE : CAMERA_PRESET_SMALL);
+								setState(
+									"size",
+									state.size < CAMERA_PRESET_LARGE
+										? CAMERA_PRESET_LARGE
+										: CAMERA_PRESET_SMALL,
+								);
 							}}
 						>
 							<IconCapEnlarge class="size-5.5" />
 						</ControlButton>
 						<ControlButton
 							pressed={state.shape !== "round"}
-							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
+							onClick={() =>
+								setState("shape", (s) =>
+									s === "round" ? "square" : s === "square" ? "full" : "round",
+								)
+							}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
-							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
+							{state.shape === "full" && (
+								<IconLucideRectangleHorizontal class="size-5.5" />
+							)}
 						</ControlButton>
-						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
+						<ControlButton
+							pressed={state.mirrored}
+							onClick={() => setState("mirrored", (m) => !m)}
+						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
 					</div>
@@ -226,9 +269,15 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 function ControlButton(
 	props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
 		active?: boolean;
-	}
+	},
 ) {
-	return <KToggleButton type="button" class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12" {...props} />;
+	return (
+		<KToggleButton
+			type="button"
+			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			{...props}
+		/>
+	);
 }
 
 // Legacy stuff below
@@ -242,14 +291,17 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			shape: "round",
 			mirrored: false,
 		}),
-		{ name: "cameraWindowState" }
+		{ name: "cameraWindowState" },
 	);
 
 	createEffect(() => {
 		// Support for legacy size strings.
 		const currentSize = state.size as number | string;
 		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
-			setState("size", currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE);
+			setState(
+				"size",
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE,
+			);
 		}
 	});
 
@@ -339,7 +391,11 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			const expectedLength = expectedRowBytes * height;
 			const availableLength = strideBytes * height;
 
-			if (strideBytes === 0 || strideBytes < expectedRowBytes || source.length < availableLength) {
+			if (
+				strideBytes === 0 ||
+				strideBytes < expectedRowBytes ||
+				source.length < availableLength
+			) {
 				console.error("Received invalid frame stride", {
 					strideBytes,
 					expectedRowBytes,
@@ -358,11 +414,18 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				for (let row = 0; row < height; row += 1) {
 					const srcStart = row * strideBytes;
 					const destStart = row * expectedRowBytes;
-					pixels.set(source.subarray(srcStart, srcStart + expectedRowBytes), destStart);
+					pixels.set(
+						source.subarray(srcStart, srcStart + expectedRowBytes),
+						destStart,
+					);
 				}
 			}
 
-			const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
+			const imageData = new ImageData(
+				new Uint8ClampedArray(pixels),
+				width,
+				height,
+			);
 			imageDataHandler({ width, data: imageData });
 		};
 
@@ -385,7 +448,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	const scale = () => {
-		const normalized = (state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
+		const normalized =
+			(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
 	};
 
@@ -421,7 +485,10 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			delta = -deltaY;
 		}
 
-		const newSize = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, start.size + delta));
+		const newSize = Math.max(
+			CAMERA_MIN_SIZE,
+			Math.min(CAMERA_MAX_SIZE, start.size + delta),
+		);
 		setState("size", newSize);
 	};
 
@@ -441,13 +508,21 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	const [windowSize] = createResource(
-		() => [state.size, state.shape, frameDimensions()?.width, frameDimensions()?.height] as const,
+		() =>
+			[
+				state.size,
+				state.shape,
+				frameDimensions()?.width,
+				frameDimensions()?.height,
+			] as const,
 		async ([size, shape, frameWidth, frameHeight]) => {
 			const BAR_HEIGHT = 56;
 			const base = Math.max(CAMERA_MIN_SIZE, Math.min(CAMERA_MAX_SIZE, size));
 			const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
-			const windowWidth = shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
-			const windowHeight = shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
+			const windowWidth =
+				shape === "full" ? (aspect >= 1 ? base * aspect : base) : base;
+			const windowHeight =
+				shape === "full" ? (aspect >= 1 ? base : base / aspect) : base;
 			const totalHeight = windowHeight + BAR_HEIGHT;
 
 			const currentWindow = getCurrentWindow();
@@ -464,8 +539,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				currentWindow.setPosition(
 					new LogicalPosition(
 						width + monitor.position.toLogical(scalingFactor).x,
-						height + monitor.position.toLogical(scalingFactor).y
-					)
+						height + monitor.position.toLogical(scalingFactor).y,
+					),
 				);
 				setHasPositioned(true);
 			} else {
@@ -478,11 +553,17 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				let newY = logicalPos.y;
 
 				// Right edge
-				if (newX + windowWidth > monitorLogicalPos.x + monitorLogicalSize.width) {
+				if (
+					newX + windowWidth >
+					monitorLogicalPos.x + monitorLogicalSize.width
+				) {
 					newX = monitorLogicalPos.x + monitorLogicalSize.width - windowWidth;
 				}
 				// Bottom edge
-				if (newY + totalHeight > monitorLogicalPos.y + monitorLogicalSize.height) {
+				if (
+					newY + totalHeight >
+					monitorLogicalPos.y + monitorLogicalSize.height
+				) {
 					newY = monitorLogicalPos.y + monitorLogicalSize.height - totalHeight;
 				}
 				// Left edge
@@ -494,13 +575,16 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 					newY = monitorLogicalPos.y;
 				}
 
-				if (Math.abs(newX - logicalPos.x) > 1 || Math.abs(newY - logicalPos.y) > 1) {
+				if (
+					Math.abs(newX - logicalPos.x) > 1 ||
+					Math.abs(newY - logicalPos.y) > 1
+				) {
 					await currentWindow.setPosition(new LogicalPosition(newX, newY));
 				}
 			}
 
 			return { width, height, size: base, windowWidth, windowHeight };
-		}
+		},
 	);
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
@@ -511,8 +595,8 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			(label) => {
 				if (label === null) getCurrentWindow().close();
 			},
-			{ defer: true }
-		)
+			{ defer: true },
+		),
 	);
 
 	onMount(() => getCurrentWindow().show());
@@ -538,20 +622,34 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						<ControlButton
 							pressed={state.size >= CAMERA_PRESET_LARGE}
 							onClick={() => {
-								setState("size", state.size < CAMERA_PRESET_LARGE ? CAMERA_PRESET_LARGE : CAMERA_PRESET_SMALL);
+								setState(
+									"size",
+									state.size < CAMERA_PRESET_LARGE
+										? CAMERA_PRESET_LARGE
+										: CAMERA_PRESET_SMALL,
+								);
 							}}
 						>
 							<IconCapEnlarge class="size-5.5" />
 						</ControlButton>
 						<ControlButton
 							pressed={state.shape !== "round"}
-							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
+							onClick={() =>
+								setState("shape", (s) =>
+									s === "round" ? "square" : s === "square" ? "full" : "round",
+								)
+							}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
-							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
+							{state.shape === "full" && (
+								<IconLucideRectangleHorizontal class="size-5.5" />
+							)}
 						</ControlButton>
-						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
+						<ControlButton
+							pressed={state.mirrored}
+							onClick={() => setState("mirrored", (m) => !m)}
+						>
 							<IconCapArrows class="size-5.5" />
 						</ControlButton>
 					</div>
@@ -580,13 +678,17 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div
 				class={cx(
 					"flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-gray-1 text-gray-12",
-					state.shape === "round" ? "rounded-full" : "rounded-3xl"
+					state.shape === "round" ? "rounded-full" : "rounded-3xl",
 				)}
 				data-tauri-drag-region
 			>
 				<Suspense fallback={<CameraLoadingState />}>
 					<Show when={latestFrame() !== null && latestFrame() !== undefined}>
-						<Canvas latestFrame={latestFrame} state={state} ref={cameraCanvasRef} />
+						<Canvas
+							latestFrame={latestFrame}
+							state={state}
+							ref={cameraCanvasRef}
+						/>
 					</Show>
 				</Suspense>
 			</div>
@@ -609,8 +711,18 @@ function Canvas(props: {
 		const base = props.state.size;
 
 		// Replicate window size logic synchronously for the canvas
-		const winWidth = props.state.shape === "full" ? (aspectRatio >= 1 ? base * aspectRatio : base) : base;
-		const winHeight = props.state.shape === "full" ? (aspectRatio >= 1 ? base : base / aspectRatio) : base;
+		const winWidth =
+			props.state.shape === "full"
+				? aspectRatio >= 1
+					? base * aspectRatio
+					: base
+				: base;
+		const winHeight =
+			props.state.shape === "full"
+				? aspectRatio >= 1
+					? base
+					: base / aspectRatio
+				: base;
 
 		if (props.state.shape === "full") {
 			return {
@@ -667,7 +779,8 @@ function CameraLoadingState() {
 
 function cameraBorderRadius(state: CameraWindowState) {
 	if (state.shape === "round") return "9999px";
-	const normalized = (state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
+	const normalized =
+		(state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 	const radius = 3 + normalized * 1.5;
 	return `${radius}rem`;
 }
@@ -678,7 +791,9 @@ function CameraDisconnectedOverlay() {
 			class="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm px-4 pointer-events-none"
 			style={{ "border-radius": "inherit" }}
 		>
-			<p class="text-center text-sm font-medium text-white/90">Camera disconnected</p>
+			<p class="text-center text-sm font-medium text-white/90">
+				Camera disconnected
+			</p>
 		</div>
 	);
 }

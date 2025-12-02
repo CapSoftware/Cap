@@ -1,19 +1,36 @@
 import { ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
-import { createMutation, createQuery, queryOptions, useQueryClient } from "@tanstack/solid-query";
+import {
+	createMutation,
+	createQuery,
+	queryOptions,
+	useQueryClient,
+} from "@tanstack/solid-query";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { ask, confirm } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
-import { createMemo, createSignal, For, type JSX, type ParentProps, Show } from "solid-js";
+import {
+	createMemo,
+	createSignal,
+	For,
+	type JSX,
+	type ParentProps,
+	Show,
+} from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import CapTooltip from "~/components/Tooltip";
 import { ArrowUpRight } from "~/icons";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { commands, events, type RecordingMetaWithMetadata, type UploadProgress } from "~/utils/tauri";
+import {
+	commands,
+	events,
+	type RecordingMetaWithMetadata,
+	type UploadProgress,
+} from "~/utils/tauri";
 
 type Recording = {
 	meta: RecordingMetaWithMetadata;
@@ -55,7 +72,7 @@ const recordingsQuery = queryOptions({
 					prettyName: meta.pretty_name,
 					thumbnailPath,
 				};
-			})
+			}),
 		);
 		return recordings;
 	},
@@ -65,8 +82,12 @@ const recordingsQuery = queryOptions({
 });
 
 export default function Recordings() {
-	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(Tabs[0].id);
-	const [uploadProgress, setUploadProgress] = createStore<Record</* video_id */ string, number>>({});
+	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
+		Tabs[0].id,
+	);
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record</* video_id */ string, number>
+	>({});
 	const recordings = createQuery(() => recordingsQuery);
 
 	createTauriEventListener(events.uploadProgressEvent, (e) => {
@@ -75,7 +96,7 @@ export default function Recordings() {
 			setUploadProgress(
 				produce((s) => {
 					delete s[e.video_id];
-				})
+				}),
 			);
 	});
 
@@ -88,7 +109,9 @@ export default function Recordings() {
 		if (activeTab() === "all") {
 			return recordings.data;
 		}
-		return recordings.data.filter((recording) => recording.meta.mode === activeTab());
+		return recordings.data.filter(
+			(recording) => recording.meta.mode === activeTab(),
+		);
 	});
 
 	const handleRecordingClick = (recording: Recording) => {
@@ -162,7 +185,9 @@ export default function Recordings() {
 									onClick={() => handleRecordingClick(recording)}
 									onOpenFolder={() => handleOpenFolder(recording.path)}
 									onOpenEditor={() => handleOpenEditor(recording.path)}
-									onCopyVideoToClipboard={() => handleCopyVideoToClipboard(recording.path)}
+									onCopyVideoToClipboard={() =>
+										handleCopyVideoToClipboard(recording.path)
+									}
 									uploadProgress={
 										recording.meta.upload &&
 										(recording.meta.upload.state === "MultipartUpload" ||
@@ -190,10 +215,12 @@ function RecordingItem(props: {
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
 	const mode = () => props.recording.meta.mode;
-	const firstLetterUpperCase = () => mode().charAt(0).toUpperCase() + mode().slice(1);
+	const firstLetterUpperCase = () =>
+		mode().charAt(0).toUpperCase() + mode().slice(1);
 
 	const queryClient = useQueryClient();
-	const studioCompleteCheck = () => mode() === "studio" && props.recording.meta.status.status === "Complete";
+	const studioCompleteCheck = () =>
+		mode() === "studio" && props.recording.meta.status.status === "Complete";
 
 	return (
 		<li
@@ -204,11 +231,16 @@ function RecordingItem(props: {
 			}}
 			class={cx(
 				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
-				studioCompleteCheck() ? "cursor-pointer hover:bg-gray-3" : "cursor-default"
+				studioCompleteCheck()
+					? "cursor-pointer hover:bg-gray-3"
+					: "cursor-default",
 			)}
 		>
 			<div class="flex gap-5 items-center">
-				<Show when={imageExists()} fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}>
+				<Show
+					when={imageExists()}
+					fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}
+				>
 					<img
 						class="object-cover rounded size-12"
 						alt="Recording thumbnail"
@@ -269,12 +301,19 @@ function RecordingItem(props: {
 				<Show when={mode() === "studio"}>
 					<Show when={props.uploadProgress}>
 						<CapTooltip content={`${(props.uploadProgress || 0).toFixed(2)}%`}>
-							<ProgressCircle variant="primary" progress={props.uploadProgress || 0} size="sm" />
+							<ProgressCircle
+								variant="primary"
+								progress={props.uploadProgress || 0}
+								size="sm"
+							/>
 						</CapTooltip>
 					</Show>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
-							<TooltipIconButton tooltipText="Open link" onClick={() => shell.open(sharing().link)}>
+							<TooltipIconButton
+								tooltipText="Open link"
+								onClick={() => shell.open(sharing().link)}
+							>
 								<IconCapLink class="size-4" />
 							</TooltipIconButton>
 						)}
@@ -289,7 +328,7 @@ function RecordingItem(props: {
 									{
 										title: "Recording is potentially corrupted",
 										kind: "warning",
-									}
+									},
 								))
 							)
 								return;
@@ -309,7 +348,7 @@ function RecordingItem(props: {
 									"Reupload",
 									new Channel<UploadProgress>((progress) => {}),
 									null,
-									null
+									null,
 								),
 						}));
 
@@ -371,7 +410,7 @@ function TooltipIconButton(
 		onClick: () => void;
 		tooltipText: string;
 		disabled?: boolean;
-	}>
+	}>,
 ) {
 	return (
 		<Tooltip>

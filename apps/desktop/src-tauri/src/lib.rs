@@ -2968,6 +2968,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                         UploadMeta::MultipartUpload {
                             video_id: _,
                             file_path,
+                            subpath,
                             pre_created_video,
                             recording_dir,
                         } => {
@@ -2975,6 +2976,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                 app.clone(),
                                 file_path,
                                 pre_created_video,
+                                subpath,
                                 recording_dir,
                                 None,
                             );

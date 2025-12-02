@@ -200,9 +200,7 @@ function Page() {
 							const screen = options.screen();
 							if (!screen)
 								throw new Error(
-									`No screen found. Number of available screens: ${
-										_screens()?.length
-									}`,
+									`No screen found. Number of available screens: ${_screens()?.length}`,
 								);
 							return { variant: "display", id: screen.id };
 						}
@@ -210,9 +208,7 @@ function Page() {
 							const win = options.window();
 							if (!win)
 								throw new Error(
-									`No window found. Number of available windows: ${
-										_windows()?.length
-									}`,
+									`No window found. Number of available windows: ${_windows()?.length}`,
 								);
 							return { variant: "window", id: win.id };
 						}
@@ -220,9 +216,7 @@ function Page() {
 							const screen = options.screen();
 							if (!screen)
 								throw new Error(
-									`No screen found. Number of available screens: ${
-										_screens()?.length
-									}`,
+									`No screen found. Number of available screens: ${_screens()?.length}`,
 								);
 							return {
 								variant: "area",
@@ -843,7 +837,7 @@ function TargetSelect<T extends { id: string; name: string }>(props: {
 }
 
 function InfoPill(
-	props: ComponentProps<"button"> & { variant: "blue" | "red" },
+	props: ComponentProps<"button"> & { variant: "blue" | "red" | "on" | "off" },
 ) {
 	return (
 		<button

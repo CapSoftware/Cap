@@ -30,11 +30,17 @@ pub struct Mp4Muxer {
     audio_encoder: Option<AACEncoder>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mp4MuxerConfig {
+    pub output_size: Option<(u32, u32)>,
+    pub bpp: Option<f32>,
+}
+
 impl Muxer for Mp4Muxer {
-    type Config = ();
+    type Config = Mp4MuxerConfig;
 
     async fn setup(
-        _: Self::Config,
+        config: Self::Config,
         output_path: std::path::PathBuf,
         video_config: Option<cap_media_info::VideoInfo>,
         audio_config: Option<cap_media_info::AudioInfo>,
@@ -47,7 +53,16 @@ impl Muxer for Mp4Muxer {
         let mut output = ffmpeg::format::output(&output_path)?;
 
         let video_encoder = video_config
-            .map(|video_config| H264Encoder::builder(video_config).build(&mut output))
+            .map(|video_config| {
+                let mut builder = H264Encoder::builder(video_config);
+                if let Some((width, height)) = config.output_size {
+                    builder = builder.with_output_size(width, height)?;
+                }
+                if let Some(bpp) = config.bpp {
+                    builder = builder.with_bpp(bpp);
+                }
+                builder.build(&mut output)
+            })
             .transpose()
             .context("video encoder")?;
 
