@@ -395,6 +395,7 @@ pub async fn start_recording(
         let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
     }
 
+    // Pre-create video for both instant and studio mode
     let video_upload_info = match inputs.mode {
         RecordingMode::Instant => {
             match AuthStore::get(&app).ok().flatten() {
@@ -422,7 +423,7 @@ pub async fn start_recording(
                             return Ok(RecordingAction::UpgradeRequired);
                         }
                         Err(err) => {
-                            error!("Error creating instant mode video: {err}");
+                            error!("Error creating video: {err}");
                             return Err(err.to_string());
                         }
                     };
@@ -443,10 +444,9 @@ pub async fn start_recording(
                         config: s3_config,
                     })
                 }
-                // Allow the recording to proceed without error for any signed-in user
                 _ => {
-                    // User is not signed in
-                    return Err("Please sign in to use instant recording".to_string());
+                    // User is not signed in - both modes require authentication now
+                    return Err("Please sign in to record".to_string());
                 }
             }
         }
