@@ -3,7 +3,9 @@ use crate::{
     output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
 };
 use anyhow::{Context, anyhow};
-use cap_enc_ffmpeg::{aac::AACEncoder, h264::*, ogg::*, opus::OpusEncoder};
+use cap_enc_ffmpeg::{
+    aac::AACEncoder, fragmented_mp4::FragmentedMP4File, h264::*, ogg::*, opus::OpusEncoder,
+};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use std::{
@@ -152,5 +154,101 @@ impl Muxer for OggMuxer {
 impl AudioMuxer for OggMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
         Ok(self.0.queue_frame(frame.inner, timestamp)?)
+    }
+}
+
+pub struct FragmentedMp4Muxer {
+    output: ffmpeg::format::context::Output,
+    video_encoder: Option<H264Encoder>,
+    audio_encoder: Option<AACEncoder>,
+}
+
+impl Muxer for FragmentedMp4Muxer {
+    type Config = ();
+
+    async fn setup(
+        _: Self::Config,
+        output_path: std::path::PathBuf,
+        video_config: Option<cap_media_info::VideoInfo>,
+        audio_config: Option<cap_media_info::AudioInfo>,
+        _: Arc<AtomicBool>,
+        _: &mut TaskPool,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let mut output = ffmpeg::format::output(&output_path)?;
+
+        let video_encoder = video_config
+            .map(|video_config| H264Encoder::builder(video_config).build(&mut output))
+            .transpose()
+            .context("video encoder")?;
+
+        let audio_encoder = audio_config
+            .map(|config| AACEncoder::init(config, &mut output))
+            .transpose()
+            .context("audio encoder")?;
+
+        let mut opts = ffmpeg::Dictionary::new();
+        opts.set("movflags", "frag_keyframe+empty_moov+default_base_moof");
+        opts.set("frag_duration", "1000000");
+
+        output.write_header_with(opts)?;
+
+        Ok(Self {
+            output,
+            video_encoder,
+            audio_encoder,
+        })
+    }
+
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let video_result = self
+            .video_encoder
+            .as_mut()
+            .map(|enc| enc.flush(&mut self.output))
+            .unwrap_or(Ok(()));
+
+        let audio_result = self
+            .audio_encoder
+            .as_mut()
+            .map(|enc| enc.flush(&mut self.output))
+            .unwrap_or(Ok(()));
+
+        self.output.write_trailer().context("write_trailer")?;
+
+        if video_result.is_ok() && audio_result.is_ok() {
+            return Ok(Ok(()));
+        }
+
+        Ok(Err(anyhow!(
+            "Video: {video_result:#?}, Audio: {audio_result:#?}"
+        )))
+    }
+}
+
+impl VideoMuxer for FragmentedMp4Muxer {
+    type VideoFrame = FFmpegVideoFrame;
+
+    fn send_video_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        if let Some(video_encoder) = self.video_encoder.as_mut() {
+            video_encoder.queue_frame(frame.inner, timestamp, &mut self.output)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl AudioMuxer for FragmentedMp4Muxer {
+    fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        if let Some(audio_encoder) = self.audio_encoder.as_mut() {
+            audio_encoder.send_frame(frame.inner, timestamp, &mut self.output)?;
+        }
+
+        Ok(())
     }
 }

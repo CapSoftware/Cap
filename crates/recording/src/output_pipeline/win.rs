@@ -305,7 +305,13 @@ impl Muxer for WindowsMuxer {
             .await
             .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        {
+            let mut output_guard = output.lock().unwrap();
+            let mut opts = ffmpeg::Dictionary::new();
+            opts.set("movflags", "frag_keyframe+empty_moov+default_base_moof");
+            opts.set("frag_duration", "1000000");
+            output_guard.write_header_with(opts)?;
+        }
 
         Ok(Self {
             video_tx,

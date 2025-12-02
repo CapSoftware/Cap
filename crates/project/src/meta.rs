@@ -57,6 +57,9 @@ impl Default for Platform {
 
         #[cfg(target_os = "macos")]
         return Self::MacOS;
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        return Self::MacOS;
     }
 }
 
@@ -196,6 +199,150 @@ impl RecordingMeta {
             RecordingMetaInner::Studio(meta) => Some(meta),
             _ => None,
         }
+    }
+
+    pub fn needs_recovery(project_path: &Path) -> bool {
+        let partial_meta_path = project_path.join("recording-meta-partial.json");
+        let full_meta_path = project_path.join("recording-meta.json");
+
+        partial_meta_path.exists() && !full_meta_path.exists()
+    }
+
+    pub fn try_recover(project_path: &Path, pretty_name: String) -> Result<Self, Box<dyn Error>> {
+        info!("Attempting to recover recording at {:?}", project_path);
+
+        let segments_dir = project_path.join("content").join("segments");
+        let cursors_dir = project_path.join("content").join("cursors");
+
+        if !segments_dir.exists() {
+            return Err("No segments directory found".into());
+        }
+
+        let mut segments = Vec::new();
+        let mut segment_dirs: Vec<_> = std::fs::read_dir(&segments_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        segment_dirs.sort_by_key(|e| e.path());
+
+        const MIN_VIDEO_SIZE: u64 = 1024;
+
+        let file_is_valid = |path: &Path, min_size: u64| -> bool {
+            path.exists()
+                && std::fs::metadata(path)
+                    .map(|m| m.len() >= min_size)
+                    .unwrap_or(false)
+        };
+
+        for segment_entry in segment_dirs {
+            let segment_dir = segment_entry.path();
+
+            let display_path = segment_dir.join("display.mp4");
+            if !file_is_valid(&display_path, MIN_VIDEO_SIZE) {
+                warn!(
+                    "Skipping segment {:?} - display.mp4 missing or too small",
+                    segment_dir.file_name()
+                );
+                continue;
+            }
+
+            let camera_path = segment_dir.join("camera.mp4");
+            let mic_path = segment_dir.join("audio-input.ogg");
+            let system_audio_path = segment_dir.join("system_audio.ogg");
+            let cursor_json_path = segment_dir.join("cursor.json");
+            let cursor_stream_path = segment_dir.join("cursor-stream.jsonl");
+            let has_cursor_data = cursor_json_path.exists() || cursor_stream_path.exists();
+
+            let relative_base = segment_dir
+                .strip_prefix(project_path)
+                .map(|p| RelativePathBuf::from_path(p).ok())
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| RelativePathBuf::from("content/segments/segment-0"));
+
+            segments.push(MultipleSegment {
+                display: VideoMeta {
+                    path: relative_base.join("display.mp4"),
+                    fps: 30,
+                    start_time: None,
+                },
+                camera: file_is_valid(&camera_path, MIN_VIDEO_SIZE).then(|| VideoMeta {
+                    path: relative_base.join("camera.mp4"),
+                    fps: 30,
+                    start_time: None,
+                }),
+                mic: mic_path.exists().then(|| AudioMeta {
+                    path: relative_base.join("audio-input.ogg"),
+                    start_time: None,
+                }),
+                system_audio: system_audio_path.exists().then(|| AudioMeta {
+                    path: relative_base.join("system_audio.ogg"),
+                    start_time: None,
+                }),
+                cursor: has_cursor_data.then(|| relative_base.join("cursor.json")),
+            });
+        }
+
+        if segments.is_empty() {
+            return Err("No valid segments found for recovery".into());
+        }
+
+        let segment_count = segments.len();
+
+        let mut cursor_map = HashMap::new();
+        if cursors_dir.exists() {
+            for entry in std::fs::read_dir(&cursors_dir)?.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "png") {
+                    if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if let Some(id) = file_stem.strip_prefix("cursor_") {
+                            let relative_path = RelativePathBuf::from("content/cursors")
+                                .join(entry.file_name().to_string_lossy().as_ref());
+                            cursor_map.insert(
+                                id.to_string(),
+                                CursorMeta {
+                                    image_path: relative_path,
+                                    hotspot: XY { x: 0.0, y: 0.0 },
+                                    shape: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let meta = Self {
+            platform: Some(Platform::default()),
+            project_path: project_path.to_path_buf(),
+            pretty_name,
+            sharing: None,
+            inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                inner: MultipleSegments {
+                    segments,
+                    cursors: Cursors::Correct(cursor_map),
+                    status: Some(StudioRecordingStatus::Complete),
+                },
+            }),
+            upload: None,
+        };
+
+        meta.save_for_project().map_err(|e| match e {
+            Either::Left(e) => Box::new(e) as Box<dyn Error>,
+            Either::Right(e) => Box::new(e) as Box<dyn Error>,
+        })?;
+
+        let partial_meta_path = project_path.join("recording-meta-partial.json");
+        if partial_meta_path.exists() {
+            let _ = std::fs::remove_file(partial_meta_path);
+        }
+
+        info!(
+            "Successfully recovered recording with {} segment(s)",
+            segment_count
+        );
+
+        Ok(meta)
     }
 }
 
@@ -382,20 +529,22 @@ impl MultipleSegment {
     }
 
     pub fn cursor_events(&self, meta: &RecordingMeta) -> CursorEvents {
-        let Some(cursor_path) = &self.cursor else {
+        let segment_dir = self
+            .cursor
+            .as_ref()
+            .and_then(|p| meta.path(p).parent().map(|p| p.to_path_buf()))
+            .or_else(|| {
+                self.display
+                    .path
+                    .parent()
+                    .map(|p| meta.project_path.join(p.as_str()))
+            });
+
+        let Some(dir) = segment_dir else {
             return CursorEvents::default();
         };
 
-        let full_path = meta.path(cursor_path);
-
-        // Try to load the cursor data
-        let mut data = match CursorEvents::load_from_file(&full_path) {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to load cursor data: {e}");
-                return CursorEvents::default();
-            }
-        };
+        let mut data = CursorEvents::load_with_fallback(&dir);
 
         let pointer_ids = if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
             studio_meta.pointer_cursor_ids()

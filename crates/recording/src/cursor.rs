@@ -3,7 +3,13 @@ use cap_cursor_info::CursorShape;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs::{File, OpenOptions},
+    io::{BufWriter, Write},
+    path::PathBuf,
+    time::Instant,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -19,12 +25,19 @@ pub type Cursors = HashMap<u64, Cursor>;
 
 #[derive(Clone)]
 pub struct CursorActorResponse {
-    // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
     pub next_cursor_id: u32,
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CursorEventBatch {
+    moves: Vec<CursorMoveEvent>,
+    clicks: Vec<CursorClickEvent>,
+}
+
+const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 
 pub struct CursorActor {
     stop: Option<DropGuard>,
@@ -42,6 +55,7 @@ pub fn spawn_cursor_recorder(
     crop_bounds: CursorCropBounds,
     display: scap_targets::Display,
     cursors_dir: PathBuf,
+    cursor_stream_path: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
@@ -54,7 +68,7 @@ pub fn spawn_cursor_recorder(
         pin::pin,
         time::Duration,
     };
-    use tracing::{error, info};
+    use tracing::{error, info, warn};
 
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
@@ -66,7 +80,6 @@ pub fn spawn_cursor_recorder(
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
-        // Create cursors directory if it doesn't exist
         std::fs::create_dir_all(&cursors_dir).unwrap();
 
         let mut response = CursorActorResponse {
@@ -76,6 +89,36 @@ pub fn spawn_cursor_recorder(
             clicks: vec![],
         };
 
+        let mut pending_moves: Vec<CursorMoveEvent> = vec![];
+        let mut pending_clicks: Vec<CursorClickEvent> = vec![];
+        let mut last_flush = Instant::now();
+
+        let flush_to_stream = |path: &PathBuf,
+                               moves: &mut Vec<CursorMoveEvent>,
+                               clicks: &mut Vec<CursorClickEvent>| {
+            if moves.is_empty() && clicks.is_empty() {
+                return;
+            }
+
+            let batch = CursorEventBatch {
+                moves: std::mem::take(moves),
+                clicks: std::mem::take(clicks),
+            };
+
+            match OpenOptions::new().create(true).append(true).open(path) {
+                Ok(file) => {
+                    let mut writer = BufWriter::new(file);
+                    if let Ok(json) = serde_json::to_string(&batch) {
+                        let _ = writeln!(writer, "{}", json);
+                        let _ = writer.flush();
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to open cursor stream file: {}", e);
+                }
+            }
+        };
+
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(10));
             let Either::Right(_) =
@@ -83,6 +126,11 @@ pub fn spawn_cursor_recorder(
             else {
                 break;
             };
+
+            if last_flush.elapsed().as_secs() >= CURSOR_FLUSH_INTERVAL_SECS {
+                flush_to_stream(&cursor_stream_path, &mut pending_moves, &mut pending_clicks);
+                last_flush = Instant::now();
+            }
 
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
@@ -151,6 +199,7 @@ pub fn spawn_cursor_recorder(
                     y,
                 };
 
+                pending_moves.push(mouse_event.clone());
                 response.moves.push(mouse_event);
             }
 
@@ -170,11 +219,14 @@ pub fn spawn_cursor_recorder(
                     cursor_id: cursor_id.clone(),
                     time_ms: elapsed,
                 };
+                pending_clicks.push(mouse_event.clone());
                 response.clicks.push(mouse_event);
             }
 
             last_mouse_state = mouse_state;
         }
+
+        flush_to_stream(&cursor_stream_path, &mut pending_moves, &mut pending_clicks);
 
         info!("cursor recorder done");
 
