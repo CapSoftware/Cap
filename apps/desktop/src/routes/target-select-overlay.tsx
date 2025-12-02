@@ -3,12 +3,26 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { invoke } from "@tauri-apps/api/core";
+import { LogicalPosition, type PhysicalPosition, type PhysicalSize } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createEffect, createMemo, createSignal, Match, mergeProps, onCleanup, Show, Suspense, Switch } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	Match,
+	mergeProps,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+	Switch,
+} from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import toast from "solid-toast";
 import {
 	CROP_ZERO,
 	type CropBounds,
@@ -193,6 +207,16 @@ function Inner() {
 	const unsubOnEscapePress = events.onEscapePress.listen(() => {
 		setOptions("targetMode", null);
 		commands.closeTargetSelectOverlays();
+
+		// We can't easily access `revertCamera` here because it's inside the Match.
+		// However, if we close overlays, the camera might stay moved?
+		// The user request says "if the user cancels the selection".
+		// Pressing Escape cancels the selection mode entirely.
+		// Ideally we should revert the camera position if we moved it.
+		// But `revertCamera` is scoped to `Inner` -> `Match`.
+		// We can rely on the fact that `originalCameraBounds` state is local to that Match block.
+		// If the block unmounts, we might want to revert?
+		// `onCleanup` inside the Match block is the right place.
 	});
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
@@ -360,10 +384,21 @@ function Inner() {
 					let controlsEl: HTMLDivElement | undefined;
 					let cropperRef: CropperRef | undefined;
 
+					const [cameraWindow, setCameraWindow] = createSignal<WebviewWindow | null>(null);
+					const [originalCameraBounds, setOriginalCameraBounds] = createSignal<{
+						position: PhysicalPosition;
+						size: PhysicalSize;
+					} | null>(null);
+					const [cachedScaleFactor, setCachedScaleFactor] = createSignal<number | null>(null);
+
+					onMount(async () => {
+						const win = await WebviewWindow.getByLabel("camera");
+						if (win) setCameraWindow(win);
+					});
+
 					const [aspect, setAspect] = createSignal<Ratio | null>(null);
 					const [snapToRatioEnabled, setSnapToRatioEnabled] = createSignal(true);
 					const [isInteracting, setIsInteracting] = createSignal(false);
-					const [committedCrop, setCommittedCrop] = createSignal<CropBounds>(CROP_ZERO);
 					const shouldShowSelectionHint = createMemo(() => {
 						if (initialAreaBounds() !== undefined) return false;
 						const bounds = crop();
@@ -374,14 +409,142 @@ function Inner() {
 						const b = crop();
 						return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
 					});
-					const committedIsValid = createMemo(() => {
-						const b = committedCrop();
-						return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+
+					const [targetState, setTargetState] = createSignal<{
+						x: number;
+						y: number;
+						width: number;
+						height: number;
+					} | null>(null);
+
+					let lastApplied: {
+						x: number;
+						y: number;
+						width: number;
+						height: number;
+					} | null = null;
+
+					onMount(() => {
+						let processing = false;
+						let raf: number;
+
+						const loop = async () => {
+							const target = targetState();
+							if (target && !processing) {
+								const changed =
+									!lastApplied ||
+									Math.abs(lastApplied.x - target.x) > 1 ||
+									Math.abs(lastApplied.y - target.y) > 1 ||
+									Math.abs(lastApplied.width - target.width) > 1 ||
+									Math.abs(lastApplied.height - target.height) > 1;
+
+								if (changed) {
+									processing = true;
+									try {
+										await invoke("update_camera_overlay_bounds", {
+											x: target.x,
+											y: target.y,
+											width: target.width,
+											height: target.height,
+										});
+										lastApplied = target;
+									} catch (e) {
+										console.error("Failed to update camera window", e);
+									}
+									processing = false;
+								}
+							}
+							raf = requestAnimationFrame(loop);
+						};
+						raf = requestAnimationFrame(loop);
+						onCleanup(() => cancelAnimationFrame(raf));
 					});
 
-					createEffect(() => {
-						if (isInteracting()) return;
-						setCommittedCrop(crop());
+					createEffect(async () => {
+						if (options.mode === "screenshot") return;
+						const bounds = crop();
+						const interacting = isInteracting();
+
+						// Find the camera window if we haven't yet
+						let win = cameraWindow();
+						if (!win) {
+							// Try to find it
+							try {
+								win = await WebviewWindow.getByLabel("camera");
+								if (!win) {
+									// Fallback: check all windows
+									const all = await WebviewWindow.getAll();
+									win = all.find((w) => w.label.includes("camera")) ?? null;
+								}
+								if (win) setCameraWindow(win);
+							} catch (e) {
+								console.error("Failed to find camera window", e);
+							}
+						}
+
+						if (!win || !interacting) return;
+
+						// Initialize data
+						if (!originalCameraBounds() || cachedScaleFactor() === null) {
+							try {
+								const pos = await win.outerPosition();
+								const size = await win.outerSize();
+								const factor = await win.scaleFactor();
+								setOriginalCameraBounds({ position: pos, size });
+								setCachedScaleFactor(factor);
+							} catch (e) {
+								console.error("Failed to init camera bounds", e);
+							}
+							return;
+						}
+
+						const original = originalCameraBounds();
+						const scaleFactor = cachedScaleFactor() ?? 1;
+
+						if (!original) return;
+
+						const originalLogicalSize = original.size.toLogical(scaleFactor);
+
+						const padding = 16;
+						const selectionMinDim = Math.min(bounds.width, bounds.height);
+						const targetMaxDim = Math.max(
+							150,
+							Math.min(Math.max(originalLogicalSize.width, originalLogicalSize.height), selectionMinDim * 0.5)
+						);
+
+						const originalMaxDim = Math.max(originalLogicalSize.width, originalLogicalSize.height);
+						const scale = targetMaxDim / originalMaxDim;
+
+						const newWidth = Math.round(originalLogicalSize.width * scale);
+						const newHeight = Math.round(originalLogicalSize.height * scale);
+
+						if (bounds.width > newWidth + padding * 2 && bounds.height > newHeight + padding * 2) {
+							const newX = Math.round(bounds.x + bounds.width - newWidth - padding);
+							const newY = Math.round(bounds.y + bounds.height - newHeight - padding);
+
+							setTargetState({
+								x: newX * scaleFactor,
+								y: newY * scaleFactor,
+								width: newWidth * scaleFactor,
+								height: newHeight * scaleFactor,
+							});
+						}
+					});
+
+					async function revertCamera() {
+						const original = originalCameraBounds();
+						const win = cameraWindow();
+						if (original && win) {
+							await win.setPosition(original.position);
+							await win.setSize(original.size);
+							setOriginalCameraBounds(null);
+							setTargetState(null);
+							lastApplied = null;
+						}
+					}
+
+					onCleanup(() => {
+						revertCamera();
 					});
 
 					async function showCropOptionsMenu(e: UIEvent) {
@@ -393,6 +556,7 @@ function Inner() {
 									cropperRef?.reset();
 									setAspect(null);
 									setPendingAreaTarget(null);
+									revertCamera();
 								},
 							},
 							await PredefinedMenuItem.new({
@@ -477,10 +641,10 @@ function Inner() {
 
 					createEffect(() => {
 						if (isInteracting()) return;
-						if (!committedIsValid()) return;
+						if (!isValid()) return;
 						const screenId = displayId();
 						if (!screenId) return;
-						const bounds = committedCrop();
+						const bounds = crop();
 						setPendingAreaTarget({
 							variant: "area",
 							screen: screenId,
@@ -491,28 +655,69 @@ function Inner() {
 						});
 					});
 
+					const [wasInteracting, setWasInteracting] = createSignal(false);
+					createEffect(async () => {
+						const interacting = isInteracting();
+						const was = wasInteracting();
+						setWasInteracting(interacting);
+
+						if (was && !interacting) {
+							if (options.mode === "screenshot" && isValid()) {
+								const target: ScreenCaptureTarget = {
+									variant: "area",
+									screen: displayId(),
+									bounds: {
+										position: {
+											x: crop().x,
+											y: crop().y,
+										},
+										size: {
+											width: crop().width,
+											height: crop().height,
+										},
+									},
+								};
+
+								try {
+									const path = await invoke<string>("take_screenshot", {
+										target,
+									});
+									await commands.showWindow({ ScreenshotEditor: { path } });
+									await commands.closeTargetSelectOverlays();
+								} catch (e) {
+									const message = e instanceof Error ? e.message : String(e);
+									toast.error(`Failed to take screenshot: ${message}`);
+									console.error("Failed to take screenshot", e);
+								}
+							}
+						}
+					});
+
 					return (
-						<div class="fixed w-screen h-screen bg-black/60 relative">
+						<div class="fixed w-screen h-screen bg-black/60">
 							<div ref={controlsEl} class="fixed z-50 transition-opacity" style={controlsStyle()}>
 								<div class="flex flex-col items-center">
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: displayId(),
-											bounds: {
-												position: {
-													x: committedCrop().x,
-													y: committedCrop().y,
+									<Show when={options.mode !== "screenshot"}>
+										<RecordingControls
+											target={{
+												variant: "area",
+												screen: displayId(),
+												bounds: {
+													position: {
+														x: crop().x,
+														y: crop().y,
+													},
+													size: {
+														width: crop().width,
+														height: crop().height,
+													},
 												},
-												size: {
-													width: committedCrop().width,
-													height: committedCrop().height,
-												},
-											},
-										}}
-										disabled={!isValid()}
-										showBackground={controllerInside()}
-									/>
+											}}
+											disabled={!isValid()}
+											showBackground={controllerInside()}
+											onRecordingStart={() => setOriginalCameraBounds(null)}
+										/>
+									</Show>
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
 											<p>Minimum size is 150 x 150</p>
@@ -555,6 +760,7 @@ function RecordingControls(props: {
 	setToggleModeSelect?: (value: boolean) => void;
 	showBackground?: boolean;
 	disabled?: boolean;
+	onRecordingStart?: () => void;
 }) {
 	const auth = authStore.createQuery();
 	const { setOptions, rawOptions } = useRecordingOptions();
@@ -600,6 +806,13 @@ function RecordingControls(props: {
 						setOptions("mode", "instant");
 					},
 					checked: rawOptions.mode === "instant",
+				}),
+				await CheckMenuItem.new({
+					text: "Screenshot Mode",
+					action: () => {
+						setOptions("mode", "screenshot");
+					},
+					checked: rawOptions.mode === "screenshot",
 				}),
 			],
 		});
@@ -718,13 +931,33 @@ function RecordingControls(props: {
 						<IconCapCaretDown class="pointer-events-none focus:rotate-90" />
 					</div> */}
 				</div>
-				{/* <div
-					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
-					onMouseDown={(e) => showMenu(preRecordingMenu(), e)}
-					onClick={(e) => showMenu(preRecordingMenu(), e)}
-				>
-					<IconCapGear class="pointer-events-none will-change-transform size-5" />
-				</div> */}
+				{/* <Show when={(rawOptions.mode as string) !== "screenshot"}>
+					<div class="p-3 rounded-2xl border border-white/30 dark:border-white/10 bg-white/70 dark:bg-gray-2/70 shadow-lg backdrop-blur-xl">
+						<div class="grid grid-cols-2 gap-2 w-full">
+							<CameraSelect
+								disabled={cameras.isPending}
+								options={cameras.data ?? []}
+								value={selectedCamera() ?? null}
+								onChange={(camera) => {
+									if (!camera) setCamera.mutate(null);
+									else if (camera.model_id)
+										setCamera.mutate({ ModelID: camera.model_id });
+									else setCamera.mutate({ DeviceID: camera.device_id });
+								}}
+							/>
+							<MicrophoneSelect
+								disabled={mics.isPending}
+								options={mics.isPending ? [] : (mics.data ?? [])}
+								value={
+									mics.isPending
+										? (rawOptions.micName ?? null)
+										: selectedMicName()
+								}
+								onChange={(value) => setMicInput.mutate(value)}
+							/>
+						</div>
+					</div>
+				</Show> */}
 			</div>
 			{/* <div class="flex justify-center items-center w-full">
 				<div

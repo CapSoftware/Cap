@@ -76,6 +76,7 @@
 
 /* Dark theme variables */
 :root.dark {
+	color-scheme: dark;
 	/* Main background colors */
 	--gray-50: #141414; /* Main background - slightly darker */
 	--gray-100: #181818; /* Secondary background */

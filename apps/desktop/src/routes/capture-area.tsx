@@ -23,6 +23,7 @@ import SelectionHint from "~/components/selection-hint";
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 import { emitTo } from "~/utils/tauriSpectaHack";
+import IconLucideExpand from "~icons/lucide/expand";
 
 const MIN_SIZE = { width: 150, height: 150 };
 

@@ -50,10 +50,12 @@ pub async fn export_video(
             settings
                 .export(exporter_base, move |frame_index| {
                     // Ensure progress never exceeds total frames
-                    let _ = progress.send(FramesRendered {
-                        rendered_count: (frame_index + 1).min(total_frames),
-                        total_frames,
-                    });
+                    progress
+                        .send(FramesRendered {
+                            rendered_count: (frame_index + 1).min(total_frames),
+                            total_frames,
+                        })
+                        .is_ok()
                 })
                 .await
         }
@@ -61,10 +63,12 @@ pub async fn export_video(
             settings
                 .export(exporter_base, move |frame_index| {
                     // Ensure progress never exceeds total frames
-                    let _ = progress.send(FramesRendered {
-                        rendered_count: (frame_index + 1).min(total_frames),
-                        total_frames,
-                    });
+                    progress
+                        .send(FramesRendered {
+                            rendered_count: (frame_index + 1).min(total_frames),
+                            total_frames,
+                        })
+                        .is_ok()
                 })
                 .await
         }

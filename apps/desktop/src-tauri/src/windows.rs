@@ -21,13 +21,14 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, apply_camera_input, apply_mic_input, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
-    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
     window_exclusion::WindowExclusion,
 };
+use cap_recording::feeds;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -48,6 +49,7 @@ pub enum CapWindowId {
     Upgrade,
     ModeSelect,
     Debug,
+    ScreenshotEditor { id: u32 },
 }
 
 impl FromStr for CapWindowId {
@@ -69,6 +71,12 @@ impl FromStr for CapWindowId {
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
+                    .parse::<u32>()
+                    .map_err(|e| e.to_string())?,
+            },
+            s if s.starts_with("screenshot-editor-") => Self::ScreenshotEditor {
+                id: s
+                    .replace("screenshot-editor-", "")
                     .parse::<u32>()
                     .map_err(|e| e.to_string())?,
             },
@@ -109,6 +117,7 @@ impl std::fmt::Display for CapWindowId {
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
+            Self::ScreenshotEditor { id } => write!(f, "screenshot-editor-{id}"),
         }
     }
 }
@@ -126,6 +135,7 @@ impl CapWindowId {
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::RecordingControls => "Cap Recording Controls".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
             Self::ModeSelect => "Cap Mode Selection".to_string(),
             Self::Camera => "Cap Camera".to_string(),
             Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
@@ -139,6 +149,7 @@ impl CapWindowId {
             Self::Setup
                 | Self::Main
                 | Self::Editor { .. }
+                | Self::ScreenshotEditor { .. }
                 | Self::Settings
                 | Self::Upgrade
                 | Self::ModeSelect
@@ -153,7 +164,9 @@ impl CapWindowId {
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 32.0))),
+            Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
+                Some(Some(LogicalPosition::new(20.0, 32.0)))
+            }
             Self::Settings => Some(Some(LogicalPosition::new(16.0, 28.0))),
             Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Camera
@@ -170,6 +183,7 @@ impl CapWindowId {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
+            Self::ScreenshotEditor { .. } => (800.0, 600.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
@@ -207,6 +221,9 @@ pub enum ShowCapWindow {
     },
     Upgrade,
     ModeSelect,
+    ScreenshotEditor {
+        path: PathBuf,
+    },
 }
 
 impl ShowCapWindow {
@@ -217,6 +234,19 @@ impl ShowCapWindow {
             if !s.iter().any(|(path, _)| path == project_path) {
                 s.push((
                     project_path.clone(),
+                    state
+                        .counter
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                ));
+            }
+        }
+
+        if let Self::ScreenshotEditor { path } = &self {
+            let state = app.state::<ScreenshotEditorWindowIds>();
+            let mut s = state.ids.lock().unwrap();
+            if !s.iter().any(|(p, _)| p == path) {
+                s.push((
+                    path.clone(),
                     state
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
@@ -314,8 +344,6 @@ impl ShowCapWindow {
                         crate::platform::set_window_level(window.as_ref().window(), 50);
                     }
                 }
-
-                restore_recording_inputs_if_idle(app);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -449,6 +477,17 @@ impl ShowCapWindow {
                     .center()
                     .build()?
             }
+            Self::ScreenshotEditor { path: _ } => {
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.close();
+                };
+
+                self.window_builder(app, "/screenshot-editor")
+                    .maximizable(true)
+                    .inner_size(1240.0, 800.0)
+                    .center()
+                    .build()?
+            }
             Self::Upgrade => {
                 // Hide main window when upgrade window opens
                 if let Some(main) = CapWindowId::Main.get(app) {
@@ -536,6 +575,13 @@ impl ShowCapWindow {
                     let window = window_builder.build()?;
 
                     if enable_native_camera_preview {
+                        if let Some(id) = state.selected_camera_id.clone()
+                            && !state.camera_in_use
+                        {
+                            let _ = state.camera_feed.ask(feeds::camera::SetInput { id }).await;
+                            state.camera_in_use = true;
+                        }
+
                         let camera_feed = state.camera_feed.clone();
                         if let Err(err) = state
                             .camera_preview
@@ -549,6 +595,8 @@ impl ShowCapWindow {
 
                     #[cfg(target_os = "macos")]
                     {
+                        crate::platform::set_window_level(window.as_ref().window(), 60);
+
                         _ = window.run_on_main_thread({
                             let window = window.as_ref().window();
                             move || unsafe {
@@ -829,50 +877,14 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
-        }
-    }
-}
-
-fn restore_recording_inputs_if_idle(app: &AppHandle<Wry>) {
-    let settings = match RecordingSettingsStore::get(app) {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "Failed to load recording settings while restoring inputs");
-            return;
-        }
-    };
-
-    let mic_name = settings.mic_name.clone();
-    let camera_id = settings.camera_id.clone();
-
-    if mic_name.is_none() && camera_id.is_none() {
-        return;
-    }
-
-    let app_handle = app.clone();
-    let state = app_handle.state::<ArcLock<App>>();
-    let app_state = state.inner().clone();
-
-    tauri::async_runtime::spawn(async move {
-        if app_state.read().await.is_recording_active_or_pending() {
-            return;
-        }
-
-        if let Some(mic) = mic_name {
-            match apply_mic_input(app_handle.state(), Some(mic)).await {
-                Err(err) => warn!(%err, "Failed to restore microphone input"),
-                Ok(_) => {}
+            ShowCapWindow::ScreenshotEditor { path } => {
+                let state = app.state::<ScreenshotEditorWindowIds>();
+                let s = state.ids.lock().unwrap();
+                let id = s.iter().find(|(p, _)| p == path).unwrap().1;
+                CapWindowId::ScreenshotEditor { id }
             }
         }
-
-        if let Some(camera) = camera_id {
-            match apply_camera_input(app_handle.clone(), app_handle.state(), Some(camera)).await {
-                Err(err) => warn!(%err, "Failed to restore camera input"),
-                Ok(_) => {}
-            }
-        }
-    });
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1074,5 +1086,17 @@ pub struct EditorWindowIds {
 impl EditorWindowIds {
     pub fn get(app: &AppHandle) -> Self {
         app.state::<EditorWindowIds>().deref().clone()
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct ScreenshotEditorWindowIds {
+    pub ids: Arc<Mutex<Vec<(PathBuf, u32)>>>,
+    pub counter: Arc<AtomicU32>,
+}
+
+impl ScreenshotEditorWindowIds {
+    pub fn get(app: &AppHandle) -> Self {
+        app.state::<ScreenshotEditorWindowIds>().deref().clone()
     }
 }

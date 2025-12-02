@@ -17,6 +17,14 @@ pub struct DecodedFrame {
 }
 
 impl DecodedFrame {
+    pub fn new(data: Vec<u8>, width: u32, height: u32) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+        }
+    }
+
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -39,7 +47,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 100;
+pub const FRAME_CACHE_SIZE: usize = 500;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {

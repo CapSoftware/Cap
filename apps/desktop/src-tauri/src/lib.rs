@@ -22,6 +22,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
@@ -58,6 +59,12 @@ use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
 use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
+use screenshot_editor::{
+    ScreenshotEditorInstances, create_screenshot_editor_instance, update_screenshot_config,
+};
+
+mod gpu_context;
+pub use gpu_context::{PendingScreenshot, PendingScreenshots};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -84,7 +91,9 @@ use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
-use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
+use windows::{
+    CapWindowId, EditorWindowIds, ScreenshotEditorWindowIds, ShowCapWindow, set_window_transparent,
+};
 
 use crate::{
     camera::CameraPreviewManager,
@@ -115,6 +124,7 @@ pub struct App {
     selected_mic_label: Option<String>,
     selected_camera_id: Option<DeviceOrModelID>,
     camera_in_use: bool,
+    camera_cleanup_done: bool,
     camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
     logs_dir: PathBuf,
@@ -331,13 +341,6 @@ impl App {
 #[specta::specta]
 #[instrument(skip(state))]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    apply_mic_input(state, label).await
-}
-
-pub(crate) async fn apply_mic_input(
-    state: MutableState<'_, App>,
-    label: Option<String>,
-) -> Result<(), String> {
     let (mic_feed, studio_handle, current_label) = {
         let app = state.read().await;
         let handle = match app.current_recording() {
@@ -422,14 +425,6 @@ async fn set_camera_input(
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    apply_camera_input(app_handle, state, id).await
-}
-
-pub(crate) async fn apply_camera_input(
-    app_handle: AppHandle,
-    state: MutableState<'_, App>,
-    id: Option<DeviceOrModelID>,
-) -> Result<(), String> {
     let app = state.read().await;
     let camera_feed = app.camera_feed.clone();
     let studio_handle = match app.current_recording() {
@@ -459,12 +454,39 @@ pub(crate) async fn apply_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
-            camera_feed
-                .ask(feeds::camera::SetInput { id: id.clone() })
-                .await
-                .map_err(|e| e.to_string())?
-                .await
-                .map_err(|e| e.to_string())?;
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+
+                // We first ask the actor to set the input
+                // This returns a future that resolves when the camera is actually ready
+                let request = camera_feed
+                    .ask(feeds::camera::SetInput { id: id.clone() })
+                    .await
+                    .map_err(|e| e.to_string());
+
+                let result = match request {
+                    Ok(future) => future.await.map_err(|e| e.to_string()),
+                    Err(e) => Err(e),
+                };
+
+                match result {
+                    Ok(_) => break,
+                    Err(e) => {
+                        if attempts >= 3 {
+                            return Err(format!(
+                                "Failed to initialize camera after {} attempts: {}",
+                                attempts, e
+                            ));
+                        }
+                        warn!(
+                            "Failed to set camera input (attempt {}): {}. Retrying...",
+                            attempts, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
 
             ShowCapWindow::Camera
                 .show(&app_handle)
@@ -491,6 +513,9 @@ pub(crate) async fn apply_camera_input(
         let app = &mut *state.write().await;
         app.selected_camera_id = id;
         app.camera_in_use = app.selected_camera_id.is_some();
+        if app.camera_in_use {
+            app.camera_cleanup_done = false;
+        }
         let cleared = app.disconnected_inputs.remove(&RecordingInputKind::Camera);
 
         if cleared {
@@ -543,6 +568,23 @@ fn spawn_mic_error_handler(app_handle: AppHandle, error_rx: flume::Receiver<Stre
 fn spawn_device_watchers(app_handle: AppHandle) {
     spawn_microphone_watcher(app_handle.clone());
     spawn_camera_watcher(app_handle);
+}
+
+async fn cleanup_camera_window(app: AppHandle) {
+    let state = app.state::<ArcLock<App>>();
+    let mut app_state = state.write().await;
+
+    if app_state.camera_cleanup_done {
+        return;
+    }
+
+    app_state.camera_cleanup_done = true;
+    app_state.camera_preview.on_window_close();
+
+    if !app_state.is_recording_active_or_pending() {
+        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+        app_state.camera_in_use = false;
+    }
 }
 
 fn spawn_microphone_watcher(app_handle: AppHandle) {
@@ -743,9 +785,17 @@ enum CurrentRecordingTarget {
 
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub enum RecordingStatus {
+    Pending,
+    Recording,
+}
+
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 struct CurrentRecording {
     target: CurrentRecordingTarget,
     mode: RecordingMode,
+    status: RecordingStatus,
 }
 
 #[tauri::command]
@@ -756,10 +806,14 @@ async fn get_current_recording(
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
 
-    let (mode, capture_target) = match &state.recording_state {
+    let (mode, capture_target, status) = match &state.recording_state {
         RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target),
-        RecordingState::Active(inner) => (inner.mode(), inner.capture_target()),
+        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
+        RecordingState::Active(inner) => (
+            inner.mode(),
+            inner.capture_target(),
+            RecordingStatus::Recording,
+        ),
     };
 
     let target = match capture_target {
@@ -777,7 +831,11 @@ async fn get_current_recording(
         },
     };
 
-    Ok(JsonValue::new(&Some(CurrentRecording { target, mode })))
+    Ok(JsonValue::new(&Some(CurrentRecording {
+        target,
+        mode,
+        status,
+    })))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -1076,6 +1134,25 @@ async fn copy_screenshot_to_clipboard(
         .await
         .set_image(img_data)
         .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(clipboard, data))]
+async fn copy_image_to_clipboard(
+    clipboard: MutableState<'_, ClipboardContext>,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    println!("Copying image to clipboard ({} bytes)", data.len());
+
+    let img_data = clipboard_rs::RustImageData::from_bytes(&data)
+        .map_err(|e| format!("Failed to create image data from bytes: {e}"))?;
+    clipboard
+        .write()
+        .await
+        .set_image(img_data)
+        .map_err(|err| format!("Failed to copy image to clipboard: {err}"))?;
     Ok(())
 }
 
@@ -2199,6 +2276,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::resume_recording,
             recording::restart_recording,
             recording::delete_recording,
+            recording::take_screenshot,
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_displays,
@@ -2217,6 +2295,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
+            copy_image_to_clipboard,
             open_file_path,
             get_video_metadata,
             create_editor_instance,
@@ -2232,6 +2311,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             permissions::request_permission,
             upload_exported_video,
             upload_screenshot,
+            create_screenshot_editor_instance,
+            update_screenshot_config,
             get_recording_meta,
             save_file_dialog,
             list_recordings,
@@ -2270,6 +2351,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
+            target_select_overlay::update_camera_overlay_bounds,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
@@ -2406,6 +2488,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
+                    label if label.starts_with("screenshot-editor-") => "screenshot-editor",
                     label if label.starts_with("window-capture-occluder-") => {
                         "window-capture-occluder"
                     }
@@ -2423,10 +2506,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            app.manage(ScreenshotEditorWindowIds::default());
             #[cfg(target_os = "macos")]
             app.manage(crate::platform::ScreenCapturePrewarmer::default());
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
+            app.manage(PendingScreenshots::default());
+
+            gpu_context::prewarm_gpu();
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2508,6 +2595,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     selected_mic_label: None,
                     selected_camera_id: None,
                     camera_in_use: false,
+                    camera_cleanup_done: false,
                     camera_feed,
                     server_url,
                     logs_dir: logs_dir.clone(),
@@ -2562,8 +2650,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                     .flatten()
                     .unwrap_or_default();
 
-                let _ = apply_mic_input(app.state(), settings.mic_name).await;
-                let _ = apply_camera_input(app.clone(), app.state(), settings.camera_id).await;
+                let _ = set_mic_input(app.state(), settings.mic_name).await;
+                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
 
                 let _ = start_recording(app.clone(), app.state(), {
                     recording::StartRecordingInputs {
@@ -2615,6 +2703,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             let app = window.app_handle();
 
             match event {
+                WindowEvent::CloseRequested { .. } => {
+                    if let Ok(CapWindowId::Camera) = CapWindowId::from_str(label) {
+                        tokio::spawn(cleanup_camera_window(app.clone()));
+                    }
+                }
                 WindowEvent::Destroyed => {
                     if let Ok(window_id) = CapWindowId::from_str(label) {
                         match window_id {
@@ -2640,6 +2733,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                             .camera_feed
                                             .ask(feeds::camera::RemoveInput)
                                             .await;
+
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
                                         app_state.camera_in_use = false;
@@ -2651,6 +2745,18 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
+
+                                #[cfg(target_os = "windows")]
+                                if CapWindowId::Settings.get(&app).is_none() {
+                                    reopen_main_window(&app);
+                                }
+                            }
+                            CapWindowId::ScreenshotEditor { id } => {
+                                let window_ids =
+                                    ScreenshotEditorWindowIds::get(window.app_handle());
+                                window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
+
+                                tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
                                 if CapWindowId::Settings.get(&app).is_none() {
@@ -2698,14 +2804,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     .destroy(&display_id, app.global_shortcut());
                             }
                             CapWindowId::Camera => {
-                                let app = app.clone();
-                                tokio::spawn(async move {
-                                    app.state::<ArcLock<App>>()
-                                        .write()
-                                        .await
-                                        .camera_preview
-                                        .on_window_close();
-                                });
+                                tokio::spawn(cleanup_camera_window(app.clone()));
                             }
                             _ => {}
                         };
@@ -2760,6 +2859,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             tauri::RunEvent::Reopen { .. } => {
                 let has_window = _handle.webview_windows().iter().any(|(label, _)| {
                     label.starts_with("editor-")
+                        || label.starts_with("screenshot-editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
                 });
@@ -2770,6 +2870,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                         .iter()
                         .find(|(label, _)| {
                             label.starts_with("editor-")
+                                || label.starts_with("screenshot-editor-")
                                 || label.as_str() == "settings"
                                 || label.as_str() == "signin"
                         })

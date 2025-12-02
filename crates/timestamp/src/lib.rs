@@ -32,6 +32,19 @@ impl Timestamp {
         }
     }
 
+    pub fn checked_duration_since(&self, start: Timestamps) -> Option<Duration> {
+        match self {
+            Self::Instant(instant) => instant.checked_duration_since(start.instant),
+            Self::SystemTime(time) => time.duration_since(start.system_time).ok(),
+            #[cfg(windows)]
+            Self::PerformanceCounter(counter) => {
+                counter.checked_duration_since(start.performance_counter)
+            }
+            #[cfg(target_os = "macos")]
+            Self::MachAbsoluteTime(time) => time.checked_duration_since(start.mach_absolute_time),
+        }
+    }
+
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
         #[cfg(windows)]
         {

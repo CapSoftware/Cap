@@ -59,7 +59,7 @@ const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
 	return (
 		<div className="block overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2">
 			<div className="pb-12">
-				<nav className="relative mt-24 mobile">
+				<nav className="relative mt-36 mobile">
 					<ul className="p-0 space-y-4">
 						{internalLinks.map((link, index) => (
 							<li key={`internal-${index.toString()}`}>

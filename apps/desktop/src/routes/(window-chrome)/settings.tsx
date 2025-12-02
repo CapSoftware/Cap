@@ -62,8 +62,56 @@ export default function Settings(props: RouteSectionProps) {
 		<div class="flex-1 flex flex-col text-[0.875rem] leading-[1.25rem] overflow-y-hidden ">
 			<div class="flex flex-col border-b border-gray-3 h-10 my-4">
 				<ul class="flex flex-row gap-5 text-gray-12 relative">
-					<For each={TABS}>
-						{(item, index) => (
+					<For
+						each={[
+							{
+								href: "general",
+								name: "General",
+								icon: IconCapSettings,
+							},
+							{
+								href: "hotkeys",
+								name: "Shortcuts",
+								icon: IconCapHotkeys,
+							},
+							{
+								href: "recordings",
+								name: "Recordings",
+								icon: IconLucideSquarePlay,
+							},
+							{
+								href: "screenshots",
+								name: "Screenshots",
+								icon: IconLucideImage,
+							},
+							{
+								href: "integrations",
+								name: "Integrations",
+								icon: IconLucideUnplug,
+							},
+							{
+								href: "license",
+								name: "License",
+								icon: IconLucideGift,
+							},
+							{
+								href: "experimental",
+								name: "Experimental",
+								icon: IconCapSettings,
+							},
+							{
+								href: "feedback",
+								name: "Feedback",
+								icon: IconLucideMessageSquarePlus,
+							},
+							{
+								href: "changelog",
+								name: "Changelog",
+								icon: IconLucideBell,
+							},
+						].filter(Boolean)}
+					>
+						{(item) => (
 							<li>
 								<A
 									ref={(el) => (tabRefs[index()] = el)}

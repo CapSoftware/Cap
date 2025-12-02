@@ -1,12 +1,13 @@
 import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
-import { createMutation, useQuery } from "@tanstack/solid-query";
+import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
 import { listen } from "@tauri-apps/api/event";
 import { getAllWebviewWindows, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow, LogicalSize, primaryMonitor } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import * as shell from "@tauri-apps/plugin-shell";
 import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
 import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, onMount, Show, Suspense } from "solid-js";
@@ -24,6 +25,7 @@ import {
 	createLicenseQuery,
 	listAudioDevices,
 	listDisplaysWithThumbnails,
+	listRecordings,
 	listScreens,
 	listVideoDevices,
 	listWindows,
@@ -37,12 +39,19 @@ import {
 	type CaptureWindowWithThumbnail,
 	commands,
 	type DeviceOrModelID,
+	type RecordingMetaWithMetadata,
 	type RecordingTargetMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
+import IconCapLogoFull from "~icons/cap/logo-full";
+import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
+import IconCapSettings from "~icons/cap/settings";
 import IconLucideAppWindowMac from "~icons/lucide/app-window-mac";
 import IconLucideArrowLeft from "~icons/lucide/arrow-left";
+import IconLucideBug from "~icons/lucide/bug";
+import IconLucideImage from "~icons/lucide/image";
 import IconLucideSearch from "~icons/lucide/search";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
 import IconMaterialSymbolsScreenshotFrame2Rounded from "~icons/material-symbols/screenshot-frame-2-rounded";
 import IconMdiMonitor from "~icons/mdi/monitor";
 import { WindowChromeHeader } from "../Context";
@@ -51,6 +60,7 @@ import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
+import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
@@ -111,6 +121,18 @@ type TargetMenuPanelProps =
 			variant: "window";
 			targets?: CaptureWindowWithThumbnail[];
 			onSelect: (target: CaptureWindowWithThumbnail) => void;
+	  }
+	| {
+			variant: "recording";
+			targets?: RecordingWithPath[];
+			onSelect: (target: RecordingWithPath) => void;
+			onViewAll: () => void;
+	  }
+	| {
+			variant: "screenshot";
+			targets?: ScreenshotWithPath[];
+			onSelect: (target: ScreenshotWithPath) => void;
+			onViewAll: () => void;
 	  };
 
 type SharedTargetMenuProps = {
@@ -124,8 +146,22 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	const [search, setSearch] = createSignal("");
 	const trimmedSearch = createMemo(() => search().trim());
 	const normalizedQuery = createMemo(() => trimmedSearch().toLowerCase());
-	const placeholder = props.variant === "display" ? "Search displays" : "Search windows";
-	const noResultsMessage = props.variant === "display" ? "No matching displays" : "No matching windows";
+	const placeholder =
+		props.variant === "display"
+			? "Search displays"
+			: props.variant === "window"
+			? "Search windows"
+			: props.variant === "recording"
+			? "Search recordings"
+			: "Search screenshots";
+	const noResultsMessage =
+		props.variant === "display"
+			? "No matching displays"
+			: props.variant === "window"
+			? "No matching windows"
+			: props.variant === "recording"
+			? "No matching recordings"
+			: "No matching screenshots";
 
 	const filteredDisplayTargets = createMemo<CaptureDisplayWithThumbnail[]>(() => {
 		if (props.variant !== "display") return [];
@@ -151,6 +187,28 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 		);
 	});
 
+	const filteredRecordingTargets = createMemo<RecordingWithPath[]>(() => {
+		if (props.variant !== "recording") return [];
+		const query = normalizedQuery();
+		const targets = props.targets ?? [];
+		if (!query) return targets;
+
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+
+		return targets.filter((target) => matchesQuery(target.pretty_name));
+	});
+
+	const filteredScreenshotTargets = createMemo<ScreenshotWithPath[]>(() => {
+		if (props.variant !== "screenshot") return [];
+		const query = normalizedQuery();
+		const targets = props.targets ?? [];
+		if (!query) return targets;
+
+		const matchesQuery = (value?: string | null) => !!value && value.toLowerCase().includes(query);
+
+		return targets.filter((target) => matchesQuery(target.pretty_name));
+	});
+
 	return (
 		<div class="flex flex-col w-full h-full min-h-0">
 			<div class="flex gap-3 justify-between items-center mt-3">
@@ -164,25 +222,47 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					<span class="font-medium text-gray-12">Back</span>
 				</div>
 				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
-					<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
-					<Input
-						type="search"
-						class="py-2 pl-6 h-full"
-						value={search()}
-						onInput={(event) => setSearch(event.currentTarget.value)}
-						onKeyDown={(event) => {
-							if (event.key === "Escape" && search()) {
-								event.preventDefault();
-								setSearch("");
-							}
-						}}
-						placeholder={placeholder}
-						autoCapitalize="off"
-						autocorrect="off"
-						autocomplete="off"
-						spellcheck={false}
-						aria-label={placeholder}
-					/>
+					<Show
+						when={props.variant === "recording" || props.variant === "screenshot"}
+						fallback={
+							<>
+								<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+								<Input
+									type="search"
+									class="py-2 pl-6 h-full"
+									value={search()}
+									onInput={(event) => setSearch(event.currentTarget.value)}
+									onKeyDown={(event) => {
+										if (event.key === "Escape" && search()) {
+											event.preventDefault();
+											setSearch("");
+										}
+									}}
+									placeholder={placeholder}
+									autoCapitalize="off"
+									autocorrect="off"
+									autocomplete="off"
+									spellcheck={false}
+									aria-label={placeholder}
+								/>
+							</>
+						}
+					>
+						<button
+							type="button"
+							class="flex w-full items-center justify-start h-full pl-2 text-xs text-gray-11 transition-colors rounded hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
+							onClick={() => {
+								if ("onViewAll" in props) props.onViewAll();
+							}}
+						>
+							{props.variant === "recording" ? (
+								<IconLucideSquarePlay class="mr-2 size-3" />
+							) : (
+								<IconLucideImage class="mr-2 size-3" />
+							)}
+							{props.variant === "recording" ? "View All Recordings" : "View All Screenshots"}
+						</button>
+					</Show>
 				</div>
 			</div>
 			<div class="pt-4">
@@ -198,10 +278,32 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							highlightQuery={trimmedSearch()}
 							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
 						/>
-					) : (
+					) : props.variant === "window" ? (
 						<TargetMenuGrid
 							variant="window"
 							targets={filteredWindowTargets()}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							highlightQuery={trimmedSearch()}
+							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+						/>
+					) : props.variant === "recording" ? (
+						<TargetMenuGrid
+							variant="recording"
+							targets={filteredRecordingTargets()}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							highlightQuery={trimmedSearch()}
+							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+						/>
+					) : (
+						<TargetMenuGrid
+							variant="screenshot"
+							targets={filteredScreenshotTargets()}
 							isLoading={props.isLoading}
 							errorMessage={props.errorMessage}
 							onSelect={props.onSelect}
@@ -284,9 +386,13 @@ function Page() {
 
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
-	const activeMenu = createMemo<"display" | "window" | null>(() => {
+	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
+	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
+	const activeMenu = createMemo<"display" | "window" | "recording" | "screenshot" | null>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
+		if (recordingsMenuOpen()) return "recording";
+		if (screenshotsMenuOpen()) return "screenshot";
 		return null;
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
@@ -304,6 +410,21 @@ function Page() {
 		...listWindowsWithThumbnails,
 		refetchInterval: false,
 	}));
+
+	const recordings = useQuery(() => listRecordings);
+	const screenshots = useQuery(() =>
+		queryOptions<ScreenshotWithPath[]>({
+			queryKey: ["screenshots"],
+			queryFn: async () => {
+				const result = await commands.listScreenshots().catch(() => [] as const);
+
+				return result.map(([path, meta]) => ({ ...meta, path } as ScreenshotWithPath));
+			},
+			refetchInterval: 2000,
+			reconcile: (old, next) => reconcile(next)(old),
+			initialData: [],
+		})
+	);
 
 	const screens = useQuery(() => listScreens);
 	const windows = useQuery(() => listWindows);
@@ -335,6 +456,22 @@ function Page() {
 		const ids = existingWindowIds();
 		if (!ids) return windowTargets.data;
 		return windowTargets.data?.filter((target) => ids.has(target.id));
+	});
+
+	const recordingsData = createMemo(() => {
+		const data = recordings.data;
+		if (!data) return [];
+		// The Rust backend sorts files descending by creation time (newest first).
+		// See list_recordings in apps/desktop/src-tauri/src/lib.rs
+		// b_time.cmp(&a_time) ensures newest first.
+		// So we just need to take the top 20.
+		return data.slice(0, 20).map(([path, meta]) => ({ ...meta, path } as RecordingWithPath));
+	});
+
+	const screenshotsData = createMemo(() => {
+		const data = screenshots.data;
+		if (!data) return [];
+		return data.slice(0, 20) as ScreenshotWithPath[];
 	});
 
 	const displayMenuLoading = () =>
@@ -378,6 +515,8 @@ function Page() {
 		if (!isRecording()) return;
 		setDisplayMenuOpen(false);
 		setWindowMenuOpen(false);
+		setRecordingsMenuOpen(false);
+		setScreenshotsMenuOpen(false);
 	});
 
 	createUpdateCheck();
@@ -715,14 +854,38 @@ function Page() {
 								<SettingsIcon class="text-neutral-300 size-4 group-hover:text-white" />
 							</button>
 						</Tooltip>
-						{/* <Tooltip content={<span>Previous Recordings</span>}>
+						{/* <Tooltip content={<span>Screenshots</span>}>
 							<button
 								type="button"
-								onClick={async () => {
-									await commands.showWindow({
-										Settings: { page: "recordings" },
+								onClick={() => {
+									setScreenshotsMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setDisplayMenuOpen(false);
+											setWindowMenuOpen(false);
+											setRecordingsMenuOpen(false);
+										}
+										return next;
 									});
-									getCurrentWindow().hide();
+								}}
+								class="flex justify-center items-center size-5"
+							>
+								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
+							</button>
+						</Tooltip>
+						<Tooltip content={<span>Recordings</span>}>
+							<button
+								type="button"
+								onClick={() => {
+									setRecordingsMenuOpen((prev) => {
+										const next = !prev;
+										if (next) {
+											setDisplayMenuOpen(false);
+											setWindowMenuOpen(false);
+											setScreenshotsMenuOpen(false);
+										}
+										return next;
+									});
 								}}
 								class="flex justify-center items-center size-5"
 							>
@@ -800,7 +963,7 @@ function Page() {
 										displayTriggerRef?.focus();
 									}}
 								/>
-							) : (
+							) : variant === "window" ? (
 								<TargetMenuPanel
 									variant="window"
 									targets={windowTargetsData()}
@@ -811,6 +974,60 @@ function Page() {
 									onBack={() => {
 										setWindowMenuOpen(false);
 										windowTriggerRef?.focus();
+									}}
+								/>
+							) : variant === "recording" ? (
+								<TargetMenuPanel
+									variant="recording"
+									targets={recordingsData()}
+									isLoading={recordings.isPending}
+									errorMessage={recordings.error ? "Failed to load recordings" : undefined}
+									onSelect={async (recording) => {
+										if (recording.mode === "studio") {
+											await commands.showWindow({
+												Editor: { project_path: recording.path },
+											});
+										} else {
+											if (recording.sharing?.link) {
+												await shell.open(recording.sharing.link);
+											}
+										}
+										getCurrentWindow().hide();
+									}}
+									disabled={isRecording()}
+									onBack={() => {
+										setRecordingsMenuOpen(false);
+									}}
+									onViewAll={async () => {
+										await commands.showWindow({
+											Settings: { page: "recordings" },
+										});
+										getCurrentWindow().hide();
+									}}
+								/>
+							) : (
+								<TargetMenuPanel
+									variant="screenshot"
+									targets={screenshotsData()}
+									isLoading={screenshots.isPending}
+									errorMessage={screenshots.error ? "Failed to load screenshots" : undefined}
+									onSelect={async (screenshot) => {
+										await commands.showWindow({
+											ScreenshotEditor: {
+												path: screenshot.path,
+											},
+										});
+										// getCurrentWindow().hide(); // Maybe keep open?
+									}}
+									disabled={isRecording()}
+									onBack={() => {
+										setScreenshotsMenuOpen(false);
+									}}
+									onViewAll={async () => {
+										await commands.showWindow({
+											Settings: { page: "screenshots" },
+										});
+										getCurrentWindow().hide();
 									}}
 								/>
 							)

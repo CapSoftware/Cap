@@ -855,7 +855,7 @@ async fn create_segment_pipeline(
     }))
     .await
     .transpose()
-    .context("microphone pipeline setup")?;
+    .context("system audio pipeline setup")?;
 
     let cursor = custom_cursor_capture
         .then(move || {

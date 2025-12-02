@@ -11,7 +11,7 @@ use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
     Win32::{
-        Foundation::E_NOTIMPL,
+        Foundation::{E_FAIL, E_NOTIMPL},
         Graphics::{
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
@@ -435,14 +435,12 @@ impl H264Encoder {
                         // (e.g., hardware encoder transient failures, specific MFT implementations).
                         // This is a known contract violation by certain Media Foundation Transforms.
                         // We handle this gracefully by skipping the frame instead of panicking.
-                        let sample = {
-                            let mut output_buffers = [output_buffer];
-                            self.transform
-                                .ProcessOutput(0, &mut output_buffers, &mut status)?;
-                            output_buffers[0].pSample.as_ref().cloned()
-                        };
+                        let mut output_buffers = [output_buffer];
+                        self.transform
+                            .ProcessOutput(0, &mut output_buffers, &mut status)?;
 
-                        if let Some(sample) = sample {
+                        // Use the sample directly without cloning to prevent memory leaks
+                        if let Some(sample) = output_buffers[0].pSample.take() {
                             consecutive_empty_samples = 0;
                             on_sample(sample)?;
                         } else {

@@ -47,7 +47,6 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
-    apply_camera_input, apply_mic_input,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -56,7 +55,6 @@ use crate::{
     },
     open_external_link,
     presets::PresetsStore,
-    recording_settings::RecordingSettingsStore,
     thumbnails::*,
     upload::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
@@ -353,41 +351,6 @@ pub enum RecordingAction {
     UpgradeRequired,
 }
 
-async fn restore_inputs_from_store_if_missing(app: &AppHandle, state: &MutableState<'_, App>) {
-    let guard = state.read().await;
-    let recording_active = !matches!(guard.recording_state, RecordingState::None);
-    let needs_mic = guard.selected_mic_label.is_none();
-    let needs_camera = guard.selected_camera_id.is_none();
-    drop(guard);
-
-    if recording_active || (!needs_mic && !needs_camera) {
-        return;
-    }
-
-    let settings = match RecordingSettingsStore::get(app) {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return,
-        Err(err) => {
-            warn!(%err, "Failed to load recording settings while restoring inputs");
-            return;
-        }
-    };
-
-    if let Some(mic) = settings.mic_name.clone().filter(|_| needs_mic) {
-        match apply_mic_input(app.state(), Some(mic)).await {
-            Err(err) => warn!(%err, "Failed to restore microphone input"),
-            Ok(_) => {}
-        }
-    }
-
-    if let Some(camera) = settings.camera_id.clone().filter(|_| needs_camera) {
-        match apply_camera_input(app.clone(), app.state(), Some(camera)).await {
-            Err(err) => warn!(%err, "Failed to restore camera input"),
-            Ok(_) => {}
-        }
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -396,26 +359,8 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<RecordingAction, String> {
-    restore_inputs_from_store_if_missing(&app, &state_mtx).await;
-
     if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
         return Err("Recording already in progress".to_string());
-    }
-
-    let has_camera_selected = {
-        let guard = state_mtx.read().await;
-        guard.selected_camera_id.is_some()
-    };
-    let camera_window_open = CapWindowId::Camera.get(&app).is_some();
-    let should_open_camera_preview =
-        matches!(inputs.mode, RecordingMode::Instant) && has_camera_selected && !camera_window_open;
-
-    if should_open_camera_preview {
-        ShowCapWindow::Camera
-            .show(&app)
-            .await
-            .map_err(|err| error!("Failed to show camera preview window: {err}"))
-            .ok();
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -506,6 +451,7 @@ pub async fn start_recording(
             }
         }
         RecordingMode::Studio => None,
+        RecordingMode::Screenshot => return Err("Use take_screenshot for screenshots".to_string()),
     };
 
     let date_time = if cfg!(windows) {
@@ -531,6 +477,9 @@ pub async fn start_recording(
             }
             RecordingMode::Instant => {
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+            RecordingMode::Screenshot => {
+                return Err("Use take_screenshot for screenshots".to_string());
             }
         },
         sharing: None,
@@ -610,15 +559,56 @@ pub async fn start_recording(
         let inputs = inputs.clone();
         async move {
             fail!("recording::spawn_actor");
-            let mut state = state_mtx.write().await;
-
             use kameo::error::SendError;
 
-            let camera_feed = match state.camera_feed.ask(camera::Lock).await {
-                Ok(lock) => Some(Arc::new(lock)),
-                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+            // Initialize camera if selected but not active
+            let (camera_feed_actor, selected_camera_id) = {
+                let state = state_mtx.read().await;
+                (state.camera_feed.clone(), state.selected_camera_id.clone())
+            };
+
+            let camera_lock_result = camera_feed_actor.ask(camera::Lock).await;
+
+            let camera_feed_lock = match camera_lock_result {
+                Ok(lock) => Some(lock),
+                Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => {
+                    if let Some(id) = selected_camera_id {
+                        info!(
+                            "Camera selected but not initialized, initializing: {:?}",
+                            id
+                        );
+                        match camera_feed_actor
+                            .ask(camera::SetInput { id: id.clone() })
+                            .await
+                        {
+                            Ok(fut) => match fut.await {
+                                Ok(_) => match camera_feed_actor.ask(camera::Lock).await {
+                                    Ok(lock) => Some(lock),
+                                    Err(e) => {
+                                        warn!("Failed to lock camera after initialization: {}", e);
+                                        None
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Failed to initialize camera: {}", e);
+                                    None
+                                }
+                            },
+                            Err(e) => {
+                                warn!("Failed to ask SetInput: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                }
                 Err(e) => return Err(anyhow!(e.to_string())),
             };
+
+            let mut state = state_mtx.write().await;
+
+            let camera_feed = camera_feed_lock.map(Arc::new);
 
             state.camera_in_use = camera_feed.is_some();
 
@@ -749,6 +739,9 @@ pub async fn start_recording(
                                 camera_feed: camera_feed.clone(),
                             })
                         }
+                        RecordingMode::Screenshot => Err(anyhow!(
+                            "Screenshot mode should be handled via take_screenshot"
+                        )),
                     }
                 }
                 .await;
@@ -1038,6 +1031,158 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
     Ok(())
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+#[tracing::instrument(name = "take_screenshot", skip(app))]
+pub async fn take_screenshot(
+    app: AppHandle,
+    target: ScreenCaptureTarget,
+) -> Result<PathBuf, String> {
+    use crate::NewScreenshotAdded;
+    use crate::notifications;
+    use crate::{PendingScreenshot, PendingScreenshots};
+    use cap_recording::screenshot::capture_screenshot;
+    use image::ImageEncoder;
+    use std::time::Instant;
+
+    let image = capture_screenshot(target)
+        .await
+        .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
+
+    let image_width = image.width();
+    let image_height = image.height();
+    let image_data = image.into_raw();
+
+    let screenshots_dir = app.path().app_data_dir().unwrap().join("screenshots");
+
+    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+
+    let date_time = if cfg!(windows) {
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let cap_dir = screenshots_dir.join(format!("{id}.cap"));
+    std::fs::create_dir_all(&cap_dir).map_err(|e| e.to_string())?;
+
+    let image_filename = "original.png";
+    let image_path = cap_dir.join(image_filename);
+    let cap_dir_key = cap_dir.to_string_lossy().to_string();
+
+    let pending_screenshots = app.state::<PendingScreenshots>();
+    pending_screenshots.insert(
+        cap_dir_key.clone(),
+        PendingScreenshot {
+            data: image_data.clone(),
+            width: image_width,
+            height: image_height,
+            created_at: Instant::now(),
+        },
+    );
+
+    let relative_path = relative_path::RelativePathBuf::from(image_filename);
+
+    let video_meta = cap_project::VideoMeta {
+        path: relative_path,
+        fps: 0,
+        start_time: Some(0.0),
+    };
+
+    let segment = cap_project::SingleSegment {
+        display: video_meta,
+        camera: None,
+        audio: None,
+        cursor: None,
+    };
+
+    let meta = cap_project::RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: cap_dir.clone(),
+        pretty_name: format!("Screenshot {}", date_time),
+        sharing: None,
+        inner: cap_project::RecordingMetaInner::Studio(
+            cap_project::StudioRecordingMeta::SingleSegment { segment },
+        ),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+
+    cap_project::ProjectConfiguration::default()
+        .write(&cap_dir)
+        .map_err(|e| format!("Failed to save project config: {e}"))?;
+
+    let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
+    let compression = if is_large_capture {
+        image::codecs::png::CompressionType::Fast
+    } else {
+        image::codecs::png::CompressionType::Default
+    };
+    let image_path_for_emit = image_path.clone();
+    let image_path_for_write = image_path.clone();
+    let app_handle = app.clone();
+    let pending_state = PendingScreenshots(pending_screenshots.0.clone());
+
+    tauri::async_runtime::spawn(async move {
+        let encode_result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let file = std::fs::File::create(&image_path_for_write)
+                .map_err(|e| format!("Failed to create screenshot file: {e}"))?;
+            let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                std::io::BufWriter::new(file),
+                compression,
+                image::codecs::png::FilterType::Adaptive,
+            );
+
+            ImageEncoder::write_image(
+                encoder,
+                &image_data,
+                image_width,
+                image_height,
+                image::ColorType::Rgb8.into(),
+            )
+            .map_err(|e| format!("Failed to encode PNG: {e}"))
+        })
+        .await;
+
+        pending_state.remove(&cap_dir_key);
+
+        match encode_result {
+            Ok(Ok(())) => {
+                let _ = NewScreenshotAdded {
+                    path: image_path_for_emit.clone(),
+                }
+                .emit(&app_handle);
+
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaved,
+                );
+
+                AppSounds::StopRecording.play();
+            }
+            Ok(Err(e)) => {
+                error!("Failed to encode PNG: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+            Err(e) => {
+                error!("Failed to join screenshot encoding task: {e}");
+                notifications::send_notification(
+                    &app_handle,
+                    notifications::NotificationType::ScreenshotSaveFailed,
+                );
+            }
+        }
+    });
+
+    Ok(image_path)
+}
+
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
@@ -1097,6 +1242,9 @@ async fn handle_recording_end(
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         let _ = app.camera_feed.ask(camera::RemoveInput).await;
+        app.selected_mic_label = None;
+        app.selected_camera_id = None;
+        app.camera_in_use = false;
         if let Some(win) = CapWindowId::Camera.get(&handle) {
             win.close().ok();
         }

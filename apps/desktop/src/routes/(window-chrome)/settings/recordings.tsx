@@ -116,9 +116,11 @@ export default function Recordings() {
 	return (
 		<div class="flex relative flex-col space-y-4 w-full h-full">
 			{/* <div class="flex flex-col">
-        <h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
-        <p class="text-sm text-gray-10">Manage your recordings and perform actions.</p>
-      </div> */}
+				<h2 class="text-lg font-medium text-gray-12">Recordings</h2>
+				<p class="text-sm text-gray-10">
+					Manage your recordings and perform actions.
+				</p>
+			</div> */}
 			<Show
 				when={recordings.data && recordings.data.length > 0}
 				fallback={
