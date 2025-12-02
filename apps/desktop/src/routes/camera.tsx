@@ -16,13 +16,12 @@ import {
 	Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { ArrowsOutIcon } from "~/icons";
 import { generalSettingsStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCameraMutation } from "~/utils/queries";
 import { createLazySignal } from "~/utils/socket";
 import { commands, events } from "~/utils/tauri";
-import { useRecordingOptions } from "./(window-chrome)/OptionsContext";
+import { RecordingOptionsProvider, useRecordingOptions } from "./(window-chrome)/OptionsContext";
 
 type CameraWindowShape = "round" | "square" | "full";
 type CameraWindowState = {
@@ -100,8 +99,6 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	const setCamera = createCameraMutation();
 
-	const setCamera = createCameraMutation();
-
 	const scale = () => {
 		const normalized = (state.size - CAMERA_MIN_SIZE) / (CAMERA_MAX_SIZE - CAMERA_MIN_SIZE);
 		return 0.7 + normalized * 0.3;
@@ -166,41 +163,31 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row items-center justify-center gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-8 group-hover:translate-y-6 transition-[opacity,transform] text-white rounded-[18px] border border-white/15"
-						style={{
-							background:
-								"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--neutral-950, #090A0B)",
-							"background-blend-mode": "plus-lighter, normal",
-							"box-shadow":
-								"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
-							transform: `scale(${scale()})`,
-						}}
+						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						style={{ transform: `scale(${scale()})` }}
 					>
-						<ControlButtonWithBackground onClick={() => getCurrentWindow().close()}>
-							<IconCapCircleX class="size-4" />
-						</ControlButtonWithBackground>
-						<ControlButtonWithBackground
+						<ControlButton onClick={() => getCurrentWindow().close()}>
+							<IconCapCircleX class="size-5.5" />
+						</ControlButton>
+						<ControlButton
 							pressed={state.size >= CAMERA_PRESET_LARGE}
 							onClick={() => {
 								setState("size", state.size < CAMERA_PRESET_LARGE ? CAMERA_PRESET_LARGE : CAMERA_PRESET_SMALL);
 							}}
 						>
-							<ArrowsOutIcon class="size-4" />
-						</ControlButtonWithBackground>
-						<ControlButtonWithBackground
+							<IconCapEnlarge class="size-5.5" />
+						</ControlButton>
+						<ControlButton
 							pressed={state.shape !== "round"}
 							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
 							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
-						</ControlButtonWithBackground>
-						{/* <ControlButton
-							pressed={state.mirrored}
-							onClick={() => setState("mirrored", (m) => !m)}
-						>
+						</ControlButton>
+						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
 							<IconCapArrows class="size-5.5" />
-						</ControlButton> */}
+						</ControlButton>
 					</div>
 				</div>
 			</div>
@@ -233,20 +220,6 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 				</div>
 			</Show>
 		</div>
-	);
-}
-
-function ControlButtonWithBackground(
-	props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
-		active?: boolean;
-	}
-) {
-	return (
-		<KToggleButton
-			type="button"
-			class="flex items-center justify-center size-8 hover:bg-white/5 ui-pressed:bg-white/10 ui-pressed:hover:bg-white/15 ui-pressed:text-white rounded-[12px] "
-			{...props}
-		/>
 	);
 }
 
@@ -532,8 +505,6 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 
 	let cameraCanvasRef: HTMLCanvasElement | undefined;
 
-	const setCamera = createCameraMutation();
-
 	createEffect(
 		on(
 			() => rawOptions.cameraLabel,
@@ -561,28 +532,28 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
 						style={{ transform: `scale(${scale()})` }}
 					>
-						<ControlButtonWithBackground onClick={() => getCurrentWindow().close()}>
+						<ControlButton onClick={() => getCurrentWindow().close()}>
 							<IconCapCircleX class="size-5.5" />
-						</ControlButtonWithBackground>
-						<ControlButtonWithBackground
+						</ControlButton>
+						<ControlButton
 							pressed={state.size >= CAMERA_PRESET_LARGE}
 							onClick={() => {
 								setState("size", state.size < CAMERA_PRESET_LARGE ? CAMERA_PRESET_LARGE : CAMERA_PRESET_SMALL);
 							}}
 						>
 							<IconCapEnlarge class="size-5.5" />
-						</ControlButtonWithBackground>
-						<ControlButtonWithBackground
+						</ControlButton>
+						<ControlButton
 							pressed={state.shape !== "round"}
 							onClick={() => setState("shape", (s) => (s === "round" ? "square" : s === "square" ? "full" : "round"))}
 						>
 							{state.shape === "round" && <IconCapCircle class="size-5.5" />}
 							{state.shape === "square" && <IconCapSquare class="size-5.5" />}
 							{state.shape === "full" && <IconLucideRectangleHorizontal class="size-5.5" />}
-						</ControlButtonWithBackground>
-						{/* <ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
+						</ControlButton>
+						<ControlButton pressed={state.mirrored} onClick={() => setState("mirrored", (m) => !m)}>
 							<IconCapArrows class="size-5.5" />
-						</ControlButton> */}
+						</ControlButton>
 					</div>
 				</div>
 			</div>

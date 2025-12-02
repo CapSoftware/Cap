@@ -565,7 +565,7 @@ export default function () {
 								</button>
 
 								<div class="flex items-center gap-1">
-									<div class="relative flex h-8 w-8 items-center justify-center" title={microphoneTitle()}>
+									{/* <div class="relative flex h-8 w-8 items-center justify-center" title={microphoneTitle()}>
 										{optionsQuery.rawOptions.micName != null ? (
 											disconnectedInputs.microphone ? (
 												<IconLucideMicOff class="size-5 text-amber-11" />
@@ -585,7 +585,7 @@ export default function () {
 										) : (
 											<IconLucideMicOff class="size-5 text-gray-7" data-tauri-drag-region />
 										)}
-									</div>
+									</div> */}
 									<Show when={hasRecordingIssue()}>
 										<ActionButton
 											class={cx(
