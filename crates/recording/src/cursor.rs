@@ -211,8 +211,7 @@ fn get_cursor_data() -> Option<CursorData> {
 
         let image = image_data.as_bytes_unchecked().to_vec();
 
-        let shape =
-            cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
+        let shape = CursorShape::try_from(&hex::encode(Sha256::digest(&image))).ok();
 
         Some(CursorData {
             image,
