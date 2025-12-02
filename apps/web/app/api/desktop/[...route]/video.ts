@@ -3,6 +3,7 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
+	googleDriveConfigs,
 	organizationMembers,
 	organizations,
 	s3Buckets,
@@ -84,6 +85,11 @@ app.get(
 				.select()
 				.from(s3Buckets)
 				.where(eq(s3Buckets.ownerId, user.id));
+
+			const [googleDriveConfig] = await db()
+				.select()
+				.from(googleDriveConfigs)
+				.where(eq(googleDriveConfigs.ownerId, user.id));
 
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
@@ -180,6 +186,7 @@ app.get(
 								: undefined,
 					isScreenshot,
 					bucket: customBucket?.id,
+					googleDriveConfigId: googleDriveConfig?.id,
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
 					duration: durationInSecs,
 					width,
@@ -244,8 +251,13 @@ app.get(
 
 			return c.json({
 				id: idToUse,
-				// All deprecated
 				user_id: user.id,
+				storageType: googleDriveConfig
+					? "google-drive"
+					: customBucket
+						? "s3"
+						: "default",
+				googleDriveConfigId: googleDriveConfig?.id ?? null,
 				aws_region: "n/a",
 				aws_bucket: "n/a",
 			});

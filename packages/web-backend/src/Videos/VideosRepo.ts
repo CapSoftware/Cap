@@ -69,6 +69,12 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 									id,
 									orgId: data.orgId,
 									bucket: Option.getOrNull(data.bucketId ?? Option.none()),
+									googleDriveConfigId: Option.getOrNull(
+										data.googleDriveConfigId ?? Option.none(),
+									),
+									googleDriveFileId: Option.getOrNull(
+										data.googleDriveFileId ?? Option.none(),
+									),
 									metadata: Option.getOrNull(data.metadata ?? Option.none()),
 									transcriptionStatus: Option.getOrNull(
 										data.transcriptionStatus ?? Option.none(),

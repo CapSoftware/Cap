@@ -25,6 +25,14 @@ export default function AppsTab() {
 			url: "/settings/integrations/s3-config",
 			pro: true,
 		},
+		{
+			name: "Google Drive",
+			description:
+				"Store and serve your screen recordings directly from your Google Drive. Connect your Google account to upload recordings to a folder you choose. Shareable links will serve content from Google Drive, giving you full control over your files in a familiar cloud storage environment.",
+			icon: IconLucideHardDrive,
+			url: "/settings/integrations/google-drive-config",
+			pro: true,
+		},
 	];
 
 	const handleAppClick = async (app: (typeof apps)[number]) => {

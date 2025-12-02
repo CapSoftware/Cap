@@ -1,6 +1,7 @@
 import type {
 	Comment,
 	Folder,
+	GoogleDrive,
 	ImageUpload,
 	Organisation,
 	S3Bucket,
@@ -296,7 +297,10 @@ export const videos = mysqlTable(
 		orgId: nanoIdRequired("orgId").$type<Organisation.OrganisationId>(),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
-		// in seconds
+		googleDriveConfigId: nanoIdNullable(
+			"googleDriveConfigId",
+		).$type<GoogleDrive.GoogleDriveConfigId>(),
+		googleDriveFileId: varchar("googleDriveFileId", { length: 255 }),
 		duration: float("duration"),
 		width: int("width"),
 		height: int("height"),
@@ -460,13 +464,28 @@ export const notifications = mysqlTable(
 export const s3Buckets = mysqlTable("s3_buckets", {
 	id: nanoId("id").notNull().primaryKey().$type<S3Bucket.S3BucketId>(),
 	ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
-	// Use encryptedText for sensitive fields
 	region: encryptedText("region").notNull(),
 	endpoint: encryptedTextNullable("endpoint"),
 	bucketName: encryptedText("bucketName").notNull(),
 	accessKeyId: encryptedText("accessKeyId").notNull(),
 	secretAccessKey: encryptedText("secretAccessKey").notNull(),
 	provider: text("provider").notNull().default("aws"),
+});
+
+export const googleDriveConfigs = mysqlTable("google_drive_configs", {
+	id: nanoId("id")
+		.notNull()
+		.primaryKey()
+		.$type<GoogleDrive.GoogleDriveConfigId>(),
+	ownerId: nanoId("ownerId").notNull().$type<User.UserId>(),
+	accessToken: encryptedText("accessToken").notNull(),
+	refreshToken: encryptedText("refreshToken").notNull(),
+	expiresAt: int("expiresAt").notNull(),
+	email: varchar("email", { length: 255 }),
+	folderId: varchar("folderId", { length: 255 }),
+	folderName: varchar("folderName", { length: 255 }),
+	createdAt: timestamp("createdAt").notNull().defaultNow(),
+	updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 });
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
@@ -526,6 +545,16 @@ export const s3BucketsRelations = relations(s3Buckets, ({ one }) => ({
 		references: [users.id],
 	}),
 }));
+
+export const googleDriveConfigsRelations = relations(
+	googleDriveConfigs,
+	({ one }) => ({
+		owner: one(users, {
+			fields: [googleDriveConfigs.ownerId],
+			references: [users.id],
+		}),
+	}),
+);
 
 export const organizationsRelations = relations(
 	organizations,

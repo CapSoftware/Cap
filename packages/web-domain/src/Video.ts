@@ -4,6 +4,7 @@ import { Context, Effect, Option, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { FolderId } from "./Folder.ts";
+import { GoogleDriveConfigId } from "./GoogleDrive.ts";
 import { OrganisationId } from "./Organisation.ts";
 import { PolicyDeniedError } from "./Policy.ts";
 import { S3BucketId } from "./S3Bucket.ts";
@@ -26,6 +27,8 @@ export class Video extends Schema.Class<Video>("Video")({
 		Schema.Record({ key: Schema.String, value: Schema.Any }),
 	),
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
+	googleDriveConfigId: Schema.OptionFromNullOr(GoogleDriveConfigId),
+	googleDriveFileId: Schema.OptionFromNullOr(Schema.String),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
 		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "SKIPPED"),
