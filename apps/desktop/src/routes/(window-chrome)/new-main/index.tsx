@@ -65,6 +65,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import HorizontalTargetButton from "./HorizontalTargetButton";
+import VerticalTargetButton from "./VerticalTargetButton";
 import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
 
 function getWindowSize() {
@@ -862,26 +863,70 @@ function Page() {
 					</button>
 				</div>
 			</div>
-			<div class="flex flex-col gap-4 p-4" data-tauri-drag-region>
-				<p class="text-xs text-white/70 leading-none pointer-events-none">Select inputs</p>
-				<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
-					<CameraSelect
-						disabled={cameras.isPending}
-						options={cameras.data ?? []}
-						value={options.camera() ?? null}
-						onChange={(c) => {
-							if (!c) setCamera.mutate(null);
-							else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-							else setCamera.mutate({ DeviceID: c.device_id });
-						}}
-					/>
-					<MicrophoneSelect
-						disabled={mics.isPending}
-						options={mics.isPending ? [] : mics.data ?? []}
-						value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
-						onChange={(v) => setMicInput.mutate(v)}
-					/>
-					<SystemAudio />
+			<div class="p-[2px] -mt-5 relative z-[6]">
+				<div
+					class="flex flex-col gap-4 p-4 bg-neutral-900 rounded-[16px] border border-white/10 backdrop-blur-sm"
+					data-tauri-drag-region
+				>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">Select inputs</p>
+					<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
+						<CameraSelect
+							disabled={cameras.isPending}
+							options={cameras.data ?? []}
+							value={options.camera() ?? null}
+							onChange={(c) => {
+								if (!c) setCamera.mutate(null);
+								else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+								else setCamera.mutate({ DeviceID: c.device_id });
+							}}
+						/>
+						<MicrophoneSelect
+							disabled={mics.isPending}
+							options={mics.isPending ? [] : mics.data ?? []}
+							value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+							onChange={(v) => setMicInput.mutate(v)}
+						/>
+						<SystemAudio />
+					</div>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">Select what to record</p>
+					<div class="flex flex-row gap-1 w-full">
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "display"}
+							Component={DisplayIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Display"
+						/>
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "window"}
+							Component={WindowIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Window"
+						/>
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "area"}
+							Component={CropIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Area"
+						/>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -943,7 +988,6 @@ function Page() {
 		>
 			<div class="flex flex-col w-full h-full">
 				<BaseControls />
-				<RecordingControls />
 			</div>
 		</Transition>
 	);
