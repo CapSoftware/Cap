@@ -817,11 +817,12 @@ function DefaultProjectNameCard(props: {
 						<div class="space-y-1">
 							<p class="font-medium text-foreground">Recording Mode</p>
 							<p>
-								<CodeView>{"{recording_mode}"}</CodeView> → "Studio" or
-								"Instant"
+								<CodeView>{"{recording_mode}"}</CodeView> → "Studio", "Instant",
+								or "Screenshot"
 							</p>
 							<p>
-								<CodeView>{"{mode}"}</CodeView> → "studio" or "instant"
+								<CodeView>{"{mode}"}</CodeView> → "studio", "instant", or
+								"screenshot"
 							</p>
 						</div>
 

@@ -462,16 +462,17 @@ pub async fn start_recording(
 
     let recordings_base_dir = app.path().app_data_dir().unwrap().join("recordings");
 
-    let recording_dir = recordings_base_dir.join(&cap_utils::ensure_unique_filename(
+    let project_file_path = recordings_base_dir.join(&cap_utils::ensure_unique_filename(
         &filename,
         &recordings_base_dir,
     )?);
 
-    ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
+    ensure_dir(&project_file_path)
+        .map_err(|e| format!("Failed to create recording directory: {e}"))?;
     state_mtx
         .write()
         .await
-        .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
+        .add_recording_logging_handle(&project_file_path.join("recording-logs.log"))
         .await?;
 
     if let Some(window) = CapWindowId::Camera.get(&app) {
@@ -528,7 +529,7 @@ pub async fn start_recording(
 
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
-        project_path: recording_dir.clone(),
+        project_path: project_file_path.clone(),
         pretty_name: project_name.clone(),
         inner: match inputs.mode {
             RecordingMode::Studio => {
@@ -619,7 +620,7 @@ pub async fn start_recording(
     let actor_task = {
         let state_mtx = Arc::clone(&state_mtx);
         let general_settings = general_settings.cloned();
-        let recording_dir = recording_dir.clone();
+        let recording_dir = project_file_path.clone();
         let inputs = inputs.clone();
         async move {
             fail!("recording::spawn_actor");
@@ -844,15 +845,25 @@ pub async fn start_recording(
         Ok(Ok(rx)) => rx,
         Ok(Err(err)) => {
             let message = format!("{err:#}");
-            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
-                .await?;
+            handle_spawn_failure(
+                &app,
+                &state_mtx,
+                project_file_path.as_path(),
+                message.clone(),
+            )
+            .await?;
             return Err(message);
         }
         Err(panic) => {
             let panic_msg = panic_message(panic);
             let message = format!("Failed to spawn recording actor: {panic_msg}");
-            handle_spawn_failure(&app, &state_mtx, recording_dir.as_path(), message.clone())
-                .await?;
+            handle_spawn_failure(
+                &app,
+                &state_mtx,
+                project_file_path.as_path(),
+                message.clone(),
+            )
+            .await?;
             return Err(message);
         }
     };
@@ -893,7 +904,7 @@ pub async fn start_recording(
                     dialog.blocking_show();
 
                     // this clears the current recording for us
-                    handle_recording_end(app, Err(e.to_string()), &mut state, recording_dir)
+                    handle_recording_end(app, Err(e.to_string()), &mut state, project_file_path)
                         .await
                         .ok();
                 }
@@ -1110,6 +1121,19 @@ pub async fn take_screenshot(
     use image::ImageEncoder;
     use std::time::Instant;
 
+    let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
+    let general_settings = general_settings.as_ref();
+
+    let project_name = format_project_name(
+        general_settings
+            .and_then(|s| s.default_project_name_template.clone())
+            .as_deref(),
+        target.title().as_deref().unwrap_or("Unknown"),
+        target.kind_str(),
+        RecordingMode::Screenshot,
+        None,
+    );
+
     let image = capture_screenshot(target)
         .await
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
@@ -1118,23 +1142,22 @@ pub async fn take_screenshot(
     let image_height = image.height();
     let image_data = image.into_raw();
 
-    let screenshots_dir = app.path().app_data_dir().unwrap().join("screenshots");
+    let filename = project_name.replace(":", ".");
+    let filename = format!("{}.cap", sanitize_filename::sanitize(&filename));
 
-    std::fs::create_dir_all(&screenshots_dir).map_err(|e| e.to_string())?;
+    let screenshots_base_dir = app.path().app_data_dir().unwrap().join("screenshots");
 
-    let date_time = if cfg!(windows) {
-        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
-    } else {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    };
+    let project_file_path = screenshots_base_dir.join(&cap_utils::ensure_unique_filename(
+        &filename,
+        &screenshots_base_dir,
+    )?);
 
-    let id = uuid::Uuid::new_v4().to_string();
-    let cap_dir = screenshots_dir.join(format!("{id}.cap"));
-    std::fs::create_dir_all(&cap_dir).map_err(|e| e.to_string())?;
+    ensure_dir(&project_file_path)
+        .map_err(|e| format!("Failed to create screenshots directory: {e}"))?;
 
     let image_filename = "original.png";
-    let image_path = cap_dir.join(image_filename);
-    let cap_dir_key = cap_dir.to_string_lossy().to_string();
+    let image_path = project_file_path.join(image_filename);
+    let cap_dir_key = project_file_path.to_string_lossy().to_string();
 
     let pending_screenshots = app.state::<PendingScreenshots>();
     pending_screenshots.insert(
@@ -1164,8 +1187,8 @@ pub async fn take_screenshot(
 
     let meta = cap_project::RecordingMeta {
         platform: Some(Platform::default()),
-        project_path: cap_dir.clone(),
-        pretty_name: format!("Screenshot {}", date_time),
+        project_path: project_file_path.clone(),
+        pretty_name: project_name,
         sharing: None,
         inner: cap_project::RecordingMetaInner::Studio(
             cap_project::StudioRecordingMeta::SingleSegment { segment },
@@ -1177,7 +1200,7 @@ pub async fn take_screenshot(
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
     cap_project::ProjectConfiguration::default()
-        .write(&cap_dir)
+        .write(&project_file_path)
         .map_err(|e| format!("Failed to save project config: {e}"))?;
 
     let is_large_capture = (image_width as u64).saturating_mul(image_height as u64) > 8_000_000;
