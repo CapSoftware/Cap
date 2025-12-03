@@ -96,11 +96,20 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	});
 
 	createEffect(() => {
+		// Support for legacy size strings.
+		let currentSize = state.size as number | string;
+		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
+			currentSize =
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE;
+			setState("size", currentSize);
+			return;
+		}
+
 		const clampedSize = Math.max(
 			CAMERA_MIN_SIZE,
-			Math.min(CAMERA_MAX_SIZE, state.size),
+			Math.min(CAMERA_MAX_SIZE, currentSize),
 		);
-		if (clampedSize !== state.size) {
+		if (clampedSize !== currentSize) {
 			setState("size", clampedSize);
 		}
 		commands.setCameraPreviewState(state);
@@ -284,6 +293,17 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		}),
 		{ name: "cameraWindowState" },
 	);
+
+	createEffect(() => {
+		// Support for legacy size strings.
+		const currentSize = state.size as number | string;
+		if (typeof currentSize !== "number" || Number.isNaN(currentSize)) {
+			setState(
+				"size",
+				currentSize === "lg" ? CAMERA_PRESET_LARGE : CAMERA_DEFAULT_SIZE,
+			);
+		}
+	});
 
 	const [isResizing, setIsResizing] = createSignal(false);
 	const [resizeStart, setResizeStart] = createSignal({
