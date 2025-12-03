@@ -58,7 +58,9 @@ pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> 
 }
 
 async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Result<(), String> {
+    log::info!("=== EXTRACT AUDIO START ===");
     log::info!("Attempting to extract audio from: {video_path}");
+    log::info!("Output path: {:?}", output_path);
 
     if video_path.ends_with(".cap") {
         log::info!("Detected .cap project directory");
@@ -152,7 +154,20 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         }
 
         if mixed_samples.is_empty() {
+            log::error!("No audio samples after processing all sources");
             return Err("Failed to process any audio sources".to_string());
+        }
+
+        log::info!("Final mixed audio: {} samples", mixed_samples.len());
+        let mix_rms =
+            (mixed_samples.iter().map(|&s| s * s).sum::<f32>() / mixed_samples.len() as f32).sqrt();
+        log::info!("Mixed audio RMS: {:.4}", mix_rms);
+
+        if mix_rms < 0.001 {
+            log::warn!(
+                "WARNING: Mixed audio RMS is very low ({:.6}) - audio may be nearly silent!",
+                mix_rms
+            );
         }
 
         let mut output = avformat::output(&output_path)
@@ -297,6 +312,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .write_trailer()
             .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
+        log::info!("=== EXTRACT AUDIO END (from .cap) ===");
         Ok(())
     } else {
         let mut input =
@@ -458,12 +474,18 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .write_trailer()
             .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
+        log::info!("=== EXTRACT AUDIO END (from video) ===");
         Ok(())
     }
 }
 
 async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, String> {
     let mut context_guard = WHISPER_CONTEXT.lock().await;
+
+    if let Some(ref existing) = *context_guard {
+        log::info!("Reusing cached Whisper context");
+        return Ok(existing.clone());
+    }
 
     log::info!("Initializing Whisper context with model: {model_path}");
     let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
@@ -481,11 +503,17 @@ fn is_special_token(token_text: &str) -> bool {
         return true;
     }
 
-    trimmed.contains('[')
+    let is_special = trimmed.contains('[')
         || trimmed.contains(']')
         || trimmed.contains("_TT_")
         || trimmed.contains("_BEG_")
-        || trimmed.contains("<|")
+        || trimmed.contains("<|");
+
+    if is_special {
+        log::debug!("Filtering special token: {:?}", token_text);
+    }
+
+    is_special
 }
 
 fn process_with_whisper(
@@ -493,7 +521,9 @@ fn process_with_whisper(
     context: Arc<WhisperContext>,
     language: &str,
 ) -> Result<CaptionData, String> {
+    log::info!("=== WHISPER TRANSCRIPTION START ===");
     log::info!("Processing audio file: {audio_path:?}");
+    log::info!("Language setting: {}", language);
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -504,6 +534,8 @@ fn process_with_whisper(
     params.set_token_timestamps(true);
     params.set_language(Some(if language == "auto" { "auto" } else { language }));
     params.set_max_len(i32::MAX);
+
+    log::info!("Whisper params - translate: false, token_timestamps: true, max_len: MAX");
 
     let mut audio_file = File::open(audio_path)
         .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
@@ -522,18 +554,39 @@ fn process_with_whisper(
         }
     }
 
-    log::info!("Converted {} samples to f32 format", audio_data_f32.len());
+    let duration_seconds = audio_data_f32.len() as f32 / WHISPER_SAMPLE_RATE as f32;
+    log::info!(
+        "Converted {} samples to f32 format (duration: {:.2}s at {}Hz)",
+        audio_data_f32.len(),
+        duration_seconds,
+        WHISPER_SAMPLE_RATE
+    );
 
     if !audio_data_f32.is_empty() {
         let min_sample = audio_data_f32.iter().fold(f32::MAX, |a, &b| a.min(b));
         let max_sample = audio_data_f32.iter().fold(f32::MIN, |a, &b| a.max(b));
         let avg_sample = audio_data_f32.iter().sum::<f32>() / audio_data_f32.len() as f32;
-        log::info!("Audio samples - min: {min_sample}, max: {max_sample}, avg: {avg_sample}");
+        let rms = (audio_data_f32.iter().map(|&s| s * s).sum::<f32>()
+            / audio_data_f32.len() as f32)
+            .sqrt();
+        log::info!(
+            "Audio samples - min: {:.4}, max: {:.4}, avg: {:.6}, RMS: {:.4}",
+            min_sample,
+            max_sample,
+            avg_sample,
+            rms
+        );
 
-        let sample_count = audio_data_f32.len().min(10);
-        for i in 0..sample_count {
-            let idx = i * audio_data_f32.len() / sample_count;
-            log::info!("Sample {}: {}", idx, audio_data_f32[idx]);
+        if rms < 0.001 {
+            log::warn!(
+                "WARNING: Audio RMS is very low ({:.6}) - audio may be nearly silent!",
+                rms
+            );
+        }
+
+        log::info!("First 20 audio samples:");
+        for i in 0..audio_data_f32.len().min(20) {
+            log::info!("  Sample[{}] = {:.6}", i, audio_data_f32[i]);
         }
     }
 
@@ -569,7 +622,7 @@ fn process_with_whisper(
         let end_time = (end_i64 as f32) / 100.0;
 
         log::info!(
-            "Segment {}: start={}, end={}, text='{}'",
+            "=== Segment {}: start={:.2}s, end={:.2}s, raw_text='{}'",
             i,
             start_time,
             end_time,
@@ -581,14 +634,24 @@ fn process_with_whisper(
             .full_n_tokens(i)
             .map_err(|e| format!("Failed to get token count: {e}"))?;
 
+        log::info!("  Segment {} has {} tokens", i, num_tokens);
+
         let mut current_word = String::new();
         let mut word_start: Option<f32> = None;
         let mut word_end: f32 = start_time;
 
         for t in 0..num_tokens {
             let token_text = state.full_get_token_text(i, t).unwrap_or_default();
+            let token_id = state.full_get_token_id(i, t).unwrap_or(0);
+            let token_prob = state.full_get_token_prob(i, t).unwrap_or(0.0);
 
             if is_special_token(&token_text) {
+                log::debug!(
+                    "  Token[{}]: id={}, text={:?} -> SKIPPED (special)",
+                    t,
+                    token_id,
+                    token_text
+                );
                 continue;
             }
 
@@ -598,9 +661,25 @@ fn process_with_whisper(
                 let token_start = (data.t0 as f32) / 100.0;
                 let token_end = (data.t1 as f32) / 100.0;
 
+                log::info!(
+                    "  Token[{}]: id={}, text={:?}, t0={:.2}s, t1={:.2}s, prob={:.4}",
+                    t,
+                    token_id,
+                    token_text,
+                    token_start,
+                    token_end,
+                    token_prob
+                );
+
                 if token_text.starts_with(' ') || token_text.starts_with('\n') {
                     if !current_word.is_empty() {
                         if let Some(ws) = word_start {
+                            log::info!(
+                                "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
+                                current_word.trim(),
+                                ws,
+                                word_end
+                            );
                             words.push(CaptionWord {
                                 text: current_word.trim().to_string(),
                                 start: ws,
@@ -609,19 +688,39 @@ fn process_with_whisper(
                         }
                     }
                     current_word = token_text.trim().to_string();
-                    word_start = None;
+                    word_start = Some(token_start);
+                    log::debug!(
+                        "    -> Starting new word: '{}' at {:.2}s",
+                        current_word,
+                        token_start
+                    );
                 } else {
                     if word_start.is_none() {
                         word_start = Some(token_start);
+                        log::debug!("    -> Word start set to {:.2}s", token_start);
                     }
                     current_word.push_str(&token_text);
+                    log::debug!("    -> Appending to word: '{}'", current_word);
                 }
                 word_end = token_end;
+            } else {
+                log::warn!(
+                    "  Token[{}]: id={}, text={:?} -> NO TIMING DATA",
+                    t,
+                    token_id,
+                    token_text
+                );
             }
         }
 
         if !current_word.trim().is_empty() {
             if let Some(ws) = word_start {
+                log::info!(
+                    "    -> Final word: '{}' ({:.2}s - {:.2}s)",
+                    current_word.trim(),
+                    ws,
+                    word_end
+                );
                 words.push(CaptionWord {
                     text: current_word.trim().to_string(),
                     start: ws,
@@ -630,7 +729,19 @@ fn process_with_whisper(
             }
         }
 
+        log::info!("  Segment {} produced {} words", i, words.len());
+        for (w_idx, word) in words.iter().enumerate() {
+            log::info!(
+                "    Word[{}]: '{}' ({:.2}s - {:.2}s)",
+                w_idx,
+                word.text,
+                word.start,
+                word.end
+            );
+        }
+
         if words.is_empty() {
+            log::warn!("  Segment {} has no words, skipping", i);
             continue;
         }
 
@@ -652,7 +763,23 @@ fn process_with_whisper(
         });
     }
 
-    log::info!("Successfully processed {} segments", segments.len());
+    log::info!("=== WHISPER TRANSCRIPTION COMPLETE ===");
+    log::info!("Total segments: {}", segments.len());
+
+    let total_words: usize = segments.iter().map(|s| s.words.len()).sum();
+    log::info!("Total words: {}", total_words);
+
+    log::info!("=== FINAL TRANSCRIPTION SUMMARY ===");
+    for segment in &segments {
+        log::info!(
+            "Segment '{}' ({:.2}s - {:.2}s): {}",
+            segment.id,
+            segment.start,
+            segment.end,
+            segment.text
+        );
+    }
+    log::info!("=== END SUMMARY ===");
 
     Ok(CaptionData {
         segments,
@@ -668,16 +795,24 @@ pub async fn transcribe_audio(
     model_path: String,
     language: String,
 ) -> Result<CaptionData, String> {
+    log::info!("=== TRANSCRIBE AUDIO COMMAND START ===");
+    log::info!("Video path: {}", video_path);
+    log::info!("Model path: {}", model_path);
+    log::info!("Language: {}", language);
+
     if !std::path::Path::new(&video_path).exists() {
+        log::error!("Video file not found at path: {}", video_path);
         return Err(format!("Video file not found at path: {video_path}"));
     }
 
     if !std::path::Path::new(&model_path).exists() {
+        log::error!("Model file not found at path: {}", model_path);
         return Err(format!("Model file not found at path: {model_path}"));
     }
 
     let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {e}"))?;
     let audio_path = temp_dir.path().join("audio.wav");
+    log::info!("Temp audio path: {:?}", audio_path);
 
     match extract_audio_from_video(&video_path, &audio_path).await {
         Ok(_) => log::info!("Successfully extracted audio to {audio_path:?}"),
@@ -688,13 +823,24 @@ pub async fn transcribe_audio(
     }
 
     if !audio_path.exists() {
+        log::error!("Audio file was not created at {:?}", audio_path);
         return Err("Failed to create audio file for transcription".to_string());
     }
 
-    log::info!("Audio file created at: {audio_path:?}");
+    let audio_metadata = std::fs::metadata(&audio_path).ok();
+    if let Some(meta) = &audio_metadata {
+        log::info!(
+            "Audio file created at: {:?}, size: {} bytes",
+            audio_path,
+            meta.len()
+        );
+    }
 
     let context = match get_whisper_context(&model_path).await {
-        Ok(ctx) => ctx,
+        Ok(ctx) => {
+            log::info!("Whisper context ready");
+            ctx
+        }
         Err(e) => {
             log::error!("Failed to initialize Whisper context: {e}");
             return Err(format!("Failed to initialize transcription model: {e}"));
@@ -703,6 +849,7 @@ pub async fn transcribe_audio(
 
     let audio_path_clone = audio_path.clone();
     let language_clone = language.clone();
+    log::info!("Starting Whisper transcription in blocking task...");
     let whisper_result = tokio::task::spawn_blocking(move || {
         process_with_whisper(&audio_path_clone, context, &language_clone)
     })
@@ -711,14 +858,32 @@ pub async fn transcribe_audio(
 
     match whisper_result {
         Ok(captions) => {
+            log::info!("=== TRANSCRIBE AUDIO RESULT ===");
+            log::info!(
+                "Transcription produced {} segments",
+                captions.segments.len()
+            );
+
+            for (idx, segment) in captions.segments.iter().enumerate() {
+                log::info!(
+                    "  Result Segment[{}]: '{}' ({} words)",
+                    idx,
+                    segment.text,
+                    segment.words.len()
+                );
+            }
+
             if captions.segments.is_empty() {
                 log::warn!("No caption segments were generated");
                 return Err("No speech detected in the audio".to_string());
             }
+
+            log::info!("=== TRANSCRIBE AUDIO COMMAND END (success) ===");
             Ok(captions)
         }
         Err(e) => {
             log::error!("Failed to process audio with Whisper: {e}");
+            log::info!("=== TRANSCRIBE AUDIO COMMAND END (error) ===");
             Err(format!("Failed to transcribe audio: {e}"))
         }
     }
@@ -732,7 +897,30 @@ pub async fn save_captions(
     video_id: String,
     captions: CaptionData,
 ) -> Result<(), String> {
+    tracing::info!("=== SAVE CAPTIONS START ===");
     tracing::info!("Saving captions for video_id: {}", video_id);
+    tracing::info!("Received {} segments to save", captions.segments.len());
+
+    for (idx, segment) in captions.segments.iter().enumerate() {
+        tracing::info!(
+            "  Segment[{}] '{}': '{}' ({} words, {:.2}s - {:.2}s)",
+            idx,
+            segment.id,
+            segment.text,
+            segment.words.len(),
+            segment.start,
+            segment.end
+        );
+        for (w_idx, word) in segment.words.iter().enumerate() {
+            tracing::debug!(
+                "    Word[{}]: '{}' ({:.2}s - {:.2}s)",
+                w_idx,
+                word.text,
+                word.start,
+                word.end
+            );
+        }
+    }
 
     let captions_dir = app_captions_dir(&app, &video_id)?;
 
@@ -871,6 +1059,7 @@ pub async fn save_captions(
     })?;
 
     tracing::info!("Successfully saved captions");
+    tracing::info!("=== SAVE CAPTIONS END ===");
     Ok(())
 }
 
@@ -1026,11 +1215,15 @@ pub async fn load_captions(
     app: AppHandle,
     video_id: String,
 ) -> Result<Option<CaptionData>, String> {
+    tracing::info!("=== LOAD CAPTIONS START ===");
+    tracing::info!("Loading captions for video_id: {}", video_id);
+
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let captions_path = captions_dir.join("captions.json");
 
     if !captions_path.exists() {
         tracing::info!("No captions file found at: {:?}", captions_path);
+        tracing::info!("=== LOAD CAPTIONS END (no file) ===");
         return Ok(None);
     }
 
@@ -1043,6 +1236,8 @@ pub async fn load_captions(
         }
     };
 
+    tracing::info!("Captions JSON length: {} bytes", json.len());
+
     tracing::info!("Parsing captions JSON");
     match parse_captions_json(&json) {
         Ok(project_captions) => {
@@ -1051,15 +1246,29 @@ pub async fn load_captions(
                 project_captions.segments.len()
             );
 
+            for (idx, segment) in project_captions.segments.iter().enumerate() {
+                tracing::info!(
+                    "  Loaded Segment[{}] '{}': '{}' ({} words, {:.2}s - {:.2}s)",
+                    idx,
+                    segment.id,
+                    segment.text,
+                    segment.words.len(),
+                    segment.start,
+                    segment.end
+                );
+            }
+
             let tauri_captions = CaptionData {
                 segments: project_captions.segments,
                 settings: Some(project_captions.settings),
             };
 
+            tracing::info!("=== LOAD CAPTIONS END (success) ===");
             Ok(Some(tauri_captions))
         }
         Err(e) => {
             tracing::error!("Failed to parse captions: {}", e);
+            tracing::info!("=== LOAD CAPTIONS END (error) ===");
             Err(format!("Failed to parse captions: {e}"))
         }
     }

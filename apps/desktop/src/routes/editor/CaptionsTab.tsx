@@ -125,6 +125,23 @@ const fontOptions = [
 	{ value: "System Monospace", label: "System Monospace" },
 ];
 
+const defaultCaptionSettings: CaptionSettings = {
+	enabled: false,
+	font: "System Sans-Serif",
+	size: 24,
+	color: "#FFFFFF",
+	backgroundColor: "#000000",
+	backgroundOpacity: 90,
+	position: "bottom-center",
+	bold: true,
+	italic: false,
+	outline: true,
+	outlineColor: "#000000",
+	exportWithSubtitles: false,
+	highlightColor: "#FFFF00",
+	fadeDuration: 0.15,
+};
+
 // Add type definitions at the top
 interface CaptionsResponse {
 	segments: CaptionSegment[];
@@ -217,22 +234,9 @@ export function CaptionsTab() {
 	const size = createElementSize(() => scrollContainerRef);
 
 	const [captionSettings, setCaptionSettings] = createStore(
-		project?.captions?.settings || {
-			enabled: false,
-			font: "System Sans-Serif",
-			size: 24,
-			color: "#FFFFFF",
-			backgroundColor: "#000000",
-			backgroundOpacity: 80,
-			position: "bottom-center",
-			bold: true,
-			italic: false,
-			outline: true,
-			outlineColor: "#000000",
-			exportWithSubtitles: false,
-			highlightColor: "#FFFF00",
-			fadeDuration: 0.15,
-		},
+		project?.captions?.settings
+			? { ...defaultCaptionSettings, ...project.captions.settings }
+			: { ...defaultCaptionSettings },
 	);
 
 	// Sync caption settings with project and update player
@@ -328,22 +332,7 @@ export function CaptionsTab() {
 		if (!project.captions) {
 			setProject("captions", {
 				segments: [],
-				settings: {
-					enabled: false,
-					font: "System Sans-Serif",
-					size: 24,
-					color: "#FFFFFF",
-					backgroundColor: "#000000",
-					backgroundOpacity: 80,
-					position: "bottom-center",
-					bold: true,
-					italic: false,
-					outline: true,
-					outlineColor: "#000000",
-					exportWithSubtitles: false,
-					highlightColor: "#FFFF00",
-					fadeDuration: 0.15,
-				},
+				settings: { ...defaultCaptionSettings },
 			});
 		}
 	});
@@ -914,7 +903,7 @@ export function CaptionsTab() {
 												Background Opacity
 											</span>
 											<Slider
-												value={[captionSettings.backgroundOpacity || 80]}
+												value={[captionSettings.backgroundOpacity ?? 90]}
 												onChange={(v) =>
 													updateCaptionSetting("backgroundOpacity", v[0])
 												}

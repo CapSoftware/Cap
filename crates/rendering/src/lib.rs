@@ -1572,7 +1572,6 @@ pub struct RendererLayers {
     camera_only: CameraLayer,
     mask: MaskLayer,
     text: TextLayer,
-    #[allow(unused)]
     captions: CaptionsLayer,
 }
 
@@ -1658,6 +1657,13 @@ impl RendererLayers {
             &uniforms.texts,
         );
 
+        self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
+        );
+
         Ok(())
     }
 
@@ -1737,6 +1743,11 @@ impl RendererLayers {
         if !uniforms.texts.is_empty() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.text.render(&mut pass);
+        }
+
+        if self.captions.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.captions.render(&mut pass);
         }
     }
 }

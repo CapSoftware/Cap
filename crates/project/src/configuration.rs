@@ -792,7 +792,7 @@ pub struct CaptionSettings {
 
 impl CaptionSettings {
     fn default_highlight_color() -> String {
-        "#FFFF00".to_string()
+        "#FFFFFF".to_string()
     }
 
     fn default_fade_duration() -> f32 {
@@ -808,7 +808,7 @@ impl Default for CaptionSettings {
             size: 24,
             color: "#FFFFFF".to_string(),
             background_color: "#000000".to_string(),
-            background_opacity: 80,
+            background_opacity: 90,
             position: "bottom-center".to_string(),
             bold: true,
             italic: false,
