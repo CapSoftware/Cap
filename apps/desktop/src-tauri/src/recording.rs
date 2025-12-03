@@ -76,12 +76,12 @@ pub enum InProgressRecording {
         progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
         common: InProgressRecordingCommon,
-        // camera isn't used as part of recording pipeline so we hold lock here
         camera_feed: Option<Arc<CameraFeedLock>>,
     },
     Studio {
         handle: studio_recording::ActorHandle,
         common: InProgressRecordingCommon,
+        camera_feed: Option<Arc<CameraFeedLock>>,
     },
 }
 
@@ -674,6 +674,7 @@ pub async fn start_recording(
                             Ok(InProgressRecording::Studio {
                                 handle,
                                 common: common.clone(),
+                                camera_feed: camera_feed.clone(),
                             })
                         }
                         RecordingMode::Instant => {
@@ -1705,6 +1706,8 @@ fn project_config_from_recording(
         segments: timeline_segments,
         zoom_segments,
         scene_segments: Vec::new(),
+        mask_segments: Vec::new(),
+        text_segments: Vec::new(),
     });
 
     config

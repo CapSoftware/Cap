@@ -230,7 +230,7 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					.map((entry) =>
 						exec(
 							`codesign ${keychain} -s "${signId}" -f "${path.join(
-								entry.parentPath,
+								entry.parentPath || entry.path,
 								entry.name,
 							)}"`,
 						),

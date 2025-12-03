@@ -1,3 +1,4 @@
+import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
@@ -9,15 +10,24 @@ import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import {
 	FPS,
-	OUTPUT_SIZE,
+	type PreviewQuality,
 	serializeProjectConfiguration,
 	useEditorContext,
 } from "./context";
-import { EditorButton, Slider } from "./ui";
+import { MaskOverlay } from "./MaskOverlay";
+import { TextOverlay } from "./TextOverlay";
+import {
+	EditorButton,
+	MenuItem,
+	MenuItemList,
+	PopperContent,
+	Slider,
+	topLeftAnimateClasses,
+} from "./ui";
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
-export function Player() {
+export function PlayerContent() {
 	const {
 		project,
 		editorInstance,
@@ -27,7 +37,15 @@ export function Player() {
 		setEditorState,
 		zoomOutLimit,
 		setProject,
+		previewResolutionBase,
+		previewQuality,
+		setPreviewQuality,
 	} = useEditorContext();
+
+	const previewOptions = [
+		{ label: "Full", value: "full" as PreviewQuality },
+		{ label: "Half", value: "half" as PreviewQuality },
+	];
 
 	// Load captions on mount
 	onMount(async () => {
@@ -66,6 +84,8 @@ export function Player() {
 							outlineColor: captionsStore.state.settings.outlineColor,
 							exportWithSubtitles:
 								captionsStore.state.settings.exportWithSubtitles,
+							highlightColor: captionsStore.state.settings.highlightColor,
+							fadeDuration: captionsStore.state.settings.fadeDuration,
 						},
 					};
 
@@ -95,10 +115,6 @@ export function Player() {
 		}
 	});
 
-	const [canvasContainerRef, setCanvasContainerRef] =
-		createSignal<HTMLDivElement>();
-	const containerBounds = createElementBounds(canvasContainerRef);
-
 	const isAtEnd = () => {
 		const total = totalDuration();
 		return total > 0 && total - editorState.playbackTime <= 0.1;
@@ -123,6 +139,31 @@ export function Player() {
 		setEditorState("playing", false);
 	};
 
+	const handlePreviewQualityChange = async (quality: PreviewQuality) => {
+		if (quality === previewQuality()) return;
+
+		const wasPlaying = editorState.playing;
+		const currentFrame = Math.max(
+			Math.floor(editorState.playbackTime * FPS),
+			0,
+		);
+
+		setPreviewQuality(quality);
+
+		if (!wasPlaying) return;
+
+		try {
+			await commands.stopPlayback();
+			setEditorState("playing", false);
+			await commands.seekTo(currentFrame);
+			await commands.startPlayback(FPS, previewResolutionBase());
+			setEditorState("playing", true);
+		} catch (error) {
+			console.error("Failed to update preview quality:", error);
+			setEditorState("playing", false);
+		}
+	};
+
 	createEffect(() => {
 		if (isAtEnd() && editorState.playing) {
 			commands.stopPlayback();
@@ -136,7 +177,7 @@ export function Player() {
 				await commands.stopPlayback();
 				setEditorState("playbackTime", 0);
 				await commands.seekTo(0);
-				await commands.startPlayback(FPS, OUTPUT_SIZE);
+				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
 			} else if (editorState.playing) {
 				await commands.stopPlayback();
@@ -144,7 +185,7 @@ export function Player() {
 			} else {
 				// Ensure we seek to the current playback time before starting playback
 				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-				await commands.startPlayback(FPS, OUTPUT_SIZE);
+				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
 			}
 			if (editorState.playing) setEditorState("previewTime", null);
@@ -208,16 +249,74 @@ export function Player() {
 	]);
 
 	return (
-		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">
-			<div class="flex gap-3 justify-center p-3">
-				<AspectRatioSelect />
-				<EditorButton
-					tooltipText="Crop Video"
-					onClick={cropDialogHandler}
-					leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
-				>
-					Crop
-				</EditorButton>
+		<div class="flex flex-col flex-1 min-h-0">
+			<div class="flex items-center justify-between gap-3 p-3">
+				<div class="flex items-center gap-3">
+					<AspectRatioSelect />
+					<EditorButton
+						tooltipText="Crop Video"
+						onClick={cropDialogHandler}
+						leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
+					>
+						Crop
+					</EditorButton>
+				</div>
+				<div class="flex items-center gap-2">
+					<span class="text-xs font-medium text-gray-11">Preview</span>
+					<KSelect<{ label: string; value: PreviewQuality }>
+						options={previewOptions}
+						optionValue="value"
+						optionTextValue="label"
+						value={previewOptions.find(
+							(option) => option.value === previewQuality(),
+						)}
+						onChange={(next) => {
+							if (next) handlePreviewQualityChange(next.value);
+						}}
+						disallowEmptySelection
+						itemComponent={(props) => (
+							<MenuItem<typeof KSelect.Item>
+								as={KSelect.Item}
+								item={props.item}
+							>
+								<KSelect.ItemLabel class="flex-1">
+									{props.item.rawValue.label}
+								</KSelect.ItemLabel>
+								<KSelect.ItemIndicator class="ml-auto text-blue-9">
+									<IconCapCircleCheck />
+								</KSelect.ItemIndicator>
+							</MenuItem>
+						)}
+					>
+						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
+							<KSelect.Value<{ label: string; value: PreviewQuality }>
+								class="flex-1 text-left truncate"
+								placeholder="Select preview quality"
+							>
+								{(state) =>
+									state.selectedOption()?.label ?? "Select preview quality"
+								}
+							</KSelect.Value>
+							<KSelect.Icon>
+								<IconCapChevronDown class="size-4 text-gray-11" />
+							</KSelect.Icon>
+						</KSelect.Trigger>
+						<KSelect.Portal>
+							<PopperContent<typeof KSelect.Content>
+								as={KSelect.Content}
+								class={cx(topLeftAnimateClasses, "w-44")}
+							>
+								<MenuItem as="div" class="text-gray-11" data-disabled="true">
+									Select preview quality
+								</MenuItem>
+								<MenuItemList<typeof KSelect.Listbox>
+									as={KSelect.Listbox}
+									class="max-h-40"
+								/>
+							</PopperContent>
+						</KSelect.Portal>
+					</KSelect>
+				</div>
 			</div>
 			<PreviewCanvas />
 			<div class="flex overflow-hidden z-10 flex-row gap-3 justify-between items-center p-5">
@@ -423,18 +522,28 @@ function PreviewCanvas() {
 
 					return (
 						<div class="flex overflow-hidden absolute inset-0 justify-center items-center h-full">
-							<canvas
+							<div
+								class="relative"
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
-									...gridStyle,
 								}}
-								class="rounded"
-								ref={canvasRef}
-								id="canvas"
-								width={frameWidth()}
-								height={frameHeight()}
-							/>
+							>
+								<canvas
+									style={{
+										width: `${size().width}px`,
+										height: `${size().height}px`,
+										...gridStyle,
+									}}
+									class="rounded"
+									ref={canvasRef}
+									id="canvas"
+									width={frameWidth()}
+									height={frameHeight()}
+								/>
+								<MaskOverlay size={size()} />
+								<TextOverlay size={size()} />
+							</div>
 						</div>
 					);
 				}}

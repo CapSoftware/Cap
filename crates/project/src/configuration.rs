@@ -548,6 +548,130 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum MaskKind {
+    Sensitive,
+    Highlight,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskScalarKeyframe {
+    pub time: f64,
+    pub value: f64,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskVectorKeyframe {
+    pub time: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskKeyframes {
+    #[serde(default)]
+    pub position: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub size: Vec<MaskVectorKeyframe>,
+    #[serde(default)]
+    pub intensity: Vec<MaskScalarKeyframe>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "MaskSegment::default_enabled")]
+    pub enabled: bool,
+    pub mask_type: MaskKind,
+    pub center: XY<f64>,
+    pub size: XY<f64>,
+    #[serde(default)]
+    pub feather: f64,
+    #[serde(default = "MaskSegment::default_opacity")]
+    pub opacity: f64,
+    #[serde(default)]
+    pub pixelation: f64,
+    #[serde(default)]
+    pub darkness: f64,
+    #[serde(default)]
+    pub keyframes: MaskKeyframes,
+}
+
+impl MaskSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_opacity() -> f64 {
+        1.0
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "TextSegment::default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "TextSegment::default_content")]
+    pub content: String,
+    #[serde(default = "TextSegment::default_center")]
+    pub center: XY<f64>,
+    #[serde(default = "TextSegment::default_size")]
+    pub size: XY<f64>,
+    #[serde(default = "TextSegment::default_font_family")]
+    pub font_family: String,
+    #[serde(default = "TextSegment::default_font_size")]
+    pub font_size: f32,
+    #[serde(default = "TextSegment::default_font_weight")]
+    pub font_weight: f32,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default = "TextSegment::default_color")]
+    pub color: String,
+}
+
+impl TextSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_content() -> String {
+        "Text".to_string()
+    }
+
+    fn default_center() -> XY<f64> {
+        XY::new(0.5, 0.5)
+    }
+
+    fn default_size() -> XY<f64> {
+        XY::new(0.35, 0.2)
+    }
+
+    fn default_font_family() -> String {
+        "sans-serif".to_string()
+    }
+
+    fn default_font_size() -> f32 {
+        48.0
+    }
+
+    fn default_font_weight() -> f32 {
+        700.0
+    }
+
+    fn default_color() -> String {
+        "#ffffff".to_string()
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SceneMode {
@@ -573,6 +697,10 @@ pub struct TimelineConfiguration {
     pub zoom_segments: Vec<ZoomSegment>,
     #[serde(default)]
     pub scene_segments: Vec<SceneSegment>,
+    #[serde(default)]
+    pub mask_segments: Vec<MaskSegment>,
+    #[serde(default)]
+    pub text_segments: Vec<TextSegment>,
 }
 
 impl TimelineConfiguration {
@@ -601,11 +729,33 @@ pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct CaptionWord {
+    pub text: String,
+    pub start: f32,
+    pub end: f32,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptionSegment {
     pub id: String,
     pub start: f32,
     pub end: f32,
     pub text: String,
+    #[serde(default)]
+    pub words: Vec<CaptionWord>,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptionPosition {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    #[default]
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
@@ -619,6 +769,7 @@ pub struct CaptionSettings {
     pub background_color: String,
     #[serde(alias = "backgroundOpacity")]
     pub background_opacity: u32,
+    #[serde(default)]
     pub position: String,
     pub bold: bool,
     pub italic: bool,
@@ -627,6 +778,26 @@ pub struct CaptionSettings {
     pub outline_color: String,
     #[serde(alias = "exportWithSubtitles")]
     pub export_with_subtitles: bool,
+    #[serde(
+        alias = "highlightColor",
+        default = "CaptionSettings::default_highlight_color"
+    )]
+    pub highlight_color: String,
+    #[serde(
+        alias = "fadeDuration",
+        default = "CaptionSettings::default_fade_duration"
+    )]
+    pub fade_duration: f32,
+}
+
+impl CaptionSettings {
+    fn default_highlight_color() -> String {
+        "#FFFFFF".to_string()
+    }
+
+    fn default_fade_duration() -> f32 {
+        0.15
+    }
 }
 
 impl Default for CaptionSettings {
@@ -635,15 +806,17 @@ impl Default for CaptionSettings {
             enabled: false,
             font: "System Sans-Serif".to_string(),
             size: 24,
-            color: "#FFFFFF".to_string(),
+            color: "#A0A0A0".to_string(),
             background_color: "#000000".to_string(),
-            background_opacity: 80,
-            position: "bottom".to_string(),
-            bold: true,
+            background_opacity: 90,
+            position: "bottom-center".to_string(),
+            bold: false,
             italic: false,
             outline: true,
             outline_color: "#000000".to_string(),
             export_with_subtitles: false,
+            highlight_color: Self::default_highlight_color(),
+            fade_duration: Self::default_fade_duration(),
         }
     }
 }
@@ -811,6 +984,8 @@ pub struct ProjectConfiguration {
     pub clips: Vec<ClipConfiguration>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
+    #[serde(default, skip_serializing)]
+    pub hidden_text_segments: Vec<usize>,
 }
 
 fn camera_config_needs_migration(value: &Value) -> bool {
