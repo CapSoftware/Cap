@@ -467,12 +467,12 @@ function Inner() {
 								if (changed) {
 									processing = true;
 									try {
-										await invoke("update_camera_overlay_bounds", {
-											x: target.x,
-											y: target.y,
-											width: target.width,
-											height: target.height,
-										});
+										await commands.updateCameraOverlayBounds(
+											target.x,
+											target.y,
+											target.width,
+											target.height,
+										);
 										lastApplied = target;
 									} catch (e) {
 										console.error("Failed to update camera window", e);
