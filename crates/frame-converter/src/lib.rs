@@ -188,8 +188,8 @@ pub fn create_converter_with_details(
                 });
             }
             Err(e) => {
-                let reason = format!("VideoToolbox: {}", e);
-                tracing::debug!("{}", reason);
+                let reason = format!("VideoToolbox: {e}");
+                tracing::debug!("{reason}");
                 fallback_reasons.push(reason);
             }
         }
@@ -212,8 +212,8 @@ pub fn create_converter_with_details(
                 });
             }
             Err(e) => {
-                let reason = format!("D3D11: {}", e);
-                tracing::debug!("{}", reason);
+                let reason = format!("D3D11: {e}");
+                tracing::debug!("{reason}");
                 fallback_reasons.push(reason);
             }
         }

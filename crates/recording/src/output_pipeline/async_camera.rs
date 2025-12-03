@@ -152,7 +152,7 @@ impl Muxer for AsyncCameraMp4Muxer {
                 pool.drain_with_timeout(
                     |converted| {
                         let pts = converted.frame.pts().unwrap_or(0);
-                        if last_pts.map_or(true, |last| pts > last) {
+                        if last_pts.is_none_or(|last| pts > last) {
                             let timestamp = Duration::from_micros(pts as u64);
                             if let Err(e) = encoder_ref.queue_preconverted_frame(
                                 converted.frame,
@@ -236,7 +236,7 @@ impl VideoMuxer for AsyncCameraMp4Muxer {
             let mut encoded_this_call = 0u64;
             while let Some(converted) = pool.try_recv() {
                 let pts = converted.frame.pts().unwrap_or(0);
-                if self.last_pts.map_or(true, |last| pts > last) {
+                if self.last_pts.is_none_or(|last| pts > last) {
                     let frame_timestamp = Duration::from_micros(pts as u64);
                     encoder.queue_preconverted_frame(
                         converted.frame,
@@ -253,7 +253,7 @@ impl VideoMuxer for AsyncCameraMp4Muxer {
             if encoded_this_call == 0 && backlog > 10 {
                 if let Some(converted) = pool.recv_timeout(Duration::from_millis(5)) {
                     let pts = converted.frame.pts().unwrap_or(0);
-                    if self.last_pts.map_or(true, |last| pts > last) {
+                    if self.last_pts.is_none_or(|last| pts > last) {
                         let frame_timestamp = Duration::from_micros(pts as u64);
                         encoder.queue_preconverted_frame(
                             converted.frame,

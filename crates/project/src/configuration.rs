@@ -917,8 +917,7 @@ impl fmt::Display for AnnotationValidationError {
                 annotation_type,
             } => write!(
                 f,
-                "annotation {id} with type {:?} cannot include mask data",
-                annotation_type
+                "annotation {id} with type {annotation_type:?} cannot include mask data"
             ),
         }
     }

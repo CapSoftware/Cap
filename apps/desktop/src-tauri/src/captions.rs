@@ -586,8 +586,8 @@ fn process_with_whisper(
         }
 
         log::info!("First 20 audio samples:");
-        for i in 0..audio_data_f32.len().min(20) {
-            log::info!("  Sample[{}] = {:.6}", i, audio_data_f32[i]);
+        for (i, sample) in audio_data_f32.iter().take(20).enumerate() {
+            log::info!("  Sample[{i}] = {sample:.6}");
         }
     }
 
@@ -635,7 +635,7 @@ fn process_with_whisper(
             .full_n_tokens(i)
             .map_err(|e| format!("Failed to get token count: {e}"))?;
 
-        log::info!("  Segment {} has {} tokens", i, num_tokens);
+        log::info!("  Segment {i} has {num_tokens} tokens");
 
         let mut current_word = String::new();
         let mut word_start: Option<f32> = None;
@@ -1066,7 +1066,7 @@ fn start_whisperx_server(
 
 fn transcribe_with_server(
     server: &mut WhisperXServer,
-    audio_path: &PathBuf,
+    audio_path: &std::path::Path,
     model_size: &str,
     language: &str,
 ) -> Result<CaptionData, String> {
@@ -1083,8 +1083,8 @@ fn transcribe_with_server(
 
     log::info!("Sending transcription request to WhisperX server");
 
-    writeln!(server.stdin, "{}", request.to_string())
-        .map_err(|e| format!("Failed to send request to server: {}", e))?;
+    writeln!(server.stdin, "{request}")
+        .map_err(|e| format!("Failed to send request to server: {e}"))?;
     server
         .stdin
         .flush()

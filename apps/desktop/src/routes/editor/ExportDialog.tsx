@@ -236,20 +236,36 @@ export function ExportDialog() {
 	};
 
 	const exportEstimates = createQuery(() => ({
-		// prevents flicker when modifying settings
 		placeholderData: keepPreviousData,
 		queryKey: [
 			"exportEstimates",
 			{
+				format: settings.format,
 				resolution: {
 					x: settings.resolution.width,
 					y: settings.resolution.height,
 				},
 				fps: settings.fps,
+				compression: settings.compression,
 			},
 		] as const,
-		queryFn: ({ queryKey: [_, { resolution, fps }] }) =>
-			commands.getExportEstimates(projectPath, resolution, fps),
+		queryFn: ({ queryKey: [_, { format, resolution, fps, compression }] }) => {
+			const exportSettings =
+				format === "Mp4"
+					? {
+							format: "Mp4" as const,
+							fps,
+							resolution_base: resolution,
+							compression,
+						}
+					: {
+							format: "Gif" as const,
+							fps,
+							resolution_base: resolution,
+							quality: null,
+						};
+			return commands.getExportEstimates(projectPath, exportSettings);
+		},
 	}));
 
 	const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
@@ -737,7 +753,7 @@ export function ExportDialog() {
 							</div>
 						</div>
 						{/* Frame rate */}
-						<div class="overflow-hidden relative p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
+						<div class="p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Frame rate</h3>
 								<KSelect<{ label: string; value: number }>
@@ -752,13 +768,13 @@ export function ExportDialog() {
 										: FPS_OPTIONS
 									).find((opt) => opt.value === settings.fps)}
 									onChange={(option) => {
-										const value =
-											option?.value ?? (settings.format === "Gif" ? 10 : 30);
+										if (!option) return;
 										trackEvent("export_fps_changed", {
-											fps: value,
+											fps: option.value,
 										});
-										setSettings("fps", value);
+										setSettings("fps", option.value);
 									}}
+									disallowEmptySelection
 									itemComponent={(props) => (
 										<MenuItem<typeof KSelect.Item>
 											as={KSelect.Item}

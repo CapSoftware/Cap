@@ -19,7 +19,7 @@ pub struct CaptionWord {
 
 #[derive(Debug, Clone)]
 pub struct CaptionSegment {
-    pub id: String,
+    pub _id: String,
     pub start: f32,
     pub end: f32,
     pub text: String,
@@ -95,7 +95,7 @@ impl CaptionPosition {
         }
     }
 
-    fn x_alignment(&self) -> f32 {
+    fn _x_alignment(&self) -> f32 {
         match self {
             Self::TopLeft | Self::BottomLeft => 0.05,
             Self::TopCenter | Self::BottomCenter => 0.5,
@@ -234,7 +234,7 @@ fn calculate_word_highlight(
 }
 
 pub struct CaptionsLayer {
-    settings_buffer: wgpu::Buffer,
+    _settings_buffer: wgpu::Buffer,
     font_system: FontSystem,
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
@@ -356,7 +356,7 @@ impl CaptionsLayer {
         });
 
         Self {
-            settings_buffer,
+            _settings_buffer: settings_buffer,
             font_system,
             swash_cache,
             text_atlas,
@@ -375,8 +375,9 @@ impl CaptionsLayer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update_settings(&mut self, queue: &Queue, settings: CaptionSettings) {
-        queue.write_buffer(&self.settings_buffer, 0, bytemuck::cast_slice(&[settings]));
+        queue.write_buffer(&self._settings_buffer, 0, bytemuck::cast_slice(&[settings]));
     }
 
     pub fn update_caption(&mut self, text: Option<String>, start: f32, end: f32) {
@@ -850,6 +851,7 @@ impl CaptionsLayer {
     }
 }
 
+#[allow(dead_code)]
 pub fn find_caption_at_time(time: f32, segments: &[CaptionSegment]) -> Option<&CaptionSegment> {
     segments
         .iter()
@@ -866,7 +868,7 @@ const CLOSE_TRANSITION_THRESHOLD: f32 = 0.4;
 
 fn convert_project_segment(segment: &cap_project::CaptionSegment) -> CaptionSegment {
     CaptionSegment {
-        id: segment.id.clone(),
+        _id: segment.id.clone(),
         start: segment.start,
         end: segment.end,
         text: segment.text.clone(),

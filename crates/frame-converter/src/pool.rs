@@ -130,7 +130,7 @@ impl AsyncConverterPool {
             let drop_strategy = config.drop_strategy;
 
             let handle = thread::Builder::new()
-                .name(format!("converter-worker-{}", worker_id))
+                .name(format!("converter-worker-{worker_id}"))
                 .spawn(move || {
                     let converter = match factory(worker_id) {
                         Ok(c) => c,

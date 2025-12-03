@@ -77,8 +77,8 @@ async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
 },
-async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
-    return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
+async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { path, settings });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });

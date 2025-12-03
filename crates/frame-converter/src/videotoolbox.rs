@@ -99,21 +99,20 @@ pub struct VideoToolboxConverter {
 
 impl VideoToolboxConverter {
     pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
-        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
-        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
         let mut session: VTPixelTransferSessionRef = ptr::null_mut();
         let status = unsafe { VTPixelTransferSessionCreate(ptr::null(), &mut session) };
 
         if status != 0 {
             return Err(ConvertError::HardwareUnavailable(format!(
-                "VTPixelTransferSessionCreate failed with status: {}",
-                status
+                "VTPixelTransferSessionCreate failed with status: {status}"
             )));
         }
 
@@ -174,8 +173,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreateWithBytes failed: {}",
-                status
+                "CVPixelBufferCreateWithBytes failed: {status}"
             )));
         }
 
@@ -198,8 +196,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreate failed: {}",
-                status
+                "CVPixelBufferCreate failed: {status}"
             )));
         }
 
@@ -214,8 +211,7 @@ impl VideoToolboxConverter {
             let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
             if lock_status != K_CV_RETURN_SUCCESS {
                 return Err(ConvertError::ConversionFailed(format!(
-                    "CVPixelBufferLockBaseAddress failed: {}",
-                    lock_status
+                    "CVPixelBufferLockBaseAddress failed: {lock_status}"
                 )));
             }
         }
@@ -289,8 +285,7 @@ impl FrameConverter for VideoToolboxConverter {
                 CVPixelBufferRelease(output_buffer);
             }
             return Err(ConvertError::ConversionFailed(format!(
-                "VTPixelTransferSessionTransferImage failed: {}",
-                status
+                "VTPixelTransferSessionTransferImage failed: {status}"
             )));
         }
 
