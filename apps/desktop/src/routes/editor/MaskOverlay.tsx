@@ -124,24 +124,8 @@ export function MaskOverlay(props: MaskOverlayProps) {
 
 							updateSegment((s) => {
 								if (dirX !== 0) {
-									const newWidth = Math.max(
-										0.01,
-										startSize.x + dx * dirX, // if dirX is -1 (left), dx needs to be inverted for width? No. If I move mouse left (dx negative), width should increase. So dx * dirX -> (-ve * -1) = +ve. Correct.
-									);
-									// If we clamp width, we need to adjust center calc?
-									// Simple version:
+									const newWidth = Math.max(0.01, startSize.x + dx * dirX);
 									s.size.x = newWidth;
-									s.center.x =
-										startPos.x + (dx * dirX) / 2 + dx * (dirX === -1 ? 0 : 0);
-									// Wait, my logic before:
-									// Right (dirX=1): Width = W + dx. Center = C + dx/2.
-									// Left (dirX=-1): Width = W - dx. Center = C + dx/2.
-									// So Center is always C + dx/2 regardless of direction?
-									// Let's re-verify.
-									// Right Handle: move right (+dx). W grows (+dx). Center moves right (+dx/2). Correct.
-									// Left Handle: move left (-dx). W grows (-dx i.e. +ve). Center moves left (-dx/2). Correct.
-									// So yes, Center += dx/2. Width += dx * dirX.
-
 									s.center.x = startPos.x + dx / 2;
 								}
 
