@@ -311,8 +311,8 @@ export function Timeline() {
 		const total = totalDuration();
 		const secPerPx = secsPerPixel();
 
-		const FADE_WIDTH = 64;
-		const FADE_RAMP_PX = 50; // Pixels of scrolling over which the fade animates in
+		const FADE_WIDTH = 32;
+		const FADE_RAMP_PX = 50;
 		const LEFT_OFFSET = TIMELINE_PADDING + TRACK_GUTTER;
 		const RIGHT_PADDING = TIMELINE_PADDING;
 
@@ -454,7 +454,7 @@ export function Timeline() {
 									split() ? "from-red-300" : "from-gray-400",
 								)}
 								style={{
-									left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+									left: `${TRACK_GUTTER}px`,
 									transform: `translateX(${
 										(time() - transform().position) / secsPerPixel() - 0.5
 									}px)`,
@@ -463,7 +463,7 @@ export function Timeline() {
 							>
 								<div
 									class={cx(
-										"absolute -top-2 rounded-full size-3",
+										"absolute -top-2 rounded-full size-3 -ml-[calc(0.37rem-0.5px)]",
 										split() ? "bg-red-300" : "bg-gray-10",
 									)}
 								/>
@@ -476,7 +476,7 @@ export function Timeline() {
 							split() && "opacity-50",
 						)}
 						style={{
-							left: `${TIMELINE_PADDING + TRACK_GUTTER}px`,
+							left: `${TRACK_GUTTER}px`,
 							transform: `translateX(${Math.min(
 								(editorState.playbackTime - transform().position) /
 									secsPerPixel(),
