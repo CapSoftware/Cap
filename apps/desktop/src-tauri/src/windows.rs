@@ -171,7 +171,6 @@ impl CapWindowDef {
     }
 
     #[cfg(target_os = "macos")]
-    #[cfg(target_os = "macos")]
     pub const fn undecorated(&self) -> bool {
         matches!(
             self,
