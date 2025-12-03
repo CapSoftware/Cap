@@ -27,7 +27,7 @@ import {
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
-export function Player() {
+export function PlayerContent() {
 	const {
 		project,
 		editorInstance,
@@ -84,6 +84,8 @@ export function Player() {
 							outlineColor: captionsStore.state.settings.outlineColor,
 							exportWithSubtitles:
 								captionsStore.state.settings.exportWithSubtitles,
+							highlightColor: captionsStore.state.settings.highlightColor,
+							fadeDuration: captionsStore.state.settings.fadeDuration,
 						},
 					};
 
@@ -247,7 +249,7 @@ export function Player() {
 	]);
 
 	return (
-		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">
+		<div class="flex flex-col flex-1 min-h-0">
 			<div class="flex items-center justify-between gap-3 p-3">
 				<div class="flex items-center gap-3">
 					<AspectRatioSelect />
