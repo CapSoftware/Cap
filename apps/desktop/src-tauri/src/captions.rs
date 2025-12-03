@@ -745,22 +745,34 @@ fn process_with_whisper(
             continue;
         }
 
-        let segment_text = words
-            .iter()
-            .map(|word| word.text.clone())
-            .collect::<Vec<_>>()
-            .join(" ");
+        const MAX_WORDS_PER_SEGMENT: usize = 6;
 
-        let segment_start = words.first().map(|word| word.start).unwrap_or(start_time);
-        let segment_end = words.last().map(|word| word.end).unwrap_or(end_time);
+        let word_chunks: Vec<Vec<CaptionWord>> = words
+            .chunks(MAX_WORDS_PER_SEGMENT)
+            .map(|chunk| chunk.to_vec())
+            .collect();
 
-        segments.push(CaptionSegment {
-            id: format!("segment-{i}"),
-            start: segment_start,
-            end: segment_end,
-            text: segment_text,
-            words,
-        });
+        for (chunk_idx, chunk_words) in word_chunks.into_iter().enumerate() {
+            let segment_text = chunk_words
+                .iter()
+                .map(|word| word.text.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let segment_start = chunk_words
+                .first()
+                .map(|word| word.start)
+                .unwrap_or(start_time);
+            let segment_end = chunk_words.last().map(|word| word.end).unwrap_or(end_time);
+
+            segments.push(CaptionSegment {
+                id: format!("segment-{i}-{chunk_idx}"),
+                start: segment_start,
+                end: segment_end,
+                text: segment_text,
+                words: chunk_words,
+            });
+        }
     }
 
     log::info!("=== WHISPER TRANSCRIPTION COMPLETE ===");
@@ -1119,7 +1131,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                     let color = settings_obj
                         .get("color")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("#FFFFFF")
+                        .unwrap_or("#A0A0A0")
                         .to_string();
 
                     let background_color = settings_obj
@@ -1143,7 +1155,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                     let bold = settings_obj
                         .get("bold")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                        .unwrap_or(false);
                     let italic = settings_obj
                         .get("italic")
                         .and_then(|v| v.as_bool())
@@ -1170,7 +1182,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .get("highlightColor")
                         .or_else(|| settings_obj.get("highlight_color"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("#FFFF00")
+                        .unwrap_or("#FFFFFF")
                         .to_string();
 
                     let fade_duration = settings_obj
