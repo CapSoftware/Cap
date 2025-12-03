@@ -57,13 +57,14 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
-export type PreviewQuality = "half" | "full";
+export type PreviewQuality = "quarter" | "half" | "full";
 
 export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
 
 const previewQualityScale: Record<PreviewQuality, number> = {
 	full: 1,
 	half: 0.5,
+	quarter: 0.25,
 };
 
 export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
