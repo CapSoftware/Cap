@@ -16,6 +16,7 @@ import {
 import { createStore } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
+import { defaultCaptionSettings } from "~/store/captions";
 import type { CaptionSegment, CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 import IconLucideCheck from "~icons/lucide/check";
@@ -124,23 +125,6 @@ const fontOptions = [
 	{ value: "System Serif", label: "System Serif" },
 	{ value: "System Monospace", label: "System Monospace" },
 ];
-
-const defaultCaptionSettings: CaptionSettings = {
-	enabled: false,
-	font: "System Sans-Serif",
-	size: 24,
-	color: "#FFFFFF",
-	backgroundColor: "#000000",
-	backgroundOpacity: 90,
-	position: "bottom-center",
-	bold: true,
-	italic: false,
-	outline: true,
-	outlineColor: "#000000",
-	exportWithSubtitles: false,
-	highlightColor: "#FFFF00",
-	fadeDuration: 0.15,
-};
 
 // Add type definitions at the top
 interface CaptionsResponse {
@@ -974,7 +958,7 @@ export function CaptionsTab() {
 										<div class="flex flex-col gap-2">
 											<span class="text-gray-500 text-sm">Highlight Color</span>
 											<RgbInput
-												value={captionSettings.highlightColor || "#FFFF00"}
+												value={captionSettings.highlightColor || "#FFFFFF"}
 												onChange={(value) =>
 													updateCaptionSetting("highlightColor", value)
 												}

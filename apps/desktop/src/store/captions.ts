@@ -12,7 +12,7 @@ export type CaptionsState = {
 	currentCaption: string | null;
 };
 
-const defaultCaptionSettings: CaptionSettings = {
+export const defaultCaptionSettings: CaptionSettings = {
 	enabled: false,
 	font: "System Sans-Serif",
 	size: 24,
