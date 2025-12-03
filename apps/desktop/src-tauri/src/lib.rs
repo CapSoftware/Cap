@@ -1544,6 +1544,8 @@ async fn upload_exported_video(
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 
+    let has_camera = path.join("content/camera.mp4").exists();
+
     let s3_config = match async {
         let video_id = match mode {
             UploadMode::Initial { pre_created_video } => {
@@ -1569,6 +1571,7 @@ async fn upload_exported_video(
             Some(metadata.clone()),
             organization_id,
             workspace_id,
+            has_camera,
         )
         .await
     }

@@ -117,7 +117,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 false,
                 None::<&str>,
             )?,
-            &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::Quit, "Quit Inflight", true, None::<&str>)?,
         ],
     )?;
     let app = app.clone();

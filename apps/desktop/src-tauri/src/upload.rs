@@ -193,7 +193,7 @@ pub async fn upload_image(
         .ok_or("Invalid file path")?
         .to_string();
 
-    let s3_config = create_or_get_video(app, true, None, None, None, None, None).await?;
+    let s3_config = create_or_get_video(app, true, None, None, None, None, None, false).await?;
 
     let (stream, total_size) = file_reader_stream(file_path).await?;
     singlepart_uploader(
@@ -224,6 +224,7 @@ pub async fn create_or_get_video(
     meta: Option<S3VideoMeta>,
     organization_id: Option<String>,
     workspace_id: Option<String>,
+    has_camera: bool,
 ) -> Result<S3UploadMeta, AuthedApiError> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
@@ -252,6 +253,10 @@ pub async fn create_or_get_video(
 
     if let Some(ws_id) = workspace_id {
         s3_config_url.push_str(&format!("&workspaceId={}", ws_id));
+    }
+
+    if has_camera {
+        s3_config_url.push_str("&hasCamera=true");
     }
 
     let response = app
@@ -409,20 +414,20 @@ impl InstantMultipartUpload {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id} ({subpath})...");
 
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for upload init: {err}")
-        })?;
-        project_meta.upload = Some(UploadMeta::MultipartUpload {
-            video_id: video_id.clone(),
-            file_path: file_path.clone(),
-            subpath: subpath.clone(),
-            pre_created_video: pre_created_video.clone(),
-            recording_dir: recording_dir.clone(),
-        });
-        project_meta
-            .save_for_project()
-            .map_err(|e| error!("Failed to save recording meta: {e}"))
-            .ok();
+        // let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+        //     format!("Error reading project meta from {recording_dir:?} for upload init: {err}")
+        // })?;
+        // project_meta.upload = Some(UploadMeta::MultipartUpload {
+        //     video_id: video_id.clone(),
+        //     file_path: file_path.clone(),
+        //     subpath: subpath.clone(),
+        //     pre_created_video: pre_created_video.clone(),
+        //     recording_dir: recording_dir.clone(),
+        // });
+        // project_meta
+        //     .save_for_project()
+        //     .map_err(|e| error!("Failed to save recording meta: {e}"))
+        //     .ok();
 
         let upload_id = api::upload_multipart_initiate(&app, &video_id, &subpath).await?;
 
@@ -463,13 +468,13 @@ impl InstantMultipartUpload {
         .await?;
         info!("Multipart upload complete for {video_id}.");
 
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-            format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
-        })?;
-        project_meta.upload = Some(UploadMeta::Complete);
-        project_meta
-            .save_for_project()
-            .map_err(|err| format!("Error reading project meta from {recording_dir:?}: {err}"))?;
+        // let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+        //     format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
+        // })?;
+        // project_meta.upload = Some(UploadMeta::Complete);
+        // project_meta
+        //     .save_for_project()
+        //     .map_err(|err| format!("Error reading project meta from {recording_dir:?}: {err}"))?;
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -1014,4 +1019,165 @@ fn tauri_channel_progress<T: UploadedChunk, E>(
             yield chunk;
         }
     }
+}
+
+async fn upload_camera_fallback(
+    app: &AppHandle,
+    video_id: &str,
+    camera_path: PathBuf,
+) -> Result<(), String> {
+    if !camera_path.exists() {
+        return Ok(());
+    }
+
+    info!("Attempting singlepart upload for camera.mp4...");
+    let camera_data = tokio::fs::read(&camera_path)
+        .await
+        .map_err(|e| format!("Failed to read camera.mp4 for fallback upload: {e}"))?;
+
+    singlepart_uploader(
+        app.clone(),
+        PresignedS3PutRequest {
+            video_id: video_id.to_string(),
+            subpath: "camera.mp4".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
+        },
+        camera_data.len() as u64,
+        stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(camera_data)) }),
+    )
+    .await
+    .map_err(|e| format!("Instant mode camera.mp4 singlepart upload failed: {e}"))?;
+
+    info!("Instant mode camera.mp4 singlepart upload succeeded");
+    Ok(())
+}
+
+async fn upload_cursor_file(
+    app: &AppHandle,
+    video_id: &str,
+    recording_dir: &PathBuf,
+) -> Result<(), String> {
+    let cursor_path = recording_dir.join("content/cursor.json");
+    if !cursor_path.exists() {
+        return Ok(());
+    }
+
+    let cursor_data = tokio::fs::read(&cursor_path)
+        .await
+        .map_err(|e| format!("Failed to read cursor.json: {e}"))?;
+
+    singlepart_uploader(
+        app.clone(),
+        PresignedS3PutRequest {
+            video_id: video_id.to_string(),
+            subpath: "cursor.json".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
+        },
+        cursor_data.len() as u64,
+        stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(cursor_data)) }),
+    )
+    .await
+    .map_err(|e| format!("Error uploading cursor.json for instant mode: {e}"))?;
+
+    info!("Instant mode cursor.json upload succeeded");
+    Ok(())
+}
+
+async fn upload_screenshot_file(
+    app: &AppHandle,
+    video_id: &str,
+    screenshot_path: PathBuf,
+) -> Result<(), String> {
+    let bytes = compress_image(screenshot_path)
+        .await
+        .map_err(|e| format!("Error compressing thumbnail for instant mode: {e}"))?;
+
+    singlepart_uploader(
+        app.clone(),
+        PresignedS3PutRequest {
+            video_id: video_id.to_string(),
+            subpath: "screenshot.jpg".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
+        },
+        bytes.len() as u64,
+        stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
+    )
+    .await
+    .map_err(|e| format!("Error uploading screenshot for instant mode: {e}"))?;
+
+    info!("Instant mode screenshot upload succeeded");
+    Ok(())
+}
+
+#[instrument(skip(app))]
+pub async fn upload_instant_recording(
+    app: &AppHandle,
+    recording_dir: PathBuf,
+    video_upload_info: VideoUploadInfo,
+    display_output_path: PathBuf,
+    camera_output_path: Option<PathBuf>,
+    screenshot_path: PathBuf,
+    display_upload_succeeded: bool,
+    camera_upload_succeeded: bool,
+) -> Result<(), String> {
+    if !display_upload_succeeded {
+        error!("Display multipart upload failed, attempting fallback upload...");
+
+        let meta = build_video_meta(&display_output_path)
+            .map_err(|e| format!("Error getting video metadata: {e}"))?;
+
+        upload_video(
+            app,
+            video_upload_info.id.clone(),
+            display_output_path,
+            screenshot_path.clone(),
+            meta,
+            None,
+            video_upload_info.config.version_id.clone(),
+        )
+        .await
+        .map_err(|e| format!("Error in fallback display upload: {e}"))?;
+
+        info!("Fallback display video upload with screenshot completed successfully");
+
+        upload_cursor_file(app, &video_upload_info.id, &recording_dir)
+            .await
+            .map_err(|e| {
+                error!("{e}");
+                e
+            })?;
+    } else {
+        upload_cursor_file(app, &video_upload_info.id, &recording_dir)
+            .await
+            .map_err(|e| {
+                error!("{e}");
+                e
+            })
+            .ok();
+
+        upload_screenshot_file(app, &video_upload_info.id, screenshot_path)
+            .await
+            .map_err(|e| {
+                error!("{e}");
+                e
+            })
+            .ok();
+    }
+
+    if !camera_upload_succeeded {
+        if let Some(camera_path) = camera_output_path {
+            upload_camera_fallback(app, &video_upload_info.id, camera_path)
+                .await
+                .map_err(|e| {
+                    error!("{e}");
+                    e
+                })
+                .ok();
+        }
+    }
+
+    Ok(())
 }
