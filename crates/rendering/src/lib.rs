@@ -1231,6 +1231,10 @@ impl ProjectUniforms {
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
+                const BASE_HEIGHT: f32 = 1080.0;
+                let resolution_scale = output_size[1] / BASE_HEIGHT;
+                let camera_padding = CAMERA_PADDING * resolution_scale;
+
                 let base_size = project.camera.size / 100.0;
                 let zoom_size = project
                     .camera
@@ -1247,19 +1251,19 @@ impl ProjectUniforms {
                     CameraShape::Source => {
                         if aspect >= 1.0 {
                             [
-                                (min_axis * scale + CAMERA_PADDING) * aspect,
-                                min_axis * scale + CAMERA_PADDING,
+                                (min_axis * scale + camera_padding) * aspect,
+                                min_axis * scale + camera_padding,
                             ]
                         } else {
                             [
-                                min_axis * scale + CAMERA_PADDING,
-                                (min_axis * scale + CAMERA_PADDING) / aspect,
+                                min_axis * scale + camera_padding,
+                                (min_axis * scale + camera_padding) / aspect,
                             ]
                         }
                     }
                     CameraShape::Square => [
-                        min_axis * scale + CAMERA_PADDING,
-                        min_axis * scale + CAMERA_PADDING,
+                        min_axis * scale + camera_padding,
+                        min_axis * scale + camera_padding,
                     ],
                 };
 
@@ -1268,14 +1272,14 @@ impl ProjectUniforms {
 
                 let position_for = |subject_size: [f32; 2]| {
                     let x = match &project.camera.position.x {
-                        CameraXPosition::Left => CAMERA_PADDING,
+                        CameraXPosition::Left => camera_padding,
                         CameraXPosition::Center => output_size[0] / 2.0 - subject_size[0] / 2.0,
-                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - subject_size[0],
+                        CameraXPosition::Right => output_size[0] - camera_padding - subject_size[0],
                     };
                     let y = match &project.camera.position.y {
-                        CameraYPosition::Top => CAMERA_PADDING,
+                        CameraYPosition::Top => camera_padding,
                         CameraYPosition::Bottom => {
-                            output_size[1] - subject_size[1] - CAMERA_PADDING
+                            output_size[1] - subject_size[1] - camera_padding
                         }
                     };
 
