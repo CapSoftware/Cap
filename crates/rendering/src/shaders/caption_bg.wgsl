@@ -27,6 +27,21 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
+fn squircle_sdf(p: vec2<f32>, half_size: vec2<f32>, radius: f32) -> f32 {
+    let adjusted_half = half_size - vec2<f32>(radius);
+    let q = abs(p) - adjusted_half;
+    
+    if q.x <= 0.0 && q.y <= 0.0 {
+        return max(q.x, q.y) - radius;
+    }
+    
+    let corner = max(q, vec2<f32>(0.0));
+    let n = 4.0;
+    let corner_dist = pow(pow(corner.x, n) + pow(corner.y, n), 1.0 / n);
+    
+    return corner_dist - radius;
+}
+
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let rect_min = uniforms.rect.xy;
@@ -36,10 +51,10 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let half_size = rect_size * 0.5;
 
     let local = position.xy - rect_center;
-    let dist = abs(local) - (half_size - vec2<f32>(radius, radius));
-    let outside = max(dist, vec2<f32>(0.0, 0.0));
-    let distance = length(outside) - radius;
-    let alpha = clamp(1.0 - distance, 0.0, 1.0);
+    let distance = squircle_sdf(local, half_size, radius);
+    
+    let edge_softness = 1.5;
+    let alpha = 1.0 - smoothstep(-edge_softness, edge_softness, distance);
 
     return vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
 }
