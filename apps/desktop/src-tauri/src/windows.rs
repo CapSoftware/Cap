@@ -289,6 +289,9 @@ impl ShowCapWindow {
                 let title = CapWindowId::Main.title();
                 let should_protect = should_protect_window(app, &title);
 
+                let state = app.state::<ArcLock<App>>();
+                let camera_ws_port = state.read().await.camera_ws_port;
+
                 let window = self
                     .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
                     .resizable(false)
@@ -303,10 +306,12 @@ impl ShowCapWindow {
                     .initialization_script(format!(
                         "
                         window.__CAP__ = window.__CAP__ ?? {{}};
-                        window.__CAP__.initialTargetMode = {}
+                        window.__CAP__.initialTargetMode = {};
+                        window.__CAP__.cameraWsPort = {};
                     ",
                         serde_json::to_string(init_target_mode)
-                            .expect("Failed to serialize initial target mode")
+                            .expect("Failed to serialize initial target mode"),
+                        camera_ws_port
                     ))
                     .build()?;
 

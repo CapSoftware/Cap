@@ -488,11 +488,11 @@ async fn set_camera_input(
                 }
             }
 
-            ShowCapWindow::Camera
-                .show(&app_handle)
-                .await
-                .map_err(|err| error!("Failed to show camera preview window: {err}"))
-                .ok();
+            // ShowCapWindow::Camera
+            //     .show(&app_handle)
+            //     .await
+            //     .map_err(|err| error!("Failed to show camera preview window: {err}"))
+            //     .ok();
         }
     }
 
