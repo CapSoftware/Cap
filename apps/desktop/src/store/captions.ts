@@ -15,18 +15,18 @@ export type CaptionsState = {
 export const defaultCaptionSettings: CaptionSettings = {
 	enabled: false,
 	font: "System Sans-Serif",
-	size: 24,
-	color: "#FFFFFF",
+	size: 45,
+	color: "#A0A0A0",
 	backgroundColor: "#000000",
-	backgroundOpacity: 90,
+	backgroundOpacity: 95,
 	position: "bottom-center",
-	bold: true,
+	bold: false,
 	italic: false,
 	outline: true,
 	outlineColor: "#000000",
 	exportWithSubtitles: false,
 	highlightColor: "#FFFFFF",
-	fadeDuration: 0.15,
+	fadeDuration: 0.2,
 };
 
 function createCaptionsStore() {

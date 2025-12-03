@@ -539,8 +539,8 @@ impl CaptionsLayer {
         }
 
         let available_width = (width as f32 - margin * 2.0).max(1.0);
-        let padding = font_size * 0.4;
-        let corner_radius = font_size * 0.45;
+        let padding = font_size * 0.5;
+        let corner_radius = font_size * 0.55;
         let text_width = layout_width.min(available_width);
         let text_height = layout_height;
         let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
@@ -564,10 +564,10 @@ impl CaptionsLayer {
         let text_top = background_top + padding;
 
         let bounds = TextBounds {
-            left: text_left.floor() as i32,
-            top: text_top.floor() as i32,
-            right: (text_left + text_width).ceil() as i32,
-            bottom: (text_top + text_height).ceil() as i32,
+            left: (text_left - 2.0).floor() as i32,
+            top: (text_top - 2.0).floor() as i32,
+            right: (text_left + text_width + 2.0).ceil() as i32,
+            bottom: (text_top + text_height + 2.0).ceil() as i32,
         };
 
         self.text_buffer = updated_buffer;
@@ -583,15 +583,20 @@ impl CaptionsLayer {
         );
 
         if caption_data.settings.outline {
+            let outline_thickness = 1.2;
             let outline_offsets = [
-                (-1.5, -1.5),
-                (0.0, -1.5),
-                (1.5, -1.5),
-                (-1.5, 0.0),
-                (1.5, 0.0),
-                (-1.5, 1.5),
-                (0.0, 1.5),
-                (1.5, 1.5),
+                (-outline_thickness, -outline_thickness),
+                (0.0, -outline_thickness),
+                (outline_thickness, -outline_thickness),
+                (-outline_thickness, 0.0),
+                (outline_thickness, 0.0),
+                (-outline_thickness, outline_thickness),
+                (0.0, outline_thickness),
+                (outline_thickness, outline_thickness),
+                (-outline_thickness * 0.7, -outline_thickness * 0.7),
+                (outline_thickness * 0.7, -outline_thickness * 0.7),
+                (-outline_thickness * 0.7, outline_thickness * 0.7),
+                (outline_thickness * 0.7, outline_thickness * 0.7),
             ];
 
             for (offset_x, offset_y) in outline_offsets.iter() {
@@ -661,8 +666,9 @@ impl CaptionsLayer {
             bytemuck::bytes_of(&rect),
         );
 
-        let scissor_x = background_left.max(0.0).floor() as u32;
-        let scissor_y = background_top.max(0.0).floor() as u32;
+        let scissor_padding = 4.0;
+        let scissor_x = (background_left - scissor_padding).max(0.0).floor() as u32;
+        let scissor_y = (background_top - scissor_padding).max(0.0).floor() as u32;
         let max_width = width.saturating_sub(scissor_x);
         let max_height = height.saturating_sub(scissor_y);
 
@@ -671,8 +677,14 @@ impl CaptionsLayer {
             return;
         }
 
-        let scissor_width = box_width.ceil().max(1.0).min(max_width as f32) as u32;
-        let scissor_height = box_height.ceil().max(1.0).min(max_height as f32) as u32;
+        let scissor_width = (box_width + scissor_padding * 2.0)
+            .ceil()
+            .max(1.0)
+            .min(max_width as f32) as u32;
+        let scissor_height = (box_height + scissor_padding * 2.0)
+            .ceil()
+            .max(1.0)
+            .min(max_height as f32) as u32;
 
         if scissor_width == 0 || scissor_height == 0 {
             self.has_caption = false;
