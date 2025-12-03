@@ -20,6 +20,7 @@ cap-cursor-info = { path = "../cursor-info" }
 cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-frame-converter = { path = "../frame-converter" }
 cap-timestamp = { path = "../timestamp" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
 

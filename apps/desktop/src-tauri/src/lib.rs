@@ -649,10 +649,18 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
                 )
             };
 
-            if should_check && let Some(selected_id) = camera_id {
-                let available = is_camera_available(&selected_id);
+            if should_check && let Some(ref selected_id) = camera_id {
+                let available = is_camera_available(selected_id);
+                debug!(
+                    "Camera watcher: checking availability for {:?}, available={}, is_marked={}",
+                    selected_id, available, is_marked
+                );
 
                 if !available && !is_marked {
+                    warn!(
+                        "Camera watcher: camera {:?} detected as unavailable, pausing recording",
+                        selected_id
+                    );
                     let mut app = state.write().await;
                     if let Err(err) = app
                         .handle_input_disconnect(RecordingInputKind::Camera)
@@ -674,7 +682,21 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
 }
 
 fn is_camera_available(id: &DeviceOrModelID) -> bool {
-    cap_camera::list_cameras().any(|info| match id {
+    let cameras: Vec<_> = cap_camera::list_cameras().collect();
+    debug!(
+        "is_camera_available: looking for {:?} in {} cameras",
+        id,
+        cameras.len()
+    );
+    for camera in &cameras {
+        debug!(
+            "  - device_id={}, model_id={:?}, name={}",
+            camera.device_id(),
+            camera.model_id(),
+            camera.display_name()
+        );
+    }
+    cameras.iter().any(|info| match id {
         DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
         DeviceOrModelID::ModelID(model_id) => {
             info.model_id().is_some_and(|existing| existing == model_id)

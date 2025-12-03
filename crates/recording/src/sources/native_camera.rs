@@ -1,7 +1,6 @@
 use crate::{
     feeds::camera::{self, CameraFeedLock},
-    ffmpeg::FFmpegVideoFrame,
-    output_pipeline::{SetupCtx, VideoSource},
+    output_pipeline::{NativeCameraFrame, SetupCtx, VideoSource},
 };
 use anyhow::anyhow;
 use cap_media_info::VideoInfo;
@@ -12,15 +11,15 @@ use std::sync::{
 };
 use tokio::sync::oneshot;
 
-pub struct Camera {
+pub struct NativeCamera {
     feed_lock: Arc<CameraFeedLock>,
     stop_tx: Option<oneshot::Sender<()>>,
     stopped: Arc<AtomicBool>,
 }
 
-impl VideoSource for Camera {
+impl VideoSource for NativeCamera {
     type Config = Arc<CameraFeedLock>;
-    type Frame = FFmpegVideoFrame;
+    type Frame = NativeCameraFrame;
 
     async fn setup(
         feed_lock: Self::Config,
@@ -33,16 +32,16 @@ impl VideoSource for Camera {
         let (tx, rx) = flume::bounded(256);
 
         feed_lock
-            .ask(camera::AddSender(tx))
+            .ask(camera::AddNativeSender(tx))
             .await
-            .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+            .map_err(|e| anyhow!("Failed to add native camera sender: {e}"))?;
 
         let (stop_tx, stop_rx) = oneshot::channel();
         let stopped = Arc::new(AtomicBool::new(false));
         let stopped_clone = stopped.clone();
 
         tokio::spawn(async move {
-            tracing::debug!("Camera source task started");
+            tracing::debug!("Native camera source task started");
             let mut frame_count: u64 = 0;
             let mut sent_count: u64 = 0;
             let mut dropped_count: u64 = 0;
@@ -52,14 +51,14 @@ impl VideoSource for Camera {
 
             loop {
                 if stopped_clone.load(Ordering::Relaxed) {
-                    tracing::debug!("Camera source: stop flag set, exiting");
+                    tracing::debug!("Native camera source: stop flag set, exiting");
                     break;
                 }
 
                 tokio::select! {
                     biased;
                     _ = &mut stop_rx => {
-                        tracing::debug!("Camera source: received stop signal");
+                        tracing::debug!("Native camera source: received stop signal");
                         break;
                     }
                     result = rx.recv_async() => {
@@ -71,7 +70,7 @@ impl VideoSource for Camera {
                                         sent_count += 1;
                                         if sent_count % 30 == 0 {
                                             tracing::debug!(
-                                                "Camera source: sent {} frames, dropped {} in {:?}",
+                                                "Native camera source: sent {} frames, dropped {} in {:?}",
                                                 sent_count,
                                                 dropped_count,
                                                 start.elapsed()
@@ -83,13 +82,13 @@ impl VideoSource for Camera {
                                             dropped_count += 1;
                                             if dropped_count % 30 == 0 {
                                                 tracing::warn!(
-                                                    "Camera source: encoder can't keep up, dropped {} frames so far",
+                                                    "Native camera source: encoder can't keep up, dropped {} frames so far",
                                                     dropped_count
                                                 );
                                             }
                                         } else if e.is_disconnected() {
                                             tracing::debug!(
-                                                "Camera source: pipeline closed after {} sent, {} dropped",
+                                                "Native camera source: pipeline closed after {} sent, {} dropped",
                                                 sent_count,
                                                 dropped_count
                                             );
@@ -100,7 +99,7 @@ impl VideoSource for Camera {
                             }
                             Err(e) => {
                                 tracing::debug!(
-                                    "Camera feed disconnected (rx closed) after {} frames in {:?}: {e}",
+                                    "Native camera feed disconnected (rx closed) after {} frames in {:?}: {e}",
                                     frame_count,
                                     start.elapsed()
                                 );
@@ -114,7 +113,7 @@ impl VideoSource for Camera {
             drop(video_tx);
 
             tracing::info!(
-                "Camera source finished: {} received, {} sent, {} dropped in {:?}",
+                "Native camera source finished: {} received, {} sent, {} dropped in {:?}",
                 frame_count,
                 sent_count,
                 dropped_count,
@@ -135,7 +134,7 @@ impl VideoSource for Camera {
 
     fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            tracing::debug!("Camera source: stopping");
+            tracing::debug!("Native camera source: stopping");
             self.stopped.store(true, Ordering::SeqCst);
             if let Some(stop_tx) = self.stop_tx.take() {
                 let _ = stop_tx.send(());

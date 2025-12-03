@@ -1,6 +1,8 @@
+mod async_camera;
 mod core;
 pub mod ffmpeg;
 
+pub use async_camera::*;
 pub use core::*;
 pub use ffmpeg::*;
 

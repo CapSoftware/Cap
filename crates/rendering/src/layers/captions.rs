@@ -113,7 +113,7 @@ fn wrap_text_by_words(text: &str, max_words: usize) -> String {
     if words.is_empty() {
         return String::new();
     }
-    
+
     let mut result = String::new();
     for (i, word) in words.iter().enumerate() {
         if i > 0 {
@@ -128,14 +128,19 @@ fn wrap_text_by_words(text: &str, max_words: usize) -> String {
     result
 }
 
-fn calculate_bounce_offset(_fade_opacity: f32, time_from_start: f32, time_to_end: f32, fade_duration: f32) -> f32 {
+fn calculate_bounce_offset(
+    _fade_opacity: f32,
+    time_from_start: f32,
+    time_to_end: f32,
+    fade_duration: f32,
+) -> f32 {
     if fade_duration <= 0.0 {
         return 0.0;
     }
-    
+
     let fade_in_progress = (time_from_start / fade_duration).clamp(0.0, 1.0);
     let fade_out_progress = (time_to_end / fade_duration).clamp(0.0, 1.0);
-    
+
     if fade_in_progress < 1.0 {
         let ease = 1.0 - fade_in_progress;
         let bounce = ease * ease;
@@ -305,7 +310,7 @@ impl CaptionsLayer {
     fn calculate_fade_opacity(&self, current_time: f32, fade_duration: f32) -> (f32, f32, f32) {
         let time_from_start = current_time - self.current_segment_start;
         let time_to_end = self.current_segment_end - current_time;
-        
+
         if fade_duration <= 0.0 {
             return (1.0, time_from_start, time_to_end);
         }
@@ -356,13 +361,15 @@ impl CaptionsLayer {
         let raw_caption_text = self.current_text.clone().unwrap_or_default();
         let caption_text = wrap_text_by_words(&raw_caption_text, MAX_WORDS_PER_LINE);
         let caption_words = current_caption.words.clone();
-        let (fade_opacity, time_from_start, time_to_end) = self.calculate_fade_opacity(current_time, fade_duration);
+        let (fade_opacity, time_from_start, time_to_end) =
+            self.calculate_fade_opacity(current_time, fade_duration);
         if fade_opacity <= 0.0 {
             self.current_text = None;
             return;
         }
-        
-        let bounce_offset = calculate_bounce_offset(fade_opacity, time_from_start, time_to_end, fade_duration);
+
+        let bounce_offset =
+            calculate_bounce_offset(fade_opacity, time_from_start, time_to_end, fade_duration);
 
         let (width, height) = (output_size.x, output_size.y);
         let device = &constants.device;
@@ -550,7 +557,8 @@ impl CaptionsLayer {
         let center_y = height as f32 * position.y_factor();
         let base_background_top =
             (center_y - box_height / 2.0).clamp(0.0, (height as f32 - box_height).max(0.0));
-        let background_top = (base_background_top + bounce_offset).clamp(0.0, (height as f32 - box_height).max(0.0));
+        let background_top =
+            (base_background_top + bounce_offset).clamp(0.0, (height as f32 - box_height).max(0.0));
 
         let text_left = background_left + padding;
         let text_top = background_top + padding;
