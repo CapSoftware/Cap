@@ -357,9 +357,7 @@ export function SceneTrack(props: {
 							class={cx(
 								"border transition-colors duration-200 hover:border-gray-12 group",
 								`bg-gradient-to-r from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]`,
-								isSelected()
-									? "wobble-wrapper border-gray-12"
-									: "border-transparent",
+								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
 							innerClass="ring-blue-5"
 							segment={segment}

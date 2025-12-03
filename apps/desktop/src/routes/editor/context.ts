@@ -15,6 +15,7 @@ import {
 	createSignal,
 	on,
 	onCleanup,
+	untrack,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
@@ -28,10 +29,16 @@ import {
 	type MultipleSegments,
 	type ProjectConfiguration,
 	type RecordingMeta,
+	type SceneSegment,
 	type SerializedEditorInstance,
 	type SingleSegment,
+	type TimelineConfiguration,
+	type TimelineSegment,
 	type XY,
+	type ZoomSegment,
 } from "~/utils/tauri";
+import type { MaskSegment } from "./masks";
+import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
 
 export type CurrentDialog =
@@ -50,6 +57,25 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
+export type PreviewQuality = "half" | "full";
+
+export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
+
+const previewQualityScale: Record<PreviewQuality, number> = {
+	full: 1,
+	half: 0.5,
+};
+
+export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
+	const scale = previewQualityScale[quality];
+	const width = (Math.max(2, Math.round(OUTPUT_SIZE.x * scale)) + 1) & ~1;
+	const height = (Math.max(2, Math.round(OUTPUT_SIZE.y * scale)) + 1) & ~1;
+
+	return { x: width, y: height };
+};
+
+export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
+
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
 
@@ -66,12 +92,23 @@ export type CornerRoundingType = "rounded" | "squircle";
 
 type WithCornerStyle<T> = T & { roundingType: CornerRoundingType };
 
+type EditorTimelineConfiguration = Omit<
+	TimelineConfiguration,
+	"sceneSegments" | "maskSegments"
+> & {
+	sceneSegments?: SceneSegment[];
+	maskSegments: MaskSegment[];
+	textSegments: TextSegment[];
+};
+
 export type EditorProjectConfiguration = Omit<
 	ProjectConfiguration,
-	"background" | "camera"
+	"background" | "camera" | "timeline"
 > & {
 	background: WithCornerStyle<ProjectConfiguration["background"]>;
 	camera: WithCornerStyle<ProjectConfiguration["camera"]>;
+	timeline?: EditorTimelineConfiguration | null;
+	hiddenTextSegments?: number[];
 };
 
 function withCornerDefaults<
@@ -90,8 +127,28 @@ function withCornerDefaults<
 export function normalizeProject(
 	config: ProjectConfiguration,
 ): EditorProjectConfiguration {
+	const timeline = config.timeline
+		? {
+				...config.timeline,
+				sceneSegments: config.timeline.sceneSegments ?? [],
+				maskSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							maskSegments?: MaskSegment[];
+						}
+					).maskSegments ?? [],
+				textSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							textSegments?: TextSegment[];
+						}
+					).textSegments ?? [],
+			}
+		: undefined;
+
 	return {
 		...config,
+		timeline,
 		background: withCornerDefaults(config.background),
 		camera: withCornerDefaults(config.camera),
 	};
@@ -105,8 +162,17 @@ export function serializeProjectConfiguration(
 		background;
 	const { roundingType: cameraRoundingType, ...cameraRest } = camera;
 
+	const timeline = project.timeline
+		? {
+				...project.timeline,
+				maskSegments: project.timeline.maskSegments ?? [],
+				textSegments: project.timeline.textSegments ?? [],
+			}
+		: project.timeline;
+
 	return {
 		...rest,
+		timeline: timeline as unknown as ProjectConfiguration["timeline"],
 		background: {
 			...backgroundRest,
 			roundingType: backgroundRoundingType,
@@ -223,6 +289,84 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitMaskSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"maskSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteMaskSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"maskSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			splitTextSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"textSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteTextSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"textSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			splitSceneSegment: (index: number, time: number) => {
 				setProject(
 					"timeline",
@@ -290,6 +434,16 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 							zoomSegment.end += diff(zoomSegment.end);
 						}
 
+						for (const maskSegment of timeline.maskSegments) {
+							maskSegment.start += diff(maskSegment.start);
+							maskSegment.end += diff(maskSegment.end);
+						}
+
+						for (const textSegment of timeline.textSegments) {
+							textSegment.start += diff(textSegment.start);
+							textSegment.end += diff(textSegment.end);
+						}
+
 						segment.timescale = timescale;
 					}),
 				);
@@ -313,7 +467,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			shouldResave = false;
 			hasPendingProjectSave = false;
 			try {
-				await commands.setProjectConfig(serializeProjectConfiguration(project));
+				const config = serializeProjectConfiguration(project);
+				await commands.setProjectConfig(config);
 			} catch (error) {
 				console.error("Failed to persist project config", error);
 			} finally {
@@ -355,6 +510,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				{ defer: true },
 			),
 		);
+
+		const [previewQuality, setPreviewQuality] = createSignal<PreviewQuality>(
+			DEFAULT_PREVIEW_QUALITY,
+		);
+
+		const previewResolutionBase = () => getPreviewResolution(previewQuality());
 
 		const [dialog, setDialog] = createSignal<DialogState>({
 			open: false,
@@ -430,6 +591,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			};
 		}
 
+		const initialMaskTrackEnabled =
+			(project.timeline?.maskSegments?.length ?? 0) > 0;
+		const initialTextTrackEnabled =
+			(project.timeline?.textSegments?.length ?? 0) > 0;
+
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
 			playbackTime: 0,
@@ -440,7 +606,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| null
 					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; indices: number[] }
-					| { type: "scene"; indices: number[] },
+					| { type: "scene"; indices: number[] }
+					| { type: "mask"; indices: number[] }
+					| { type: "text"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -477,7 +645,14 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						);
 					},
 				},
-				hoveredTrack: null as null | "clip" | "zoom" | "scene",
+				tracks: {
+					clip: true,
+					zoom: true,
+					scene: true,
+					mask: initialMaskTrackEnabled,
+					text: initialTextTrackEnabled,
+				},
+				hoveredTrack: null as null | TimelineTrackType,
 			},
 		});
 
@@ -509,6 +684,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			setExportState,
 			micWaveforms,
 			systemAudioWaveforms,
+			previewQuality,
+			setPreviewQuality,
+			previewResolutionBase,
 		};
 	},
 	// biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -577,7 +755,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 					events.renderFrameEvent.emit({
 						frame_number: Math.floor(0),
 						fps: FPS,
-						resolution_base: OUTPUT_SIZE,
+						resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
 					});
 				}
 			});

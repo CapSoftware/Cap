@@ -119,6 +119,9 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
+async updateProjectConfigInMemory(config: ProjectConfiguration) : Promise<null> {
+    return await TAURI_INVOKE("update_project_config_in_memory", { config });
+},
 async generateZoomSegmentsFromClicks() : Promise<ZoomSegment[]> {
     return await TAURI_INVOKE("generate_zoom_segments_from_clicks");
 },
@@ -229,57 +232,30 @@ async setCameraPreviewState(state: CameraPreviewState) : Promise<null> {
 async awaitCameraPreviewReady() : Promise<boolean> {
     return await TAURI_INVOKE("await_camera_preview_ready");
 },
-/**
- * Function to handle creating directories for the model
- */
 async createDir(path: string, recursive: boolean) : Promise<null> {
     return await TAURI_INVOKE("create_dir", { path, recursive });
 },
-/**
- * Function to save the model file
- */
 async saveModelFile(path: string, data: number[]) : Promise<null> {
     return await TAURI_INVOKE("save_model_file", { path, data });
 },
-/**
- * Function to transcribe audio from a video file using Whisper
- */
 async transcribeAudio(videoPath: string, modelPath: string, language: string) : Promise<CaptionData> {
     return await TAURI_INVOKE("transcribe_audio", { videoPath, modelPath, language });
 },
-/**
- * Function to save caption data to a file
- */
 async saveCaptions(videoId: string, captions: CaptionData) : Promise<null> {
     return await TAURI_INVOKE("save_captions", { videoId, captions });
 },
-/**
- * Function to load caption data from a file
- */
 async loadCaptions(videoId: string) : Promise<CaptionData | null> {
     return await TAURI_INVOKE("load_captions", { videoId });
 },
-/**
- * Helper function to download a Whisper model from Hugging Face Hub
- */
 async downloadWhisperModel(modelName: string, outputPath: string) : Promise<null> {
     return await TAURI_INVOKE("download_whisper_model", { modelName, outputPath });
 },
-/**
- * Function to check if a model file exists
- */
 async checkModelExists(modelPath: string) : Promise<boolean> {
     return await TAURI_INVOKE("check_model_exists", { modelPath });
 },
-/**
- * Function to delete a downloaded model
- */
 async deleteWhisperModel(modelPath: string) : Promise<null> {
     return await TAURI_INVOKE("delete_whisper_model", { modelPath });
 },
-/**
- * Export captions to an SRT file
- */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
 },
@@ -390,8 +366,9 @@ export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
-export type CaptionSegment = { id: string; start: number; end: number; text: string }
-export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
+export type CaptionSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[] }
+export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position?: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor?: string; fadeDuration?: number }
+export type CaptionWord = { text: string; start: number; end: number }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
 export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
 export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
@@ -412,7 +389,7 @@ export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DisplayId = string
-export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; refresh_rate: string }
+export type DisplayInformation = { name: string | null; physical_size: PhysicalSize | null; logical_size: LogicalSize | null; refresh_rate: string }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
@@ -444,7 +421,12 @@ export type LogicalBounds = { position: LogicalPosition; size: LogicalSize }
 export type LogicalPosition = { x: number; y: number }
 export type LogicalSize = { width: number; height: number }
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
+export type MaskKeyframes = { position?: MaskVectorKeyframe[]; size?: MaskVectorKeyframe[]; intensity?: MaskScalarKeyframe[] }
+export type MaskKind = "sensitive" | "highlight"
+export type MaskScalarKeyframe = { time: number; value: number }
+export type MaskSegment = { start: number; end: number; enabled?: boolean; maskType: MaskKind; center: XY<number>; size: XY<number>; feather?: number; opacity?: number; pixelation?: number; darkness?: number; keyframes?: MaskKeyframes }
 export type MaskType = "blur" | "pixelate"
+export type MaskVectorKeyframe = { time: number; x: number; y: number }
 export type ModelIDType = string
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
@@ -501,7 +483,8 @@ export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "Failed"; error: string } | { status: "Complete" }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[] }
+export type TextSegment = { start: number; end: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"

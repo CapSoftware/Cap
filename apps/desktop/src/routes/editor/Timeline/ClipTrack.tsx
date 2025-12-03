@@ -409,9 +409,7 @@ export function ClipTrack(
 								class={cx(
 									"border transition-colors duration-200 group hover:border-gray-12",
 									"bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
-									isSelected()
-										? "wobble-wrapper border-gray-12"
-										: "border-transparent",
+									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-blue-9"
 								segment={relativeSegment()}

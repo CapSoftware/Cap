@@ -187,32 +187,41 @@ impl Mp4ExportSettings {
                     frame_count += 1;
                 }
 
+                drop(frame_tx);
+
                 if let Some(frame) = first_frame {
-                    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
-                        frame.width,
-                        frame.height,
-                        frame
-                            .data
-                            .chunks(frame.padded_bytes_per_row as usize)
-                            .flat_map(|row| {
-                                row[0..(frame.width * 4) as usize]
-                                    .chunks(4)
-                                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .expect("Failed to create image from frame data");
+                    let project_path = project_path.clone();
+                    let screenshot_task = tokio::task::spawn_blocking(move || {
+                        let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+                            frame.width,
+                            frame.height,
+                            frame
+                                .data
+                                .chunks(frame.padded_bytes_per_row as usize)
+                                .flat_map(|row| {
+                                    row[0..(frame.width * 4) as usize]
+                                        .chunks(4)
+                                        .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                                })
+                                .collect::<Vec<_>>(),
+                        );
 
-                    let screenshots_dir = project_path.join("screenshots");
-                    std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
-                        eprintln!("Failed to create screenshots directory: {e:?}");
+                        let Some(rgb_img) = rgb_img else {
+                            return;
+                        };
+
+                        let screenshots_dir = project_path.join("screenshots");
+                        if std::fs::create_dir_all(&screenshots_dir).is_err() {
+                            return;
+                        }
+
+                        let screenshot_path = screenshots_dir.join("display.jpg");
+                        let _ = rgb_img.save(&screenshot_path);
                     });
 
-                    // Save full-size screenshot
-                    let screenshot_path = screenshots_dir.join("display.jpg");
-                    rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
-                        eprintln!("Failed to save screenshot: {e:?}");
-                    });
+                    if let Err(e) = screenshot_task.await {
+                        warn!("Screenshot task failed: {e}");
+                    }
                 } else {
                     warn!("No frames were processed, cannot save screenshot or thumbnail");
                 }

@@ -18,12 +18,10 @@ use tokio::sync::Mutex;
 use tracing::instrument;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-// Re-export caption types from cap_project
-pub use cap_project::{CaptionSegment, CaptionSettings};
+pub use cap_project::{CaptionSegment, CaptionSettings, CaptionWord};
 
 use crate::http_client;
 
-// Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
     pub segments: Vec<CaptionSegment>,
@@ -39,15 +37,12 @@ impl Default for CaptionData {
     }
 }
 
-// Model context is shared and cached
 lazy_static::lazy_static! {
-    static ref WHISPER_CONTEXT: Arc<Mutex<Option<WhisperContext>>> = Arc::new(Mutex::new(None));
+    static ref WHISPER_CONTEXT: Arc<Mutex<Option<Arc<WhisperContext>>>> = Arc::new(Mutex::new(None));
 }
 
-// Constants
 const WHISPER_SAMPLE_RATE: u32 = 16000;
 
-/// Function to handle creating directories for the model
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -55,7 +50,6 @@ pub async fn create_dir(path: String, _recursive: bool) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {e}"))
 }
 
-/// Function to save the model file
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -63,15 +57,14 @@ pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> 
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {e}"))
 }
 
-/// Extract audio from a video file and save it as a temporary WAV file
 async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Result<(), String> {
+    log::info!("=== EXTRACT AUDIO START ===");
     log::info!("Attempting to extract audio from: {video_path}");
+    log::info!("Output path: {:?}", output_path);
 
-    // Check if this is a .cap directory
     if video_path.ends_with(".cap") {
         log::info!("Detected .cap project directory");
 
-        // Read the recording metadata
         let meta_path = std::path::Path::new(video_path).join("recording-meta.json");
         let meta_content = std::fs::read_to_string(&meta_path)
             .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
@@ -79,21 +72,23 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         let meta: serde_json::Value = serde_json::from_str(&meta_content)
             .map_err(|e| format!("Failed to parse recording metadata: {e}"))?;
 
-        // Get paths for both audio sources
         let base_path = std::path::Path::new(video_path);
         let mut audio_sources = Vec::new();
 
         if let Some(segments) = meta["segments"].as_array() {
             for segment in segments {
-                // Add system audio if available
-                if let Some(system_audio) = segment["system_audio"]["path"].as_str() {
-                    audio_sources.push(base_path.join(system_audio));
-                }
+                let mut push_source = |path: Option<&str>| {
+                    if let Some(path) = path {
+                        let full_path = base_path.join(path);
+                        if !audio_sources.contains(&full_path) {
+                            audio_sources.push(full_path);
+                        }
+                    }
+                };
 
-                // Add microphone audio if available
-                if let Some(audio) = segment["audio"]["path"].as_str() {
-                    audio_sources.push(base_path.join(audio));
-                }
+                push_source(segment["system_audio"]["path"].as_str());
+                push_source(segment["mic"]["path"].as_str());
+                push_source(segment["audio"]["path"].as_str());
             }
         }
 
@@ -103,7 +98,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         log::info!("Found {} audio sources", audio_sources.len());
 
-        // Process each audio source using AudioData
         let mut mixed_samples = Vec::new();
         let mut channel_count = 0;
 
@@ -121,7 +115,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                         mixed_samples = audio.samples().to_vec();
                         channel_count = audio.channels() as usize;
                     } else {
-                        // Handle potential different channel counts by mixing to mono first if needed
                         if audio.channels() as usize != channel_count {
                             log::info!(
                                 "Channel count mismatch: {} vs {}, mixing to mono",
@@ -129,24 +122,20 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                                 audio.channels()
                             );
 
-                            // If we have mixed samples with multiple channels, convert to mono
                             if channel_count > 1 {
                                 let mono_samples = convert_to_mono(&mixed_samples, channel_count);
                                 mixed_samples = mono_samples;
                                 channel_count = 1;
                             }
 
-                            // Convert the new audio to mono too if it has multiple channels
                             let samples = if audio.channels() > 1 {
                                 convert_to_mono(audio.samples(), audio.channels() as usize)
                             } else {
                                 audio.samples().to_vec()
                             };
 
-                            // Mix mono samples
                             mix_samples(&mut mixed_samples, &samples);
                         } else {
-                            // Same channel count, simple mix
                             mix_samples(&mut mixed_samples, audio.samples());
                         }
                     }
@@ -158,7 +147,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        // No matter what, ensure we have mono audio for Whisper
         if channel_count > 1 {
             log::info!("Converting final mixed audio from {channel_count} channels to mono");
             mixed_samples = convert_to_mono(&mixed_samples, channel_count);
@@ -166,10 +154,22 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         }
 
         if mixed_samples.is_empty() {
+            log::error!("No audio samples after processing all sources");
             return Err("Failed to process any audio sources".to_string());
         }
 
-        // Convert to WAV format with desired sample rate
+        log::info!("Final mixed audio: {} samples", mixed_samples.len());
+        let mix_rms =
+            (mixed_samples.iter().map(|&s| s * s).sum::<f32>() / mixed_samples.len() as f32).sqrt();
+        log::info!("Mixed audio RMS: {:.4}", mix_rms);
+
+        if mix_rms < 0.001 {
+            log::warn!(
+                "WARNING: Mixed audio RMS is very low ({:.6}) - audio may be nearly silent!",
+                mix_rms
+            );
+        }
+
         let mut output = avformat::output(&output_path)
             .map_err(|e| format!("Failed to create output file: {e}"))?;
 
@@ -199,7 +199,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .write_header()
             .map_err(|e| format!("Failed to write header: {e}"))?;
 
-        // Create resampler for sample rate conversion
         let mut resampler = resampling::Context::get(
             avformat::Sample::F32(avformat::sample::Type::Packed),
             channel_layout,
@@ -210,9 +209,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         )
         .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
-        // Process audio in chunks
         let frame_size = encoder.frame_size() as usize;
-        // Check if frame_size is zero and use a fallback
         let frame_size = if frame_size == 0 { 1024 } else { frame_size };
 
         log::info!(
@@ -229,15 +226,12 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         );
         frame.set_rate(WHISPER_SAMPLE_RATE);
 
-        // Make sure we have samples and a valid chunk size
         if !mixed_samples.is_empty() && frame_size * channel_count > 0 {
-            // Process chunks of audio
             for (chunk_idx, chunk) in mixed_samples.chunks(frame_size * channel_count).enumerate() {
                 if chunk_idx % 100 == 0 {
                     log::info!("Processing chunk {}, size: {}", chunk_idx, chunk.len());
                 }
 
-                // Create a new input frame with actual data from the chunk
                 let mut input_frame = ffmpeg::frame::Audio::new(
                     avformat::Sample::F32(avformat::sample::Type::Packed),
                     chunk.len() / channel_count,
@@ -245,7 +239,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 );
                 input_frame.set_rate(AudioData::SAMPLE_RATE);
 
-                // Copy data from chunk to frame
                 let bytes = unsafe {
                     std::slice::from_raw_parts(
                         chunk.as_ptr() as *const u8,
@@ -254,7 +247,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 };
                 input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
 
-                // Create output frame for resampled data
                 let mut output_frame = ffmpeg::frame::Audio::new(
                     avformat::Sample::I16(avformat::sample::Type::Packed),
                     frame_size,
@@ -262,7 +254,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 );
                 output_frame.set_rate(WHISPER_SAMPLE_RATE);
 
-                // Use the input frame with actual data instead of the empty frame
                 match resampler.run(&input_frame, &mut output_frame) {
                     Ok(_) => {
                         if chunk_idx % 100 == 0 {
@@ -284,7 +275,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     continue;
                 }
 
-                // Process each encoded packet
                 loop {
                     let mut packet = ffmpeg::Packet::empty();
                     match encoder.receive_packet(&mut packet) {
@@ -299,12 +289,10 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        // Flush the encoder
         encoder
             .send_eof()
             .map_err(|e| format!("Failed to send EOF: {e}"))?;
 
-        // Process final packets in a loop with limited borrow scope
         loop {
             let mut packet = ffmpeg::Packet::empty();
             let received = encoder.receive_packet(&mut packet);
@@ -313,7 +301,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 break;
             }
 
-            // Use a block to limit the scope of the output borrow
             {
                 if let Err(e) = packet.write_interleaved(&mut output) {
                     return Err(format!("Failed to write final packet: {e}"));
@@ -325,9 +312,9 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .write_trailer()
             .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
+        log::info!("=== EXTRACT AUDIO END (from .cap) ===");
         Ok(())
     } else {
-        // Handle regular video file
         let mut input =
             avformat::input(&video_path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
@@ -338,25 +325,20 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         let codec_params = stream.parameters();
 
-        // Get decoder parameters first
         let decoder_ctx = avcodec::Context::from_parameters(codec_params.clone())
             .map_err(|e| format!("Failed to create decoder context: {e}"))?;
 
-        // Create and open the decoder
         let mut decoder = decoder_ctx
             .decoder()
             .audio()
             .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
-        // Now we can access audio-specific methods
         let decoder_format = decoder.format();
         let decoder_channel_layout = decoder.channel_layout();
         let decoder_rate = decoder.rate();
 
-        // Set up and prepare encoder and output separately to avoid multiple borrows
         let channel_layout = ChannelLayout::MONO;
 
-        // Create encoder first
         let mut encoder_ctx = avcodec::Context::new()
             .encoder()
             .audio()
@@ -373,11 +355,9 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             .open_as(codec)
             .map_err(|e| format!("Failed to open encoder: {e}"))?;
 
-        // Create output context separately
         let mut output = avformat::output(&output_path)
             .map_err(|e| format!("Failed to create output file: {e}"))?;
 
-        // Add stream and get parameters in a block to limit the borrow
         let stream_params = {
             let mut output_stream = output
                 .add_stream(codec)
@@ -385,16 +365,13 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
             output_stream.set_parameters(&encoder);
 
-            // Store the stream parameters we need for later
             (output_stream.index(), output_stream.id())
         };
 
-        // Write header
         output
             .write_header()
             .map_err(|e| format!("Failed to write header: {e}"))?;
 
-        // Create resampler
         let mut resampler = resampling::Context::get(
             decoder_format,
             decoder_channel_layout,
@@ -405,7 +382,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         )
         .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
-        // Create frames
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
         let mut resampled_frame = ffmpeg::frame::Audio::new(
             avformat::Sample::I16(avformat::sample::Type::Packed),
@@ -413,22 +389,15 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             channel_layout,
         );
 
-        // Save the stream index from the original stream (not the output stream)
         let input_stream_index = stream.index();
 
-        // Process packets one at a time, cloning what we need from input packets
         let mut packet_queue = Vec::new();
 
-        // First collect all the packets we need by cloning the data
         {
-            // Use a separate block to limit the immutable borrow lifetime
             for (stream_idx, packet) in input.packets() {
                 if stream_idx.index() == input_stream_index {
-                    // Clone the packet data to avoid borrowing input
                     if let Some(data) = packet.data() {
-                        // Copy the packet data to a new packet
                         let mut cloned_packet = ffmpeg::Packet::copy(data);
-                        // Copy timing information
                         if let Some(pts) = packet.pts() {
                             cloned_packet.set_pts(Some(pts));
                         }
@@ -441,14 +410,12 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        // Then process each cloned packet
         for packet_res in packet_queue {
             if let Err(e) = decoder.send_packet(&packet_res) {
                 log::warn!("Failed to send packet to decoder: {e}");
                 continue;
             }
 
-            // Process decoded frames
             while decoder.receive_frame(&mut decoded_frame).is_ok() {
                 if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
                     log::warn!("Failed to resample audio: {e}");
@@ -460,12 +427,10 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     continue;
                 }
 
-                // Process encoded packets
                 loop {
                     let mut packet = ffmpeg::Packet::empty();
                     match encoder.receive_packet(&mut packet) {
                         Ok(_) => {
-                            // Set the stream for the output packet
                             packet.set_stream(stream_params.0);
 
                             if let Err(e) = packet.write_interleaved(&mut output) {
@@ -478,7 +443,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        // Flush the decoder
         decoder
             .send_eof()
             .map_err(|e| format!("Failed to send EOF to decoder: {e}"))?;
@@ -492,7 +456,6 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 .send_frame(&resampled_frame)
                 .map_err(|e| format!("Failed to send final frame: {e}"))?;
 
-            // Process final encoded packets
             loop {
                 let mut packet = ffmpeg::Packet::empty();
                 let received = encoder.receive_packet(&mut packet);
@@ -507,53 +470,73 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             }
         }
 
-        // Close the output file with trailer
         output
             .write_trailer()
             .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
+        log::info!("=== EXTRACT AUDIO END (from video) ===");
         Ok(())
     }
 }
 
-/// Load or initialize the WhisperContext
 async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, String> {
     let mut context_guard = WHISPER_CONTEXT.lock().await;
 
-    // Always create a new context to avoid issues with multiple uses
+    if let Some(ref existing) = *context_guard {
+        log::info!("Reusing cached Whisper context");
+        return Ok(existing.clone());
+    }
+
     log::info!("Initializing Whisper context with model: {model_path}");
     let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
         .map_err(|e| format!("Failed to load Whisper model: {e}"))?;
 
-    *context_guard = Some(ctx);
+    let ctx_arc = Arc::new(ctx);
+    *context_guard = Some(ctx_arc.clone());
 
-    // Get a reference to the context and wrap it in an Arc
-    let context_ref = context_guard.as_ref().unwrap();
-    let context_arc = unsafe { Arc::new(std::ptr::read(context_ref)) };
-    Ok(context_arc)
+    Ok(ctx_arc)
 }
 
-/// Process audio file with Whisper for transcription
+fn is_special_token(token_text: &str) -> bool {
+    let trimmed = token_text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let is_special = trimmed.contains('[')
+        || trimmed.contains(']')
+        || trimmed.contains("_TT_")
+        || trimmed.contains("_BEG_")
+        || trimmed.contains("<|");
+
+    if is_special {
+        log::debug!("Filtering special token: {:?}", token_text);
+    }
+
+    is_special
+}
+
 fn process_with_whisper(
     audio_path: &PathBuf,
     context: Arc<WhisperContext>,
     language: &str,
 ) -> Result<CaptionData, String> {
+    log::info!("=== WHISPER TRANSCRIPTION START ===");
     log::info!("Processing audio file: {audio_path:?}");
+    log::info!("Language setting: {}", language);
 
-    // Set up parameters for Whisper
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-    // Configure parameters for better caption quality
     params.set_translate(false);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
-    params.set_token_timestamps(true); // Enable timestamps for captions
-    params.set_language(Some(if language == "auto" { "auto" } else { language })); // Use selected language or auto-detect
-    params.set_max_len(i32::MAX); // No max length for transcription
+    params.set_token_timestamps(true);
+    params.set_language(Some(if language == "auto" { "auto" } else { language }));
+    params.set_max_len(i32::MAX);
 
-    // Load audio file
+    log::info!("Whisper params - translate: false, token_timestamps: true, max_len: MAX");
+
     let mut audio_file = File::open(audio_path)
         .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
     let mut audio_data = Vec::new();
@@ -563,7 +546,6 @@ fn process_with_whisper(
 
     log::info!("Processing audio file of size: {} bytes", audio_data.len());
 
-    // Convert audio data to the required format (16-bit mono PCM)
     let mut audio_data_f32 = Vec::new();
     for i in (0..audio_data.len()).step_by(2) {
         if i + 1 < audio_data.len() {
@@ -572,24 +554,42 @@ fn process_with_whisper(
         }
     }
 
-    log::info!("Converted {} samples to f32 format", audio_data_f32.len());
+    let duration_seconds = audio_data_f32.len() as f32 / WHISPER_SAMPLE_RATE as f32;
+    log::info!(
+        "Converted {} samples to f32 format (duration: {:.2}s at {}Hz)",
+        audio_data_f32.len(),
+        duration_seconds,
+        WHISPER_SAMPLE_RATE
+    );
 
-    // Log sample data statistics for debugging
     if !audio_data_f32.is_empty() {
         let min_sample = audio_data_f32.iter().fold(f32::MAX, |a, &b| a.min(b));
         let max_sample = audio_data_f32.iter().fold(f32::MIN, |a, &b| a.max(b));
         let avg_sample = audio_data_f32.iter().sum::<f32>() / audio_data_f32.len() as f32;
-        log::info!("Audio samples - min: {min_sample}, max: {max_sample}, avg: {avg_sample}");
+        let rms = (audio_data_f32.iter().map(|&s| s * s).sum::<f32>()
+            / audio_data_f32.len() as f32)
+            .sqrt();
+        log::info!(
+            "Audio samples - min: {:.4}, max: {:.4}, avg: {:.6}, RMS: {:.4}",
+            min_sample,
+            max_sample,
+            avg_sample,
+            rms
+        );
 
-        // Sample a few values
-        let sample_count = audio_data_f32.len().min(10);
-        for i in 0..sample_count {
-            let idx = i * audio_data_f32.len() / sample_count;
-            log::info!("Sample {}: {}", idx, audio_data_f32[idx]);
+        if rms < 0.001 {
+            log::warn!(
+                "WARNING: Audio RMS is very low ({:.6}) - audio may be nearly silent!",
+                rms
+            );
+        }
+
+        log::info!("First 20 audio samples:");
+        for i in 0..audio_data_f32.len().min(20) {
+            log::info!("  Sample[{}] = {:.6}", i, audio_data_f32[i]);
         }
     }
 
-    // Run the transcription
     let mut state = context
         .create_state()
         .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
@@ -598,7 +598,6 @@ fn process_with_whisper(
         .full(params, &audio_data_f32[..])
         .map_err(|e| format!("Failed to run Whisper transcription: {e}"))?;
 
-    // Process results: convert Whisper segments to CaptionSegment
     let num_segments = state
         .full_n_segments()
         .map_err(|e| format!("Failed to get number of segments: {e}"))?;
@@ -608,11 +607,10 @@ fn process_with_whisper(
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
-        let text = state
+        let raw_text = state
             .full_get_segment_text(i)
             .map_err(|e| format!("Failed to get segment text: {e}"))?;
 
-        // Properly unwrap the Result first, then convert i64 to f64
         let start_i64 = state
             .full_get_segment_t0(i)
             .map_err(|e| format!("Failed to get segment start time: {e}"))?;
@@ -620,30 +618,180 @@ fn process_with_whisper(
             .full_get_segment_t1(i)
             .map_err(|e| format!("Failed to get segment end time: {e}"))?;
 
-        // Convert timestamps from centiseconds to seconds (as f32 for CaptionSegment)
         let start_time = (start_i64 as f32) / 100.0;
         let end_time = (end_i64 as f32) / 100.0;
 
-        // Add debug logging for timestamps
         log::info!(
-            "Segment {}: start={}, end={}, text='{}'",
+            "=== Segment {}: start={:.2}s, end={:.2}s, raw_text='{}'",
             i,
             start_time,
             end_time,
-            text.trim()
+            raw_text.trim()
         );
 
-        if !text.trim().is_empty() {
+        let mut words = Vec::new();
+        let num_tokens = state
+            .full_n_tokens(i)
+            .map_err(|e| format!("Failed to get token count: {e}"))?;
+
+        log::info!("  Segment {} has {} tokens", i, num_tokens);
+
+        let mut current_word = String::new();
+        let mut word_start: Option<f32> = None;
+        let mut word_end: f32 = start_time;
+
+        for t in 0..num_tokens {
+            let token_text = state.full_get_token_text(i, t).unwrap_or_default();
+            let token_id = state.full_get_token_id(i, t).unwrap_or(0);
+            let token_prob = state.full_get_token_prob(i, t).unwrap_or(0.0);
+
+            if is_special_token(&token_text) {
+                log::debug!(
+                    "  Token[{}]: id={}, text={:?} -> SKIPPED (special)",
+                    t,
+                    token_id,
+                    token_text
+                );
+                continue;
+            }
+
+            let token_data = state.full_get_token_data(i, t).ok();
+
+            if let Some(data) = token_data {
+                let token_start = (data.t0 as f32) / 100.0;
+                let token_end = (data.t1 as f32) / 100.0;
+
+                log::info!(
+                    "  Token[{}]: id={}, text={:?}, t0={:.2}s, t1={:.2}s, prob={:.4}",
+                    t,
+                    token_id,
+                    token_text,
+                    token_start,
+                    token_end,
+                    token_prob
+                );
+
+                if token_text.starts_with(' ') || token_text.starts_with('\n') {
+                    if !current_word.is_empty() {
+                        if let Some(ws) = word_start {
+                            log::info!(
+                                "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
+                                current_word.trim(),
+                                ws,
+                                word_end
+                            );
+                            words.push(CaptionWord {
+                                text: current_word.trim().to_string(),
+                                start: ws,
+                                end: word_end,
+                            });
+                        }
+                    }
+                    current_word = token_text.trim().to_string();
+                    word_start = Some(token_start);
+                    log::debug!(
+                        "    -> Starting new word: '{}' at {:.2}s",
+                        current_word,
+                        token_start
+                    );
+                } else {
+                    if word_start.is_none() {
+                        word_start = Some(token_start);
+                        log::debug!("    -> Word start set to {:.2}s", token_start);
+                    }
+                    current_word.push_str(&token_text);
+                    log::debug!("    -> Appending to word: '{}'", current_word);
+                }
+                word_end = token_end;
+            } else {
+                log::warn!(
+                    "  Token[{}]: id={}, text={:?} -> NO TIMING DATA",
+                    t,
+                    token_id,
+                    token_text
+                );
+            }
+        }
+
+        if !current_word.trim().is_empty() {
+            if let Some(ws) = word_start {
+                log::info!(
+                    "    -> Final word: '{}' ({:.2}s - {:.2}s)",
+                    current_word.trim(),
+                    ws,
+                    word_end
+                );
+                words.push(CaptionWord {
+                    text: current_word.trim().to_string(),
+                    start: ws,
+                    end: word_end,
+                });
+            }
+        }
+
+        log::info!("  Segment {} produced {} words", i, words.len());
+        for (w_idx, word) in words.iter().enumerate() {
+            log::info!(
+                "    Word[{}]: '{}' ({:.2}s - {:.2}s)",
+                w_idx,
+                word.text,
+                word.start,
+                word.end
+            );
+        }
+
+        if words.is_empty() {
+            log::warn!("  Segment {} has no words, skipping", i);
+            continue;
+        }
+
+        const MAX_WORDS_PER_SEGMENT: usize = 6;
+
+        let word_chunks: Vec<Vec<CaptionWord>> = words
+            .chunks(MAX_WORDS_PER_SEGMENT)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+
+        for (chunk_idx, chunk_words) in word_chunks.into_iter().enumerate() {
+            let segment_text = chunk_words
+                .iter()
+                .map(|word| word.text.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let segment_start = chunk_words
+                .first()
+                .map(|word| word.start)
+                .unwrap_or(start_time);
+            let segment_end = chunk_words.last().map(|word| word.end).unwrap_or(end_time);
+
             segments.push(CaptionSegment {
-                id: format!("segment-{i}"),
-                start: start_time,
-                end: end_time,
-                text: text.trim().to_string(),
+                id: format!("segment-{i}-{chunk_idx}"),
+                start: segment_start,
+                end: segment_end,
+                text: segment_text,
+                words: chunk_words,
             });
         }
     }
 
-    log::info!("Successfully processed {} segments", segments.len());
+    log::info!("=== WHISPER TRANSCRIPTION COMPLETE ===");
+    log::info!("Total segments: {}", segments.len());
+
+    let total_words: usize = segments.iter().map(|s| s.words.len()).sum();
+    log::info!("Total words: {}", total_words);
+
+    log::info!("=== FINAL TRANSCRIPTION SUMMARY ===");
+    for segment in &segments {
+        log::info!(
+            "Segment '{}' ({:.2}s - {:.2}s): {}",
+            segment.id,
+            segment.start,
+            segment.end,
+            segment.text
+        );
+    }
+    log::info!("=== END SUMMARY ===");
 
     Ok(CaptionData {
         segments,
@@ -651,7 +799,6 @@ fn process_with_whisper(
     })
 }
 
-/// Function to transcribe audio from a video file using Whisper
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -660,20 +807,25 @@ pub async fn transcribe_audio(
     model_path: String,
     language: String,
 ) -> Result<CaptionData, String> {
-    // Check if files exist with detailed error messages
+    log::info!("=== TRANSCRIBE AUDIO COMMAND START ===");
+    log::info!("Video path: {}", video_path);
+    log::info!("Model path: {}", model_path);
+    log::info!("Language: {}", language);
+
     if !std::path::Path::new(&video_path).exists() {
+        log::error!("Video file not found at path: {}", video_path);
         return Err(format!("Video file not found at path: {video_path}"));
     }
 
     if !std::path::Path::new(&model_path).exists() {
+        log::error!("Model file not found at path: {}", model_path);
         return Err(format!("Model file not found at path: {model_path}"));
     }
 
-    // Create temp dir with better error handling
     let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {e}"))?;
     let audio_path = temp_dir.path().join("audio.wav");
+    log::info!("Temp audio path: {:?}", audio_path);
 
-    // First try the ffmpeg implementation
     match extract_audio_from_video(&video_path, &audio_path).await {
         Ok(_) => log::info!("Successfully extracted audio to {audio_path:?}"),
         Err(e) => {
@@ -682,39 +834,73 @@ pub async fn transcribe_audio(
         }
     }
 
-    // Verify the audio file was created
     if !audio_path.exists() {
+        log::error!("Audio file was not created at {:?}", audio_path);
         return Err("Failed to create audio file for transcription".to_string());
     }
 
-    log::info!("Audio file created at: {audio_path:?}");
+    let audio_metadata = std::fs::metadata(&audio_path).ok();
+    if let Some(meta) = &audio_metadata {
+        log::info!(
+            "Audio file created at: {:?}, size: {} bytes",
+            audio_path,
+            meta.len()
+        );
+    }
 
-    // Get or initialize Whisper context with detailed error handling
     let context = match get_whisper_context(&model_path).await {
-        Ok(ctx) => ctx,
+        Ok(ctx) => {
+            log::info!("Whisper context ready");
+            ctx
+        }
         Err(e) => {
             log::error!("Failed to initialize Whisper context: {e}");
             return Err(format!("Failed to initialize transcription model: {e}"));
         }
     };
 
-    // Process with Whisper and handle errors
-    match process_with_whisper(&audio_path, context, &language) {
+    let audio_path_clone = audio_path.clone();
+    let language_clone = language.clone();
+    log::info!("Starting Whisper transcription in blocking task...");
+    let whisper_result = tokio::task::spawn_blocking(move || {
+        process_with_whisper(&audio_path_clone, context, &language_clone)
+    })
+    .await
+    .map_err(|e| format!("Whisper task panicked: {e}"))?;
+
+    match whisper_result {
         Ok(captions) => {
+            log::info!("=== TRANSCRIBE AUDIO RESULT ===");
+            log::info!(
+                "Transcription produced {} segments",
+                captions.segments.len()
+            );
+
+            for (idx, segment) in captions.segments.iter().enumerate() {
+                log::info!(
+                    "  Result Segment[{}]: '{}' ({} words)",
+                    idx,
+                    segment.text,
+                    segment.words.len()
+                );
+            }
+
             if captions.segments.is_empty() {
                 log::warn!("No caption segments were generated");
                 return Err("No speech detected in the audio".to_string());
             }
+
+            log::info!("=== TRANSCRIBE AUDIO COMMAND END (success) ===");
             Ok(captions)
         }
         Err(e) => {
             log::error!("Failed to process audio with Whisper: {e}");
+            log::info!("=== TRANSCRIBE AUDIO COMMAND END (error) ===");
             Err(format!("Failed to transcribe audio: {e}"))
         }
     }
 }
 
-/// Function to save caption data to a file
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -723,7 +909,30 @@ pub async fn save_captions(
     video_id: String,
     captions: CaptionData,
 ) -> Result<(), String> {
+    tracing::info!("=== SAVE CAPTIONS START ===");
     tracing::info!("Saving captions for video_id: {}", video_id);
+    tracing::info!("Received {} segments to save", captions.segments.len());
+
+    for (idx, segment) in captions.segments.iter().enumerate() {
+        tracing::info!(
+            "  Segment[{}] '{}': '{}' ({} words, {:.2}s - {:.2}s)",
+            idx,
+            segment.id,
+            segment.text,
+            segment.words.len(),
+            segment.start,
+            segment.end
+        );
+        for (w_idx, word) in segment.words.iter().enumerate() {
+            tracing::debug!(
+                "    Word[{}]: '{}' ({:.2}s - {:.2}s)",
+                w_idx,
+                word.text,
+                word.start,
+                word.end
+            );
+        }
+    }
 
     let captions_dir = app_captions_dir(&app, &video_id)?;
 
@@ -739,13 +948,10 @@ pub async fn save_captions(
 
     tracing::info!("Writing captions to: {:?}", captions_path);
 
-    // Ensure settings are included with default values if not provided
     let settings = captions.settings.unwrap_or_default();
 
-    // Create a JSON structure manually to ensure field naming consistency
     let mut json_obj = serde_json::Map::new();
 
-    // Add segments array
     let segments_array = serde_json::to_value(
         captions
             .segments
@@ -769,6 +975,18 @@ pub async fn save_captions(
                     "text".to_string(),
                     serde_json::Value::String(seg.text.clone()),
                 );
+                let words_array: Vec<serde_json::Value> = seg
+                    .words
+                    .iter()
+                    .map(|w| {
+                        serde_json::json!({
+                            "text": w.text,
+                            "start": w.start,
+                            "end": w.end
+                        })
+                    })
+                    .collect();
+                segment.insert("words".to_string(), serde_json::Value::Array(words_array));
                 segment
             })
             .collect::<Vec<_>>(),
@@ -780,7 +998,6 @@ pub async fn save_captions(
 
     json_obj.insert("segments".to_string(), segments_array);
 
-    // Add settings object with camelCase naming
     let mut settings_obj = serde_json::Map::new();
     settings_obj.insert(
         "enabled".to_string(),
@@ -827,13 +1044,22 @@ pub async fn save_captions(
         "exportWithSubtitles".to_string(),
         serde_json::Value::Bool(settings.export_with_subtitles),
     );
+    settings_obj.insert(
+        "highlightColor".to_string(),
+        serde_json::Value::String(settings.highlight_color.clone()),
+    );
+    settings_obj.insert(
+        "fadeDuration".to_string(),
+        serde_json::Value::Number(
+            serde_json::Number::from_f64(settings.fade_duration as f64).unwrap(),
+        ),
+    );
 
     json_obj.insert(
         "settings".to_string(),
         serde_json::Value::Object(settings_obj),
     );
 
-    // Convert to pretty JSON string
     let json = serde_json::to_string_pretty(&json_obj).map_err(|e| {
         tracing::error!("Failed to serialize captions: {}", e);
         format!("Failed to serialize captions: {e}")
@@ -845,19 +1071,16 @@ pub async fn save_captions(
     })?;
 
     tracing::info!("Successfully saved captions");
+    tracing::info!("=== SAVE CAPTIONS END ===");
     Ok(())
 }
 
-/// Helper function to parse captions from a JSON string
-/// This can be used by other modules to parse captions without duplicating code
 pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, String> {
-    // Use a more flexible parsing approach
     match serde_json::from_str::<serde_json::Value>(json) {
         Ok(json_value) => {
             if let Some(segments_array) = json_value.get("segments").and_then(|v| v.as_array()) {
                 let mut segments = Vec::new();
 
-                // Process each segment
                 for segment in segments_array {
                     if let (Some(id), Some(start), Some(end), Some(text)) = (
                         segment.get("id").and_then(|v| v.as_str()),
@@ -865,18 +1088,33 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         segment.get("end").and_then(|v| v.as_f64()),
                         segment.get("text").and_then(|v| v.as_str()),
                     ) {
+                        let mut words = Vec::new();
+                        if let Some(words_array) = segment.get("words").and_then(|v| v.as_array()) {
+                            for word in words_array {
+                                if let (Some(w_text), Some(w_start), Some(w_end)) = (
+                                    word.get("text").and_then(|v| v.as_str()),
+                                    word.get("start").and_then(|v| v.as_f64()),
+                                    word.get("end").and_then(|v| v.as_f64()),
+                                ) {
+                                    words.push(cap_project::CaptionWord {
+                                        text: w_text.to_string(),
+                                        start: w_start as f32,
+                                        end: w_end as f32,
+                                    });
+                                }
+                            }
+                        }
                         segments.push(cap_project::CaptionSegment {
                             id: id.to_string(),
                             start: start as f32,
                             end: end as f32,
                             text: text.to_string(),
+                            words,
                         });
                     }
                 }
 
-                // Get settings or use defaults
                 let settings = if let Some(settings_obj) = json_value.get("settings") {
-                    // Extract each field with proper fallbacks
                     let enabled = settings_obj
                         .get("enabled")
                         .and_then(|v| v.as_bool())
@@ -893,10 +1131,9 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                     let color = settings_obj
                         .get("color")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("#FFFFFF")
+                        .unwrap_or("#A0A0A0")
                         .to_string();
 
-                    // Handle both camelCase and snake_case field names
                     let background_color = settings_obj
                         .get("backgroundColor")
                         .or_else(|| settings_obj.get("background_color"))
@@ -918,7 +1155,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                     let bold = settings_obj
                         .get("bold")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                        .unwrap_or(false);
                     let italic = settings_obj
                         .get("italic")
                         .and_then(|v| v.as_bool())
@@ -941,6 +1178,19 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
 
+                    let highlight_color = settings_obj
+                        .get("highlightColor")
+                        .or_else(|| settings_obj.get("highlight_color"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("#FFFFFF")
+                        .to_string();
+
+                    let fade_duration = settings_obj
+                        .get("fadeDuration")
+                        .or_else(|| settings_obj.get("fade_duration"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.15) as f32;
+
                     cap_project::CaptionSettings {
                         enabled,
                         font,
@@ -954,9 +1204,10 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         outline,
                         outline_color,
                         export_with_subtitles,
+                        highlight_color,
+                        fade_duration,
                     }
                 } else {
-                    // Use default settings if none provided
                     cap_project::CaptionSettings::default()
                 };
 
@@ -969,7 +1220,6 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
     }
 }
 
-/// Function to load caption data from a file
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -977,11 +1227,15 @@ pub async fn load_captions(
     app: AppHandle,
     video_id: String,
 ) -> Result<Option<CaptionData>, String> {
+    tracing::info!("=== LOAD CAPTIONS START ===");
+    tracing::info!("Loading captions for video_id: {}", video_id);
+
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let captions_path = captions_dir.join("captions.json");
 
     if !captions_path.exists() {
         tracing::info!("No captions file found at: {:?}", captions_path);
+        tracing::info!("=== LOAD CAPTIONS END (no file) ===");
         return Ok(None);
     }
 
@@ -994,6 +1248,8 @@ pub async fn load_captions(
         }
     };
 
+    tracing::info!("Captions JSON length: {} bytes", json.len());
+
     tracing::info!("Parsing captions JSON");
     match parse_captions_json(&json) {
         Ok(project_captions) => {
@@ -1002,33 +1258,42 @@ pub async fn load_captions(
                 project_captions.segments.len()
             );
 
-            // Create the CaptionData structure
+            for (idx, segment) in project_captions.segments.iter().enumerate() {
+                tracing::info!(
+                    "  Loaded Segment[{}] '{}': '{}' ({} words, {:.2}s - {:.2}s)",
+                    idx,
+                    segment.id,
+                    segment.text,
+                    segment.words.len(),
+                    segment.start,
+                    segment.end
+                );
+            }
+
             let tauri_captions = CaptionData {
                 segments: project_captions.segments,
                 settings: Some(project_captions.settings),
             };
 
+            tracing::info!("=== LOAD CAPTIONS END (success) ===");
             Ok(Some(tauri_captions))
         }
         Err(e) => {
             tracing::error!("Failed to parse captions: {}", e);
+            tracing::info!("=== LOAD CAPTIONS END (error) ===");
             Err(format!("Failed to parse captions: {e}"))
         }
     }
 }
 
-/// Helper function to get the captions directory for a video
 fn app_captions_dir(app: &AppHandle, video_id: &str) -> Result<PathBuf, String> {
     tracing::info!("Getting captions directory for video_id: {}", video_id);
 
-    // Get the app data directory
     let app_dir = app
         .path()
         .app_data_dir()
         .map_err(|_| "Failed to get app data directory".to_string())?;
 
-    // Create a dedicated captions directory
-    // Strip .cap extension if present in video_id
     let clean_video_id = video_id.trim_end_matches(".cap");
     let captions_dir = app_dir.join("captions").join(clean_video_id);
 
@@ -1036,7 +1301,6 @@ fn app_captions_dir(app: &AppHandle, video_id: &str) -> Result<PathBuf, String> 
     Ok(captions_dir)
 }
 
-// Add new type for download progress
 #[derive(Debug, Serialize, Type, tauri_specta::Event, Clone)]
 pub struct DownloadProgress {
     pub progress: f64,
@@ -1047,7 +1311,6 @@ impl DownloadProgress {
     const EVENT_NAME: &'static str = "download-progress";
 }
 
-/// Helper function to download a Whisper model from Hugging Face Hub
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(window))]
@@ -1057,7 +1320,6 @@ pub async fn download_whisper_model(
     model_name: String,
     output_path: String,
 ) -> Result<(), String> {
-    // Define model URLs based on model names
     let model_url = match model_name.as_str() {
         "tiny" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         "base" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
@@ -1065,10 +1327,9 @@ pub async fn download_whisper_model(
         "medium" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         "large" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         "large-v3" => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-        _ => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin", // Default to tiny
+        _ => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
     };
 
-    // Create the client and download the model
     let response = app
         .state::<http_client::HttpClient>()
         .get(model_url)
@@ -1083,10 +1344,8 @@ pub async fn download_whisper_model(
         ));
     }
 
-    // Get the total size for progress calculation
     let total_size = response.content_length().unwrap_or(0);
 
-    // Create a file to write to
     if let Some(parent) = std::path::Path::new(&output_path).parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create parent directories: {e}"))?;
@@ -1095,15 +1354,13 @@ pub async fn download_whisper_model(
         .await
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
-    // Download and write in chunks
     let mut downloaded = 0;
     let mut bytes = response
         .bytes()
         .await
         .map_err(|e| format!("Failed to get response bytes: {e}"))?;
 
-    // Write the bytes in chunks to show progress
-    const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
+    const CHUNK_SIZE: usize = 1024 * 1024;
     while !bytes.is_empty() {
         let chunk_size = std::cmp::min(CHUNK_SIZE, bytes.len());
         let chunk = bytes.split_to(chunk_size);
@@ -1114,7 +1371,6 @@ pub async fn download_whisper_model(
 
         downloaded += chunk_size as u64;
 
-        // Calculate and emit progress
         let progress = if total_size > 0 {
             (downloaded as f64 / total_size as f64) * 100.0
         } else {
@@ -1132,7 +1388,6 @@ pub async fn download_whisper_model(
             .map_err(|e| format!("Failed to emit progress: {e}"))?;
     }
 
-    // Ensure file is properly written
     file.flush()
         .await
         .map_err(|e| format!("Failed to flush file: {e}"))?;
@@ -1140,7 +1395,6 @@ pub async fn download_whisper_model(
     Ok(())
 }
 
-/// Function to check if a model file exists
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -1148,7 +1402,6 @@ pub async fn check_model_exists(model_path: String) -> Result<bool, String> {
     Ok(std::path::Path::new(&model_path).exists())
 }
 
-/// Function to delete a downloaded model
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -1164,15 +1417,12 @@ pub async fn delete_whisper_model(model_path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Convert caption segments to SRT format
 fn captions_to_srt(captions: &CaptionData) -> String {
     let mut srt = String::new();
     for (i, segment) in captions.segments.iter().enumerate() {
-        // Convert start and end times from seconds to HH:MM:SS,mmm format
         let start_time = format_srt_time(f64::from(segment.start));
         let end_time = format_srt_time(f64::from(segment.end));
 
-        // Write SRT entry
         srt.push_str(&format!(
             "{}\n{} --> {}\n{}\n\n",
             i + 1,
@@ -1184,7 +1434,6 @@ fn captions_to_srt(captions: &CaptionData) -> String {
     srt
 }
 
-/// Format time in seconds to SRT time format (HH:MM:SS,mmm)
 fn format_srt_time(seconds: f64) -> String {
     let hours = (seconds / 3600.0) as i32;
     let minutes = ((seconds % 3600.0) / 60.0) as i32;
@@ -1193,7 +1442,6 @@ fn format_srt_time(seconds: f64) -> String {
     format!("{hours:02}:{minutes:02}:{secs:02},{millis:03}")
 }
 
-/// Export captions to an SRT file
 #[tauri::command]
 #[specta::specta]
 #[instrument(skip(app))]
@@ -1203,7 +1451,6 @@ pub async fn export_captions_srt(
 ) -> Result<Option<PathBuf>, String> {
     tracing::info!("Starting SRT export for video_id: {}", video_id);
 
-    // Load captions
     let captions = match load_captions(app.clone(), video_id.clone()).await? {
         Some(c) => {
             tracing::info!("Found {} caption segments to export", c.segments.len());
@@ -1215,8 +1462,6 @@ pub async fn export_captions_srt(
         }
     };
 
-    // Ensure we have settings (this should already be handled by load_captions,
-    // but we add this check for extra safety)
     let captions_with_settings = CaptionData {
         segments: captions.segments,
         settings: captions
@@ -1224,16 +1469,13 @@ pub async fn export_captions_srt(
             .or_else(|| Some(CaptionSettings::default())),
     };
 
-    // Convert to SRT format
     tracing::info!("Converting captions to SRT format");
     let srt_content = captions_to_srt(&captions_with_settings);
 
-    // Get path for SRT file
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let srt_path = captions_dir.join("captions.srt");
     tracing::info!("Will write SRT file to: {:?}", srt_path);
 
-    // Write SRT file
     match std::fs::write(&srt_path, srt_content) {
         Ok(_) => {
             tracing::info!("Successfully wrote SRT file to: {:?}", srt_path);
@@ -1246,7 +1488,6 @@ pub async fn export_captions_srt(
     }
 }
 
-// Helper function to convert multi-channel audio to mono
 fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
     if channels == 1 {
         return samples.to_vec();
@@ -1266,11 +1507,9 @@ fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
     mono_samples
 }
 
-// Helper function to mix two sample arrays together
 fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
     let length = dest.len().min(source.len());
     for i in 0..length {
-        // Simple mix with equal weight (0.5) to prevent clipping
         dest[i] = (dest[i] + source[i]) * 0.5;
     }
     length

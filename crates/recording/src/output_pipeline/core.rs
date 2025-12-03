@@ -397,7 +397,7 @@ async fn setup_video_source<TVideo: VideoSource>(
     video_config: TVideo::Config,
     setup_ctx: &mut SetupCtx,
 ) -> anyhow::Result<(TVideo, mpsc::Receiver<TVideo::Frame>)> {
-    let (video_tx, video_rx) = mpsc::channel(8);
+    let (video_tx, video_rx) = mpsc::channel(128);
     let video_source = TVideo::setup(video_config, video_tx, setup_ctx).await?;
 
     Ok((video_source, video_rx))
@@ -454,10 +454,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         use futures::StreamExt;
 
         let mut first_tx = Some(first_tx);
+        let mut frame_count = 0u64;
 
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
+                    frame_count += 1;
+
                     let timestamp = frame.timestamp();
 
                     if let Some(first_tx) = first_tx.take() {
@@ -480,14 +483,52 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             })
             .await;
 
+        let was_cancelled = res.is_none();
+
+        if was_cancelled {
+            info!("mux-video cancelled, draining remaining frames from channel");
+            let mut drained = 0u64;
+            while let Some(frame) = video_rx.next().await {
+                frame_count += 1;
+                drained += 1;
+
+                let timestamp = frame.timestamp();
+
+                if let Some(first_tx) = first_tx.take() {
+                    let _ = first_tx.send(timestamp);
+                }
+
+                let duration = timestamp
+                    .checked_duration_since(timestamps)
+                    .unwrap_or(Duration::ZERO);
+
+                match muxer.lock().await.send_video_frame(frame, duration) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warn!("Error processing drained frame: {e}");
+                        break;
+                    }
+                }
+            }
+            if drained > 0 {
+                info!(
+                    "mux-video drained {} additional frames after cancellation",
+                    drained
+                );
+            }
+        }
+
         muxer.lock().await.stop();
 
         if let Some(Err(e)) = res {
             return Err(e);
         }
 
-        if res.is_none() {
-            info!("mux-video cancelled");
+        if was_cancelled {
+            info!(
+                "mux-video finished after cancellation, total {} frames",
+                frame_count
+            );
         }
 
         Ok(())
