@@ -436,11 +436,6 @@ impl CapWindow {
                     .maximized(false)
                     .center();
 
-                #[cfg(target_os = "macos")]
-                {
-                    builder = builder.max_inner_size(650.0, f64::MAX);
-                }
-
                 builder.build()?
             }
             Self::Editor { .. } => {
