@@ -107,6 +107,7 @@ impl CaptionPosition {
 const BASE_TEXT_OPACITY: f32 = 0.8;
 const MAX_WORDS_PER_LINE: usize = 6;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
+const CLOSE_TRANSITION_BOUNCE_DURATION: f32 = 0.12;
 
 fn wrap_text_by_words(text: &str, max_words: usize) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
@@ -133,7 +134,25 @@ fn calculate_bounce_offset(
     time_from_start: f32,
     time_to_end: f32,
     fade_duration: f32,
+    skip_fade_in: bool,
+    skip_fade_out: bool,
 ) -> f32 {
+    if skip_fade_in && time_from_start < CLOSE_TRANSITION_BOUNCE_DURATION {
+        let progress = (time_from_start / CLOSE_TRANSITION_BOUNCE_DURATION).clamp(0.0, 1.0);
+        let ease = 1.0 - progress;
+        let bounce = ease * ease;
+        return -bounce * BOUNCE_OFFSET_PIXELS;
+    }
+
+    if skip_fade_out && time_to_end < 0.0 {
+        let time_past_end = -time_to_end;
+        if time_past_end < CLOSE_TRANSITION_BOUNCE_DURATION {
+            let progress = (time_past_end / CLOSE_TRANSITION_BOUNCE_DURATION).clamp(0.0, 1.0);
+            let bounce = progress * progress;
+            return bounce * BOUNCE_OFFSET_PIXELS;
+        }
+    }
+
     if fade_duration <= 0.0 {
         return 0.0;
     }
@@ -141,17 +160,77 @@ fn calculate_bounce_offset(
     let fade_in_progress = (time_from_start / fade_duration).clamp(0.0, 1.0);
     let fade_out_progress = (time_to_end / fade_duration).clamp(0.0, 1.0);
 
-    if fade_in_progress < 1.0 {
+    if fade_in_progress < 1.0 && !skip_fade_in {
         let ease = 1.0 - fade_in_progress;
         let bounce = ease * ease;
         -bounce * BOUNCE_OFFSET_PIXELS
-    } else if fade_out_progress < 1.0 {
+    } else if fade_out_progress < 1.0 && !skip_fade_out {
         let ease = 1.0 - fade_out_progress;
         let bounce = ease * ease;
         bounce * BOUNCE_OFFSET_PIXELS
     } else {
         0.0
     }
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn ease_in_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * t
+}
+
+fn calculate_word_highlight(
+    current_time: f32,
+    word: &CaptionWord,
+    word_idx: usize,
+    all_words: &[CaptionWord],
+    transition_duration: f32,
+) -> f32 {
+    if transition_duration <= 0.0 {
+        if current_time >= word.start && current_time < word.end {
+            return 1.0;
+        }
+        return 0.0;
+    }
+
+    let next_word_start = if word_idx + 1 < all_words.len() {
+        Some(all_words[word_idx + 1].start)
+    } else {
+        None
+    };
+
+    if current_time >= word.start && current_time < word.end {
+        let time_since_start = current_time - word.start;
+        let fade_in = ease_out_cubic(time_since_start / transition_duration);
+        return fade_in;
+    }
+
+    if current_time >= word.end {
+        if let Some(next_start) = next_word_start {
+            if current_time < next_start {
+                let time_since_end = current_time - word.end;
+                let gap_duration = next_start - word.end;
+                let effective_duration = transition_duration.min(gap_duration);
+
+                if time_since_end < effective_duration {
+                    let progress = time_since_end / effective_duration;
+                    return 1.0 - ease_in_cubic(progress);
+                }
+            }
+        } else {
+            let time_since_end = current_time - word.end;
+            if time_since_end < transition_duration {
+                let progress = time_since_end / transition_duration;
+                return 1.0 - ease_in_cubic(progress);
+            }
+        }
+    }
+
+    0.0
 }
 
 pub struct CaptionsLayer {
@@ -307,7 +386,14 @@ impl CaptionsLayer {
         self.current_segment_end = end;
     }
 
-    fn calculate_fade_opacity(&self, current_time: f32, fade_duration: f32) -> (f32, f32, f32) {
+    fn calculate_fade_opacity(
+        &self,
+        current_time: f32,
+        fade_duration: f32,
+        linger_duration: f32,
+        skip_fade_in: bool,
+        skip_fade_out: bool,
+    ) -> (f32, f32, f32) {
         let time_from_start = current_time - self.current_segment_start;
         let time_to_end = self.current_segment_end - current_time;
 
@@ -315,8 +401,24 @@ impl CaptionsLayer {
             return (1.0, time_from_start, time_to_end);
         }
 
-        let fade_in = (time_from_start / fade_duration).min(1.0);
-        let fade_out = (time_to_end / fade_duration).min(1.0);
+        let fade_in = if skip_fade_in {
+            1.0
+        } else {
+            (time_from_start / fade_duration).min(1.0)
+        };
+
+        let fade_out = if skip_fade_out {
+            1.0
+        } else {
+            let effective_time_to_end = time_to_end + linger_duration;
+            if effective_time_to_end > linger_duration {
+                1.0
+            } else if effective_time_to_end > 0.0 {
+                (effective_time_to_end / fade_duration).min(1.0)
+            } else {
+                0.0
+            }
+        };
 
         (fade_in.min(fade_out).max(0.0), time_from_start, time_to_end)
     }
@@ -344,13 +446,22 @@ impl CaptionsLayer {
 
         let current_time = segment_frames.segment_time;
         let fade_duration = caption_data.settings.fade_duration;
+        let linger_duration = caption_data.settings.linger_duration;
+        let word_transition_duration = caption_data.settings.word_transition_duration;
 
-        let Some(current_caption) =
-            find_caption_at_time_project(current_time, &caption_data.segments)
-        else {
+        let Some(caption_result) = find_caption_at_time_project(
+            current_time,
+            &caption_data.segments,
+            linger_duration,
+            fade_duration,
+        ) else {
             self.current_text = None;
             return;
         };
+
+        let current_caption = caption_result.segment;
+        let skip_fade_in = caption_result.skip_fade_in;
+        let skip_fade_out = caption_result.skip_fade_out;
 
         self.update_caption(
             Some(current_caption.text.clone()),
@@ -361,15 +472,26 @@ impl CaptionsLayer {
         let raw_caption_text = self.current_text.clone().unwrap_or_default();
         let caption_text = wrap_text_by_words(&raw_caption_text, MAX_WORDS_PER_LINE);
         let caption_words = current_caption.words.clone();
-        let (fade_opacity, time_from_start, time_to_end) =
-            self.calculate_fade_opacity(current_time, fade_duration);
+        let (fade_opacity, time_from_start, time_to_end) = self.calculate_fade_opacity(
+            current_time,
+            fade_duration,
+            linger_duration,
+            skip_fade_in,
+            skip_fade_out,
+        );
         if fade_opacity <= 0.0 {
             self.current_text = None;
             return;
         }
 
-        let bounce_offset =
-            calculate_bounce_offset(fade_opacity, time_from_start, time_to_end, fade_duration);
+        let bounce_offset = calculate_bounce_offset(
+            fade_opacity,
+            time_from_start,
+            time_to_end,
+            fade_duration,
+            skip_fade_in,
+            skip_fade_out,
+        );
 
         let (width, height) = (output_size.x, output_size.y);
         let device = &constants.device;
@@ -430,10 +552,6 @@ impl CaptionsLayer {
         let highlight_alpha = fade_opacity.clamp(0.0, 1.0);
 
         if !caption_words.is_empty() {
-            let current_word_idx = caption_words
-                .iter()
-                .position(|w| current_time >= w.start && current_time < w.end);
-
             let mut rich_text: Vec<(&str, Attrs)> = Vec::new();
             let full_text = caption_text.as_str();
             let mut last_end = 0usize;
@@ -458,18 +576,22 @@ impl CaptionsLayer {
                         ));
                     }
 
-                    let is_current = Some(idx) == current_word_idx;
-                    let alpha = if is_current {
-                        highlight_alpha
-                    } else {
-                        base_alpha
-                    };
+                    let word_highlight = calculate_word_highlight(
+                        current_time,
+                        word,
+                        idx,
+                        &caption_words,
+                        word_transition_duration,
+                    );
 
-                    let color_rgb = if is_current {
-                        highlight_color_rgb
-                    } else {
-                        base_color
-                    };
+                    let blended_color = [
+                        base_color[0] + (highlight_color_rgb[0] - base_color[0]) * word_highlight,
+                        base_color[1] + (highlight_color_rgb[1] - base_color[1]) * word_highlight,
+                        base_color[2] + (highlight_color_rgb[2] - base_color[2]) * word_highlight,
+                    ];
+
+                    let blended_alpha =
+                        base_alpha + (highlight_alpha - base_alpha) * word_highlight;
 
                     let word_end = abs_start + word.text.len();
                     rich_text.push((
@@ -478,10 +600,10 @@ impl CaptionsLayer {
                             .family(font_family)
                             .weight(weight)
                             .color(Color::rgba(
-                                (color_rgb[0] * 255.0) as u8,
-                                (color_rgb[1] * 255.0) as u8,
-                                (color_rgb[2] * 255.0) as u8,
-                                (alpha * 255.0) as u8,
+                                (blended_color[0] * 255.0) as u8,
+                                (blended_color[1] * 255.0) as u8,
+                                (blended_color[2] * 255.0) as u8,
+                                (blended_alpha * 255.0) as u8,
                             )),
                     ));
                     last_end = word_end;
@@ -734,26 +856,87 @@ pub fn find_caption_at_time(time: f32, segments: &[CaptionSegment]) -> Option<&C
         .find(|segment| time >= segment.start && time < segment.end)
 }
 
+pub struct CaptionAtTime {
+    pub segment: CaptionSegment,
+    pub skip_fade_in: bool,
+    pub skip_fade_out: bool,
+}
+
+const CLOSE_TRANSITION_THRESHOLD: f32 = 0.4;
+
+fn convert_project_segment(segment: &cap_project::CaptionSegment) -> CaptionSegment {
+    CaptionSegment {
+        id: segment.id.clone(),
+        start: segment.start,
+        end: segment.end,
+        text: segment.text.clone(),
+        words: segment
+            .words
+            .iter()
+            .map(|w| CaptionWord {
+                text: w.text.clone(),
+                start: w.start,
+                end: w.end,
+            })
+            .collect(),
+    }
+}
+
 pub fn find_caption_at_time_project(
     time: f32,
     segments: &[cap_project::CaptionSegment],
-) -> Option<CaptionSegment> {
-    segments
-        .iter()
-        .find(|segment| time >= segment.start && time < segment.end)
-        .map(|segment| CaptionSegment {
-            id: segment.id.clone(),
-            start: segment.start,
-            end: segment.end,
-            text: segment.text.clone(),
-            words: segment
-                .words
-                .iter()
-                .map(|w| CaptionWord {
-                    text: w.text.clone(),
-                    start: w.start,
-                    end: w.end,
-                })
-                .collect(),
-        })
+    linger_duration: f32,
+    fade_duration: f32,
+) -> Option<CaptionAtTime> {
+    let extended_end = linger_duration + fade_duration;
+
+    for (idx, segment) in segments.iter().enumerate() {
+        if time >= segment.start && time < segment.end {
+            let prev_segment = if idx > 0 {
+                Some(&segments[idx - 1])
+            } else {
+                None
+            };
+            let next_segment = segments.get(idx + 1);
+
+            let skip_fade_in = prev_segment
+                .map(|prev| segment.start - prev.end < CLOSE_TRANSITION_THRESHOLD)
+                .unwrap_or(false);
+            let skip_fade_out = next_segment
+                .map(|next| next.start - segment.end < CLOSE_TRANSITION_THRESHOLD)
+                .unwrap_or(false);
+
+            return Some(CaptionAtTime {
+                segment: convert_project_segment(segment),
+                skip_fade_in,
+                skip_fade_out,
+            });
+        }
+    }
+
+    for (idx, segment) in segments.iter().enumerate() {
+        if time >= segment.end && time < segment.end + extended_end {
+            let prev_segment = if idx > 0 {
+                Some(&segments[idx - 1])
+            } else {
+                None
+            };
+            let next_segment = segments.get(idx + 1);
+
+            let skip_fade_in = prev_segment
+                .map(|prev| segment.start - prev.end < CLOSE_TRANSITION_THRESHOLD)
+                .unwrap_or(false);
+            let skip_fade_out = next_segment
+                .map(|next| next.start - segment.end < CLOSE_TRANSITION_THRESHOLD)
+                .unwrap_or(false);
+
+            return Some(CaptionAtTime {
+                segment: convert_project_segment(segment),
+                skip_fade_in,
+                skip_fade_out,
+            });
+        }
+    }
+
+    None
 }

@@ -788,6 +788,16 @@ pub struct CaptionSettings {
         default = "CaptionSettings::default_fade_duration"
     )]
     pub fade_duration: f32,
+    #[serde(
+        alias = "lingerDuration",
+        default = "CaptionSettings::default_linger_duration"
+    )]
+    pub linger_duration: f32,
+    #[serde(
+        alias = "wordTransitionDuration",
+        default = "CaptionSettings::default_word_transition_duration"
+    )]
+    pub word_transition_duration: f32,
 }
 
 impl CaptionSettings {
@@ -797,6 +807,14 @@ impl CaptionSettings {
 
     fn default_fade_duration() -> f32 {
         0.15
+    }
+
+    fn default_linger_duration() -> f32 {
+        0.4
+    }
+
+    fn default_word_transition_duration() -> f32 {
+        0.25
     }
 }
 
@@ -817,6 +835,8 @@ impl Default for CaptionSettings {
             export_with_subtitles: false,
             highlight_color: Self::default_highlight_color(),
             fade_duration: Self::default_fade_duration(),
+            linger_duration: Self::default_linger_duration(),
+            word_transition_duration: Self::default_word_transition_duration(),
         }
     }
 }

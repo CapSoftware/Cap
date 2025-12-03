@@ -207,9 +207,16 @@ export function CaptionsTab() {
 				}),
 			);
 
-			setDownloadedModels(
-				models.filter((m) => m.downloaded).map((m) => m.name),
-			);
+			const downloadedModelNames = models
+				.filter((m) => m.downloaded)
+				.map((m) => m.name);
+			setDownloadedModels(downloadedModelNames);
+
+			if (downloadedModelNames.length > 0) {
+				const modelToPrewarm = downloadedModelNames[0];
+				const modelPath = await join(modelsPath, `${modelToPrewarm}.bin`);
+				commands.prewarmWhisperx(modelPath).catch(() => {});
+			}
 
 			const savedModel = localStorage.getItem("selectedTranscriptionModel");
 			if (savedModel && MODEL_OPTIONS.some((m) => m.name === savedModel)) {
@@ -577,7 +584,12 @@ export function CaptionsTab() {
 						</div>
 					</div>
 
-					<div class={cx(!hasCaptions() && "opacity-50 pointer-events-none")}>
+					<div
+						class={cx(
+							"space-y-4",
+							!hasCaptions() && "opacity-50 pointer-events-none",
+						)}
+					>
 						<Field name="Font Settings" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
