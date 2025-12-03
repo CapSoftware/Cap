@@ -4,18 +4,9 @@ import { createElementSize } from "@solid-primitives/resize-observer";
 import { useSearchParams } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
-import {
-	LogicalPosition,
-	type PhysicalPosition,
-	type PhysicalSize,
-} from "@tauri-apps/api/dpi";
+import { LogicalPosition, type PhysicalPosition, type PhysicalSize } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
-import {
-	CheckMenuItem,
-	Menu,
-	MenuItem,
-	PredefinedMenuItem,
-} from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import {
@@ -63,10 +54,7 @@ import {
 } from "~/utils/tauri";
 import CameraSelect from "./(window-chrome)/new-main/CameraSelect";
 import MicrophoneSelect from "./(window-chrome)/new-main/MicrophoneSelect";
-import {
-	RecordingOptionsProvider,
-	useRecordingOptions,
-} from "./(window-chrome)/OptionsContext";
+import { RecordingOptionsProvider, useRecordingOptions } from "./(window-chrome)/OptionsContext";
 
 const MIN_SIZE = { width: 150, height: 150 };
 
@@ -77,9 +65,7 @@ const capitalize = (str: string) => {
 const findCamera = (cameras: CameraInfo[], id?: DeviceOrModelID | null) => {
 	if (!id) return undefined;
 	return cameras.find((camera) =>
-		"DeviceID" in id
-			? camera.device_id === id.DeviceID
-			: camera.model_id === id.ModelID,
+		"DeviceID" in id ? camera.device_id === id.DeviceID : camera.model_id === id.ModelID
 	);
 };
 
@@ -129,11 +115,10 @@ function Inner() {
 
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
-	const [targetUnderCursor, setTargetUnderCursor] =
-		createStore<TargetUnderCursor>({
-			display_id: null,
-			window: null,
-		});
+	const [targetUnderCursor, setTargetUnderCursor] = createStore<TargetUnderCursor>({
+		display_id: null,
+		window: null,
+	});
 
 	const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
 		setTargetUnderCursor(reconcile(event.payload));
@@ -144,9 +129,7 @@ function Inner() {
 		queryKey: ["windowIcon", targetUnderCursor.window?.id],
 		queryFn: async () => {
 			if (!targetUnderCursor.window?.id) return null;
-			return await commands.getWindowIcon(
-				targetUnderCursor.window.id.toString(),
-			);
+			return await commands.getWindowIcon(targetUnderCursor.window.id.toString());
 		},
 		enabled: !!targetUnderCursor.window?.id,
 		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
@@ -169,19 +152,12 @@ function Inner() {
 
 	const [crop, setCrop] = createSignal<CropBounds>(CROP_ZERO);
 	type AreaTarget = Extract<ScreenCaptureTarget, { variant: "area" }>;
-	const [pendingAreaTarget, setPendingAreaTarget] =
-		createSignal<AreaTarget | null>(null);
-	const [initialAreaBounds, setInitialAreaBounds] = createSignal<
-		CropBounds | undefined
-	>(undefined);
+	const [pendingAreaTarget, setPendingAreaTarget] = createSignal<AreaTarget | null>(null);
+	const [initialAreaBounds, setInitialAreaBounds] = createSignal<CropBounds | undefined>(undefined);
 
 	createEffect(() => {
 		const target = options.captureTarget;
-		if (
-			target.variant === "area" &&
-			params.displayId &&
-			target.screen === params.displayId
-		) {
+		if (target.variant === "area" && params.displayId && target.screen === params.displayId) {
 			setPendingAreaTarget({
 				variant: "area",
 				screen: target.screen,
@@ -219,7 +195,7 @@ function Inner() {
 								height: target.bounds.size.height,
 							},
 						},
-					}),
+					})
 				);
 			}
 			setPendingAreaTarget(null);
@@ -262,9 +238,7 @@ function Inner() {
 							{(display) => (
 								<div class="flex flex-col items-center text-white">
 									<IconCapMonitor class="size-20 mb-3" />
-									<span class="mb-2 text-3xl font-semibold">
-										{display.name || "Monitor"}
-									</span>
+									<span class="mb-2 text-3xl font-semibold">{display.name || "Monitor"}</span>
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs">
@@ -278,14 +252,8 @@ function Inner() {
 
 						<Show when={toggleModeSelect()}>
 							{/* Transparent overlay to capture outside clicks */}
-							<div
-								class="absolute inset-0 z-10"
-								onClick={() => setToggleModeSelect(false)}
-							/>
-							<ModeSelect
-								standalone
-								onClose={() => setToggleModeSelect(false)}
-							/>
+							<div class="absolute inset-0 z-10" onClick={() => setToggleModeSelect(false)} />
+							<ModeSelect standalone onClose={() => setToggleModeSelect(false)} />
 						</Show>
 
 						<RecordingControls
@@ -296,12 +264,7 @@ function Inner() {
 					</div>
 				)}
 			</Match>
-			<Match
-				when={
-					options.targetMode === "window" &&
-					targetUnderCursor.display_id === params.displayId
-				}
-			>
+			<Match when={options.targetMode === "window" && targetUnderCursor.display_id === params.displayId}>
 				<Show when={targetUnderCursor.window} keyed>
 					{(windowUnderCursor) => (
 						<div
@@ -322,7 +285,7 @@ function Inner() {
 										reconcile({
 											variant: "window",
 											id: windowUnderCursor.id,
-										}),
+										})
 									);
 									setOptions("targetMode", null);
 									commands.closeTargetSelectOverlays();
@@ -342,9 +305,7 @@ function Inner() {
 											</Show>
 										</Suspense>
 									</div>
-									<span class="mb-2 text-3xl font-semibold">
-										{windowUnderCursor.app_name}
-									</span>
+									<span class="mb-2 text-3xl font-semibold">{windowUnderCursor.app_name}</span>
 									<span class="mb-3 text-xs">
 										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
 									</span>
@@ -423,15 +384,12 @@ function Inner() {
 					let controlsEl: HTMLDivElement | undefined;
 					let cropperRef: CropperRef | undefined;
 
-					const [cameraWindow, setCameraWindow] =
-						createSignal<WebviewWindow | null>(null);
+					const [cameraWindow, setCameraWindow] = createSignal<WebviewWindow | null>(null);
 					const [originalCameraBounds, setOriginalCameraBounds] = createSignal<{
 						position: PhysicalPosition;
 						size: PhysicalSize;
 					} | null>(null);
-					const [cachedScaleFactor, setCachedScaleFactor] = createSignal<
-						number | null
-					>(null);
+					const [cachedScaleFactor, setCachedScaleFactor] = createSignal<number | null>(null);
 
 					onMount(async () => {
 						const win = await WebviewWindow.getByLabel("camera");
@@ -439,8 +397,7 @@ function Inner() {
 					});
 
 					const [aspect, setAspect] = createSignal<Ratio | null>(null);
-					const [snapToRatioEnabled, setSnapToRatioEnabled] =
-						createSignal(true);
+					const [snapToRatioEnabled, setSnapToRatioEnabled] = createSignal(true);
 					const [isInteracting, setIsInteracting] = createSignal(false);
 					const shouldShowSelectionHint = createMemo(() => {
 						if (initialAreaBounds() !== undefined) return false;
@@ -552,31 +509,18 @@ function Inner() {
 						const selectionMinDim = Math.min(bounds.width, bounds.height);
 						const targetMaxDim = Math.max(
 							150,
-							Math.min(
-								Math.max(originalLogicalSize.width, originalLogicalSize.height),
-								selectionMinDim * 0.5,
-							),
+							Math.min(Math.max(originalLogicalSize.width, originalLogicalSize.height), selectionMinDim * 0.5)
 						);
 
-						const originalMaxDim = Math.max(
-							originalLogicalSize.width,
-							originalLogicalSize.height,
-						);
+						const originalMaxDim = Math.max(originalLogicalSize.width, originalLogicalSize.height);
 						const scale = targetMaxDim / originalMaxDim;
 
 						const newWidth = Math.round(originalLogicalSize.width * scale);
 						const newHeight = Math.round(originalLogicalSize.height * scale);
 
-						if (
-							bounds.width > newWidth + padding * 2 &&
-							bounds.height > newHeight + padding * 2
-						) {
-							const newX = Math.round(
-								bounds.x + bounds.width - newWidth - padding,
-							);
-							const newY = Math.round(
-								bounds.y + bounds.height - newHeight - padding,
-							);
+						if (bounds.width > newWidth + padding * 2 && bounds.height > newHeight + padding * 2) {
+							const newX = Math.round(bounds.x + bounds.width - newWidth - padding);
+							const newY = Math.round(bounds.y + bounds.height - newHeight - padding);
 
 							setTargetState({
 								x: newX * scaleFactor,
@@ -687,10 +631,7 @@ function Inner() {
 
 						const finalX = Math.max(
 							SIDE_MARGIN,
-							Math.min(
-								centerX - size.width / 2,
-								window.innerWidth - size.width - SIDE_MARGIN,
-							),
+							Math.min(centerX - size.width / 2, window.innerWidth - size.width - SIDE_MARGIN)
 						);
 
 						return {
@@ -754,11 +695,7 @@ function Inner() {
 
 					return (
 						<div class="fixed w-screen h-screen bg-black/60">
-							<div
-								ref={controlsEl}
-								class="fixed z-50 transition-opacity"
-								style={controlsStyle()}
-							>
+							<div ref={controlsEl} class="fixed z-50 transition-opacity" style={controlsStyle()}>
 								<div class="flex flex-col items-center">
 									<Show when={options.mode !== "screenshot"}>
 										<RecordingControls
@@ -793,9 +730,7 @@ function Inner() {
 										</div>
 									</Show>
 									<Show when={isValid()}>
-										<ShowCapFreeWarning
-											isInstantMode={options.mode === "instant"}
-										/>
+										<ShowCapFreeWarning isInstantMode={options.mode === "instant"} />
 									</Show>
 								</div>
 							</div>
@@ -837,10 +772,7 @@ function RecordingControls(props: {
 		if (!rawOptions.workspaceId && workspaces().length > 0) {
 			return workspaces()[0];
 		}
-		return (
-			workspaces().find((w) => w.id === rawOptions.workspaceId) ??
-			workspaces()[0]
-		);
+		return workspaces().find((w) => w.id === rawOptions.workspaceId) ?? workspaces()[0];
 	});
 
 	const workspacesMenu = async () =>
@@ -853,8 +785,8 @@ function RecordingControls(props: {
 							setOptions("workspaceId", workspace.id);
 						},
 						checked: selectedWorkspace()?.id === workspace.id,
-					}),
-				),
+					})
+				)
 			),
 		});
 
@@ -946,21 +878,10 @@ function RecordingControls(props: {
 						onMouseDown={(e) => showMenu(workspacesMenu(), e)}
 						onClick={(e) => showMenu(workspacesMenu(), e)}
 					>
-						<Show
-							when={
-								selectedWorkspace()?.avatarUrl &&
-								selectedWorkspace()?.avatarUrl !== null
-							}
-						>
-							<img
-								src={selectedWorkspace()?.avatarUrl ?? ""}
-								alt=""
-								class="size-5 rounded-full object-cover"
-							/>
+						<Show when={selectedWorkspace()?.avatarUrl && selectedWorkspace()?.avatarUrl !== null}>
+							<img src={selectedWorkspace()?.avatarUrl ?? ""} alt="" class="size-5 rounded-full object-cover" />
 						</Show>
-						<span class="text-sm text-gray-12">
-							{selectedWorkspace()?.name}
-						</span>
+						<span class="text-sm text-gray-12">{selectedWorkspace()?.name}</span>
 						<DoubleArrowSwitcher class="size-3 text-gray-11" />
 					</div>
 				</Show>
@@ -971,7 +892,7 @@ function RecordingControls(props: {
 					data-inactive={rawOptions.mode === "instant" && !auth.data}
 					class="flex overflow-hidden flex-row h-10 rounded-[12px] bg-blue-9 group border border-white/15"
 					onClick={() => {
-						if (rawOptions.mode === "instant" && !auth.data) {
+						if (!auth.data) {
 							emit("start-sign-in");
 							return;
 						}
@@ -1067,10 +988,7 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
 				<p class="text-sm text-center max-w-64">
 					Instant Mode recordings are limited to 5 mins,{" "}
-					<button
-						class="underline"
-						onClick={() => commands.showWindow("Upgrade")}
-					>
+					<button class="underline" onClick={() => commands.showWindow("Upgrade")}>
 						Upgrade to Pro
 					</button>
 				</p>
