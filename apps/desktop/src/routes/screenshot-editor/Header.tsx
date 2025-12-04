@@ -66,15 +66,16 @@ export function Header() {
 
 	const cropDialogHandler = () => {
 		const frame = latestFrame();
-		const frameWidth = frame?.data?.width ?? 0;
-		const frameHeight = frame?.data?.height ?? 0;
+		if (!frame?.data) return;
 		setDialog({
 			open: true,
 			type: "crop",
-			originalSize: { x: frameWidth, y: frameHeight },
+			originalSize: { x: frame.data.width, y: frame.data.height },
 			currentCrop: project.background.crop,
 		});
 	};
+
+	const isCropDisabled = () => !latestFrame()?.data;
 
 	return (
 		<div
@@ -90,6 +91,7 @@ export function Header() {
 				<EditorButton
 					tooltipText="Crop Image"
 					onClick={cropDialogHandler}
+					disabled={isCropDisabled()}
 					leftIcon={<IconCapCrop class="size-4" />}
 				/>
 				<div class="w-px h-6 bg-gray-4 mx-1" />

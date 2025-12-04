@@ -1,5 +1,5 @@
 import { cx } from "cva";
-import { createEffect, createSignal, For, on, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import IconLucideArrowUpRight from "~icons/lucide/arrow-up-right";
 import IconLucideCircle from "~icons/lucide/circle";
 import IconLucideEyeOff from "~icons/lucide/eye-off";
@@ -62,6 +62,100 @@ export function LayersPanel() {
 	const getActualIndex = (reversedIdx: number) =>
 		annotations.length - 1 - reversedIdx;
 
+	const handleDragMove = (moveEvent: MouseEvent) => {
+		setDragState((prev) =>
+			prev ? { ...prev, currentY: moveEvent.clientY } : null,
+		);
+
+		const listEl = document.querySelector("[data-layers-list]");
+		if (!listEl) return;
+
+		const items = listEl.querySelectorAll("[data-layer-item]");
+		let targetIdx: number | null = null;
+
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i] as HTMLElement;
+			const rect = item.getBoundingClientRect();
+			const midY = rect.top + rect.height / 2;
+
+			if (moveEvent.clientY < midY) {
+				targetIdx = i;
+				break;
+			}
+			targetIdx = i + 1;
+		}
+
+		setDropTargetIndex(targetIdx);
+	};
+
+	const finalizeDrag = () => {
+		const state = dragState();
+		const targetIdx = dropTargetIndex();
+
+		if (state && targetIdx !== null) {
+			const draggedReversedIdx = reversedAnnotations().findIndex(
+				(a) => a.id === state.draggedId,
+			);
+
+			if (draggedReversedIdx !== -1 && draggedReversedIdx !== targetIdx) {
+				const fromActual = getActualIndex(draggedReversedIdx);
+				let toActual: number;
+
+				if (targetIdx > draggedReversedIdx) {
+					toActual = getActualIndex(targetIdx - 1);
+				} else {
+					toActual = getActualIndex(targetIdx);
+				}
+
+				if (fromActual !== toActual) {
+					projectHistory.push();
+					const newAnnotations = [...annotations];
+					const [removed] = newAnnotations.splice(fromActual, 1);
+					newAnnotations.splice(toActual, 0, removed);
+					setAnnotations(newAnnotations);
+				}
+			}
+		}
+
+		setDragState(null);
+		setDropTargetIndex(null);
+	};
+
+	const handleDragEnd = () => {
+		finalizeDrag();
+	};
+
+	const handleWindowBlur = () => {
+		finalizeDrag();
+	};
+
+	const handleMouseLeave = () => {
+		finalizeDrag();
+	};
+
+	createEffect(() => {
+		const state = dragState();
+
+		if (state) {
+			window.addEventListener("mousemove", handleDragMove);
+			window.addEventListener("mouseup", handleDragEnd);
+			window.addEventListener("blur", handleWindowBlur);
+			document.documentElement.addEventListener("mouseleave", handleMouseLeave);
+
+			onCleanup(() => {
+				window.removeEventListener("mousemove", handleDragMove);
+				window.removeEventListener("mouseup", handleDragEnd);
+				window.removeEventListener("blur", handleWindowBlur);
+				document.documentElement.removeEventListener(
+					"mouseleave",
+					handleMouseLeave,
+				);
+				setDragState(null);
+				setDropTargetIndex(null);
+			});
+		}
+	});
+
 	const handleMouseDown = (ann: Annotation, e: MouseEvent) => {
 		if ((e.target as HTMLElement).closest("button")) return;
 
@@ -76,70 +170,6 @@ export function LayersPanel() {
 			startY: e.clientY,
 			currentY: e.clientY,
 		});
-
-		const handleMouseMove = (moveEvent: MouseEvent) => {
-			setDragState((prev) =>
-				prev ? { ...prev, currentY: moveEvent.clientY } : null,
-			);
-
-			const listEl = document.querySelector("[data-layers-list]");
-			if (!listEl) return;
-
-			const items = listEl.querySelectorAll("[data-layer-item]");
-			let targetIdx: number | null = null;
-
-			for (let i = 0; i < items.length; i++) {
-				const item = items[i] as HTMLElement;
-				const rect = item.getBoundingClientRect();
-				const midY = rect.top + rect.height / 2;
-
-				if (moveEvent.clientY < midY) {
-					targetIdx = i;
-					break;
-				}
-				targetIdx = i + 1;
-			}
-
-			setDropTargetIndex(targetIdx);
-		};
-
-		const handleMouseUp = () => {
-			const state = dragState();
-			const targetIdx = dropTargetIndex();
-
-			if (state && targetIdx !== null) {
-				const draggedReversedIdx = reversedAnnotations().findIndex(
-					(a) => a.id === state.draggedId,
-				);
-
-				if (draggedReversedIdx !== -1 && draggedReversedIdx !== targetIdx) {
-					const fromActual = getActualIndex(draggedReversedIdx);
-					let toActual: number;
-
-					if (targetIdx > draggedReversedIdx) {
-						toActual = getActualIndex(targetIdx - 1);
-					} else {
-						toActual = getActualIndex(targetIdx);
-					}
-
-					if (fromActual !== toActual) {
-						projectHistory.push();
-						const newAnnotations = [...annotations];
-						const [removed] = newAnnotations.splice(fromActual, 1);
-						newAnnotations.splice(toActual, 0, removed);
-						setAnnotations(newAnnotations);
-					}
-				}
-			}
-
-			setDragState(null);
-			setDropTargetIndex(null);
-			window.removeEventListener("mousemove", handleMouseMove);
-			window.removeEventListener("mouseup", handleMouseUp);
-		};
-
-		window.addEventListener("mousemove", handleMouseMove);
-		window.addEventListener("mouseup", handleMouseUp);
 	};
 
 	const handleLayerClick = (ann: Annotation, e: MouseEvent) => {

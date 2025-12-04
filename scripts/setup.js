@@ -110,7 +110,13 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await execFile("tar", ["xf", ffmpegZipPath, "-C", targetDir]);
+			await execFile("tar", [
+				"xf",
+				ffmpegZipPath,
+				"-C",
+				targetDir,
+				"--force-local",
+			]);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
@@ -231,7 +237,7 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 					.map((entry) =>
 						exec(
 							`codesign ${keychain} -s "${signId}" -f "${path.join(
-								entry.parentPath || entry.path,
+								entry.parentPath,
 								entry.name,
 							)}"`,
 						),
