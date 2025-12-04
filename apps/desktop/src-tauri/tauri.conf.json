@@ -54,6 +54,7 @@
 			"../src/assets/rive/*.riv": "assets/rive/"
 		},
 		"macOS": {
+			"minimumSystemVersion": "13.1",
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"appPosition": {
