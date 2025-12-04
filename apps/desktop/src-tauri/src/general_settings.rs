@@ -31,6 +31,14 @@ pub enum PostDeletionBehaviour {
     ReopenRecordingWindow,
 }
 
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum PostSettingsCloseBehaviour {
+    DoNothing,
+    #[default]
+    OpenRecordingWindow,
+}
+
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
@@ -116,6 +124,8 @@ pub struct GeneralSettingsStore {
     pub recording_picker_preference_set: bool,
     #[serde(default)]
     pub post_deletion_behaviour: PostDeletionBehaviour,
+    #[serde(default)]
+    pub post_settings_close_behaviour: PostSettingsCloseBehaviour,
     #[serde(default = "default_excluded_windows")]
     pub excluded_windows: Vec<WindowExclusion>,
     #[serde(default)]
@@ -184,6 +194,7 @@ impl Default for GeneralSettingsStore {
             enable_new_recording_flow: default_enable_new_recording_flow(),
             recording_picker_preference_set: false,
             post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
+            post_settings_close_behaviour: PostSettingsCloseBehaviour::OpenRecordingWindow,
             excluded_windows: default_excluded_windows(),
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,

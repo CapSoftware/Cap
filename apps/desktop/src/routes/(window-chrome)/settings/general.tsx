@@ -34,6 +34,7 @@ import {
 	type GeneralSettingsStore,
 	type MainWindowRecordingStartBehaviour,
 	type PostDeletionBehaviour,
+	type PostSettingsCloseBehaviour,
 	type PostStudioRecordingBehaviour,
 	type WindowExclusion,
 } from "~/utils/tauri";
@@ -359,6 +360,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			| MainWindowRecordingStartBehaviour
 			| PostStudioRecordingBehaviour
 			| PostDeletionBehaviour
+			| PostSettingsCloseBehaviour
 			| number,
 	>(props: {
 		label: string;
@@ -555,6 +557,21 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							{
 								text: "Reopen Recording Window",
 								value: "reopenRecordingWindow",
+							},
+						]}
+					/>
+					<SelectSettingItem
+						label="After Closing Settings Window"
+						description="What should Cap do when you close the settings window?"
+						value={settings.postSettingsCloseBehaviour ?? "openRecordingWindow"}
+						onChange={(value) =>
+							handleChange("postSettingsCloseBehaviour", value)
+						}
+						options={[
+							{ text: "Do Nothing", value: "doNothing" },
+							{
+								text: "Open Recording Window",
+								value: "openRecordingWindow",
 							},
 						]}
 					/>

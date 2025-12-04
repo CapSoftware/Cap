@@ -56,7 +56,7 @@ use clipboard_rs::{Clipboard, ClipboardContext};
 use cpal::StreamError;
 use editor_window::{EditorInstances, WindowEditorInstance};
 use ffmpeg::ffi::AV_TIME_BASE;
-use general_settings::GeneralSettingsStore;
+use general_settings::{GeneralSettingsStore, PostSettingsCloseBehaviour};
 use kameo::{Actor, actor::ActorRef};
 use notifications::NotificationType;
 use recording::{InProgressRecording, RecordingEvent, RecordingInputKind};
@@ -2796,6 +2796,16 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
                             }
                             CapWindowId::Settings => {
+                                let settings = GeneralSettingsStore::get(&app)
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_default();
+
+                                let should_open_main = matches!(
+                                    settings.post_settings_close_behaviour,
+                                    PostSettingsCloseBehaviour::OpenRecordingWindow
+                                );
+
                                 for (label, window) in app.webview_windows() {
                                     if let Ok(id) = CapWindowId::from_str(&label)
                                         && matches!(
@@ -2805,12 +2815,14 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                                 | CapWindowId::Camera
                                         )
                                     {
-                                        let _ = window.show();
+                                        if should_open_main {
+                                            let _ = window.show();
+                                        }
                                     }
                                 }
 
                                 #[cfg(target_os = "windows")]
-                                if !has_open_editor_window(&app) {
+                                if should_open_main && !has_open_editor_window(&app) {
                                     reopen_main_window(&app);
                                 }
 
