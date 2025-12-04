@@ -280,6 +280,19 @@ impl CapWindow {
             PendingEditorInstances::start_prewarm(app, window_label, project_path.clone()).await;
         }
 
+        if let Self::ScreenshotEditor { path } = &self {
+            let state = app.state::<ScreenshotEditorWindowIds>();
+            let mut s = state.ids.lock().unwrap();
+            if !s.iter().any(|(p, _)| p == path) {
+                s.push((
+                    path.clone(),
+                    state
+                        .counter
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                ));
+            }
+        }
+
         let def = self.def(app);
         if let Some(window) = def.get(app) {
             window.show().ok();
