@@ -80,10 +80,10 @@ impl DisplayImpl {
             info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
 
             unsafe {
-                if GetMonitorInfoW(display.0, &mut info as *mut _ as *mut _).as_bool() {
-                    if (info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0 {
-                        return display;
-                    }
+                if GetMonitorInfoW(display.0, &mut info as *mut _ as *mut _).as_bool()
+                    && (info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0
+                {
+                    return display;
                 }
             }
         }
@@ -197,8 +197,10 @@ impl DisplayImpl {
         unsafe {
             if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
                 let device_name = info.szDevice;
-                let mut devmode = DEVMODEW::default();
-                devmode.dmSize = mem::size_of::<DEVMODEW>() as u16;
+                let mut devmode = DEVMODEW {
+                    dmSize: mem::size_of::<DEVMODEW>() as u16,
+                    ..Default::default()
+                };
 
                 if EnumDisplaySettingsW(
                     PCWSTR(device_name.as_ptr()),
@@ -492,13 +494,13 @@ impl WindowImpl {
             }
 
             let mut buffer = vec![0u8; size as usize];
-            if !GetFileVersionInfoW(
+            if GetFileVersionInfoW(
                 PCWSTR(wide_path.as_ptr()),
                 Some(0),
                 size,
                 buffer.as_mut_ptr() as *mut _,
             )
-            .is_ok()
+            .is_err()
             {
                 return None;
             }
@@ -533,18 +535,16 @@ impl WindowImpl {
             // Target size for acceptable icon quality - early termination threshold
             const GOOD_SIZE_THRESHOLD: i32 = 256;
 
-            // Method 1: Try shell icon extraction for highest quality
-            if let Some(exe_path) = self.get_executable_path() {
-                if let Some(icon_data) = self.extract_shell_icon_high_res(&exe_path, 512) {
-                    return Some(icon_data);
-                }
+            if let Some(exe_path) = self.get_executable_path()
+                && let Some(icon_data) = self.extract_shell_icon_high_res(&exe_path, 512)
+            {
+                return Some(icon_data);
             }
 
-            // Method 2: Try executable file extraction with multiple icon sizes
-            if let Some(exe_path) = self.get_executable_path() {
-                if let Some(icon_data) = self.extract_executable_icons_high_res(&exe_path) {
-                    return Some(icon_data);
-                }
+            if let Some(exe_path) = self.get_executable_path()
+                && let Some(icon_data) = self.extract_executable_icons_high_res(&exe_path)
+            {
+                return Some(icon_data);
             }
 
             // Method 3: Try to get the window's large icon
@@ -555,12 +555,11 @@ impl WindowImpl {
                 Some(LPARAM(0isize)),
             ); // ICON_BIG = 1
 
-            if large_icon.0 != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(large_icon.0 as _)) {
-                    // If we got a good quality icon, return it immediately
-                    if result.1 >= GOOD_SIZE_THRESHOLD {
-                        return Some(result.0);
-                    }
+            if large_icon.0 != 0
+                && let Some(result) = self.hicon_to_png_bytes_optimized(HICON(large_icon.0 as _))
+            {
+                if result.1 >= GOOD_SIZE_THRESHOLD {
+                    return Some(result.0);
                 }
             }
 
@@ -615,18 +614,17 @@ impl WindowImpl {
                 Some(LPARAM(0isize)),
             ); // ICON_SMALL = 0
 
-            if small_icon.0 != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(small_icon.0 as _)) {
-                    return Some(result.0);
-                }
+            if small_icon.0 != 0
+                && let Some(result) = self.hicon_to_png_bytes_optimized(HICON(small_icon.0 as _))
+            {
+                return Some(result.0);
             }
 
-            // Method 6: Try class icon as last resort
             let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
-            if class_icon != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(class_icon as _)) {
-                    return Some(result.0);
-                }
+            if class_icon != 0
+                && let Some(result) = self.hicon_to_png_bytes_optimized(HICON(class_icon as _))
+            {
+                return Some(result.0);
             }
 
             None
@@ -717,14 +715,14 @@ impl WindowImpl {
                     let icon_result = self.hicon_to_png_bytes_optimized(icon_handle);
                     let _ = DestroyIcon(icon_handle);
 
-                    if let Some((png_data, realized_size)) = icon_result {
-                        if realized_size > best_size {
-                            best_size = realized_size;
-                            best_icon = Some(png_data);
+                    if let Some((png_data, realized_size)) = icon_result
+                        && realized_size > best_size
+                    {
+                        best_size = realized_size;
+                        best_icon = Some(png_data);
 
-                            if best_size >= 256 {
-                                return best_icon;
-                            }
+                        if best_size >= 256 {
+                            return best_icon;
                         }
                     }
                 }
@@ -769,7 +767,7 @@ impl WindowImpl {
     fn get_icon_size(&self, icon: HICON) -> Option<(i32, i32)> {
         unsafe {
             let mut icon_info = ICONINFO::default();
-            if !GetIconInfo(icon, &mut icon_info).is_ok() {
+            if GetIconInfo(icon, &mut icon_info).is_err() {
                 return None;
             }
 
@@ -796,7 +794,7 @@ impl WindowImpl {
     fn hicon_to_png_bytes_optimized(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             let mut icon_info = ICONINFO::default();
-            if !GetIconInfo(icon, &mut icon_info).is_ok() {
+            if GetIconInfo(icon, &mut icon_info).is_err() {
                 return None;
             }
 
@@ -1118,13 +1116,11 @@ impl WindowImpl {
             return false;
         }
 
-        // Also skip WebView2 and Cap-related processes
-        if let Ok(exe_path) = unsafe { pid_to_exe_path(id) } {
-            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
-                    return false;
-                }
-            }
+        if let Ok(exe_path) = unsafe { pid_to_exe_path(id) }
+            && let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str())
+            && IGNORED_EXES.contains(&&*exe_name.to_lowercase())
+        {
+            return false;
         }
 
         let mut rect = RECT::default();
@@ -1154,25 +1150,21 @@ impl WindowImpl {
 
 fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool {
     unsafe {
-        // Skip invisible or minimized windows
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return false;
         }
 
-        // Skip own process windows
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         if process_id == current_process_id {
             return false;
         }
 
-        // Also skip WebView2 and Cap-related processes
-        if let Ok(exe_path) = pid_to_exe_path(process_id) {
-            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
-                    return false;
-                }
-            }
+        if let Ok(exe_path) = pid_to_exe_path(process_id)
+            && let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str())
+            && IGNORED_EXES.contains(&&*exe_name.to_lowercase())
+        {
+            return false;
         }
 
         true
@@ -1185,28 +1177,25 @@ fn is_window_valid_for_topmost_selection(
     point: POINT,
 ) -> bool {
     unsafe {
-        // Skip invisible or minimized windows
         if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return false;
         }
 
-        // Skip own process windows (includes overlays)
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         if process_id == current_process_id {
             return false;
         }
 
-        // Also skip WebView2 and Cap-related processes
-        if let Ok(exe_path) = pid_to_exe_path(process_id) {
-            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                let exe_name_lower = exe_name.to_lowercase();
-                if exe_name_lower.contains("webview2")
-                    || exe_name_lower.contains("msedgewebview2")
-                    || exe_name_lower.contains("cap")
-                {
-                    return false;
-                }
+        if let Ok(exe_path) = pid_to_exe_path(process_id)
+            && let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str())
+        {
+            let exe_name_lower = exe_name.to_lowercase();
+            if exe_name_lower.contains("webview2")
+                || exe_name_lower.contains("msedgewebview2")
+                || exe_name_lower.contains("cap")
+            {
+                return false;
             }
         }
 
@@ -1226,10 +1215,8 @@ fn is_window_valid_for_topmost_selection(
             }
         }
 
-        // Skip windows with certain extended styles
         let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
         if (ex_style & WS_EX_TRANSPARENT.0) != 0 || (ex_style & WS_EX_LAYERED.0) != 0 {
-            // Allow layered windows only if they have proper alpha
             if (ex_style & WS_EX_LAYERED.0) != 0 {
                 let mut alpha = 0u8;
                 let mut color_key = 0u32;
@@ -1241,14 +1228,12 @@ fn is_window_valid_for_topmost_selection(
                     Some(&mut flags as *mut u32 as *mut _),
                 )
                 .is_ok()
+                    && alpha < 50
                 {
-                    if alpha < 50 {
-                        // Skip nearly transparent windows
-                        return false;
-                    }
+                    return false;
                 }
             } else {
-                return false; // Skip fully transparent windows
+                return false;
             }
         }
 
