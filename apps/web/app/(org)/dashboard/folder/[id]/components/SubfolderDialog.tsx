@@ -20,7 +20,6 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,

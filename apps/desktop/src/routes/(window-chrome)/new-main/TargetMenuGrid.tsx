@@ -1,10 +1,13 @@
 import { cx } from "cva";
-import { createMemo, For, Match, Switch } from "solid-js";
+import { createMemo, For, type JSX, Match, Show, Switch } from "solid-js";
 import { Transition } from "solid-transition-group";
 import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
 } from "~/utils/tauri";
+import IconLucideExternalLink from "~icons/lucide/external-link";
+import IconLucideImage from "~icons/lucide/image";
+import IconLucideSquarePlay from "~icons/lucide/square-play";
 import TargetCard, {
 	type RecordingWithPath,
 	type ScreenshotWithPath,
@@ -35,10 +38,16 @@ type WindowGridProps = BaseProps<CaptureWindowWithThumbnail> & {
 
 type RecordingGridProps = BaseProps<RecordingWithPath> & {
 	variant: "recording";
+	uploadProgress?: Record<string, number>;
+	reuploadingPaths?: Set<string>;
+	onReupload?: (path: string) => void;
+	onRefetch?: () => void;
+	onViewAll?: () => void;
 };
 
 type ScreenshotGridProps = BaseProps<ScreenshotWithPath> & {
 	variant: "screenshot";
+	onViewAll?: () => void;
 };
 
 type TargetMenuGridProps =
@@ -46,6 +55,48 @@ type TargetMenuGridProps =
 	| WindowGridProps
 	| RecordingGridProps
 	| ScreenshotGridProps;
+
+function EmptyState(props: {
+	icon: JSX.Element;
+	title: string;
+	description: string;
+	action?: { label: string; onClick: () => void };
+}) {
+	return (
+		<div class="col-span-2 flex flex-col items-center justify-center py-8 px-4 text-center">
+			<div class="flex items-center justify-center size-12 rounded-full bg-gray-3 mb-3">
+				{props.icon}
+			</div>
+			<p class="text-sm font-medium text-gray-12 mb-1">{props.title}</p>
+			<p class="text-xs text-gray-10 mb-3 max-w-[200px]">{props.description}</p>
+			<Show when={props.action}>
+				{(action) => (
+					<button
+						type="button"
+						onClick={action().onClick}
+						class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-12 bg-gray-3 rounded-lg hover:bg-gray-4 transition-colors"
+					>
+						<IconLucideExternalLink class="size-3" />
+						{action().label}
+					</button>
+				)}
+			</Show>
+		</div>
+	);
+}
+
+function ViewAllButton(props: { onClick: () => void; label: string }) {
+	return (
+		<button
+			type="button"
+			onClick={props.onClick}
+			class="col-span-2 flex items-center justify-center gap-2 py-2.5 mt-1 text-xs font-medium text-gray-11 bg-gray-3 rounded-lg hover:bg-gray-4 hover:text-gray-12 transition-colors"
+		>
+			<IconLucideExternalLink class="size-3" />
+			{props.label}
+		</button>
+	);
+}
 
 export default function TargetMenuGrid(props: TargetMenuGridProps) {
 	const items = createMemo(() => props.targets ?? []);
@@ -112,14 +163,56 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		target?.focus();
 	};
 
-	const defaultEmptyMessage = () =>
-		props.variant === "display"
-			? "No displays found"
-			: props.variant === "window"
-				? "No windows found"
-				: props.variant === "recording"
-					? "No recordings found"
-					: "No screenshots found";
+	const getOnViewAll = () => {
+		if (props.variant === "recording")
+			return (props as RecordingGridProps).onViewAll;
+		if (props.variant === "screenshot")
+			return (props as ScreenshotGridProps).onViewAll;
+		return undefined;
+	};
+
+	const renderEmptyState = () => {
+		const onViewAll = getOnViewAll();
+
+		if (props.variant === "recording") {
+			return (
+				<EmptyState
+					icon={<IconLucideSquarePlay class="size-5 text-gray-10" />}
+					title="No recordings yet"
+					description="Your screen recordings will appear here. Start recording to get started!"
+					action={
+						onViewAll
+							? { label: "View All Recordings", onClick: onViewAll }
+							: undefined
+					}
+				/>
+			);
+		}
+
+		if (props.variant === "screenshot") {
+			return (
+				<EmptyState
+					icon={<IconLucideImage class="size-5 text-gray-10" />}
+					title="No screenshots yet"
+					description="Your screenshots will appear here. Take a screenshot to get started!"
+					action={
+						onViewAll
+							? { label: "View All Screenshots", onClick: onViewAll }
+							: undefined
+					}
+				/>
+			);
+		}
+
+		return (
+			<div class="col-span-2 py-6 text-sm text-center text-gray-11">
+				{props.emptyMessage ??
+					(props.variant === "display"
+						? "No displays found"
+						: "No windows found")}
+			</div>
+		);
+	};
 
 	return (
 		<div
@@ -143,11 +236,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 						{() => <TargetCardSkeleton class="w-full" />}
 					</For>
 				</Match>
-				<Match when={isEmpty()}>
-					<div class="col-span-2 py-6 text-sm text-center text-gray-11">
-						{props.emptyMessage ?? defaultEmptyMessage()}
-					</div>
-				</Match>
+				<Match when={isEmpty()}>{renderEmptyState()}</Match>
 				<Match when={items().length > 0}>
 					<Switch>
 						<Match when={props.variant === "display"}>
@@ -224,34 +313,75 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 							{(() => {
 								const recordingProps = props as RecordingGridProps;
 								return (
-									<For each={items() as RecordingWithPath[]}>
-										{(item, index) => (
-											<Transition
-												appear
-												enterActiveClass="transition duration-200"
-												enterClass="scale-95 opacity-0"
-												enterToClass="scale-100 opacity-100"
-												exitActiveClass="transition duration-200"
-												exitClass="scale-100"
-												exitToClass="scale-95"
-											>
-												<div
-													style={{ "transition-delay": `${index() * 100}ms` }}
-												>
-													<TargetCard
-														variant="recording"
-														target={item}
-														onClick={() => recordingProps.onSelect?.(item)}
-														disabled={recordingProps.disabled}
-														onKeyDown={handleKeyDown}
-														class="w-full"
-														data-target-menu-card="true"
-														highlightQuery={recordingProps.highlightQuery}
-													/>
-												</div>
-											</Transition>
-										)}
-									</For>
+									<>
+										<For each={items() as RecordingWithPath[]}>
+											{(item, index) => {
+												const videoId = () => {
+													const upload = item.upload;
+													if (!upload) return undefined;
+													if (
+														upload.state === "MultipartUpload" ||
+														upload.state === "SinglePartUpload"
+													) {
+														return upload.video_id;
+													}
+													return undefined;
+												};
+												const progress = () => {
+													const id = videoId();
+													if (!id || !recordingProps.uploadProgress)
+														return undefined;
+													return recordingProps.uploadProgress[id];
+												};
+												const isReuploading = () => {
+													return (
+														recordingProps.reuploadingPaths?.has(item.path) ??
+														false
+													);
+												};
+												return (
+													<Transition
+														appear
+														enterActiveClass="transition duration-200"
+														enterClass="scale-95 opacity-0"
+														enterToClass="scale-100 opacity-100"
+														exitActiveClass="transition duration-200"
+														exitClass="scale-100"
+														exitToClass="scale-95"
+													>
+														<div
+															style={{
+																"transition-delay": `${index() * 100}ms`,
+															}}
+														>
+															<TargetCard
+																variant="recording"
+																target={item}
+																onClick={() => recordingProps.onSelect?.(item)}
+																disabled={recordingProps.disabled}
+																onKeyDown={handleKeyDown}
+																class="w-full"
+																data-target-menu-card="true"
+																highlightQuery={recordingProps.highlightQuery}
+																uploadProgress={progress()}
+																isReuploading={isReuploading()}
+																onReupload={recordingProps.onReupload}
+																onRefetch={recordingProps.onRefetch}
+															/>
+														</div>
+													</Transition>
+												);
+											}}
+										</For>
+										<Show when={recordingProps.onViewAll}>
+											{(onViewAll) => (
+												<ViewAllButton
+													onClick={onViewAll()}
+													label="View All Recordings"
+												/>
+											)}
+										</Show>
+									</>
 								);
 							})()}
 						</Match>
@@ -259,34 +389,44 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 							{(() => {
 								const screenshotProps = props as ScreenshotGridProps;
 								return (
-									<For each={items() as ScreenshotWithPath[]}>
-										{(item, index) => (
-											<Transition
-												appear
-												enterActiveClass="transition duration-200"
-												enterClass="scale-95 opacity-0"
-												enterToClass="scale-100 opacity-100"
-												exitActiveClass="transition duration-200"
-												exitClass="scale-100"
-												exitToClass="scale-95"
-											>
-												<div
-													style={{ "transition-delay": `${index() * 100}ms` }}
+									<>
+										<For each={items() as ScreenshotWithPath[]}>
+											{(item, index) => (
+												<Transition
+													appear
+													enterActiveClass="transition duration-200"
+													enterClass="scale-95 opacity-0"
+													enterToClass="scale-100 opacity-100"
+													exitActiveClass="transition duration-200"
+													exitClass="scale-100"
+													exitToClass="scale-95"
 												>
-													<TargetCard
-														variant="screenshot"
-														target={item}
-														onClick={() => screenshotProps.onSelect?.(item)}
-														disabled={screenshotProps.disabled}
-														onKeyDown={handleKeyDown}
-														class="w-full"
-														data-target-menu-card="true"
-														highlightQuery={screenshotProps.highlightQuery}
-													/>
-												</div>
-											</Transition>
-										)}
-									</For>
+													<div
+														style={{ "transition-delay": `${index() * 100}ms` }}
+													>
+														<TargetCard
+															variant="screenshot"
+															target={item}
+															onClick={() => screenshotProps.onSelect?.(item)}
+															disabled={screenshotProps.disabled}
+															onKeyDown={handleKeyDown}
+															class="w-full"
+															data-target-menu-card="true"
+															highlightQuery={screenshotProps.highlightQuery}
+														/>
+													</div>
+												</Transition>
+											)}
+										</For>
+										<Show when={screenshotProps.onViewAll}>
+											{(onViewAll) => (
+												<ViewAllButton
+													onClick={onViewAll()}
+													label="View All Screenshots"
+												/>
+											)}
+										</Show>
+									</>
 								);
 							})()}
 						</Match>

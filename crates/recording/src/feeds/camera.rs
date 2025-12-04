@@ -559,21 +559,18 @@ async fn setup_camera(
 
             if let Ok(bytes) = frame.native().bytes() {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
-                use windows::Win32::Media::MediaFoundation::{
-                    IMFMediaBuffer, MFCreateMemoryBuffer,
-                };
-                use windows::core::Interface;
+                use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
                 let data_len = bytes.len();
                 if let Ok(buffer) = (unsafe { MFCreateMemoryBuffer(data_len as u32) }) {
-                    if let Ok(mut lock) = buffer.lock_mut() {
+                    if let Ok(mut lock) = buffer.lock() {
                         lock.copy_from_slice(&*bytes);
                         drop(lock);
                         let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
 
                         let _ = native_recipient
                             .tell(NewNativeFrame(NativeCameraFrame {
-                                buffer,
+                                buffer: std::sync::Arc::new(std::sync::Mutex::new(buffer)),
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,

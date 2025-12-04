@@ -334,6 +334,7 @@ mod tests {
         // Test color conversion
         let color_source = BackgroundSource::Color {
             value: [65535, 32768, 0],
+            alpha: 255,
         };
         let color_bg = Background::from(color_source);
         assert!(matches!(color_bg, Background::Color([65535, 32768, 0])));
@@ -358,6 +359,7 @@ mod tests {
             output_size: (800, 600),
             background: BackgroundSource::Color {
                 value: [65535, 0, 0],
+                alpha: 255,
             },
             border: None,
         };
@@ -382,6 +384,7 @@ mod tests {
             output_size: (800, 600),
             background: BackgroundSource::Color {
                 value: [0, 65535, 0],
+                alpha: 255,
             },
             border: None,
         };

@@ -3,8 +3,6 @@ use cap_frame_converter::{
     SwscaleConverter,
 };
 use ffmpeg::format::Pixel;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 fn create_test_frame(format: Pixel, width: u32, height: u32) -> ffmpeg::frame::Video {
@@ -25,14 +23,14 @@ fn benchmark_single_threaded(iterations: u32, config: &ConversionConfig) -> Dura
     let mut total_time = Duration::ZERO;
     let mut first_frame = true;
 
-    for i in 0..iterations {
+    for _ in 0..iterations {
         let frame = create_test_frame(config.input_format, config.input_width, config.input_height);
         let start = Instant::now();
         let _output = converter.convert(frame).expect("Conversion failed");
         let elapsed = start.elapsed();
 
         if first_frame {
-            println!("  First frame: {:?}", elapsed);
+            println!("  First frame: {elapsed:?}");
             first_frame = false;
         }
         total_time += elapsed;
@@ -74,7 +72,7 @@ fn benchmark_pool(
         }
         let stats = pool.stats();
         if stats.frames_converted >= frame_count as u64 {
-            while let Some(_) = pool.try_recv() {
+            while pool.try_recv().is_some() {
                 received += 1;
             }
             break;
@@ -108,16 +106,16 @@ fn main() {
     let warmup_iterations = 10;
     let test_iterations = 100;
 
-    println!("Warmup ({} frames)...", warmup_iterations);
+    println!("Warmup ({warmup_iterations} frames)...");
     let _ = benchmark_single_threaded(warmup_iterations, &config);
 
-    println!("Benchmark ({} frames)...", test_iterations);
+    println!("Benchmark ({test_iterations} frames)...");
     let single_time = benchmark_single_threaded(test_iterations, &config);
     let avg_per_frame = single_time / test_iterations;
     let max_fps = 1.0 / avg_per_frame.as_secs_f64();
-    println!("  Total time: {:?}", single_time);
-    println!("  Avg per frame: {:?}", avg_per_frame);
-    println!("  Max theoretical FPS: {:.1}", max_fps);
+    println!("  Total time: {single_time:?}");
+    println!("  Avg per frame: {avg_per_frame:?}");
+    println!("  Max theoretical FPS: {max_fps:.1}");
     println!(
         "  Can sustain 30fps: {}",
         if max_fps >= 30.0 { "YES" } else { "NO" }
@@ -127,16 +125,13 @@ fn main() {
     let frame_count = 300;
 
     for worker_count in [1, 2, 4, 6, 8] {
-        println!(
-            "--- Pool with {} workers ({} frames) ---",
-            worker_count, frame_count
-        );
+        println!("--- Pool with {worker_count} workers ({frame_count} frames) ---");
         let (elapsed, converted, dropped) = benchmark_pool(frame_count, &config, worker_count);
 
         let conversion_fps = converted as f64 / elapsed.as_secs_f64();
-        println!("  Total time: {:?}", elapsed);
-        println!("  Converted: {}, Dropped: {}", converted, dropped);
-        println!("  Throughput: {:.1} fps", conversion_fps);
+        println!("  Total time: {elapsed:?}");
+        println!("  Converted: {converted}, Dropped: {dropped}");
+        println!("  Throughput: {conversion_fps:.1} fps");
         println!(
             "  Can sustain 30fps: {}",
             if conversion_fps >= 30.0 { "YES" } else { "NO" }
@@ -159,14 +154,14 @@ fn main() {
             let time = benchmark_single_threaded(50, &alt_config);
             let avg = time / 50;
             let fps = 1.0 / avg.as_secs_f64();
-            println!("  {}: {:.1} fps ({:?}/frame)", name, fps, avg);
+            println!("  {name}: {fps:.1} fps ({avg:?}/frame)");
         }
     }
 
     println!("\n--- Real-time Simulations ---");
 
     for encode_time_ms in [0.1, 1.0, 5.0, 10.0, 20.0] {
-        println!("\n  Encode time: {}ms", encode_time_ms);
+        println!("\n  Encode time: {encode_time_ms}ms");
         simulate_realtime_pipeline(
             &config,
             30.0,
@@ -203,10 +198,7 @@ fn simulate_realtime_pipeline(
     let mut converted = 0u64;
     let mut encode_time_total = Duration::ZERO;
 
-    println!(
-        "  Simulating {} frames at {:.1} fps over {:?}",
-        total_frames, target_fps, duration
-    );
+    println!("  Simulating {total_frames} frames at {target_fps:.1} fps over {duration:?}");
 
     for i in 0..total_frames {
         let now = Instant::now();
@@ -233,7 +225,7 @@ fn simulate_realtime_pipeline(
 
     let drain_deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < drain_deadline {
-        if let Some(_) = pool.recv_timeout(Duration::from_millis(100)) {
+        if pool.recv_timeout(Duration::from_millis(100)).is_some() {
             converted += 1;
         } else {
             break;
@@ -243,16 +235,14 @@ fn simulate_realtime_pipeline(
     let elapsed = start.elapsed();
     let stats = pool.stats();
 
-    println!("  Elapsed: {:?}", elapsed);
+    println!("  Elapsed: {elapsed:?}");
     println!(
-        "  Submitted: {}, Converted: {}, Dropped: {}",
-        submitted, converted, stats.frames_dropped
+        "  Submitted: {submitted}, Converted: {converted}, Dropped: {}",
+        stats.frames_dropped
     );
-    println!(
-        "  Drop rate: {:.1}%",
-        (stats.frames_dropped as f64 / total_frames as f64) * 100.0
-    );
-    println!("  Total encode time: {:?}", encode_time_total);
+    let drop_rate = (stats.frames_dropped as f64 / total_frames as f64) * 100.0;
+    println!("  Drop rate: {drop_rate:.1}%");
+    println!("  Total encode time: {encode_time_total:?}");
 
     let expected_duration = Duration::from_secs_f64(total_frames as f64 / target_fps);
     let overhead = if elapsed > expected_duration {
@@ -260,7 +250,7 @@ fn simulate_realtime_pipeline(
     } else {
         Duration::ZERO
     };
-    println!("  Processing overhead: {:?}", overhead);
+    println!("  Processing overhead: {overhead:?}");
 
     if stats.frames_dropped == 0 {
         println!("  Result: SUCCESS - No frames dropped!");

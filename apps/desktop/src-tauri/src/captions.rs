@@ -10,6 +10,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Window};
 use tempfile::tempdir;
@@ -395,17 +396,17 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         {
             for (stream_idx, packet) in input.packets() {
-                if stream_idx.index() == input_stream_index {
-                    if let Some(data) = packet.data() {
-                        let mut cloned_packet = ffmpeg::Packet::copy(data);
-                        if let Some(pts) = packet.pts() {
-                            cloned_packet.set_pts(Some(pts));
-                        }
-                        if let Some(dts) = packet.dts() {
-                            cloned_packet.set_dts(Some(dts));
-                        }
-                        packet_queue.push(cloned_packet);
+                if stream_idx.index() == input_stream_index
+                    && let Some(data) = packet.data()
+                {
+                    let mut cloned_packet = ffmpeg::Packet::copy(data);
+                    if let Some(pts) = packet.pts() {
+                        cloned_packet.set_pts(Some(pts));
                     }
+                    if let Some(dts) = packet.dts() {
+                        cloned_packet.set_dts(Some(dts));
+                    }
+                    packet_queue.push(cloned_packet);
                 }
             }
         }
@@ -585,8 +586,8 @@ fn process_with_whisper(
         }
 
         log::info!("First 20 audio samples:");
-        for i in 0..audio_data_f32.len().min(20) {
-            log::info!("  Sample[{}] = {:.6}", i, audio_data_f32[i]);
+        for (i, sample) in audio_data_f32.iter().take(20).enumerate() {
+            log::info!("  Sample[{i}] = {sample:.6}");
         }
     }
 
@@ -634,7 +635,7 @@ fn process_with_whisper(
             .full_n_tokens(i)
             .map_err(|e| format!("Failed to get token count: {e}"))?;
 
-        log::info!("  Segment {} has {} tokens", i, num_tokens);
+        log::info!("  Segment {i} has {num_tokens} tokens");
 
         let mut current_word = String::new();
         let mut word_start: Option<f32> = None;
@@ -672,20 +673,20 @@ fn process_with_whisper(
                 );
 
                 if token_text.starts_with(' ') || token_text.starts_with('\n') {
-                    if !current_word.is_empty() {
-                        if let Some(ws) = word_start {
-                            log::info!(
-                                "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
-                                current_word.trim(),
-                                ws,
-                                word_end
-                            );
-                            words.push(CaptionWord {
-                                text: current_word.trim().to_string(),
-                                start: ws,
-                                end: word_end,
-                            });
-                        }
+                    if !current_word.is_empty()
+                        && let Some(ws) = word_start
+                    {
+                        log::info!(
+                            "    -> Completing word: '{}' ({:.2}s - {:.2}s)",
+                            current_word.trim(),
+                            ws,
+                            word_end
+                        );
+                        words.push(CaptionWord {
+                            text: current_word.trim().to_string(),
+                            start: ws,
+                            end: word_end,
+                        });
                     }
                     current_word = token_text.trim().to_string();
                     word_start = Some(token_start);
@@ -713,20 +714,20 @@ fn process_with_whisper(
             }
         }
 
-        if !current_word.trim().is_empty() {
-            if let Some(ws) = word_start {
-                log::info!(
-                    "    -> Final word: '{}' ({:.2}s - {:.2}s)",
-                    current_word.trim(),
-                    ws,
-                    word_end
-                );
-                words.push(CaptionWord {
-                    text: current_word.trim().to_string(),
-                    start: ws,
-                    end: word_end,
-                });
-            }
+        if !current_word.trim().is_empty()
+            && let Some(ws) = word_start
+        {
+            log::info!(
+                "    -> Final word: '{}' ({:.2}s - {:.2}s)",
+                current_word.trim(),
+                ws,
+                word_end
+            );
+            words.push(CaptionWord {
+                text: current_word.trim().to_string(),
+                start: ws,
+                end: word_end,
+            });
         }
 
         log::info!("  Segment {} produced {} words", i, words.len());
@@ -799,6 +800,668 @@ fn process_with_whisper(
     })
 }
 
+fn find_python() -> Option<String> {
+    let python_commands = if cfg!(target_os = "windows") {
+        vec!["python", "python3", "py"]
+    } else {
+        vec!["python3", "python"]
+    };
+
+    for cmd in python_commands {
+        if let Ok(output) = Command::new(cmd).arg("--version").output()
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout);
+            if version.contains("Python 3")
+                || String::from_utf8_lossy(&output.stderr).contains("Python 3")
+            {
+                log::info!("Found Python 3 at: {}", cmd);
+                return Some(cmd.to_string());
+            }
+        }
+    }
+    None
+}
+
+const WHISPERX_WHL_URL: &str =
+    "https://github.com/m-bain/whisperX/releases/download/v3.7.4/whisperx-3.7.4-py3-none-any.whl";
+const WHISPERX_WHL_NAME: &str = "whisperx-3.7.4-py3-none-any.whl";
+
+lazy_static::lazy_static! {
+    static ref WHISPERX_SERVER: Arc<Mutex<Option<WhisperXServer>>> = Arc::new(Mutex::new(None));
+}
+
+struct WhisperXServer {
+    child: std::process::Child,
+    stdin: std::io::BufWriter<std::process::ChildStdin>,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    model_size: String,
+}
+
+impl Drop for WhisperXServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+fn get_whisperx_server_script() -> String {
+    r#"
+import os
+import sys
+import json
+
+hf_cache = sys.argv[1]
+torch_cache = sys.argv[2]
+models_cache = sys.argv[3]
+
+os.environ["HF_HOME"] = hf_cache
+os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
+os.environ["TORCH_HOME"] = torch_cache
+os.environ["XDG_CACHE_HOME"] = models_cache
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import torch
+torch.hub.set_dir(torch_cache)
+
+original_torch_load = torch.load
+def patched_torch_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return original_torch_load(*args, **kwargs)
+torch.load = patched_torch_load
+
+import whisperx
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+compute_type = "float16" if device == "cuda" else "int8"
+
+cached_model = None
+cached_model_size = None
+cached_align_models = {}
+
+def load_or_get_model(model_size, language, download_root):
+    global cached_model, cached_model_size
+    
+    if cached_model is not None and cached_model_size == model_size:
+        return cached_model
+    
+    print(f"STDERR:Loading WhisperX model: {model_size} on {device}", file=sys.stderr, flush=True)
+    cached_model = whisperx.load_model(model_size, device, compute_type=compute_type, language=language, download_root=download_root)
+    cached_model_size = model_size
+    return cached_model
+
+def load_or_get_align_model(language_code):
+    global cached_align_models
+    
+    if language_code in cached_align_models:
+        return cached_align_models[language_code]
+    
+    print(f"STDERR:Loading alignment model for: {language_code}", file=sys.stderr, flush=True)
+    model_a, metadata = whisperx.load_align_model(language_code=language_code, device=device)
+    cached_align_models[language_code] = (model_a, metadata)
+    return model_a, metadata
+
+print("READY", flush=True)
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line.strip())
+        audio_file = request["audio_file"]
+        model_size = request["model_size"]
+        language = request.get("language")
+        download_root = request["download_root"]
+        
+        if language == "" or language == "auto":
+            language = None
+        
+        model = load_or_get_model(model_size, language, download_root)
+        
+        print(f"STDERR:Loading audio...", file=sys.stderr, flush=True)
+        audio = whisperx.load_audio(audio_file)
+        
+        print(f"STDERR:Transcribing...", file=sys.stderr, flush=True)
+        result = model.transcribe(audio, batch_size=16)
+        
+        detected_lang = result["language"]
+        print(f"STDERR:Detected language: {detected_lang}", file=sys.stderr, flush=True)
+        
+        model_a, metadata = load_or_get_align_model(detected_lang)
+        
+        print(f"STDERR:Aligning words...", file=sys.stderr, flush=True)
+        result = whisperx.align(result["segments"], model_a, metadata, audio, device, return_char_alignments=False)
+        
+        output = {"segments": []}
+        for seg in result["segments"]:
+            segment = {
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"],
+                "words": []
+            }
+            if "words" in seg:
+                for w in seg["words"]:
+                    word = {"word": w.get("word", "")}
+                    if "start" in w:
+                        word["start"] = w["start"]
+                    if "end" in w:
+                        word["end"] = w["end"]
+                    segment["words"].append(word)
+            output["segments"].append(segment)
+        
+        print(f"STDERR:WhisperX completed: {len(output['segments'])} segments", file=sys.stderr, flush=True)
+        print(json.dumps({"success": True, "result": output}), flush=True)
+        
+    except Exception as e:
+        print(json.dumps({"success": False, "error": str(e)}), flush=True)
+"#.to_string()
+}
+
+fn ensure_server_script_exists() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let script_path = cache_dir.join("whisperx_server.py");
+
+    if !script_path.exists() {
+        std::fs::write(&script_path, get_whisperx_server_script())
+            .map_err(|e| format!("Failed to write server script: {}", e))?;
+        log::info!("Created WhisperX server script at {:?}", script_path);
+    }
+
+    Ok(script_path)
+}
+
+fn start_whisperx_server(
+    venv_python: &PathBuf,
+    model_size: &str,
+) -> Result<WhisperXServer, String> {
+    let models_cache = get_whisperx_models_cache_dir()?;
+    let hf_cache = get_huggingface_cache_dir()?;
+    let torch_cache = get_torch_cache_dir()?;
+
+    let script_path = ensure_server_script_exists()?;
+
+    log::info!("Starting WhisperX server with model size: {}", model_size);
+
+    let mut child = Command::new(venv_python)
+        .arg(&script_path)
+        .arg(hf_cache.to_string_lossy().to_string())
+        .arg(torch_cache.to_string_lossy().to_string())
+        .arg(models_cache.to_string_lossy().to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start WhisperX server: {}", e))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to get stdin".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to get stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to get stderr".to_string())?;
+
+    let stdin = std::io::BufWriter::new(stdin);
+    let mut stdout = std::io::BufReader::new(stdout);
+
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if line.starts_with("STDERR:") {
+                    log::info!("[WhisperX] {}", &line[7..]);
+                } else {
+                    log::info!("[WhisperX stderr] {}", line);
+                }
+            }
+        }
+    });
+
+    use std::io::BufRead;
+    let mut ready_line = String::new();
+    let start_time = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(120);
+
+    loop {
+        if start_time.elapsed() > timeout {
+            let _ = child.kill();
+            return Err("WhisperX server startup timed out".to_string());
+        }
+
+        ready_line.clear();
+        match stdout.read_line(&mut ready_line) {
+            Ok(0) => {
+                let _ = child.kill();
+                return Err("WhisperX server closed unexpectedly".to_string());
+            }
+            Ok(_) => {
+                if ready_line.trim() == "READY" {
+                    log::info!(
+                        "WhisperX server is ready (took {:.1}s)",
+                        start_time.elapsed().as_secs_f32()
+                    );
+                    break;
+                }
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("Error reading from WhisperX server: {}", e));
+            }
+        }
+    }
+
+    Ok(WhisperXServer {
+        child,
+        stdin,
+        stdout,
+        model_size: model_size.to_string(),
+    })
+}
+
+fn is_server_communication_error(error: &str) -> bool {
+    error.contains("Failed to send request to server")
+        || error.contains("Failed to flush request")
+        || error.contains("Failed to read response from server")
+        || error.contains("Failed to parse server response")
+        || error.contains("Server not available")
+}
+
+fn transcribe_with_server(
+    server: &mut WhisperXServer,
+    audio_path: &std::path::Path,
+    model_size: &str,
+    language: &str,
+) -> Result<CaptionData, String> {
+    use std::io::{BufRead, Write};
+
+    let models_cache = get_whisperx_models_cache_dir()?;
+
+    let request = serde_json::json!({
+        "audio_file": audio_path.to_string_lossy(),
+        "model_size": model_size,
+        "language": if language == "auto" { "" } else { language },
+        "download_root": models_cache.to_string_lossy(),
+    });
+
+    log::info!("Sending transcription request to WhisperX server");
+
+    writeln!(server.stdin, "{request}")
+        .map_err(|e| format!("Failed to send request to server: {e}"))?;
+    server
+        .stdin
+        .flush()
+        .map_err(|e| format!("Failed to flush request: {}", e))?;
+
+    let mut response_line = String::new();
+    server
+        .stdout
+        .read_line(&mut response_line)
+        .map_err(|e| format!("Failed to read response from server: {}", e))?;
+
+    let response: serde_json::Value = serde_json::from_str(&response_line)
+        .map_err(|e| format!("Failed to parse server response: {}", e))?;
+
+    if !response["success"].as_bool().unwrap_or(false) {
+        let error = response["error"].as_str().unwrap_or("Unknown error");
+        return Err(format!("WhisperX server error: {}", error));
+    }
+
+    let whisperx_result: WhisperXOutput = serde_json::from_value(response["result"].clone())
+        .map_err(|e| format!("Failed to parse WhisperX output: {}", e))?;
+
+    log::info!(
+        "WhisperX server produced {} segments",
+        whisperx_result.segments.len()
+    );
+
+    let mut segments = Vec::new();
+    const MAX_WORDS_PER_SEGMENT: usize = 6;
+
+    for (seg_idx, whisperx_seg) in whisperx_result.segments.iter().enumerate() {
+        log::info!(
+            "Segment {}: '{}' ({:.2}s - {:.2}s) with {} words",
+            seg_idx,
+            whisperx_seg.text.trim(),
+            whisperx_seg.start,
+            whisperx_seg.end,
+            whisperx_seg.words.len()
+        );
+
+        let mut words: Vec<CaptionWord> = Vec::new();
+
+        for (word_idx, w) in whisperx_seg.words.iter().enumerate() {
+            let word_text = w.word.trim().to_string();
+            if word_text.is_empty() {
+                continue;
+            }
+
+            let word_start = w.start.unwrap_or_else(|| {
+                if word_idx == 0 {
+                    whisperx_seg.start
+                } else if let Some(prev) = words.last() {
+                    prev.end as f64
+                } else {
+                    whisperx_seg.start
+                }
+            });
+
+            let word_end = w.end.unwrap_or_else(|| {
+                if word_idx == whisperx_seg.words.len() - 1 {
+                    whisperx_seg.end
+                } else {
+                    word_start + 0.2
+                }
+            });
+
+            words.push(CaptionWord {
+                text: word_text,
+                start: word_start as f32,
+                end: word_end as f32,
+            });
+        }
+
+        if words.is_empty() {
+            continue;
+        }
+
+        let word_chunks: Vec<Vec<CaptionWord>> = words
+            .chunks(MAX_WORDS_PER_SEGMENT)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+
+        for (chunk_idx, chunk_words) in word_chunks.into_iter().enumerate() {
+            let segment_text = chunk_words
+                .iter()
+                .map(|word| word.text.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let segment_start = chunk_words
+                .first()
+                .map(|w| w.start)
+                .unwrap_or(whisperx_seg.start as f32);
+            let segment_end = chunk_words
+                .last()
+                .map(|w| w.end)
+                .unwrap_or(whisperx_seg.end as f32);
+
+            segments.push(CaptionSegment {
+                id: format!("segment-{}-{}", seg_idx, chunk_idx),
+                start: segment_start,
+                end: segment_end,
+                text: segment_text,
+                words: chunk_words,
+            });
+        }
+    }
+
+    Ok(CaptionData {
+        segments,
+        settings: Some(cap_project::CaptionSettings::default()),
+    })
+}
+
+fn get_whisperx_cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = dirs::cache_dir()
+        .or_else(dirs::data_local_dir)
+        .ok_or_else(|| "Could not determine cache directory".to_string())?;
+    let whisperx_dir = cache_dir.join("cap").join("whisperx");
+    std::fs::create_dir_all(&whisperx_dir)
+        .map_err(|e| format!("Failed to create whisperx cache directory: {}", e))?;
+    Ok(whisperx_dir)
+}
+
+fn get_whisperx_models_cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let models_dir = cache_dir.join("models");
+    std::fs::create_dir_all(&models_dir)
+        .map_err(|e| format!("Failed to create whisperx models cache directory: {}", e))?;
+    Ok(models_dir)
+}
+
+fn get_huggingface_cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let hf_dir = cache_dir.join("huggingface");
+    std::fs::create_dir_all(&hf_dir)
+        .map_err(|e| format!("Failed to create huggingface cache directory: {}", e))?;
+    Ok(hf_dir)
+}
+
+fn get_torch_cache_dir() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let torch_dir = cache_dir.join("torch");
+    std::fs::create_dir_all(&torch_dir)
+        .map_err(|e| format!("Failed to create torch cache directory: {}", e))?;
+    Ok(torch_dir)
+}
+
+fn get_venv_python() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let venv_dir = cache_dir.join("venv");
+
+    if cfg!(target_os = "windows") {
+        Ok(venv_dir.join("Scripts").join("python.exe"))
+    } else {
+        Ok(venv_dir.join("bin").join("python"))
+    }
+}
+
+fn create_venv_if_needed(system_python: &str) -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let venv_dir = cache_dir.join("venv");
+    let venv_python = get_venv_python()?;
+
+    if venv_python.exists() {
+        log::info!("Virtual environment already exists at: {:?}", venv_dir);
+        return Ok(venv_python);
+    }
+
+    log::info!(
+        "Creating virtual environment at: {:?} using {}",
+        venv_dir,
+        system_python
+    );
+
+    let output = Command::new(system_python)
+        .args(["-m", "venv", venv_dir.to_str().unwrap()])
+        .output()
+        .map_err(|e| format!("Failed to create venv: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to create virtual environment: {}", stderr));
+    }
+
+    if !venv_python.exists() {
+        return Err("Virtual environment was created but python not found".to_string());
+    }
+
+    log::info!("Virtual environment created successfully");
+
+    log::info!("Upgrading pip in virtual environment...");
+    let pip_upgrade = Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--upgrade", "pip"])
+        .output();
+
+    if let Err(e) = pip_upgrade {
+        log::warn!("Failed to upgrade pip in venv: {}", e);
+    }
+
+    Ok(venv_python)
+}
+
+fn download_whisperx_whl() -> Result<PathBuf, String> {
+    let cache_dir = get_whisperx_cache_dir()?;
+    let whl_path = cache_dir.join(WHISPERX_WHL_NAME);
+
+    if whl_path.exists() {
+        log::info!("WhisperX wheel already cached at: {:?}", whl_path);
+        return Ok(whl_path);
+    }
+
+    log::info!("Downloading WhisperX wheel from: {}", WHISPERX_WHL_URL);
+
+    let output = Command::new("curl")
+        .args([
+            "-L",
+            "-o",
+            whl_path.to_str().unwrap(),
+            "--create-dirs",
+            WHISPERX_WHL_URL,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run curl: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to download WhisperX wheel: {}", stderr));
+    }
+
+    if !whl_path.exists() {
+        return Err("WhisperX wheel was not downloaded".to_string());
+    }
+
+    log::info!("Successfully downloaded WhisperX wheel to: {:?}", whl_path);
+    Ok(whl_path)
+}
+
+fn install_whisperx_in_venv(venv_python: &PathBuf) -> Result<(), String> {
+    log::info!("Installing whisperx in virtual environment...");
+
+    let whl_path = download_whisperx_whl()?;
+    log::info!("Installing WhisperX from: {:?}", whl_path);
+
+    let install_result = Command::new(venv_python)
+        .args(["-m", "pip", "install", whl_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| format!("Failed to run pip install: {}", e))?;
+
+    if !install_result.status.success() {
+        let stderr = String::from_utf8_lossy(&install_result.stderr);
+        return Err(format!("Failed to install whisperx: {}", stderr));
+    }
+
+    log::info!("Successfully installed whisperx in virtual environment");
+    Ok(())
+}
+
+fn setup_whisperx_environment(system_python: &str) -> Result<PathBuf, String> {
+    let venv_python = create_venv_if_needed(system_python)?;
+
+    let check_output = Command::new(&venv_python)
+        .args(["-c", "import whisperx; print('ok')"])
+        .output();
+
+    let whisperx_installed = check_output
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("ok"))
+        .unwrap_or(false);
+
+    if whisperx_installed {
+        log::info!("WhisperX already installed in virtual environment");
+        return Ok(venv_python);
+    }
+
+    install_whisperx_in_venv(&venv_python)?;
+    Ok(venv_python)
+}
+
+#[derive(Debug, Deserialize)]
+struct WhisperXWord {
+    word: String,
+    start: Option<f64>,
+    end: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WhisperXSegment {
+    start: f64,
+    end: f64,
+    text: String,
+    #[serde(default)]
+    words: Vec<WhisperXWord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WhisperXOutput {
+    segments: Vec<WhisperXSegment>,
+}
+
+fn get_model_size_from_path(model_path: &str) -> &str {
+    if model_path.contains("large") {
+        "large-v3"
+    } else if model_path.contains("medium") {
+        "medium"
+    } else if model_path.contains("small") {
+        "small"
+    } else if model_path.contains("base") {
+        "base"
+    } else {
+        "tiny"
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument]
+pub async fn prewarm_whisperx(model_path: String) -> Result<bool, String> {
+    if !std::path::Path::new(&model_path).exists() {
+        log::info!("No model downloaded, skipping WhisperX pre-warm");
+        return Ok(false);
+    }
+
+    let system_python = match find_python() {
+        Some(p) => p,
+        None => {
+            log::info!("Python not found, skipping WhisperX pre-warm");
+            return Ok(false);
+        }
+    };
+
+    let venv_python = match setup_whisperx_environment(&system_python) {
+        Ok(p) => p,
+        Err(e) => {
+            log::info!("WhisperX environment not ready: {}, skipping pre-warm", e);
+            return Ok(false);
+        }
+    };
+
+    let model_size = get_model_size_from_path(&model_path).to_string();
+
+    log::info!(
+        "Pre-warming WhisperX server with model size: {}",
+        model_size
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let mut server_guard = WHISPERX_SERVER.blocking_lock();
+
+        if server_guard.is_some() {
+            log::info!("WhisperX server already running, pre-warm not needed");
+            return;
+        }
+
+        match start_whisperx_server(&venv_python, &model_size) {
+            Ok(server) => {
+                log::info!(
+                    "WhisperX server pre-warmed successfully - transcriptions will be fast!"
+                );
+                *server_guard = Some(server);
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-warm WhisperX server: {}", e);
+            }
+        }
+    });
+
+    Ok(true)
+}
+
 #[tauri::command]
 #[specta::specta]
 #[instrument]
@@ -847,6 +1510,130 @@ pub async fn transcribe_audio(
             meta.len()
         );
     }
+
+    let model_size = get_model_size_from_path(&model_path);
+    log::info!("Detected model size: {}", model_size);
+
+    if let Some(system_python) = find_python() {
+        log::info!("Found system Python at: {}", system_python);
+
+        match setup_whisperx_environment(&system_python) {
+            Ok(venv_python) => {
+                let audio_path_clone = audio_path.clone();
+                let language_clone = language.clone();
+                let model_size_clone = model_size.to_string();
+                let venv_python_clone = venv_python.clone();
+
+                log::info!("Attempting to use persistent WhisperX server...");
+                let whisperx_result = tokio::task::spawn_blocking(move || {
+                    let mut server_guard = WHISPERX_SERVER.blocking_lock();
+
+                    let need_new_server = match &*server_guard {
+                        Some(server) => {
+                            if server.model_size != model_size_clone {
+                                log::info!(
+                                    "Model size changed from {} to {}, restarting server",
+                                    server.model_size,
+                                    model_size_clone
+                                );
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        None => true,
+                    };
+
+                    if need_new_server {
+                        *server_guard = None;
+
+                        match start_whisperx_server(&venv_python_clone, &model_size_clone) {
+                            Ok(server) => {
+                                log::info!("WhisperX server started successfully");
+                                *server_guard = Some(server);
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to start WhisperX server: {}", e);
+                                return Err(e);
+                            }
+                        }
+                    } else {
+                        log::info!("Reusing existing WhisperX server (models already loaded!)");
+                    }
+
+                    let result = if let Some(server) = server_guard.as_mut() {
+                        transcribe_with_server(
+                            server,
+                            &audio_path_clone,
+                            &model_size_clone,
+                            &language_clone,
+                        )
+                    } else {
+                        Err("Server not available".to_string())
+                    };
+
+                    if let Err(ref e) = result
+                        && is_server_communication_error(e)
+                    {
+                        log::warn!(
+                            "Server communication error detected, clearing dead server: {}",
+                            e
+                        );
+                        *server_guard = None;
+                    }
+
+                    result
+                })
+                .await
+                .map_err(|e| format!("WhisperX task panicked: {e}"));
+
+                match whisperx_result {
+                    Ok(Ok(captions)) => {
+                        log::info!("=== TRANSCRIBE AUDIO RESULT (WhisperX) ===");
+                        log::info!(
+                            "Transcription produced {} segments",
+                            captions.segments.len()
+                        );
+
+                        for (idx, segment) in captions.segments.iter().enumerate() {
+                            log::info!(
+                                "  Result Segment[{}]: '{}' ({} words)",
+                                idx,
+                                segment.text,
+                                segment.words.len()
+                            );
+                        }
+
+                        if captions.segments.is_empty() {
+                            log::warn!("No caption segments were generated by WhisperX");
+                        } else {
+                            log::info!("=== TRANSCRIBE AUDIO COMMAND END (WhisperX success) ===");
+                            return Ok(captions);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        log::warn!("WhisperX failed: {}. Falling back to built-in Whisper.", e);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "WhisperX task error: {}. Falling back to built-in Whisper.",
+                            e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to setup WhisperX environment: {}. Falling back to built-in Whisper.",
+                    e
+                );
+            }
+        }
+    } else {
+        log::info!("Python not found, using built-in Whisper");
+    }
+
+    log::info!("Using built-in Whisper for transcription");
 
     let context = match get_whisper_context(&model_path).await {
         Ok(ctx) => {
@@ -1054,6 +1841,18 @@ pub async fn save_captions(
             serde_json::Number::from_f64(settings.fade_duration as f64).unwrap(),
         ),
     );
+    settings_obj.insert(
+        "lingerDuration".to_string(),
+        serde_json::Value::Number(
+            serde_json::Number::from_f64(settings.linger_duration as f64).unwrap(),
+        ),
+    );
+    settings_obj.insert(
+        "wordTransitionDuration".to_string(),
+        serde_json::Value::Number(
+            serde_json::Number::from_f64(settings.word_transition_duration as f64).unwrap(),
+        ),
+    );
 
     json_obj.insert(
         "settings".to_string(),
@@ -1191,6 +1990,18 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.15) as f32;
 
+                    let linger_duration = settings_obj
+                        .get("lingerDuration")
+                        .or_else(|| settings_obj.get("linger_duration"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.4) as f32;
+
+                    let word_transition_duration = settings_obj
+                        .get("wordTransitionDuration")
+                        .or_else(|| settings_obj.get("word_transition_duration"))
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.25) as f32;
+
                     cap_project::CaptionSettings {
                         enabled,
                         font,
@@ -1206,6 +2017,8 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         export_with_subtitles,
                         highlight_color,
                         fade_duration,
+                        linger_duration,
+                        word_transition_duration,
                     }
                 } else {
                     cap_project::CaptionSettings::default()

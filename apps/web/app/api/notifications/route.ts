@@ -11,7 +11,7 @@ import type { NotificationType } from "@/lib/Notification";
 import { runPromise } from "@/lib/server";
 import { jsonExtractString } from "@/utils/sql";
 
-const notificationDataSchema = z.object({
+const _notificationDataSchema = z.object({
 	authorId: z.string(),
 	content: z.string().optional(),
 	videoId: z.string(),

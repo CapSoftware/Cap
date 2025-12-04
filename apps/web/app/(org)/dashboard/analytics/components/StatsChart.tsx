@@ -75,11 +75,9 @@ export default function StatsBox({
 		<div className="flex flex-col gap-4 px-8 pt-8 w-full rounded-xl border bg-gray-2 border-gray-3">
 			<div className="flex flex-wrap gap-4">
 				{isLoading ? (
-					<>
-						{Array.from({ length: capId ? 3 : 4 }, (_, index) => (
-							<StatBoxSkeleton key={`skeleton-${capId ? 3 : 4}-${index}`} />
-						))}
-					</>
+					Array.from({ length: capId ? 3 : 4 }, (_, index) => (
+						<StatBoxSkeleton key={`skeleton-${capId ? 3 : 4}-${index}`} />
+					))
 				) : (
 					<>
 						<StatBox

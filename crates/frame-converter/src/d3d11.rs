@@ -566,6 +566,17 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
                 );
             }
         }
+        Pixel::YUYV422 => {
+            let bytes_per_pixel = 2;
+            let row_bytes = frame.width() as usize * bytes_per_pixel;
+            for y in 0..height {
+                ptr::copy_nonoverlapping(
+                    src.add(y * src_stride),
+                    frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                    row_bytes,
+                );
+            }
+        }
         _ => {}
     }
 }

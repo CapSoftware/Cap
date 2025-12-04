@@ -1,5 +1,6 @@
 use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
 use ffmpeg::{format::Pixel, frame};
+use parking_lot::Mutex;
 use std::{
     ffi::c_void,
     ptr,
@@ -83,8 +84,12 @@ fn pixel_to_cv_format(pixel: Pixel) -> Option<u32> {
     }
 }
 
+struct SessionHandle(VTPixelTransferSessionRef);
+
+unsafe impl Send for SessionHandle {}
+
 pub struct VideoToolboxConverter {
-    session: VTPixelTransferSessionRef,
+    session: Mutex<SessionHandle>,
     input_format: Pixel,
     input_cv_format: u32,
     output_format: Pixel,
@@ -99,21 +104,20 @@ pub struct VideoToolboxConverter {
 
 impl VideoToolboxConverter {
     pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
-        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
-        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
         let mut session: VTPixelTransferSessionRef = ptr::null_mut();
         let status = unsafe { VTPixelTransferSessionCreate(ptr::null(), &mut session) };
 
         if status != 0 {
             return Err(ConvertError::HardwareUnavailable(format!(
-                "VTPixelTransferSessionCreate failed with status: {}",
-                status
+                "VTPixelTransferSessionCreate failed with status: {status}"
             )));
         }
 
@@ -134,7 +138,7 @@ impl VideoToolboxConverter {
         );
 
         Ok(Self {
-            session,
+            session: Mutex::new(SessionHandle(session)),
             input_format: config.input_format,
             input_cv_format,
             output_format: config.output_format,
@@ -174,8 +178,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreateWithBytes failed: {}",
-                status
+                "CVPixelBufferCreateWithBytes failed: {status}"
             )));
         }
 
@@ -198,8 +201,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreate failed: {}",
-                status
+                "CVPixelBufferCreate failed: {status}"
             )));
         }
 
@@ -214,8 +216,7 @@ impl VideoToolboxConverter {
             let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
             if lock_status != K_CV_RETURN_SUCCESS {
                 return Err(ConvertError::ConversionFailed(format!(
-                    "CVPixelBufferLockBaseAddress failed: {}",
-                    lock_status
+                    "CVPixelBufferLockBaseAddress failed: {lock_status}"
                 )));
             }
         }
@@ -252,10 +253,11 @@ impl VideoToolboxConverter {
 
 impl Drop for VideoToolboxConverter {
     fn drop(&mut self) {
-        if !self.session.is_null() {
+        let session = self.session.get_mut().0;
+        if !session.is_null() {
             unsafe {
-                VTPixelTransferSessionInvalidate(self.session);
-                CFRelease(self.session as *const c_void);
+                VTPixelTransferSessionInvalidate(session);
+                CFRelease(session as *const c_void);
             }
         }
     }
@@ -276,8 +278,11 @@ impl FrameConverter for VideoToolboxConverter {
         let input_buffer = self.create_input_pixel_buffer(&input)?;
         let output_buffer = self.create_output_pixel_buffer()?;
 
-        let status = unsafe {
-            VTPixelTransferSessionTransferImage(self.session, input_buffer, output_buffer)
+        let status = {
+            let session_guard = self.session.lock();
+            unsafe {
+                VTPixelTransferSessionTransferImage(session_guard.0, input_buffer, output_buffer)
+            }
         };
 
         unsafe {
@@ -289,8 +294,7 @@ impl FrameConverter for VideoToolboxConverter {
                 CVPixelBufferRelease(output_buffer);
             }
             return Err(ConvertError::ConversionFailed(format!(
-                "VTPixelTransferSessionTransferImage failed: {}",
-                status
+                "VTPixelTransferSessionTransferImage failed: {status}"
             )));
         }
 
@@ -326,6 +330,3 @@ impl FrameConverter for VideoToolboxConverter {
         Some(self.verified_hardware.load(Ordering::Relaxed))
     }
 }
-
-unsafe impl Send for VideoToolboxConverter {}
-unsafe impl Sync for VideoToolboxConverter {}

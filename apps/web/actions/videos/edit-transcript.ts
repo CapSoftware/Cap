@@ -6,7 +6,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
+import { Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { runPromise } from "@/lib/server";
 

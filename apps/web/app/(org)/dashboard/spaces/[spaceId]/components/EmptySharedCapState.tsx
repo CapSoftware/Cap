@@ -40,7 +40,7 @@ export const EmptySharedCapState: React.FC<EmptySharedCapStateProps> = ({
 		<div className="flex flex-col flex-1 justify-center items-center w-full h-full">
 			<div className="mx-auto mb-20 w-full max-w-md">
 				<EmptyCap
-					key={theme + "empty-shared-cap"}
+					key={`${theme}empty-shared-cap`}
 					className="max-w-[300px] w-full mx-auto md:max-w-[600px] h-[250px]"
 				/>
 			</div>

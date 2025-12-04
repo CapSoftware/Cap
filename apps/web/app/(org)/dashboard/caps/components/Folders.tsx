@@ -41,7 +41,7 @@ export const NormalFolder = React.forwardRef<
 
 	return (
 		<NormalFolderRive
-			key={theme + "folder-normal"}
+			key={`${theme}folder-normal`}
 			className="w-[50px] h-[50px]"
 		/>
 	);

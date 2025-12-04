@@ -1,6 +1,6 @@
 import { HttpApiSchema } from "@effect/platform";
 import { Rpc, RpcGroup } from "@effect/rpc";
-import { Effect, Schema } from "effect";
+import { Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication.ts";
 import { InternalError } from "./Errors.ts";
 import { OrganisationId } from "./Organisation.ts";

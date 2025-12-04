@@ -15,7 +15,6 @@ import {
 	createSignal,
 	on,
 	onCleanup,
-	untrack,
 } from "solid-js";
 import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
@@ -33,9 +32,7 @@ import {
 	type SerializedEditorInstance,
 	type SingleSegment,
 	type TimelineConfiguration,
-	type TimelineSegment,
 	type XY,
-	type ZoomSegment,
 } from "~/utils/tauri";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
@@ -57,13 +54,14 @@ export const OUTPUT_SIZE = {
 	y: 1080,
 };
 
-export type PreviewQuality = "half" | "full";
+export type PreviewQuality = "quarter" | "half" | "full";
 
 export const DEFAULT_PREVIEW_QUALITY: PreviewQuality = "full";
 
 const previewQualityScale: Record<PreviewQuality, number> = {
 	full: 1,
 	half: 0.5,
+	quarter: 0.25,
 };
 
 export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
@@ -202,12 +200,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					"segments",
 					produce((segments) => {
 						let searchTime = time;
-						let prevDuration = 0;
+						let _prevDuration = 0;
 						const currentSegmentIndex = segments.findIndex((segment) => {
 							const duration = segment.end - segment.start;
 							if (searchTime > duration) {
 								searchTime -= duration;
-								prevDuration += duration;
+								_prevDuration += duration;
 								return false;
 							}
 

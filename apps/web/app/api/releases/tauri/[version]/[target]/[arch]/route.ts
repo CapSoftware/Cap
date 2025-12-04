@@ -5,7 +5,7 @@ const octokit = new Octokit();
 export const runtime = "edge";
 
 export async function GET(
-	req: Request,
+	_req: Request,
 	props: RouteContext<"/api/releases/tauri/[version]/[target]/[arch]">,
 ) {
 	const params = await props.params;

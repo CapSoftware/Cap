@@ -49,15 +49,13 @@ export const UsageButton = memo(
 		}
 
 		return (
-			<>
-				<Tooltip
-					disable={!sidebarCollapsed}
-					position="right"
-					content="Upgrade to Pro"
-				>
-					<ProRiveButton toggleMobileNav={toggleMobileNav} />
-				</Tooltip>
-			</>
+			<Tooltip
+				disable={!sidebarCollapsed}
+				position="right"
+				content="Upgrade to Pro"
+			>
+				<ProRiveButton toggleMobileNav={toggleMobileNav} />
+			</Tooltip>
 		);
 	},
 );

@@ -15,14 +15,14 @@ pub struct PreparedText {
 
 fn parse_color(hex: &str) -> [f32; 4] {
     let color = hex.trim_start_matches('#');
-    if color.len() == 6 {
-        if let (Ok(r), Ok(g), Ok(b)) = (
+    if color.len() == 6
+        && let (Ok(r), Ok(g), Ok(b)) = (
             u8::from_str_radix(&color[0..2], 16),
             u8::from_str_radix(&color[2..4], 16),
             u8::from_str_radix(&color[4..6], 16),
-        ) {
-            return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
-        }
+        )
+    {
+        return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
     }
 
     [1.0, 1.0, 1.0, 1.0]

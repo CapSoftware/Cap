@@ -35,7 +35,7 @@ export function generateMasterPlaylist(
 	xStreamInfo?: string,
 ) {
 	const streamInfo = xStreamInfo
-		? xStreamInfo + ',AUDIO="audio"'
+		? `${xStreamInfo},AUDIO="audio"`
 		: `BANDWIDTH=${bandwidth},RESOLUTION=${resolution},AUDIO="audio"`;
 	const masterPlaylist = `#EXTM3U
 #EXT-X-VERSION:4

@@ -214,7 +214,7 @@ const CustomDomainDialog = ({
 				}
 			}
 		},
-		onError: (error, { showToasts }) => {
+		onError: (_error, { showToasts }) => {
 			if (showToasts) {
 				toast.error("Failed to check domain verification");
 			}
@@ -346,7 +346,7 @@ const CustomDomainDialog = ({
 		} else if (isVerified) {
 			handleNext();
 		}
-	}, [isVerified, stepState.currentIndex]);
+	}, [isVerified, stepState.currentIndex, handleClose, handleNext]);
 
 	return (
 		<>
@@ -439,35 +439,30 @@ const CustomDomainDialog = ({
 								</Button>
 							)}
 
-							{currentStep.id === "domain" && (
-								<>
-									{user.isPro ? (
-										<Button
-											onClick={handleDomainSubmit}
-											size="sm"
-											spinner={updateDomainMutation.isPending}
-											disabled={
-												updateDomainMutation.isPending || !domain.trim()
-											}
-											variant="dark"
-											className="min-w-[100px]"
-										>
-											Next
-										</Button>
-									) : (
-										<Button
-											variant="blue"
-											size="sm"
-											onClick={() => {
-												setShowUpgradeModal(true);
-												handleClose();
-											}}
-										>
-											Upgrade To Cap Pro
-										</Button>
-									)}
-								</>
-							)}
+							{currentStep.id === "domain" &&
+								(user.isPro ? (
+									<Button
+										onClick={handleDomainSubmit}
+										size="sm"
+										spinner={updateDomainMutation.isPending}
+										disabled={updateDomainMutation.isPending || !domain.trim()}
+										variant="dark"
+										className="min-w-[100px]"
+									>
+										Next
+									</Button>
+								) : (
+									<Button
+										variant="blue"
+										size="sm"
+										onClick={() => {
+											setShowUpgradeModal(true);
+											handleClose();
+										}}
+									>
+										Upgrade To Cap Pro
+									</Button>
+								))}
 						</DialogFooter>
 					)}
 				</DialogContent>

@@ -162,7 +162,7 @@ export const MediaFormatConverter = ({
 	const [isDragging, setIsDragging] = useState(false);
 	const [currentSourceFormat, setCurrentSourceFormat] = useState(sourceFormat);
 	const [currentTargetFormat, setCurrentTargetFormat] = useState(targetFormat);
-	const [supportedFormats, setSupportedFormats] = useState<string[]>([
+	const [_supportedFormats, setSupportedFormats] = useState<string[]>([
 		"mp4",
 		"webm",
 	]);
@@ -228,7 +228,7 @@ export const MediaFormatConverter = ({
 	useEffect(() => {
 		const loadRemotionModules = async () => {
 			try {
-				const parser = await import("@remotion/media-parser");
+				const _parser = await import("@remotion/media-parser");
 				setMediaEngineLoaded(true);
 			} catch (error) {
 				console.error("Failed to load Remotion modules:", error);
@@ -354,7 +354,7 @@ export const MediaFormatConverter = ({
 		} catch (err: any) {
 			console.error("Detailed conversion error:", err);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(err)) {
+			if (MediaParser.hasBeenAborted?.(err)) {
 				setError("Conversion was cancelled");
 			} else {
 				let errorMessage = "Conversion failed: ";
@@ -385,7 +385,7 @@ export const MediaFormatConverter = ({
 			const parser = await import("@remotion/media-parser");
 			const webcodecs = await import("@remotion/webcodecs");
 
-			const handleProgress = (progressEvent: { progress: number }) => {
+			const _handleProgress = (progressEvent: { progress: number }) => {
 				setProgress(Math.min(Math.round(progressEvent.progress * 100), 99));
 			};
 
@@ -411,8 +411,8 @@ export const MediaFormatConverter = ({
 			setProgress(100);
 
 			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file!.size,
-				fileName: file!.name,
+				fileSize: file?.size,
+				fileName: file?.name,
 				outputSize: blob.size,
 			});
 		} catch (error) {
@@ -424,9 +424,9 @@ export const MediaFormatConverter = ({
 	const convertVideoToGif = async (inputFile: File): Promise<void> => {
 		try {
 			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
+			const _webcodecs = await import("@remotion/webcodecs");
 
-			const onProgress = ({
+			const _onProgress = ({
 				overallProgress,
 			}: {
 				overallProgress: number | null;
@@ -555,14 +555,14 @@ export const MediaFormatConverter = ({
 			recordedChunksRef.current = [gifBlob];
 
 			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file!.size,
-				fileName: file!.name,
+				fileSize: file?.size,
+				fileName: file?.name,
 				outputSize: gifBlob.size,
 			});
 		} catch (error) {
 			console.error("Error converting video to GIF:", error);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(error)) {
+			if (MediaParser.hasBeenAborted?.(error)) {
 				setError("Conversion was cancelled");
 			} else {
 				let errorMessage = "GIF conversion failed: ";
@@ -656,14 +656,14 @@ export const MediaFormatConverter = ({
 			recordedChunksRef.current = [blob];
 
 			trackEvent(`${conversionPath}_conversion_completed`, {
-				fileSize: file!.size,
-				fileName: file!.name,
+				fileSize: file?.size,
+				fileName: file?.name,
 				outputSize: blob.size,
 			});
 		} catch (error) {
 			console.error("Error converting video format:", error);
 
-			if (MediaParser.hasBeenAborted && MediaParser.hasBeenAborted(error)) {
+			if (MediaParser.hasBeenAborted?.(error)) {
 				setError("Conversion was cancelled");
 			} else {
 				let errorMessage = "Conversion failed: ";
@@ -884,7 +884,7 @@ export const MediaFormatConverter = ({
 									min="1"
 									max="20"
 									value={gifQuality}
-									onChange={(e) => setGifQuality(parseInt(e.target.value))}
+									onChange={(e) => setGifQuality(parseInt(e.target.value, 10))}
 									className="w-full"
 								/>
 								<span className="ml-2 text-sm w-8 text-gray-600">
@@ -905,7 +905,7 @@ export const MediaFormatConverter = ({
 									min="5"
 									max="30"
 									value={gifFps}
-									onChange={(e) => setGifFps(parseInt(e.target.value))}
+									onChange={(e) => setGifFps(parseInt(e.target.value, 10))}
 									className="w-full"
 								/>
 								<span className="ml-2 text-sm w-8 text-gray-600">{gifFps}</span>
@@ -925,7 +925,7 @@ export const MediaFormatConverter = ({
 									max="1280"
 									step="80"
 									value={gifMaxWidth}
-									onChange={(e) => setGifMaxWidth(parseInt(e.target.value))}
+									onChange={(e) => setGifMaxWidth(parseInt(e.target.value, 10))}
 									className="w-full"
 								/>
 								<span className="ml-2 text-sm w-10 text-gray-600">

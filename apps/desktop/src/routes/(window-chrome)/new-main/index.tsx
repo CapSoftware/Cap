@@ -2,16 +2,13 @@ import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, queryOptions, useQuery } from "@tanstack/solid-query";
+import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
 	getAllWebviewWindows,
 	WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import {
-	getCurrentWindow,
-	LogicalSize,
-	primaryMonitor,
-} from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as shell from "@tauri-apps/plugin-shell";
@@ -27,14 +24,14 @@ import {
 	Show,
 	Suspense,
 } from "solid-js";
-import { reconcile } from "solid-js/store";
-// Removed solid-motionone in favor of solid-transition-group
+import { createStore, produce, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCameraMutation,
 	createCurrentRecordingQuery,
@@ -55,9 +52,10 @@ import {
 	type CaptureWindowWithThumbnail,
 	commands,
 	type DeviceOrModelID,
-	type RecordingMetaWithMetadata,
+	events,
 	type RecordingTargetMode,
 	type ScreenCaptureTarget,
+	type UploadProgress,
 } from "~/utils/tauri";
 import IconCapLogoFull from "~icons/cap/logo-full";
 import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
@@ -84,12 +82,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 
-function getWindowSize() {
-	return {
-		width: 290,
-		height: 310,
-	};
-}
+const WINDOW_SIZE = { width: 290, height: 310 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -155,6 +148,10 @@ type TargetMenuPanelProps =
 			targets?: RecordingWithPath[];
 			onSelect: (target: RecordingWithPath) => void;
 			onViewAll: () => void;
+			uploadProgress?: Record<string, number>;
+			reuploadingPaths?: Set<string>;
+			onReupload?: (path: string) => void;
+			onRefetch?: () => void;
 	  }
 	| {
 			variant: "screenshot";
@@ -261,51 +258,25 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 					<span class="font-medium text-gray-12">Back</span>
 				</div>
 				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
-					<Show
-						when={
-							props.variant === "recording" || props.variant === "screenshot"
-						}
-						fallback={
-							<>
-								<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
-								<Input
-									type="search"
-									class="py-2 pl-6 h-full"
-									value={search()}
-									onInput={(event) => setSearch(event.currentTarget.value)}
-									onKeyDown={(event) => {
-										if (event.key === "Escape" && search()) {
-											event.preventDefault();
-											setSearch("");
-										}
-									}}
-									placeholder={placeholder}
-									autoCapitalize="off"
-									autocorrect="off"
-									autocomplete="off"
-									spellcheck={false}
-									aria-label={placeholder}
-								/>
-							</>
-						}
-					>
-						<button
-							type="button"
-							class="flex w-full items-center justify-start h-full pl-2 text-xs text-gray-11 transition-colors rounded hover:bg-gray-3 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
-							onClick={() => {
-								if ("onViewAll" in props) props.onViewAll();
-							}}
-						>
-							{props.variant === "recording" ? (
-								<IconLucideSquarePlay class="mr-2 size-3" />
-							) : (
-								<IconLucideImage class="mr-2 size-3" />
-							)}
-							{props.variant === "recording"
-								? "View All Recordings"
-								: "View All Screenshots"}
-						</button>
-					</Show>
+					<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+					<Input
+						type="search"
+						class="py-2 pl-6 h-full"
+						value={search()}
+						onInput={(event) => setSearch(event.currentTarget.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Escape" && search()) {
+								event.preventDefault();
+								setSearch("");
+							}
+						}}
+						placeholder={placeholder}
+						autoCapitalize="off"
+						autocorrect="off"
+						autocomplete="off"
+						spellcheck={false}
+						aria-label={placeholder}
+					/>
 				</div>
 			</div>
 			<div class="flex flex-col flex-1 min-h-0 pt-4">
@@ -342,6 +313,11 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							disabled={props.disabled}
 							highlightQuery={trimmedSearch()}
 							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+							uploadProgress={props.uploadProgress}
+							reuploadingPaths={props.reuploadingPaths}
+							onReupload={props.onReupload}
+							onRefetch={props.onRefetch}
+							onViewAll={props.onViewAll}
 						/>
 					) : (
 						<TargetMenuGrid
@@ -353,6 +329,7 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 							disabled={props.disabled}
 							highlightQuery={trimmedSearch()}
 							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+							onViewAll={props.onViewAll}
 						/>
 					)}
 				</div>
@@ -458,6 +435,49 @@ function Page() {
 	}));
 
 	const recordings = useQuery(() => listRecordings);
+
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record<string, number>
+	>({});
+	const [reuploadingPaths, setReuploadingPaths] = createSignal<Set<string>>(
+		new Set(),
+	);
+
+	createTauriEventListener(events.uploadProgressEvent, (e) => {
+		if (e.uploaded === e.total) {
+			setUploadProgress(
+				produce((s) => {
+					delete s[e.video_id];
+				}),
+			);
+		} else {
+			const total = Number(e.total);
+			const progress = total > 0 ? (Number(e.uploaded) / total) * 100 : 0;
+			setUploadProgress(e.video_id, progress);
+		}
+	});
+
+	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
+
+	const handleReupload = async (path: string) => {
+		setReuploadingPaths((prev) => new Set([...prev, path]));
+		try {
+			await commands.uploadExportedVideo(
+				path,
+				"Reupload",
+				new Channel<UploadProgress>(() => {}),
+				null,
+			);
+		} finally {
+			setReuploadingPaths((prev) => {
+				const next = new Set(prev);
+				next.delete(path);
+				return next;
+			});
+			recordings.refetch();
+		}
+	};
+
 	const screenshots = useQuery(() =>
 		queryOptions<ScreenshotWithPath[]>({
 			queryKey: ["screenshots"],
@@ -594,23 +614,24 @@ function Page() {
 
 		const currentWindow = getCurrentWindow();
 
-		const size = getWindowSize();
-		currentWindow.setSize(new LogicalSize(size.width, size.height));
+		currentWindow.setSize(
+			new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+		);
 
 		const unlistenFocus = currentWindow.onFocusChanged(
 			({ payload: focused }) => {
 				if (focused) {
-					const size = getWindowSize();
-
-					currentWindow.setSize(new LogicalSize(size.width, size.height));
+					currentWindow.setSize(
+						new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+					);
 				}
 			},
 		);
 
 		const unlistenResize = currentWindow.onResized(() => {
-			const size = getWindowSize();
-
-			currentWindow.setSize(new LogicalSize(size.width, size.height));
+			currentWindow.setSize(
+				new LogicalSize(WINDOW_SIZE.width, WINDOW_SIZE.height),
+			);
 		});
 
 		commands.updateAuthPlan();
@@ -619,9 +640,6 @@ function Page() {
 			(await unlistenFocus)?.();
 			(await unlistenResize)?.();
 		});
-
-		const monitor = await primaryMonitor();
-		if (!monitor) return;
 	});
 
 	const cameras = useQuery(() => listVideoDevices);
@@ -1021,7 +1039,7 @@ function Page() {
 							<IconCapLogoFullDark class="hidden dark:block" />
 							<IconCapLogoFull class="block dark:hidden" />
 						</a>
-						<ErrorBoundary fallback={<></>}>
+						<ErrorBoundary fallback={null}>
 							<Suspense>
 								<span
 									onClick={async () => {
@@ -1126,6 +1144,10 @@ function Page() {
 										});
 										getCurrentWindow().hide();
 									}}
+									uploadProgress={uploadProgress}
+									reuploadingPaths={reuploadingPaths()}
+									onReupload={handleReupload}
+									onRefetch={() => recordings.refetch()}
 								/>
 							) : (
 								<TargetMenuPanel

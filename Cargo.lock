@@ -1402,6 +1402,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-frame-converter"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "crossbeam-channel",
+ "ffmpeg-next",
+ "flume",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "tracing",
+ "windows 0.60.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-gpu-converters"
 version = "0.1.0"
 dependencies = [
@@ -1489,6 +1504,7 @@ dependencies = [
  "cap-enc-mediafoundation",
  "cap-fail",
  "cap-flags",
+ "cap-frame-converter",
  "cap-media",
  "cap-media-info",
  "cap-mediafoundation-ffmpeg",

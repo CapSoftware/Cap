@@ -1,4 +1,4 @@
-import { createEffect, createRoot } from "solid-js";
+import { createRoot } from "solid-js";
 import { createStore } from "solid-js/store";
 import {
 	type CaptionSegment,
@@ -27,6 +27,8 @@ export const defaultCaptionSettings: CaptionSettings = {
 	exportWithSubtitles: false,
 	highlightColor: "#FFFFFF",
 	fadeDuration: 0.2,
+	lingerDuration: 0.4,
+	wordTransitionDuration: 0.25,
 };
 
 function createCaptionsStore() {
@@ -141,6 +143,8 @@ function createCaptionsStore() {
 						exportWithSubtitles: state.settings.exportWithSubtitles,
 						highlightColor: state.settings.highlightColor,
 						fadeDuration: state.settings.fadeDuration,
+						lingerDuration: state.settings.lingerDuration,
+						wordTransitionDuration: state.settings.wordTransitionDuration,
 					},
 				};
 

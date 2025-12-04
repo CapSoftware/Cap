@@ -148,6 +148,7 @@ async function main() {
 		console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
 
 		const { stdout: vcInstallDir } = await exec(
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: PowerShell syntax, not JS template literal
 			'$(& "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)',
 			{ shell: "powershell.exe" },
 		);

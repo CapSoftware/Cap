@@ -1,10 +1,9 @@
-import { onCleanup, onMount } from "solid-js";
 import toast, { Toaster } from "solid-toast";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { events } from "~/utils/tauri";
 
 export default function Page() {
-	let unlisten: (() => void) | undefined;
+	let _unlisten: (() => void) | undefined;
 
 	const SuccessIcon = () => (
 		<svg

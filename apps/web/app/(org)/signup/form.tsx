@@ -92,7 +92,7 @@ export function SignupForm() {
 					},
 					body: JSON.stringify({
 						priceId: pendingPriceId,
-						quantity: parseInt(pendingQuantity),
+						quantity: parseInt(pendingQuantity, 10),
 					}),
 				});
 				const data = await response.json();
@@ -300,7 +300,7 @@ export function SignupForm() {
 														);
 													}
 												})
-												.catch((error) => {
+												.catch((_error) => {
 													setEmailSent(false);
 													setLoading(false);
 													// Catch block is rarely triggered with NextAuth
@@ -459,23 +459,16 @@ const NormalSignup = ({
 						className="flex flex-col gap-3 justify-center items-center"
 					>
 						{!oauthError && (
-							<>
-								<MotionButton
-									variant="gray"
-									type="button"
-									className="flex gap-2 justify-center items-center w-full text-sm"
-									onClick={handleGoogleSignIn}
-									disabled={loading}
-								>
-									<Image
-										src="/google.svg"
-										alt="Google"
-										width={16}
-										height={16}
-									/>
-									Sign up with Google
-								</MotionButton>
-							</>
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="flex gap-2 justify-center items-center w-full text-sm"
+								onClick={handleGoogleSignIn}
+								disabled={loading}
+							>
+								<Image src="/google.svg" alt="Google" width={16} height={16} />
+								Sign up with Google
+							</MotionButton>
 						)}
 
 						{oauthError && (
