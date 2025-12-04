@@ -73,7 +73,7 @@
 	"devDependencies": {
 		"@fontsource/geist-sans": "^5.0.3",
 		"@iconify/json": "^2.2.239",
-		"@tauri-apps/cli": "^2.9.4",
+		"@tauri-apps/cli": "^2.9.5",
 		"@total-typescript/ts-reset": "^0.6.1",
 		"@types/dom-webcodecs": "^0.1.11",
 		"@types/uuid": "^9.0.8",
