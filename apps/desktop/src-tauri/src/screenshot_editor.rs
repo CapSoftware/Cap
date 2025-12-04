@@ -1,7 +1,7 @@
 use crate::PendingScreenshots;
 use crate::frame_ws::{WSFrame, create_watch_frame_ws};
 use crate::gpu_context;
-use crate::windows::{CapWindowId, ScreenshotEditorWindowIds};
+use crate::windows::{CapWindowDef, ScreenshotEditorWindowIds};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, SingleSegment, StudioRecordingMeta,
     VideoMeta,
@@ -382,8 +382,8 @@ pub struct SerializedScreenshotEditorInstance {
 pub async fn create_screenshot_editor_instance(
     window: Window,
 ) -> Result<SerializedScreenshotEditorInstance, String> {
-    let CapWindowId::ScreenshotEditor { id } =
-        CapWindowId::from_str(window.label()).map_err(|e| e.to_string())?
+    let CapWindowDef::ScreenshotEditor { id } =
+        CapWindowDef::from_str(window.label()).map_err(|e| e.to_string())?
     else {
         return Err("Invalid window".to_string());
     };

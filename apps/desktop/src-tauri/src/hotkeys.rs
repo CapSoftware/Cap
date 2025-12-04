@@ -1,6 +1,6 @@
 use crate::{
     RequestOpenRecordingPicker, RequestStartRecording, recording,
-    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
+    recording_settings::RecordingTargetMode, windows::CapWindow,
 };
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ pub fn init(app: &AppHandle) {
                 if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
+                        let _ = CapWindow::Settings { page: None }.show(&app).await;
                     });
                 }
 

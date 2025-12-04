@@ -11,7 +11,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
-objc2 = "0.6.1"
+objc2 = { workspace = true }
 objc2-app-kit = "0.3.1"
 objc2-foundation = "0.3.1"
 
