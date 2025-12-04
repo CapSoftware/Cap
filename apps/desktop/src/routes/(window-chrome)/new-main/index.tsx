@@ -66,7 +66,7 @@ import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import HorizontalTargetButton from "./HorizontalTargetButton";
 import VerticalTargetButton from "./VerticalTargetButton";
-import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
+import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, NoCameraIcon, SettingsIcon, WindowIcon } from "~/icons";
 
 function getWindowSize() {
 	return {
@@ -458,10 +458,17 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 	});
 
 	return (
-		<div class="relative w-full aspect-video bg-gray-2 overflow-hidden rounded-t-[20px]">
+		<div class="relative w-full aspect-video bg-neutral-900 overflow-hidden rounded-t-[20px]">
 			<Show
 				when={props.selectedCamera}
-				fallback={<div class="flex items-center justify-center h-full text-xs text-gray-11">No camera selected</div>}
+				// fallback={<div class="flex items-center justify-center h-full text-xs text-gray-11">No camera selected</div>}
+				fallback={
+					<div class="flex items-center justify-center h-full">
+						<div class="flex items-center justify-center size-12 rounded-full bg-white/10">
+							<NoCameraIcon class="text-white size-8 mt-0.5" />
+						</div>
+					</div>
+				}
 			>
 				<Show
 					when={latestFrame()}
@@ -480,6 +487,12 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 					/>
 				</Show>
 			</Show>
+			<div
+				class="absolute bottom-0 left-0 right-0 h-12 pointer-events-none"
+				style={{
+					background: "linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))",
+				}}
+			/>
 		</div>
 	);
 }
