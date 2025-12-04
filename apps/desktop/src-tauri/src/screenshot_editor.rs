@@ -30,6 +30,7 @@ pub struct ScreenshotEditorInstance {
     pub ws_shutdown_token: CancellationToken,
     pub config_tx: watch::Sender<ProjectConfiguration>,
     pub path: PathBuf,
+    pub pretty_name: String,
 }
 
 impl ScreenshotEditorInstance {
@@ -264,6 +265,7 @@ impl ScreenshotEditorInstances {
                     ws_shutdown_token,
                     config_tx,
                     path: path.clone(),
+                    pretty_name: recording_meta.pretty_name.clone(),
                 });
 
                 // Spawn render loop
@@ -375,6 +377,7 @@ pub struct SerializedScreenshotEditorInstance {
     pub frames_socket_url: String,
     pub path: PathBuf,
     pub config: Option<ProjectConfiguration>,
+    pub pretty_name: String,
 }
 
 #[tauri::command]
@@ -404,6 +407,7 @@ pub async fn create_screenshot_editor_instance(
         frames_socket_url: format!("ws://localhost:{}", instance.ws_port),
         path: instance.path.clone(),
         config: Some(config),
+        pretty_name: instance.pretty_name.clone(),
     })
 }
 

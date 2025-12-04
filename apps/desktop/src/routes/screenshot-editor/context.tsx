@@ -118,6 +118,10 @@ function createScreenshotEditorContext() {
 		null,
 	);
 
+	const [activePopover, setActivePopover] = createSignal<
+		"background" | "padding" | "rounding" | "shadow" | "border" | null
+	>(null);
+
 	const [dialog, setDialog] = createSignal<DialogState>({
 		open: false,
 	});
@@ -309,6 +313,9 @@ function createScreenshotEditorContext() {
 		get path() {
 			return editorInstance()?.path ?? "";
 		},
+		get prettyName() {
+			return editorInstance()?.prettyName ?? "Screenshot";
+		},
 		project,
 		setProject,
 		annotations,
@@ -321,6 +328,8 @@ function createScreenshotEditorContext() {
 		setLayersPanelOpen,
 		focusAnnotationId,
 		setFocusAnnotationId,
+		activePopover,
+		setActivePopover,
 		projectHistory,
 		dialog,
 		setDialog,

@@ -8,8 +8,15 @@ import { getArrowHeadPoints } from "./arrow";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 
 export function useScreenshotExport() {
-	const { path, latestFrame, annotations, dialog, setDialog, project } =
-		useScreenshotEditorContext();
+	const {
+		path,
+		prettyName,
+		latestFrame,
+		annotations,
+		dialog,
+		setDialog,
+		project,
+	} = useScreenshotEditorContext();
 	const [isExporting, setIsExporting] = createSignal(false);
 
 	const drawAnnotations = (
@@ -284,7 +291,7 @@ export function useScreenshotExport() {
 			if (destination === "file") {
 				const savePath = await save({
 					filters: [{ name: "PNG Image", extensions: ["png"] }],
-					defaultPath: "screenshot.png",
+					defaultPath: `${prettyName}.png`,
 				});
 				if (savePath) {
 					await writeFile(savePath, uint8Array);
