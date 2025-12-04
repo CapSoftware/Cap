@@ -1,10 +1,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { motion } from "framer-motion";
 import Link from "next/link";
-import { useEffect } from "react";
-import LeftBlueHue from "@/components/pages/HomePage/LeftBlueHue";
 
 interface ToolCategory {
 	title: string;

@@ -5,10 +5,7 @@ use cap_rendering::{
     DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
     RenderVideoConstants, RenderedFrame, RendererLayers,
 };
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinHandle,
-};
+use tokio::sync::{mpsc, oneshot};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
@@ -17,6 +14,7 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
         cursor: Arc<CursorEvents>,
+        frame_number: u32,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -73,48 +71,91 @@ impl Renderer {
     }
 
     async fn run(mut self) {
-        let mut frame_task: Option<JoinHandle<()>> = None;
-
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
         let mut layers =
             RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
 
+        struct PendingFrame {
+            segment_frames: DecodedSegmentFrames,
+            uniforms: ProjectUniforms,
+            finished: oneshot::Sender<()>,
+            cursor: Arc<CursorEvents>,
+            #[allow(dead_code)]
+            frame_number: u32,
+        }
+
+        let mut pending_frame: Option<PendingFrame> = None;
+
         loop {
-            while let Some(msg) = self.rx.recv().await {
+            let frame_to_render = if let Some(pending) = pending_frame.take() {
+                Some(pending)
+            } else {
+                match self.rx.recv().await {
+                    Some(RendererMessage::RenderFrame {
+                        segment_frames,
+                        uniforms,
+                        finished,
+                        cursor,
+                        frame_number,
+                    }) => Some(PendingFrame {
+                        segment_frames,
+                        uniforms,
+                        finished,
+                        cursor,
+                        frame_number,
+                    }),
+                    Some(RendererMessage::Stop { finished }) => {
+                        let _ = finished.send(());
+                        return;
+                    }
+                    None => return,
+                }
+            };
+
+            let Some(mut current) = frame_to_render else {
+                continue;
+            };
+
+            while let Ok(msg) = self.rx.try_recv() {
                 match msg {
                     RendererMessage::RenderFrame {
                         segment_frames,
                         uniforms,
                         finished,
                         cursor,
+                        frame_number,
                     } => {
-                        if let Some(task) = frame_task.as_ref() {
-                            if task.is_finished() {
-                                frame_task = None
-                            } else {
-                                continue;
-                            }
-                        }
-
-                        let frame = frame_renderer
-                            .render(segment_frames, uniforms, &cursor, &mut layers)
-                            .await
-                            .unwrap();
-
-                        (self.frame_cb)(frame);
-
-                        let _ = finished.send(());
+                        let _ = current.finished.send(());
+                        current = PendingFrame {
+                            segment_frames,
+                            uniforms,
+                            finished,
+                            cursor,
+                            frame_number,
+                        };
                     }
                     RendererMessage::Stop { finished } => {
-                        if let Some(task) = frame_task.take() {
-                            task.abort();
-                        }
+                        let _ = current.finished.send(());
                         let _ = finished.send(());
                         return;
                     }
                 }
             }
+
+            let frame = frame_renderer
+                .render(
+                    current.segment_frames,
+                    current.uniforms,
+                    &current.cursor,
+                    &mut layers,
+                )
+                .await
+                .unwrap();
+
+            (self.frame_cb)(frame);
+
+            let _ = current.finished.send(());
         }
     }
 }
@@ -129,6 +170,7 @@ impl RendererHandle {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: Arc<CursorEvents>,
+        frame_number: u32,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -137,6 +179,7 @@ impl RendererHandle {
             uniforms,
             finished: finished_tx,
             cursor,
+            frame_number,
         })
         .await;
 

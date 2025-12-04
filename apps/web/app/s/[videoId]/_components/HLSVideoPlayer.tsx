@@ -121,7 +121,7 @@ export function HLSVideoPlayer({
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError);
 		};
-	}, [hasPlayedOnce, videoSrc]);
+	}, [hasPlayedOnce, videoSrc, videoRef.current]);
 
 	// HLS setup
 	useEffect(() => {
@@ -185,7 +185,7 @@ export function HLSVideoPlayer({
 		} else {
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 		}
-	}, [videoSrc, hasPlayedOnce]);
+	}, [videoSrc, hasPlayedOnce, videoRef.current]);
 
 	// Caption handling
 	useEffect(() => {
@@ -195,11 +195,7 @@ export function HLSVideoPlayer({
 		let captionTrack: TextTrack | null = null;
 
 		const handleCueChange = (): void => {
-			if (
-				captionTrack &&
-				captionTrack.activeCues &&
-				captionTrack.activeCues.length > 0
-			) {
+			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
 				const activeCue = captionTrack.activeCues[0] as VTTCue;
 				setCurrentCue(activeCue.text);
 			} else {
@@ -268,7 +264,7 @@ export function HLSVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [captionsSrc]);
+	}, [captionsSrc, videoRef.current]);
 
 	const uploadProgressRaw = useUploadProgress(
 		videoId,

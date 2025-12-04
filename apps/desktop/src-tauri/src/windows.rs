@@ -21,7 +21,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, instrument, warn};
 
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm,
+    editor_window::PendingEditorInstances,
+    fake_window,
     general_settings::{self, AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
@@ -230,15 +232,21 @@ impl ShowCapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
-            let mut s = state.ids.lock().unwrap();
-            if !s.iter().any(|(path, _)| path == project_path) {
-                s.push((
-                    project_path.clone(),
-                    state
+            let window_id = {
+                let mut s = state.ids.lock().unwrap();
+                if !s.iter().any(|(path, _)| path == project_path) {
+                    let id = state
                         .counter
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                ));
-            }
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    s.push((project_path.clone(), id));
+                    id
+                } else {
+                    s.iter().find(|(path, _)| path == project_path).unwrap().1
+                }
+            };
+
+            let window_label = CapWindowId::Editor { id: window_id }.label();
+            PendingEditorInstances::start_prewarm(app, window_label, project_path.clone()).await;
         }
 
         if let Self::ScreenshotEditor { path } = &self {
@@ -583,7 +591,16 @@ impl ShowCapWindow {
                         if let Some(id) = state.selected_camera_id.clone()
                             && !state.camera_in_use
                         {
-                            let _ = state.camera_feed.ask(feeds::camera::SetInput { id }).await;
+                            match state.camera_feed.ask(feeds::camera::SetInput { id }).await {
+                                Ok(ready_future) => {
+                                    if let Err(err) = ready_future.await {
+                                        error!("Camera failed to initialize: {err}");
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("Failed to send SetInput to camera feed: {err}");
+                                }
+                            }
                             state.camera_in_use = true;
                         }
 

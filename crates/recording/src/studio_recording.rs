@@ -5,11 +5,17 @@ use crate::{
     },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::{Mp4Muxer, OggMuxer},
+    ffmpeg::OggMuxer,
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
+
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::{AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig};
+
+#[cfg(windows)]
+use crate::output_pipeline::{WindowsCameraMuxer, WindowsCameraMuxerConfig};
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
@@ -824,11 +830,24 @@ async fn create_segment_pipeline(
     .await
     .context("screen pipeline setup")?;
 
+    #[cfg(target_os = "macos")]
     let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
         OutputPipeline::builder(dir.join("camera.mp4"))
-            .with_video::<sources::Camera>(camera_feed)
+            .with_video::<sources::NativeCamera>(camera_feed)
             .with_timestamps(start_time)
-            .build::<Mp4Muxer>(Default::default())
+            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+            .instrument(error_span!("camera-out"))
+    }))
+    .await
+    .transpose()
+    .context("camera pipeline setup")?;
+
+    #[cfg(windows)]
+    let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
+        OutputPipeline::builder(dir.join("camera.mp4"))
+            .with_video::<sources::NativeCamera>(camera_feed)
+            .with_timestamps(start_time)
+            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig::default())
             .instrument(error_span!("camera-out"))
     }))
     .await

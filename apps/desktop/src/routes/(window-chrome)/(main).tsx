@@ -328,7 +328,7 @@ function Page() {
 						<IconCapLogoFullDark class="hidden dark:block" />
 						<IconCapLogoFull class="block dark:hidden" />
 					</a>
-					<ErrorBoundary fallback={<></>}>
+					<ErrorBoundary fallback={null}>
 						<Suspense>
 							<span
 								onClick={async () => {

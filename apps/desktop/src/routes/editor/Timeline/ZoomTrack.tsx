@@ -7,7 +7,6 @@ import {
 	createMemo,
 	createRoot,
 	createSignal,
-	For,
 	Index,
 	Match,
 	Show,

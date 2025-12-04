@@ -23,7 +23,7 @@ import {
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
-import { apiClient, orgCustomDomainClient, protectedHeaders } from "./web-api";
+import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
 	queryKey: ["capture", "windows"] as const,

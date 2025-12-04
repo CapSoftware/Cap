@@ -15,11 +15,11 @@ const OrgName = () => {
 
 	const handleOrgNameChange = async () => {
 		try {
-			if (!orgName) return;
+			if (!orgName || !activeOrganization?.organization.id) return;
 			setSaveLoading(true);
 			await updateOrganizationDetails({
 				organizationName: orgName,
-				organizationId: activeOrganization!.organization.id,
+				organizationId: activeOrganization.organization.id,
 			});
 			toast.success("Settings updated successfully");
 			router.refresh();

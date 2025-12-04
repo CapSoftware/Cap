@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { organizations, sharedVideos, videos } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
 export async function GET(request: NextRequest) {

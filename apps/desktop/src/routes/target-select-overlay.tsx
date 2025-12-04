@@ -396,6 +396,13 @@ function Inner() {
 						if (win) setCameraWindow(win);
 					});
 
+					const areaDisplayInfo = useQuery(() => ({
+						queryKey: ["areaDisplayInfo", displayId()],
+						queryFn: async () => {
+							return await commands.displayInformation(displayId());
+						},
+					}));
+
 					const [aspect, setAspect] = createSignal<Ratio | null>(null);
 					const [snapToRatioEnabled, setSnapToRatioEnabled] = createSignal(true);
 					const [isInteracting, setIsInteracting] = createSignal(false);
@@ -441,12 +448,12 @@ function Inner() {
 								if (changed) {
 									processing = true;
 									try {
-										await invoke("update_camera_overlay_bounds", {
-											x: target.x,
-											y: target.y,
-											width: target.width,
-											height: target.height,
-										});
+										await commands.updateCameraOverlayBounds(
+											target.x,
+											target.y,
+											target.width,
+											target.height,
+										);
 										lastApplied = target;
 									} catch (e) {
 										console.error("Failed to update camera window", e);
@@ -663,20 +670,35 @@ function Inner() {
 
 						if (was && !interacting) {
 							if (options.mode === "screenshot" && isValid()) {
+								const cropBounds = crop();
+								const displayInfo = areaDisplayInfo.data;
+								console.log("[Screenshot Debug] crop bounds:", cropBounds);
+								console.log("[Screenshot Debug] display info:", displayInfo);
+								console.log(
+									"[Screenshot Debug] window.innerWidth/Height:",
+									window.innerWidth,
+									window.innerHeight,
+								);
+
 								const target: ScreenCaptureTarget = {
 									variant: "area",
 									screen: displayId(),
 									bounds: {
 										position: {
-											x: crop().x,
-											y: crop().y,
+											x: cropBounds.x,
+											y: cropBounds.y,
 										},
 										size: {
-											width: crop().width,
-											height: crop().height,
+											width: cropBounds.width,
+											height: cropBounds.height,
 										},
 									},
 								};
+
+								console.log(
+									"[Screenshot Debug] target being sent:",
+									JSON.stringify(target, null, 2),
+								);
 
 								try {
 									const path = await invoke<string>("take_screenshot", {

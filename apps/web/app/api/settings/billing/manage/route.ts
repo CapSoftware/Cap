@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
 

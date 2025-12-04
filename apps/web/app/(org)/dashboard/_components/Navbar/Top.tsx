@@ -243,7 +243,7 @@ const User = () => {
 				showCondition: true,
 			},
 		],
-		[],
+		[user.isPro],
 	);
 
 	return (

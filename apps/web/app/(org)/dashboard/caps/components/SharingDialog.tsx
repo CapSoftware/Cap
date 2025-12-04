@@ -1,5 +1,4 @@
 import {
-	Avatar,
 	Button,
 	Dialog,
 	DialogContent,
@@ -160,7 +159,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			setSearchTerm("");
 			setActiveTab(tabs[0]);
 		}
-	}, [isOpen, sharedSpaces, isPublic]);
+	}, [isOpen, sharedSpaces, isPublic, tabs[0]]);
 
 	const isSpaceSharedViaOrganization = useCallback(
 		(spaceId: string) => {
@@ -189,7 +188,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 		try {
 			await navigator.clipboard.writeText(embedCode);
 			toast.success("Embed code copied to clipboard");
-		} catch (error) {
+		} catch (_error) {
 			toast.error("Failed to copy embed code");
 		}
 	};

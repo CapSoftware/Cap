@@ -46,7 +46,7 @@ import {
 	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
-import { forwardRef, useCallback, useEffect } from "react";
+import { forwardRef, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
@@ -608,7 +608,7 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
 				case "8":
 				case "9": {
 					event.preventDefault();
-					const percent = Number.parseInt(event.key) / 10;
+					const percent = Number.parseInt(event.key, 10) / 10;
 					const seekTime = mediaElement.duration * percent;
 					dispatch({
 						type: MediaActionTypes.MEDIA_SEEK_REQUEST,
@@ -2886,14 +2886,14 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		[dispatch],
 	);
 
-	const onSubtitlesToggle = React.useCallback(() => {
+	const _onSubtitlesToggle = React.useCallback(() => {
 		dispatch({
 			type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
 			detail: false,
 		});
 	}, [dispatch]);
 
-	const onShowSubtitleTrack = React.useCallback(
+	const _onShowSubtitleTrack = React.useCallback(
 		(subtitleTrack: (typeof mediaSubtitlesList)[number]) => {
 			dispatch({
 				type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
@@ -2907,7 +2907,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		[dispatch],
 	);
 
-	const selectedSubtitleLabel = React.useMemo(() => {
+	const _selectedSubtitleLabel = React.useMemo(() => {
 		if (!isSubtitlesActive) return "Off";
 		if (mediaSubtitlesShowing.length > 0) {
 			return mediaSubtitlesShowing[0]?.label ?? "On";

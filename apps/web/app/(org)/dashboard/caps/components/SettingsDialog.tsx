@@ -7,7 +7,6 @@ import {
 	DialogTitle,
 	Switch,
 } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";

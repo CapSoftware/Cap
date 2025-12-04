@@ -42,7 +42,7 @@ const OtpForm = ({
 			});
 			setCode(newCode);
 
-			const nextEmptyIndex = newCode.findIndex((digit) => digit === "");
+			const nextEmptyIndex = newCode.indexOf("");
 			if (nextEmptyIndex !== -1) {
 				inputRefs.current[nextEmptyIndex]?.focus();
 			} else {

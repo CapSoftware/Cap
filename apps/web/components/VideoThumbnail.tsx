@@ -80,7 +80,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 			if (imageRef.current?.complete && imageRef.current.naturalWidth !== 0) {
 				setImageStatus("success");
 			}
-		}, []);
+		}, [setImageStatus]);
 
 		return (
 			<div

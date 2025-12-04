@@ -30,7 +30,7 @@ fn main() {
         );
 
         if refresh_rate > 0.0 {
-            println!("  Refresh Rate: {} Hz", refresh_rate);
+            println!("  Refresh Rate: {refresh_rate} Hz");
         } else {
             println!("  Refresh Rate: Unknown");
         }
@@ -83,7 +83,7 @@ fn main() {
             }
 
             if let Some(owner) = window.owner_name() {
-                println!("  Application: {}", owner);
+                println!("  Application: {owner}");
             } else {
                 println!("  Application: Unknown");
             }
@@ -104,7 +104,7 @@ fn main() {
     if let Some(topmost) = scap_targets::Window::get_topmost_at_cursor()
         && let Some(owner) = topmost.owner_name()
     {
-        println!("Testing icon extraction for: {}", owner);
+        println!("Testing icon extraction for: {owner}");
 
         match topmost.app_icon() {
             Some(icon_data) => {
@@ -134,7 +134,7 @@ fn main() {
         if let Some((topmost_window, level)) = relevant_windows.first()
             && let Some(owner) = topmost_window.owner_name()
         {
-            print!("\rTopmost: {} (level: {})    ", owner, level);
+            print!("\rTopmost: {owner} (level: {level})    ");
             std::io::Write::flush(&mut std::io::stdout()).unwrap();
         }
 

@@ -52,13 +52,20 @@ import {
 	type TimelineSegment,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideBoxSelect from "~icons/lucide/box-select";
+import IconLucideGauge from "~icons/lucide/gauge";
+import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideMonitor from "~icons/lucide/monitor";
+import IconLucideMoon from "~icons/lucide/moon";
+import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
+import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
 import { type CornerRoundingType, useEditorContext } from "./context";
+import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -66,6 +73,7 @@ import {
 } from "./projectConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
+import type { TextSegment } from "./text";
 import {
 	ComingSoonTooltip,
 	EditorButton,
@@ -377,7 +385,7 @@ export function ConfigSidebar() {
 								meta().type === "multiple" && (meta() as any).segments[0].cursor
 							),
 						},
-						window.FLAGS.captions && {
+						{
 							id: "captions" as const,
 							icon: IconCapMessageBubble,
 						},
@@ -785,6 +793,140 @@ export function ConfigSidebar() {
 						<Suspense>
 							<Show
 								when={(() => {
+									const textSelection = selection();
+									if (textSelection.type !== "text") return;
+
+									const segments = textSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.textSegments?.[index],
+										}))
+										.filter(
+											(item): item is { index: number; segment: TextSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: textSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} text{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteTextSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<TextSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const maskSelection = selection();
+									if (maskSelection.type !== "mask") return;
+
+									const segments = maskSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.maskSegments?.[index],
+										}))
+										.filter(
+											(item): item is { index: number; segment: MaskSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: maskSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} mask{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() =>
+													projectActions.deleteMaskSegments(
+														value().segments.map((s) => s.index),
+													)
+												}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<MaskSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
@@ -1021,7 +1163,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			try {
 				const path = await resolveResource(`assets/backgrounds/${id}.jpg`);
 				return { id, path };
-			} catch (err) {
+			} catch (_err) {
 				return { id, path: null };
 			}
 		});
@@ -1078,7 +1220,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								);
 
 								debouncedSetProject(rawPath);
-							} catch (err) {
+							} catch (_err) {
 								toast.error("Failed to set wallpaper");
 							}
 						};
@@ -1090,7 +1232,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 						try {
 							const convertedPath = convertFileSrc(path);
 							await fetch(convertedPath, { method: "HEAD" });
-						} catch (err) {
+						} catch (_err) {
 							setProject("background", "source", {
 								type: "image",
 								path: null,
@@ -1418,7 +1560,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									debouncedSetProject(wallpaper.rawPath);
 
 									ensurePaddingForBackground();
-								} catch (err) {
+								} catch (_err) {
 									toast.error("Failed to set wallpaper");
 								}
 							}}
@@ -1565,7 +1707,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 										type: "image",
 										path: fullPath,
 									});
-								} catch (err) {
+								} catch (_err) {
 									toast.error("Failed to save image");
 								}
 							}}
@@ -1694,7 +1836,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 												style={{ transform: `rotate(${angle()}deg)` }}
 												onMouseDown={(downEvent) => {
 													const start = angle();
-													const resumeHistory = projectHistory.pause();
+													const _resumeHistory = projectHistory.pause();
 
 													createRoot((dispose) =>
 														createEventListenerMap(window, {
@@ -2302,6 +2444,478 @@ function CornerStyleSelect(props: {
 					</PopperContent>
 				</KSelect.Portal>
 			</KSelect>
+		</div>
+	);
+}
+
+const TEXT_FONT_OPTIONS = [
+	{ value: "sans-serif", label: "Sans" },
+	{ value: "serif", label: "Serif" },
+	{ value: "monospace", label: "Monospace" },
+	{ value: "Inter", label: "Inter" },
+	{ value: "Geist Sans", label: "Geist Sans" },
+];
+
+const normalizeHexInput = (value: string, fallback: string) => {
+	const trimmed = value.trim();
+	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+	const shortMatch = /^#[0-9A-Fa-f]{3}$/.test(withHash);
+	if (shortMatch) {
+		const [, r, g, b] = withHash;
+		return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+	}
+	const fullMatch = /^#[0-9A-Fa-f]{6}$/.test(withHash);
+	if (fullMatch) return withHash.toLowerCase();
+	return fallback;
+};
+
+function HexColorInput(props: {
+	value: string;
+	onChange: (value: string) => void;
+}) {
+	const [text, setText] = createWritableMemo(() => props.value);
+	let prevColor = props.value;
+	let colorInput: HTMLInputElement | undefined;
+
+	return (
+		<div class="flex items-center gap-3">
+			<button
+				type="button"
+				class="w-10 h-10 rounded-md border border-gray-4"
+				style={{ "background-color": text() }}
+				onClick={() => {
+					const input = colorInput as
+						| (HTMLInputElement & { showPicker?: () => void })
+						| undefined;
+					input?.showPicker?.();
+					input?.click();
+				}}
+			/>
+			<input
+				ref={(el) => {
+					colorInput = el;
+				}}
+				type="color"
+				class="absolute w-0 h-0 opacity-0"
+				value={text()}
+				onInput={(e) => {
+					const next = e.currentTarget.value;
+					setText(next);
+					prevColor = next;
+					props.onChange(next);
+				}}
+			/>
+			<TextInput
+				class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-sm text-gray-12"
+				value={text()}
+				onFocus={() => {
+					prevColor = props.value;
+				}}
+				onInput={(e) => {
+					setText(e.currentTarget.value);
+				}}
+				onBlur={(e) => {
+					const next = normalizeHexInput(e.currentTarget.value, prevColor);
+					setText(next);
+					prevColor = next;
+					props.onChange(next);
+				}}
+			/>
+		</div>
+	);
+}
+
+function TextSegmentConfig(props: {
+	segmentIndex: number;
+	segment: TextSegment;
+}) {
+	const { setProject } = useEditorContext();
+	const clampNumber = (value: number, min: number, max: number) =>
+		Math.min(Math.max(Number.isFinite(value) ? value : min), max);
+	const textFontOptions = createMemo(() => {
+		const font = props.segment.fontFamily;
+		if (!font) return TEXT_FONT_OPTIONS;
+		const exists = TEXT_FONT_OPTIONS.some((option) => option.value === font);
+		return exists
+			? TEXT_FONT_OPTIONS
+			: [...TEXT_FONT_OPTIONS, { value: font, label: font }];
+	});
+
+	const selectedFont = createMemo(
+		() =>
+			textFontOptions().find(
+				(option) => option.value === props.segment.fontFamily,
+			) ?? textFontOptions()[0],
+	);
+
+	const updateSegment = (fn: (segment: TextSegment) => void) => {
+		setProject(
+			"timeline",
+			"textSegments",
+			produce((segments) => {
+				const target = segments?.[props.segmentIndex];
+				if (!target) return;
+				fn(target);
+			}),
+		);
+	};
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Text ${props.segmentIndex + 1}`}
+				icon={<IconLucideType class="size-4" />}
+			>
+				<div class="flex items-center gap-3">
+					<textarea
+						class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-gray-12 resize-none min-h-[80px]"
+						value={props.segment.content}
+						onInput={(e) =>
+							updateSegment((segment) => {
+								segment.content = e.currentTarget.value;
+							})
+						}
+					/>
+					<div class="flex flex-col items-center gap-2">
+						<span class="text-xs text-gray-11">Enabled</span>
+						<Toggle
+							checked={props.segment.enabled}
+							onChange={(value) =>
+								updateSegment((segment) => {
+									segment.enabled = value;
+								})
+							}
+						/>
+					</div>
+				</div>
+			</Field>
+			<Field name="Font" icon={<IconLucideType class="size-4" />}>
+				<div class="grid grid-cols-2 gap-3">
+					<KSelect<{ label: string; value: string }>
+						options={textFontOptions()}
+						optionValue="value"
+						optionTextValue="label"
+						value={selectedFont()}
+						onChange={(option) => {
+							if (option) {
+								updateSegment((segment) => {
+									segment.fontFamily = option.value;
+								});
+							}
+						}}
+						itemComponent={(selectProps) => (
+							<MenuItem<typeof KSelect.Item>
+								as={KSelect.Item}
+								item={selectProps.item}
+							>
+								<KSelect.ItemLabel class="flex-1">
+									{selectProps.item.rawValue.label}
+								</KSelect.ItemLabel>
+							</MenuItem>
+						)}
+					>
+						<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+							<KSelect.Value<{
+								label: string;
+								value: string;
+							}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+								{(state) => <span>{state.selectedOption().label}</span>}
+							</KSelect.Value>
+							<KSelect.Icon<ValidComponent>
+								as={(selectProps) => (
+									<IconCapChevronDown
+										{...selectProps}
+										class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+									/>
+								)}
+							/>
+						</KSelect.Trigger>
+						<KSelect.Portal>
+							<PopperContent<typeof KSelect.Content>
+								as={KSelect.Content}
+								class={cx(topSlideAnimateClasses, "z-50")}
+							>
+								<MenuItemList<typeof KSelect.Listbox>
+									class="overflow-y-auto max-h-40"
+									as={KSelect.Listbox}
+								/>
+							</PopperContent>
+						</KSelect.Portal>
+					</KSelect>
+				</div>
+			</Field>
+			<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
+				<Slider
+					value={[clampNumber(props.segment.fontSize, 8, 200)]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fontSize = clampNumber(value, 8, 200);
+						})
+					}
+					minValue={8}
+					maxValue={200}
+					step={1}
+				/>
+			</Field>
+			<Field name="Font Weight" icon={<IconLucideSparkles class="size-4" />}>
+				<div class="flex flex-col gap-2">
+					<KSelect
+						options={[
+							{ label: "Thin", value: 100 },
+							{ label: "Extra Light", value: 200 },
+							{ label: "Light", value: 300 },
+							{ label: "Normal", value: 400 },
+							{ label: "Medium", value: 500 },
+							{ label: "Semi Bold", value: 600 },
+							{ label: "Bold", value: 700 },
+							{ label: "Extra Bold", value: 800 },
+							{ label: "Black", value: 900 },
+						]}
+						optionValue="value"
+						optionTextValue="label"
+						value={{
+							label: "Custom",
+							value: props.segment.fontWeight,
+						}}
+						onChange={(value) => {
+							if (!value) return;
+							updateSegment((segment) => {
+								segment.fontWeight = value.value;
+							});
+						}}
+						itemComponent={(props) => (
+							<MenuItem<typeof KSelect.Item>
+								as={KSelect.Item}
+								item={props.item}
+							>
+								<KSelect.ItemLabel class="flex-1">
+									{props.item.rawValue.label}
+								</KSelect.ItemLabel>
+								<KSelect.ItemIndicator class="ml-auto text-blue-9">
+									<IconCapCircleCheck />
+								</KSelect.ItemIndicator>
+							</MenuItem>
+						)}
+					>
+						<KSelect.Trigger class="flex w-full items-center justify-between rounded-md border border-gray-3 bg-gray-2 px-3 py-2 text-sm text-gray-12 transition-colors hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:outline-none focus:ring-1 focus:ring-blue-9">
+							<KSelect.Value<any> class="truncate">
+								{(state) => {
+									const selected = state.selectedOption();
+									if (selected) return selected.label;
+									// Find label for current weight
+									const weight = props.segment.fontWeight;
+									const option = [
+										{ label: "Thin", value: 100 },
+										{ label: "Extra Light", value: 200 },
+										{ label: "Light", value: 300 },
+										{ label: "Normal", value: 400 },
+										{ label: "Medium", value: 500 },
+										{ label: "Semi Bold", value: 600 },
+										{ label: "Bold", value: 700 },
+										{ label: "Extra Bold", value: 800 },
+										{ label: "Black", value: 900 },
+									].find((o) => o.value === weight);
+									return option ? option.label : weight.toString();
+								}}
+							</KSelect.Value>
+							<KSelect.Icon>
+								<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+							</KSelect.Icon>
+						</KSelect.Trigger>
+						<KSelect.Portal>
+							<PopperContent<typeof KSelect.Content>
+								as={KSelect.Content}
+								class={cx(topSlideAnimateClasses, "z-50")}
+							>
+								<MenuItemList<typeof KSelect.Listbox>
+									class="overflow-y-auto max-h-40"
+									as={KSelect.Listbox}
+								/>
+							</PopperContent>
+						</KSelect.Portal>
+					</KSelect>
+
+					<div class="flex items-center justify-between pt-1">
+						<span class="text-xs text-gray-11">Italic</span>
+						<Toggle
+							checked={props.segment.italic}
+							onChange={(value) =>
+								updateSegment((segment) => {
+									segment.italic = value;
+								})
+							}
+						/>
+					</div>
+				</div>
+			</Field>
+			<Field name="Color" icon={<IconLucidePalette class="size-4" />}>
+				<HexColorInput
+					value={props.segment.color}
+					onChange={(value) =>
+						updateSegment((segment) => {
+							segment.color = value;
+						})
+					}
+				/>
+			</Field>
+		</div>
+	);
+}
+
+function MaskSegmentConfig(props: {
+	segmentIndex: number;
+	segment: MaskSegment;
+}) {
+	const { setProject, editorState } = useEditorContext();
+
+	const updateSegment = (fn: (segment: MaskSegment) => void) => {
+		setProject(
+			"timeline",
+			"maskSegments",
+			produce((segments) => {
+				const target = segments?.[props.segmentIndex];
+				if (!target) return;
+				target.keyframes ??= { position: [], size: [], intensity: [] };
+				fn(target);
+			}),
+		);
+	};
+
+	createEffect(() => {
+		const keyframes = props.segment.keyframes;
+		if (
+			!keyframes ||
+			(keyframes.position.length === 0 &&
+				keyframes.size.length === 0 &&
+				keyframes.intensity.length === 0)
+		)
+			return;
+		updateSegment((segment) => {
+			segment.keyframes = { position: [], size: [], intensity: [] };
+		});
+	});
+
+	const currentAbsoluteTime = () =>
+		editorState.previewTime ?? editorState.playbackTime ?? props.segment.start;
+	const _maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
+
+	const clearKeyframes = (segment: MaskSegment) => {
+		segment.keyframes.position = [];
+		segment.keyframes.size = [];
+		segment.keyframes.intensity = [];
+	};
+
+	const _setPosition = (value: { x: number; y: number }) =>
+		updateSegment((segment) => {
+			segment.center = value;
+			clearKeyframes(segment);
+		});
+
+	const _setSize = (value: { x: number; y: number }) =>
+		updateSegment((segment) => {
+			segment.size = value;
+			clearKeyframes(segment);
+		});
+
+	const setIntensity = (value: number) =>
+		updateSegment((segment) => {
+			segment.opacity = value;
+			clearKeyframes(segment);
+		});
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`Mask ${props.segmentIndex + 1}`}
+				icon={<IconLucideBoxSelect class="size-4" />}
+			>
+				<div class="flex items-center justify-between gap-4">
+					<RadioGroup
+						class="grid grid-cols-2 gap-2"
+						value={props.segment.maskType}
+						onChange={(value) =>
+							updateSegment((segment) => {
+								segment.maskType = value as MaskKind;
+								if (segment.maskType === "highlight") {
+									segment.feather = 0;
+									segment.opacity = 1;
+								} else {
+									segment.feather = 0.1;
+								}
+							})
+						}
+					>
+						{[
+							{ value: "sensitive", label: "Sensitive" },
+							{ value: "highlight", label: "Highlight" },
+						].map((option) => (
+							<RadioGroup.Item
+								value={option.value}
+								class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+							>
+								<RadioGroup.ItemInput class="sr-only" />
+								<RadioGroup.ItemLabel class="flex cursor-pointer items-center gap-2 p-2 text-sm text-gray-12">
+									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+									{option.label}
+								</RadioGroup.ItemLabel>
+							</RadioGroup.Item>
+						))}
+					</RadioGroup>
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-gray-11">Enabled</span>
+						<Toggle
+							checked={props.segment.enabled}
+							onChange={(value) =>
+								updateSegment((segment) => {
+									segment.enabled = value;
+								})
+							}
+						/>
+					</div>
+				</div>
+			</Field>
+			<Show when={props.segment.maskType === "sensitive"}>
+				<Field name="Intensity" icon={<IconLucideGauge class="size-4" />}>
+					<Slider
+						value={[props.segment.opacity]}
+						onChange={([v]) => setIntensity(v)}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+						formatTooltip="%"
+					/>
+				</Field>
+			</Show>
+			<Show when={props.segment.maskType === "sensitive"}>
+				<Field name="Pixelation" icon={<IconLucideGrid class="size-4" />}>
+					<Slider
+						value={[props.segment.pixelation]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.pixelation = v;
+							})
+						}
+						minValue={1}
+						maxValue={80}
+						step={1}
+					/>
+				</Field>
+			</Show>
+			<Show when={props.segment.maskType === "highlight"}>
+				<Field name="Outside Darkness" icon={<IconLucideMoon class="size-4" />}>
+					<Slider
+						value={[props.segment.darkness]}
+						onChange={([v]) =>
+							updateSegment((segment) => {
+								segment.darkness = v;
+							})
+						}
+						minValue={0}
+						maxValue={1}
+						step={0.01}
+					/>
+				</Field>
+			</Show>
 		</div>
 	);
 }

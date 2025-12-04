@@ -1,5 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { Alias } from "vite";
 
 const pkgJsonCache = new Map();
@@ -12,8 +12,8 @@ const resolver: Alias = {
 
 		const [_, sourcePath] = source.split("~/");
 
-		if (importer!.includes("/src/")) {
-			const [pkg] = importer!.split("/src/");
+		if (importer?.includes("/src/")) {
+			const [pkg] = importer?.split("/src/");
 
 			root = `${pkg!}/src`;
 		} else {

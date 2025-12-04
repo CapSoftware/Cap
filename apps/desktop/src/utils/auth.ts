@@ -85,7 +85,7 @@ async function createLocalServerSession(signal: AbortSignal) {
 		},
 	);
 
-	signal.onabort = (e: Event) => {
+	signal.onabort = (_e: Event) => {
 		res(null);
 	};
 

@@ -91,13 +91,17 @@ export default function Recordings() {
 	const recordings = createQuery(() => recordingsQuery);
 
 	createTauriEventListener(events.uploadProgressEvent, (e) => {
-		setUploadProgress(e.video_id, (Number(e.uploaded) / Number(e.total)) * 100);
-		if (e.uploaded === e.total)
+		if (e.uploaded === e.total) {
 			setUploadProgress(
 				produce((s) => {
 					delete s[e.video_id];
 				}),
 			);
+		} else {
+			const total = Number(e.total);
+			const progress = total > 0 ? (Number(e.uploaded) / total) * 100 : 0;
+			setUploadProgress(e.video_id, progress);
+		}
 	});
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
@@ -346,7 +350,7 @@ function RecordingItem(props: {
 								commands.uploadExportedVideo(
 									props.recording.path,
 									"Reupload",
-									new Channel<UploadProgress>((progress) => {}),
+									new Channel<UploadProgress>((_progress) => {}),
 									null,
 									null,
 								),

@@ -8,7 +8,7 @@ import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
-import { commands, events, type UploadProgress } from "~/utils/tauri";
+import { commands, type UploadProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
@@ -161,7 +161,7 @@ function ShareButton() {
 					const customUrl = () =>
 						customDomain.data?.custom_domain
 							? new URL(
-									customDomain.data?.custom_domain + `/s/${meta().sharing?.id}`,
+									`${customDomain.data?.custom_domain}/s/${meta().sharing?.id}`,
 								)
 							: null;
 

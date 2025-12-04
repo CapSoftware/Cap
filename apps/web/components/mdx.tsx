@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
-import { MDXRemote, MDXRemoteProps } from "next-mdx-remote/rsc";
-import React, { PropsWithChildren, type ReactNode } from "react";
+import { MDXRemote } from "next-mdx-remote/rsc";
+import React, { type ReactNode } from "react";
 
 interface TableData {
 	headers: string[];

@@ -1,9 +1,7 @@
 "use client";
 
-import type { videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
-import { type ImageUpload, User } from "@cap/web-domain";
 import {
 	faChartSimple,
 	faChevronDown,
@@ -220,7 +218,6 @@ export const ShareHeader = ({
 										onChange={(e) => setTitle(e.target.value)}
 										onBlur={handleBlur}
 										onKeyDown={handleKeyDown}
-										autoFocus
 										className="w-full text-xl sm:text-2xl"
 									/>
 								) : (

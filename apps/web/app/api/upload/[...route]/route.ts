@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
 
-import { corsMiddleware, withAuth } from "../../utils";
+import { corsMiddleware } from "../../utils";
 
 import * as multipart from "./multipart";
 import * as signed from "./signed";
