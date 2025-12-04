@@ -347,7 +347,7 @@ function Dialogs() {
 										<Dialog.Content>
 											<div class="flex flex-row justify-center items-center">
 												<div
-													class="rounded overflow-hidden relative select-none"
+													class="relative select-none"
 													style={{
 														width: (() => {
 															const srcW = cropDialog().size.x;
@@ -383,7 +383,7 @@ function Dialogs() {
 														}}
 														initialCrop={initialBounds}
 														snapToRatioEnabled={snapToRatio()}
-														showBounds={true}
+														showBounds={false}
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
