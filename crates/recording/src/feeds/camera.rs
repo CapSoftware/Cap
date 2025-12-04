@@ -562,10 +562,17 @@ async fn setup_camera(
                 use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
                 let data_len = bytes.len();
-                if let Ok(buffer) = (unsafe { MFCreateMemoryBuffer(data_len as u32) }) {
-                    if let Ok(mut lock) = buffer.lock() {
-                        lock.copy_from_slice(&*bytes);
-                        drop(lock);
+                if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
+                    let buffer_ready = {
+                        if let Ok(mut lock) = buffer.lock() {
+                            lock.copy_from_slice(&*bytes);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if buffer_ready {
                         let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
 
                         let _ = native_recipient
