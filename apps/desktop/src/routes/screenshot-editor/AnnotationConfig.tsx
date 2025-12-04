@@ -13,6 +13,7 @@ export function AnnotationConfigBar() {
 		setAnnotations,
 		projectHistory,
 		setSelectedAnnotationId,
+		layersPanelOpen,
 	} = useScreenshotEditorContext();
 
 	const selected = createMemo(() =>
@@ -35,7 +36,12 @@ export function AnnotationConfigBar() {
 				const maskType = () => ann().maskType ?? "blur";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
-					<div class="w-full border-b border-gray-3 bg-gray-1 dark:bg-gray-2 animate-in fade-in slide-in-from-top-1 duration-150">
+					<div
+						class={cx(
+							"absolute top-14 right-0 z-10 border-b border-gray-3 bg-gray-1 dark:bg-gray-2 animate-in fade-in slide-in-from-top-1 duration-150 transition-[left]",
+							layersPanelOpen() ? "left-56" : "left-0",
+						)}
+					>
 						<div class="flex items-center justify-center gap-6 px-4 h-11">
 							<Show when={!isMask}>
 								<ConfigItem label={type === "text" ? "Color" : "Stroke"}>
