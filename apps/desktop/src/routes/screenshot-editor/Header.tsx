@@ -66,18 +66,13 @@ export function Header() {
 
 	const cropDialogHandler = () => {
 		const frame = latestFrame();
+		const frameWidth = frame?.data?.width ?? 0;
+		const frameHeight = frame?.data?.height ?? 0;
 		setDialog({
 			open: true,
 			type: "crop",
-			position: {
-				...(project.background.crop?.position ?? { x: 0, y: 0 }),
-			},
-			size: {
-				...(project.background.crop?.size ?? {
-					x: frame?.data?.width ?? 0,
-					y: frame?.data?.height ?? 0,
-				}),
-			},
+			originalSize: { x: frameWidth, y: frameHeight },
+			currentCrop: project.background.crop,
 		});
 	};
 
