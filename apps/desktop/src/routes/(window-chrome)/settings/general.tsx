@@ -156,7 +156,7 @@ function AppearanceSection(props: {
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">General</h2>
 				<p class="text-sm text-gray-10">
-					General settings of your Cap application.
+					General settings of your Inflight application.
 				</p>
 			</div>
 			<div

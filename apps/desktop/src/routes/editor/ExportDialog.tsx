@@ -460,7 +460,7 @@ export function ExportDialog() {
 		<>
 			<Show when={exportState.type === "idle"}>
 				<DialogContent
-					title="Export Cap"
+					title="Export"
 					confirm={
 						settings.exportTo === "link" && !auth.data ? (
 							<SignInButton>
@@ -883,7 +883,7 @@ export function ExportDialog() {
 													<Match when={uploadState.type !== "done" && uploadState} keyed>
 														{(uploadState) => (
 															<div class="flex flex-col gap-4 justify-center items-center">
-																<h1 class="text-lg font-medium text-center text-gray-12">Uploading Cap...</h1>
+																<h1 class="text-lg font-medium text-center text-gray-12">Uploading...</h1>
 																<Switch>
 																	<Match when={uploadState.type === "uploading" && uploadState} keyed>
 																		{(uploadState) => (
@@ -916,7 +916,7 @@ export function ExportDialog() {
 														<div class="flex flex-col gap-5 justify-center items-center">
 															<div class="flex flex-col gap-1 items-center">
 																<h1 class="mx-auto text-lg font-medium text-center text-gray-12">Upload Complete</h1>
-																<p class="text-sm text-gray-11">Your Cap has been uploaded successfully</p>
+																<p class="text-sm text-gray-11">Your recording has been uploaded successfully</p>
 															</div>
 														</div>
 													</Match>

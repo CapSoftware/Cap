@@ -280,7 +280,7 @@ export default function Page() {
 							<div class="flex flex-col items-center mb-6 text-center">
 								<h3 class="text-2xl font-medium">Commercial License</h3>
 								<p class="text-sm text-gray-11">
-									Your license details for Cap commercial use
+									Your license details for Inflight commercial use
 								</p>
 							</div>
 
@@ -395,7 +395,7 @@ export default function Page() {
 										</div>
 										<ul class="flex flex-col gap-2 justify-center list-none">
 											{[
-												"Commercial Use of Cap Recorder + Editor",
+												"Commercial Use of Inflight Recorder + Editor",
 												"Community Support",
 												"Local-only features",
 												"Perpetual license option",
@@ -464,7 +464,7 @@ export default function Page() {
 										<Pro class="w-[250px]" />
 										<div class="space-y-1 text-center">
 											<h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-1">
-												Cap Pro
+												Inflight Pro
 											</h3>
 											<p class="text-[0.875rem] text-gray-9">
 												For professional use and teams.
@@ -515,7 +515,7 @@ export default function Page() {
 										class="!rounded-full !text-lg w-full mx-auto"
 										onClick={openCheckoutInExternalBrowser}
 									>
-										{loading() ? "Loading..." : "Upgrade to Cap Pro"}
+										{loading() ? "Loading..." : "Upgrade to Inflight Pro"}
 									</Button>
 								</div>
 							</div>

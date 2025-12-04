@@ -343,7 +343,8 @@ export default function () {
 	};
 
 	const isMaxRecordingLimitEnabled = () => {
-		return optionsQuery.rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false;
+		return false;
+		// return optionsQuery.rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false;
 	};
 
 	let aborted = false;
