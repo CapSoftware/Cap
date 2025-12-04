@@ -169,8 +169,9 @@ impl CapWindowId {
             Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
                 Some(Some(LogicalPosition::new(20.0, 32.0)))
             }
-            Self::Settings => Some(Some(LogicalPosition::new(16.0, 28.0))),
-            Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+            Self::Setup | Self::RecordingControls => {
+                Some(Some(LogicalPosition::new(-100.0, -100.0)))
+            }
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
@@ -182,7 +183,7 @@ impl CapWindowId {
 
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
-            Self::Setup => (600.0, 600.0),
+            Self::Setup => (880.0, 600.0),
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),

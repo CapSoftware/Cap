@@ -16,12 +16,9 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
-import {
-	commands,
-	type OSPermission,
-	type OSPermissionStatus,
-} from "~/utils/tauri";
+import { commands, type OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import IconLucideVolumeX from "~icons/lucide/volume-x";
+import welcome from "../../assets/illustrations/welcome.webp";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
 	return status === "granted" || status === "notNeeded";
@@ -31,32 +28,23 @@ const permissions = [
 	{
 		name: "Screen Recording",
 		key: "screenRecording" as const,
-		description: "This permission is required to record your screen.",
+		description: "Share any screen, window, or app",
 	},
 	{
 		name: "Accessibility",
 		key: "accessibility" as const,
-		description:
-			"During recording, Inflight collects mouse activity locally to generate automatic zoom in segments.",
+		description: "Inflight collects mouse activity to create video cursor flyovers",
 	},
 ] as const;
 
 export default function () {
 	const [initialCheck, setInitialCheck] = createSignal(true);
-	const [check, checkActions] = createResource(() =>
-		commands.doPermissionsCheck(initialCheck()),
-	);
-	const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">(
-		"permissions",
-	);
+	const [check, checkActions] = createResource(() => commands.doPermissionsCheck(initialCheck()));
+	const [currentStep, setCurrentStep] = createSignal<"permissions" | "mode">("permissions");
 
 	createEffect(() => {
 		if (!initialCheck()) {
-			createTimer(
-				() => startTransition(() => checkActions.refetch()),
-				250,
-				setInterval,
-			);
+			createTimer(() => startTransition(() => checkActions.refetch()), 250, setInterval);
 		}
 	});
 
@@ -79,7 +67,7 @@ export default function () {
 		generalSettingsStore.get().then((s) => {
 			if (s === undefined) return true;
 			return !s.hasCompletedStartup;
-		}),
+		})
 	);
 
 	const handleContinue = () => {
@@ -90,87 +78,109 @@ export default function () {
 	};
 
 	return (
-		<div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
-			{showStartup() && (
+		<div class="flex flex-row gap-0 pl-14 text-[0.875rem] font-[400] flex-1 bg-neutral-950 relative">
+			{/* {showStartup() && (
 				<Startup
 					onClose={() => {
 						showStartupActions.mutate(false);
 					}}
 				/>
-			)}
+			)} */}
 
 			<Show when={currentStep() === "permissions"}>
-				<div class="flex flex-col items-center">
-					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Permissions Required
-					</h1>
-					<p class="text-gray-11">
-						Inflight needs permissions to run properly.
-					</p>
-				</div>
+				<div class="flex flex-col items-start justify-center gap-8 w-[380px] z-10">
+					<div class="flex flex-col gap-2 items-start">
+						<LogoSquare class="" />
+						<h1 class="text-[32px] text-white font-medium leading-tight">
+							The screen recorder <br /> for designers
+						</h1>
+						<p class="text-white/70 text-sm">Grant permissions to create your first flyover</p>
+					</div>
 
-				<ul class="flex flex-col gap-4 py-8">
-					<For each={permissions}>
-						{(permission) => {
-							const permissionCheck = () => check()?.[permission.key];
+					<ul class="flex flex-col gap-8 p-6 rounded-[12px] border border-dashed border-white/10 bg-neutral-900/70">
+						<For each={permissions}>
+							{(permission) => {
+								const permissionCheck = () => check()?.[permission.key];
 
-							return (
-								<Show when={permissionCheck() !== "notNeeded"}>
-									<li class="flex flex-row items-center gap-4">
-										<div class="flex flex-col flex-[2]">
-											<span class="font-[500] text-[0.875rem] text-[--text-primary]">
-												{permission.name} Permission
-											</span>
-											<span class="text-[--text-secondary]">
-												{permission.description}
-											</span>
-										</div>
-										<Button
-											class="flex-1 shrink-0"
-											onClick={() =>
-												permissionCheck() !== "denied"
-													? requestPermission(permission.key)
-													: openSettings(permission.key)
-											}
-											disabled={isPermitted(permissionCheck())}
-										>
-											{permissionCheck() === "granted"
-												? "Granted"
-												: permissionCheck() !== "denied"
+								return (
+									<Show when={permissionCheck() !== "notNeeded"}>
+										<li class="flex flex-row items-center justify-between gap-8">
+											<div class="flex flex-col gap-2">
+												<span class="font-[500] text-[0.875rem] text-white">{permission.name} Permission</span>
+												<span class="text-white/70">{permission.description}</span>
+											</div>
+											<button
+												class="flex items-center justify-center h-8 px-3 rounded-[8px] border border-white/10 disabled:opacity-50 whitespace-nowrap"
+												style={{
+													background:
+														"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--Bg-fill-active, #2E3138)",
+													"background-blend-mode": "plus-lighter, normal",
+													"box-shadow":
+														"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+												}}
+												onClick={() =>
+													permissionCheck() !== "denied"
+														? requestPermission(permission.key)
+														: openSettings(permission.key)
+												}
+												disabled={isPermitted(permissionCheck())}
+											>
+												{permissionCheck() === "granted"
+													? "Granted"
+													: permissionCheck() !== "denied"
 													? "Grant Permission"
 													: "Request Permission"}
-										</Button>
-									</li>
-								</Show>
-							);
-						}}
-					</For>
-				</ul>
+											</button>
+										</li>
+									</Show>
+								);
+							}}
+						</For>
+					</ul>
 
-				<Button
-					class="px-12"
-					size="lg"
-					disabled={
-						permissions.find((p) => !isPermitted(check()?.[p.key])) !==
-						undefined
-					}
-					onClick={handleContinue}
-				>
-					Continue
-				</Button>
+					<button
+						class="px-3 h-10 flex flex-row gap-1 items-center justify-center disabled:opacity-50 rounded-[12px] hover:opacity-90"
+						style={
+							permissions.find((p) => !isPermitted(check()?.[p.key])) === undefined
+								? {
+										border: "0.5px solid var(--Highlight-extra, rgba(255, 255, 255, 0.15))",
+										background:
+											"linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--Bg-fill-brand, #0080F0)",
+										"background-blend-mode": "plus-lighter, normal",
+										"box-shadow":
+											"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+								  }
+								: { background: "rgba(255,255,255,0.1)" }
+						}
+						disabled={permissions.find((p) => !isPermitted(check()?.[p.key])) !== undefined}
+						onClick={handleContinue}
+					>
+						<p class="text-white text-sm font-medium">Get Started</p>
+						<ArrowRightIcon class="size-4 text-white" />
+					</button>
+				</div>
 			</Show>
 
-			<Show when={currentStep() === "mode"}>
+			<div class="absolute right-0 w-[410px] h-[560px]">
+				<img
+					class="absolute inset-0 w-full h-full object-cover"
+					src={welcome}
+					alt="Welcome to Inflight"
+					draggable={false}
+				/>
+				<div
+					class="absolute inset-0 pointer-events-none"
+					style={{
+						background: "linear-gradient(to left, transparent 60%, #0a0a0a 95%)",
+					}}
+				/>
+			</div>
+
+			{/* <Show when={currentStep() === "mode"}>
 				<div class="flex flex-col items-center">
 					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Select Recording Mode
-					</h1>
-					<p class="text-gray-11">
-						Choose how you want to record with Inflight. You can change this
-						later.
-					</p>
+					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">Select Recording Mode</h1>
+					<p class="text-gray-11">Choose how you want to record with Inflight. You can change this later.</p>
 				</div>
 
 				<div class="w-full py-4">
@@ -180,7 +190,7 @@ export default function () {
 				<Button class="px-12" size="lg" onClick={handleContinue}>
 					Continue to Inflight
 				</Button>
-			</Show>
+			</Show> */}
 		</div>
 	);
 }
@@ -194,12 +204,10 @@ import cloud1 from "../../assets/illustrations/cloud-1.png";
 import cloud2 from "../../assets/illustrations/cloud-2.png";
 import cloud3 from "../../assets/illustrations/cloud-3.png";
 import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
+import { ArrowRightIcon, LogoSquare } from "~/icons";
 
 function Startup(props: { onClose: () => void }) {
-	const [audioState, setAudioState] = makePersisted(
-		createStore({ isMuted: false }),
-		{ name: "audioSettings" },
-	);
+	const [audioState, setAudioState] = makePersisted(createStore({ isMuted: false }), { name: "audioSettings" });
 
 	const [isExiting, setIsExiting] = createSignal(false);
 
@@ -250,30 +258,22 @@ function Startup(props: { onClose: () => void }) {
 
 		// Top right cloud - gentle diagonal movement
 		cloud1Animation = cloud1El?.animate(
-			[
-				{ transform: "translate(0, 0)" },
-				{ transform: "translate(-20px, 10px)" },
-				{ transform: "translate(0, 0)" },
-			],
+			[{ transform: "translate(0, 0)" }, { transform: "translate(-20px, 10px)" }, { transform: "translate(0, 0)" }],
 			{
 				duration: 30000,
 				iterations: Infinity,
 				easing: "linear",
-			},
+			}
 		);
 
 		// Top left cloud - gentle diagonal movement
 		cloud2Animation = cloud2El?.animate(
-			[
-				{ transform: "translate(0, 0)" },
-				{ transform: "translate(20px, 10px)" },
-				{ transform: "translate(0, 0)" },
-			],
+			[{ transform: "translate(0, 0)" }, { transform: "translate(20px, 10px)" }, { transform: "translate(0, 0)" }],
 			{
 				duration: 35000,
 				iterations: Infinity,
 				easing: "linear",
-			},
+			}
 		);
 
 		// Bottom cloud - slow rise up with subtle horizontal movement
@@ -288,7 +288,7 @@ function Startup(props: { onClose: () => void }) {
 				iterations: 1,
 				easing: "cubic-bezier(0.4, 0, 0.2, 1)",
 				fill: "forwards",
-			},
+			}
 		);
 	});
 
@@ -301,29 +301,19 @@ function Startup(props: { onClose: () => void }) {
 	return (
 		<Portal>
 			<div class="absolute inset-0 z-40">
-				<header
-					class="absolute top-0 inset-x-0 h-12 z-10"
-					data-tauri-drag-region
-				>
+				<header class="absolute top-0 inset-x-0 h-12 z-10" data-tauri-drag-region>
 					<div
 						class={cx(
 							"flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
-							ostype() === "windows" ? "flex-row" : "flex-row-reverse",
+							ostype() === "windows" ? "flex-row" : "flex-row-reverse"
 						)}
 						data-tauri-drag-region
 					>
 						<button
 							onClick={toggleMute}
-							class={cx(
-								"mx-4 text-solid-white hover:text-[#DDD] transition-colors",
-								isExiting() && "opacity-0",
-							)}
+							class={cx("mx-4 text-solid-white hover:text-[#DDD] transition-colors", isExiting() && "opacity-0")}
 						>
-							{audioState.isMuted ? (
-								<IconLucideVolumeX class="w-6 h-6" />
-							) : (
-								<IconLucideVolume2 class="w-6 h-6" />
-							)}
+							{audioState.isMuted ? <IconLucideVolumeX class="w-6 h-6" /> : <IconLucideVolume2 class="w-6 h-6" />}
 						</button>
 						{ostype() === "windows" && <CaptionControlsWindows11 />}
 					</div>
@@ -425,7 +415,7 @@ function Startup(props: { onClose: () => void }) {
 					style={{ "transition-duration": "600ms" }}
 					class={cx(
 						"flex flex-col h-screen custom-bg relative overflow-hidden transition-opacity text-solid-white",
-						isExiting() && "exiting opacity-0",
+						isExiting() && "exiting opacity-0"
 					)}
 				>
 					<div class="grain" />
@@ -437,11 +427,7 @@ function Startup(props: { onClose: () => void }) {
 							isExiting() ? "exiting" : ""
 						}`}
 					>
-						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
-							src={cloud1}
-							alt="Cloud One"
-						/>
+						<img class="cloud-image w-[100vw] md:w-[80vw] -mr-40" src={cloud1} alt="Cloud One" />
 					</div>
 					<div
 						id="cloud-2"
@@ -449,11 +435,7 @@ function Startup(props: { onClose: () => void }) {
 							isExiting() ? "exiting" : ""
 						}`}
 					>
-						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
-							src={cloud2}
-							alt="Cloud Two"
-						/>
+						<img class="cloud-image w-[100vw] md:w-[80vw] -ml-40" src={cloud2} alt="Cloud Two" />
 					</div>
 					<div
 						id="cloud-3"
@@ -461,11 +443,7 @@ function Startup(props: { onClose: () => void }) {
 							isExiting() ? "exiting" : ""
 						}`}
 					>
-						<img
-							class="cloud-image w-[180vw] md:w-[180vw]"
-							src={cloud3}
-							alt="Cloud Three"
-						/>
+						<img class="cloud-image w-[180vw] md:w-[180vw]" src={cloud3} alt="Cloud Three" />
 					</div>
 
 					{/* Main content */}
@@ -475,10 +453,7 @@ function Startup(props: { onClose: () => void }) {
 						}`}
 					>
 						<div class="text-center mb-8">
-							<div
-								onClick={handleLogoClick}
-								class="cursor-pointer inline-block"
-							>
+							<div onClick={handleLogoClick} class="cursor-pointer inline-block">
 								<IconCapLogo
 									class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
