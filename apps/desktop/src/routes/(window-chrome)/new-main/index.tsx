@@ -70,7 +70,7 @@ import HorizontalTargetButton from "./HorizontalTargetButton";
 import VerticalTargetButton from "./VerticalTargetButton";
 import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, NoCameraIcon, SettingsIcon, WindowIcon } from "~/icons";
 
-const WINDOW_SIZE = { width: 290, height: 432 } as const;
+const WINDOW_SIZE = { width: 290, height: 442 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -559,7 +559,7 @@ function Page() {
 	const handleReupload = async (path: string) => {
 		setReuploadingPaths((prev) => new Set([...prev, path]));
 		try {
-			await commands.uploadExportedVideo(path, "Reupload", new Channel<UploadProgress>(() => {}), null);
+			await commands.uploadExportedVideo(path, "Reupload", new Channel<UploadProgress>(() => {}), null, null);
 		} finally {
 			setReuploadingPaths((prev) => {
 				const next = new Set(prev);
