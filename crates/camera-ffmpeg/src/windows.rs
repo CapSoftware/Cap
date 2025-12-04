@@ -225,7 +225,7 @@ impl CapturedFrameExt for CapturedFrame {
                 let src_stride = width * 3;
 
                 for y in 0..height {
-                    let src_row = &bytes[y * src_stride..];
+                    let src_row = &bytes[(height - y - 1) * src_stride..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
                     dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
                 }
