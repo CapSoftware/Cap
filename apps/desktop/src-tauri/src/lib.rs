@@ -28,6 +28,7 @@ mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
+mod update_project_names;
 mod upload;
 mod web_api;
 mod window_exclusion;
@@ -2388,7 +2389,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            format_project_name,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2533,6 +2535,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+
+            if let Err(err) = update_project_names::migrate_if_needed(&app) {
+                tracing::error!("Failed to migrate project file names: {}", err);
+            }
+
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
@@ -3151,6 +3158,24 @@ async fn write_clipboard_string(
     writer
         .set_text(text)
         .map_err(|e| format!("Failed to write text to clipboard: {e}"))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn format_project_name(
+    template: Option<String>,
+    target_name: String,
+    target_kind: String,
+    recording_mode: RecordingMode,
+    datetime: Option<chrono::DateTime<chrono::Local>>,
+) -> String {
+    recording::format_project_name(
+        template.as_deref(),
+        target_name.as_str(),
+        target_kind.as_str(),
+        recording_mode,
+        datetime,
+    )
 }
 
 trait EventExt: tauri_specta::Event {

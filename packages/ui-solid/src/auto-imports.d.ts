@@ -8,6 +8,7 @@ export {}
 declare global {
   const IconCapArrows: typeof import('~icons/cap/arrows.jsx')['default']
   const IconCapAudioOn: typeof import('~icons/cap/audio-on.jsx')['default']
+  const IconCapAuto: typeof import('~icons/cap/auto.jsx')['default']
   const IconCapBgBlur: typeof import('~icons/cap/bg-blur.jsx')['default']
   const IconCapCamera: typeof import('~icons/cap/camera.jsx')['default']
   const IconCapCaptions: typeof import('~icons/cap/captions.jsx')['default']
