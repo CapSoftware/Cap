@@ -90,7 +90,7 @@ function ViewAllButton(props: { onClick: () => void; label: string }) {
 		<button
 			type="button"
 			onClick={props.onClick}
-			class="col-span-2 flex items-center justify-center gap-2 py-2.5 mt-1 text-xs font-medium text-gray-11 bg-gray-3 rounded-lg hover:bg-gray-4 hover:text-gray-12 transition-colors"
+			class="col-span-2 flex items-center justify-center gap-2 py-2.5 mt-1 mb-3 text-xs font-medium text-gray-11 bg-gray-3 rounded-lg hover:bg-gray-4 hover:text-gray-12 transition-colors"
 		>
 			<IconLucideExternalLink class="size-3" />
 			{props.label}
