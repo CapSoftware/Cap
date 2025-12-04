@@ -56,13 +56,17 @@
 		"macOS": {
 			"dmg": {
 				"background": "assets/dmg-background.png",
+				"windowSize": {
+					"width": 1200,
+					"height": 840
+				},
 				"appPosition": {
-					"x": 180,
-					"y": 140
+					"x": 270,
+					"y": 450
 				},
 				"applicationFolderPosition": {
-					"x": 480,
-					"y": 140
+					"x": 720,
+					"y": 450
 				}
 			},
 			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
