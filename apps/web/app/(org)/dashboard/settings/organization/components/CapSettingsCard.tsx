@@ -1,7 +1,6 @@
 "use client";
 
 import { Card, CardDescription, CardHeader, CardTitle, Switch } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";

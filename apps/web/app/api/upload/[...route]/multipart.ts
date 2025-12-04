@@ -8,15 +8,13 @@ import { serverEnv } from "@cap/env";
 import {
 	AwsCredentials,
 	Database,
-	makeCurrentUser,
 	makeCurrentUserLayer,
 	provideOptionalAuth,
 	S3Buckets,
-	Videos,
 	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
-import { CurrentUser, Policy, Video } from "@cap/web-domain";
+import { Policy, Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option, Schedule } from "effect";
@@ -438,7 +436,7 @@ app.post(
 								),
 							});
 
-							const pathToInvalidate = "/" + fileKey;
+							const pathToInvalidate = `/${fileKey}`;
 
 							yield* Effect.promise(() =>
 								cloudfront.send(

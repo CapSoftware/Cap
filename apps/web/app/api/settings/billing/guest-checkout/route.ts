@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 				});
 
 				ph.capture({
-					distinctId: "guest-" + checkoutSession.id,
+					distinctId: `guest-${checkoutSession.id}`,
 					event: "guest_checkout_started",
 					properties: {
 						price_id: priceId,

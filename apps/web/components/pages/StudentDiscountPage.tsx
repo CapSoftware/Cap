@@ -4,7 +4,6 @@ import { Button } from "@cap/ui";
 import {
 	faBookOpen,
 	faCopy,
-	faGraduationCap,
 	faRocket,
 	faUsers,
 } from "@fortawesome/free-solid-svg-icons";
@@ -12,7 +11,6 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { toast } from "sonner";
-import { CommercialCard, ProCard } from "./HomePage/Pricing";
 
 const fadeIn = {
 	hidden: { opacity: 0, y: 20 },
@@ -27,7 +25,7 @@ const fadeIn = {
 	}),
 };
 
-const fadeInFromBottom = {
+const _fadeInFromBottom = {
 	hidden: { opacity: 0, y: 50 },
 	visible: (custom: number = 0) => ({
 		opacity: 1,
@@ -61,7 +59,7 @@ export const StudentDiscountPage = () => {
 			setCopied(true);
 			toast.success("Discount code copied!");
 			setTimeout(() => setCopied(false), 2000);
-		} catch (err) {
+		} catch (_err) {
 			toast.error("Failed to copy code");
 		}
 	};

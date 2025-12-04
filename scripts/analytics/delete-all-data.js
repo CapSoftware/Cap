@@ -103,7 +103,7 @@ async function deleteAllData() {
 					},
 				);
 				ok = true;
-			} catch (e1) {
+			} catch (_e1) {
 				try {
 					await client.request(
 						`/v0/datasources/${encodeURIComponent(datasource)}/data`,
@@ -112,7 +112,7 @@ async function deleteAllData() {
 						},
 					);
 					ok = true;
-				} catch (e2) {
+				} catch (_e2) {
 					await client.request(
 						`/v0/datasources/${encodeURIComponent(datasource)}`,
 						{

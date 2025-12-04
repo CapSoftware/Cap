@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 export type ChangelogMetadata = {
 	title: string;
@@ -12,10 +12,12 @@ export type ChangelogMetadata = {
 function parseFrontmatter(fileContent: string) {
 	const frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
 	const match = frontmatterRegex.exec(fileContent);
-	const frontMatterBlock = match![1];
+	const frontMatterBlock = match?.[1];
 	const content = fileContent.replace(frontmatterRegex, "").trim();
-	const frontMatterLines = frontMatterBlock!.trim().split("\n");
+	const frontMatterLines = frontMatterBlock?.trim().split("\n");
 	const metadata: Partial<ChangelogMetadata> = {};
+
+	if (!frontMatterLines) return { metadata, content };
 
 	frontMatterLines.forEach((line) => {
 		const [key, ...valueArr] = line.split(": ");

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { serverEnv } from "@cap/env";
-import { Organisation, User } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession as _getServerSession } from "next-auth";
@@ -11,7 +10,7 @@ import type { Provider } from "next-auth/providers/index";
 import WorkOSProvider from "next-auth/providers/workos";
 import { sendEmail } from "../emails/config.ts";
 import { db } from "../index.ts";
-import { organizationMembers, organizations, users } from "../schema.ts";
+import { users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 
@@ -153,11 +152,11 @@ export const authOptions = (): NextAuthOptions => {
 			async session({ token, session }) {
 				if (!session.user) return session;
 
-				if (token) {
-					session.user.id = token.id;
-					session.user.name = token.name;
-					session.user.email = token.email;
-					session.user.image = token.picture;
+				if (token && token.id && typeof token.id === "string") {
+					(session.user as { id: string }).id = token.id;
+					session.user.name = token.name ?? null;
+					session.user.email = token.email ?? null;
+					session.user.image = token.picture ?? null;
 				}
 
 				return session;

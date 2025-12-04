@@ -1,6 +1,5 @@
 "use client";
 
-import type { users } from "@cap/database/schema";
 import {
 	Button,
 	Card,
@@ -17,7 +16,6 @@ import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../Contexts";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings } from "./server";

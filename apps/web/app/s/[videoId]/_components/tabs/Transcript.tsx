@@ -1,6 +1,5 @@
 "use client";
 
-import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
@@ -40,7 +39,8 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 		const minutes = parseInt(minutesStr, 10);
 		const seconds = parseInt(secondsStr, 10);
 
-		if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
+			return null;
 
 		return hours * 3600 + minutes * 60 + seconds;
 	};
@@ -264,7 +264,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 			return;
 		}
 
-		const originalEntry = transcriptData.find(
+		const _originalEntry = transcriptData.find(
 			(entry) => entry.id === editingEntry,
 		);
 
@@ -582,7 +582,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 											onChange={(e) => setEditText(e.target.value)}
 											className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
 											rows={Math.max(2, Math.ceil(editText.length / 60))}
-											autoFocus
 											onClick={(e) => e.stopPropagation()}
 											placeholder="Edit transcript text..."
 										/>

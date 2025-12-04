@@ -184,7 +184,14 @@ const FolderCard = ({
 			unregister();
 			document.removeEventListener("dragend", handleDragEnd);
 		};
-	}, [id, name, rive, isDragOver]);
+	}, [
+		id,
+		name,
+		rive,
+		isDragOver,
+		activeOrganization?.organization.id,
+		spaceId,
+	]);
 
 	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
 		e.preventDefault();
@@ -325,7 +332,7 @@ const FolderCard = ({
 			>
 				<div className="flex flex-1 gap-3 items-center">
 					<FolderRive
-						key={theme + "folder" + id}
+						key={`${theme}folder${id}`}
 						className="w-[50px] h-[50px]"
 					/>
 					<div

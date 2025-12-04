@@ -150,7 +150,7 @@ html {
 	:where(blockquote p:first-of-type):not(
 		:where([class~="not-prose"], [class~="not-prose"] *)
 	)::before {
-	content: "“" !important;
+	content: "“";
 	display: none;
 }
 
@@ -819,16 +819,16 @@ footer a {
 
 /* Firefox support */
 .media-player video::cue {
-	position: relative !important;
-	bottom: 64px !important;
+	position: relative;
+	bottom: 64px;
 }
 
 .media-player[data-controls-visible] video::cue {
-	bottom: 64px !important;
+	bottom: 64px;
 }
 
 .media-player[data-state="fullscreen"][data-controls-visible] video::cue {
-	bottom: 64px !important;
+	bottom: 64px;
 }
 
 /* Safari-specific styles using CSS hacks */
@@ -836,7 +836,7 @@ footer a {
 	_::-webkit-full-page-media,
 	_:future,
 	:root #video-container {
-		height: calc(100% - 1.7rem) !important;
+		height: calc(100% - 1.7rem);
 	}
 }
 
@@ -898,7 +898,7 @@ footer a {
 
 @media (max-width: 768px) {
 	.intercom-lightweight-app-launcher {
-		bottom: 90px !important;
+		bottom: 90px;
 	}
 }
 

@@ -261,13 +261,14 @@ impl AVAssetReaderDecoder {
                             .as_ref()
                             .map(|last| {
                                 requested_frame < last.number
-                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                || requested_frame - last.number > FRAME_CACHE_SIZE as u32
+                                    || requested_frame - last.number > FRAME_CACHE_SIZE as u32
                             })
                             .unwrap_or(true)
                     {
                         this.reset(requested_time);
                         frames = this.inner.frames();
+                        *last_sent_frame.borrow_mut() = None;
+                        cache.clear();
                     }
 
                     last_active_frame = Some(requested_frame);

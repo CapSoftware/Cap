@@ -18,10 +18,26 @@ export async function GET(request: Request) {
 		.map((post) => ({
 			metadata: post.metadata,
 			content: post.content,
-			slug: parseInt(post.slug),
+			slug: parseInt(post.slug, 10),
 		}))
 		.sort((a, b) => b.slug - a.slug)
-		.map(({ metadata, content }) => ({ ...metadata, content }));
+		.map(({ metadata, content }) => ({ ...metadata, content }))
+		.filter(
+			(
+				changelog,
+			): changelog is {
+				content: string;
+				title: string;
+				app: string;
+				publishedAt: string;
+				version: string;
+				image?: string;
+			} =>
+				typeof changelog.title === "string" &&
+				typeof changelog.app === "string" &&
+				typeof changelog.publishedAt === "string" &&
+				typeof changelog.version === "string",
+		);
 
 	if (changelogs.length === 0) {
 		return NextResponse.json({ hasUpdate: false });

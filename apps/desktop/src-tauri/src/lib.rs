@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod api;
 mod audio;
 mod audio_meter;
@@ -649,10 +651,18 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
                 )
             };
 
-            if should_check && let Some(selected_id) = camera_id {
-                let available = is_camera_available(&selected_id);
+            if should_check && let Some(ref selected_id) = camera_id {
+                let available = is_camera_available(selected_id);
+                debug!(
+                    "Camera watcher: checking availability for {:?}, available={}, is_marked={}",
+                    selected_id, available, is_marked
+                );
 
                 if !available && !is_marked {
+                    warn!(
+                        "Camera watcher: camera {:?} detected as unavailable, pausing recording",
+                        selected_id
+                    );
                     let mut app = state.write().await;
                     if let Err(err) = app
                         .handle_input_disconnect(RecordingInputKind::Camera)
@@ -674,7 +684,21 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
 }
 
 fn is_camera_available(id: &DeviceOrModelID) -> bool {
-    cap_camera::list_cameras().any(|info| match id {
+    let cameras: Vec<_> = cap_camera::list_cameras().collect();
+    debug!(
+        "is_camera_available: looking for {:?} in {} cameras",
+        id,
+        cameras.len()
+    );
+    for camera in &cameras {
+        debug!(
+            "  - device_id={}, model_id={:?}, name={}",
+            camera.device_id(),
+            camera.model_id(),
+            camera.display_name()
+        );
+    }
+    cameras.iter().any(|info| match id {
         DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
         DeviceOrModelID::ModelID(model_id) => {
             info.model_id().is_some_and(|existing| existing == model_id)
@@ -1467,6 +1491,17 @@ async fn set_project_config(
 
     editor_instance.project_config.0.send(config).ok();
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
+async fn update_project_config_in_memory(
+    editor_instance: WindowEditorInstance,
+    config: ProjectConfiguration,
+) -> Result<(), String> {
+    editor_instance.project_config.0.send(config).ok();
     Ok(())
 }
 
@@ -2301,6 +2336,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
@@ -2338,6 +2374,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
+            captions::prewarm_whisperx,
             captions::transcribe_audio,
             captions::save_captions,
             captions::load_captions,
@@ -3061,13 +3098,13 @@ async fn create_editor_instance_impl(
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            preview_tx
-                .send(Some((
+            preview_tx.send_modify(|v| {
+                *v = Some((
                     e.payload.frame_number,
                     e.payload.fps,
                     e.payload.resolution_base,
-                )))
-                .ok();
+                ));
+            });
         }
     });
 

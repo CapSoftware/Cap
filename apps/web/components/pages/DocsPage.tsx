@@ -16,7 +16,7 @@ export const DocsPage = () => {
 						key={doc.slug}
 						className="overflow-hidden w-full bg-white rounded-xl border transition-shadow cursor-pointer hover:shadow-md"
 					>
-						<Link href={"/docs/" + doc.slug}>
+						<Link href={`/docs/${doc.slug}`}>
 							{doc.metadata.image && (
 								<div className="w-full border-b">
 									<Image
@@ -35,15 +35,14 @@ export const DocsPage = () => {
 								</h2>
 								<p className="text-gray-600">{doc.metadata.summary}</p>
 								<div className="flex flex-wrap gap-2">
-									{doc.metadata.tags &&
-										doc.metadata.tags.split(", ").map((tag) => (
-											<p
-												key={tag}
-												className="rounded-md min-w-fit flex-initial bg-gray-4 font-medium px-2 py-0.5 text-sm text-gray-11"
-											>
-												{tag}
-											</p>
-										))}
+									{doc.metadata.tags?.split(", ").map((tag) => (
+										<p
+											key={tag}
+											className="rounded-md min-w-fit flex-initial bg-gray-4 font-medium px-2 py-0.5 text-sm text-gray-11"
+										>
+											{tag}
+										</p>
+									))}
 								</div>
 							</div>
 						</Link>

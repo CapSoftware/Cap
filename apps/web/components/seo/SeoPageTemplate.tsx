@@ -400,7 +400,7 @@ export const SeoPageTemplate = ({
 													key={cellIndex.toString()}
 													className={`px-6 py-4 text-[15px] text-gray-10 ${
 														rowIndex ===
-														content.comparisonTable!.rows.length - 1
+														(content.comparisonTable?.rows.length ?? 0) - 1
 															? ""
 															: "border-b border-gray-5"
 													}`}

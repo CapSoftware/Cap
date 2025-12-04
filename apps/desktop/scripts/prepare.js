@@ -31,7 +31,7 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
 	let build = 0;
 	if (buildOrPrerelease) {
 		const numMatch = buildOrPrerelease.match(/\d+$/);
-		build = numMatch ? parseInt(numMatch[0]) : 0;
+		build = numMatch ? parseInt(numMatch[0], 10) : 0;
 	}
 	const wixVersion = `${major}.${minor}.${patch}${
 		build === 0 ? "" : `.${build}`

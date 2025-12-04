@@ -1,5 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import { NumberField } from "@kobalte/core/number-field";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
 import { debounce, throttle } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
@@ -13,7 +14,6 @@ import {
 	createSignal,
 	Match,
 	on,
-	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -30,21 +30,27 @@ import {
 import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { events } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
 	FPS,
-	OUTPUT_SIZE,
+	serializeProjectConfiguration,
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
 import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
-import { Player } from "./Player";
+import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+
+const DEFAULT_TIMELINE_HEIGHT = 260;
+const MIN_PLAYER_CONTENT_HEIGHT = 320;
+const MIN_TIMELINE_HEIGHT = 240;
+const RESIZE_HANDLE_HEIGHT = 8;
+const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 
 export function Editor() {
 	return (
@@ -83,52 +89,85 @@ export function Editor() {
 }
 
 function Inner() {
-	const { project, editorState, setEditorState } = useEditorContext();
+	const { project, editorState, setEditorState, previewResolutionBase } =
+		useEditorContext();
+
+	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
+	const layoutBounds = createElementBounds(layoutRef);
+	const [storedTimelineHeight, setStoredTimelineHeight] = makePersisted(
+		createSignal(DEFAULT_TIMELINE_HEIGHT),
+		{ name: "editorTimelineHeight" },
+	);
+	const [isResizingTimeline, setIsResizingTimeline] = createSignal(false);
+
+	const clampTimelineHeight = (value: number) => {
+		const available = layoutBounds.height ?? 0;
+		const maxHeight =
+			available > 0
+				? Math.max(MIN_TIMELINE_HEIGHT, available - MIN_PLAYER_HEIGHT)
+				: Number.POSITIVE_INFINITY;
+		const upperBound = Number.isFinite(maxHeight)
+			? maxHeight
+			: Math.max(value, MIN_TIMELINE_HEIGHT);
+		return Math.min(Math.max(value, MIN_TIMELINE_HEIGHT), upperBound);
+	};
+
+	const timelineHeight = createMemo(() =>
+		Math.round(clampTimelineHeight(storedTimelineHeight())),
+	);
+
+	const handleTimelineResizeStart = (event: MouseEvent) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		const startY = event.clientY;
+		const startHeight = timelineHeight();
+		setIsResizingTimeline(true);
+
+		const handleMove = (moveEvent: MouseEvent) => {
+			const delta = moveEvent.clientY - startY;
+			setStoredTimelineHeight(clampTimelineHeight(startHeight - delta));
+		};
+
+		const handleUp = () => {
+			setIsResizingTimeline(false);
+			window.removeEventListener("mousemove", handleMove);
+			window.removeEventListener("mouseup", handleUp);
+		};
+
+		window.addEventListener("mousemove", handleMove);
+		window.addEventListener("mouseup", handleUp);
+	};
+
+	createEffect(() => {
+		const available = layoutBounds.height;
+		if (!available) return;
+		setStoredTimelineHeight((height) => clampTimelineHeight(height));
+	});
 
 	createTauriEventListener(events.editorStateChanged, (payload) => {
-		renderFrameThrottled.clear();
+		throttledRenderFrame.clear();
+		trailingRenderFrame.clear();
 		setEditorState("playbackTime", payload.playhead_position / FPS);
 	});
 
-	let rafId: number | null = null;
-	let pendingFrameTime: number | null = null;
-
-	const emitFrame = (time: number) => {
-		events.renderFrameEvent.emit({
-			frame_number: Math.max(Math.floor(time * FPS), 0),
-			fps: FPS,
-			resolution_base: OUTPUT_SIZE,
-		});
+	const emitRenderFrame = (time: number) => {
+		if (!editorState.playing) {
+			events.renderFrameEvent.emit({
+				frame_number: Math.max(Math.floor(time * FPS), 0),
+				fps: FPS,
+				resolution_base: previewResolutionBase(),
+			});
+		}
 	};
 
-	const renderFrameThrottled = throttle((time: number) => {
-		if (editorState.playing) return;
+	const throttledRenderFrame = throttle(emitRenderFrame, 1000 / FPS);
 
-		if (rafId !== null) {
-			pendingFrameTime = time;
-			return;
-		}
+	const trailingRenderFrame = debounce(emitRenderFrame, 1000 / FPS + 16);
 
-		rafId = requestAnimationFrame(() => {
-			rafId = null;
-			const frameTime = pendingFrameTime ?? time;
-			pendingFrameTime = null;
-			emitFrame(frameTime);
-		});
-	}, 1000 / 30);
-
-	const renderFrameDebounced = debounce((time: number) => {
-		if (editorState.playing) return;
-		emitFrame(time);
-	}, 50);
-
-	onCleanup(() => {
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-		}
-		renderFrameThrottled.clear();
-		renderFrameDebounced.clear();
-	});
+	const renderFrame = (time: number) => {
+		throttledRenderFrame(time);
+		trailingRenderFrame(time);
+	};
 
 	const frameNumberToRender = createMemo(() => {
 		const preview = editorState.previewTime;
@@ -137,24 +176,25 @@ function Inner() {
 	});
 
 	createEffect(
-		on(frameNumberToRender, (number) => {
-			if (editorState.playing) return;
-			renderFrameThrottled(number);
-		}),
+		on(
+			() => [frameNumberToRender(), previewResolutionBase()],
+			([number]) => {
+				if (editorState.playing) return;
+				renderFrame(number as number);
+			},
+		),
 	);
 
-	let lastProjectUpdateTime = 0;
+	const updateConfigAndRender = throttle(async (time: number) => {
+		const config = serializeProjectConfiguration(project);
+		await commands.updateProjectConfigInMemory(config);
+		renderFrame(time);
+	}, 1000 / FPS);
 	createEffect(
 		on(
 			() => trackDeep(project),
 			() => {
-				const now = performance.now();
-				if (now - lastProjectUpdateTime < 100) {
-					renderFrameDebounced(editorState.playbackTime);
-				} else {
-					renderFrameThrottled(editorState.playbackTime);
-				}
-				lastProjectUpdateTime = now;
+				updateConfigAndRender(editorState.playbackTime);
 			},
 		),
 	);
@@ -166,12 +206,46 @@ function Inner() {
 				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
-				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
-					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 pb-0.5">
-						<Player />
+				<div
+					ref={setLayoutRef}
+					class="flex overflow-hidden flex-col flex-1 min-h-0"
+				>
+					<div
+						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
+						style={{
+							"min-height": `${MIN_PLAYER_HEIGHT}px`,
+						}}
+					>
+						<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
+							<PlayerContent />
+							<div
+								role="separator"
+								aria-orientation="horizontal"
+								class="flex-none transition-colors hover:bg-gray-3/30"
+								style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
+							>
+								<div
+									class="flex justify-center items-center h-full cursor-row-resize select-none group"
+									classList={{ "bg-gray-3/50": isResizingTimeline() }}
+									onMouseDown={handleTimelineResizeStart}
+								>
+									<div
+										class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
+										classList={{ "bg-gray-7": isResizingTimeline() }}
+									/>
+								</div>
+							</div>
+						</div>
 						<ConfigSidebar />
 					</div>
-					<Timeline />
+					<div
+						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
+						style={{ height: `${timelineHeight()}px` }}
+					>
+						<div class="h-full">
+							<Timeline />
+						</div>
+					</div>
 				</div>
 				<Dialogs />
 			</div>

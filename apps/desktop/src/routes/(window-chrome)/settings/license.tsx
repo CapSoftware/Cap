@@ -177,7 +177,7 @@ type CommercialLicenseType = "yearly" | "lifetime";
 function CommercialLicensePurchase() {
 	const queryClient = useQueryClient();
 
-	const [type, setType] = createSignal<CommercialLicenseType>("yearly");
+	const [_type, _setType] = createSignal<CommercialLicenseType>("yearly");
 
 	const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
 

@@ -76,7 +76,7 @@ export const InviteDialog = ({
 		setIsOpen(false);
 		try {
 			await handleManageBilling();
-		} catch (error) {
+		} catch (_error) {
 			setUpgradeLoading(false);
 		}
 	};

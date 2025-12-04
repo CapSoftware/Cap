@@ -75,7 +75,6 @@ module.exports = (__app, _options) => {
 					gray: getColorScale("gray"),
 					"gray-a": getColorScale("gray-a", true),
 					blue: getColorScale("blue"),
-					red: getColorScale("red"),
 					border: "hsl(var(--border))",
 					input: "hsl(var(--input))",
 					ring: "hsl(var(--ring))",

@@ -173,11 +173,11 @@
 }
 
 [data-transparent-window] {
-	background: transparent !important;
+	background: transparent;
 }
 
 [data-transparent-window] body {
-	background: transparent !important;
+	background: transparent;
 }
 
 /* Custom scrollbar */
@@ -201,7 +201,7 @@
 /* Ensure transparent windows stay transparent in dark mode */
 .dark [data-transparent-window],
 .dark [data-transparent-window] body {
-	background: transparent !important;
+	background: transparent;
 }
 
 .custom-scroll::-webkit-scrollbar {

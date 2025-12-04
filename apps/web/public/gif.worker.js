@@ -3,10 +3,10 @@
 	function s(o, u) {
 		if (!n[o]) {
 			if (!t[o]) {
-				var a = typeof require == "function" && require;
+				var a = typeof require === "function" && require;
 				if (!u && a) return a(o, !0);
 				if (i) return i(o, !0);
-				var f = new Error("Cannot find module '" + o + "'");
+				var f = new Error(`Cannot find module '${o}'`);
 				throw ((f.code = "MODULE_NOT_FOUND"), f);
 			}
 			var l = (n[o] = { exports: {} });
@@ -26,13 +26,13 @@
 		}
 		return n[o].exports;
 	}
-	var i = typeof require == "function" && require;
+	var i = typeof require === "function" && require;
 	for (var o = 0; o < r.length; o++) s(r[o]);
 	return s;
 })(
 	{
 		1: [
-			(require, module, exports) => {
+			(require, module, _exports) => {
 				var NeuQuant = require("./TypedNeuQuant.js");
 				var LZWEncoder = require("./LZWEncoder.js");
 				function ByteArray() {
@@ -108,10 +108,7 @@
 				};
 				GIFEncoder.prototype.addFrame = function (imageData) {
 					this.image = imageData;
-					this.colorTab =
-						this.globalPalette && this.globalPalette.slice
-							? this.globalPalette
-							: null;
+					this.colorTab = this.globalPalette?.slice ? this.globalPalette : null;
 					this.getImagePixels();
 					this.analyzePixels();
 					if (this.globalPalette === true) this.globalPalette = this.colorTab;
@@ -143,12 +140,7 @@
 					this.globalPalette = palette;
 				};
 				GIFEncoder.prototype.getGlobalPalette = function () {
-					return (
-						(this.globalPalette &&
-							this.globalPalette.slice &&
-							this.globalPalette.slice(0)) ||
-						this.globalPalette
-					);
+					return this.globalPalette?.slice?.(0) || this.globalPalette;
 				};
 				GIFEncoder.prototype.writeHeader = function () {
 					this.out.writeUTFBytes("GIF89a");
@@ -174,7 +166,7 @@
 						this.transIndex = this.findClosest(this.transparent, true);
 					}
 				};
-				GIFEncoder.prototype.indexPixels = function (imgq) {
+				GIFEncoder.prototype.indexPixels = function (_imgq) {
 					var nPix = this.pixels.length / 3;
 					this.indexedPixels = new Uint8Array(nPix);
 					var k = 0;
@@ -225,7 +217,7 @@
 						],
 					};
 					if (!kernel || !kernels[kernel]) {
-						throw "Unknown dithering kernel: " + kernel;
+						throw `Unknown dithering kernel: ${kernel}`;
 					}
 					var ds = kernels[kernel];
 					var index = 0,
@@ -237,8 +229,8 @@
 					for (var y = 0; y < height; y++) {
 						if (serpentine) direction = direction * -1;
 						for (
-							var x = direction == 1 ? 0 : width - 1,
-								xend = direction == 1 ? width : 0;
+							var x = direction === 1 ? 0 : width - 1,
+								xend = direction === 1 ? width : 0;
 							x !== xend;
 							x += direction
 						) {
@@ -258,8 +250,8 @@
 							var eg = g1 - g2;
 							var eb = b1 - b2;
 							for (
-								var i = direction == 1 ? 0 : ds.length - 1,
-									end = direction == 1 ? ds.length : 0;
+								var i = direction === 1 ? 0 : ds.length - 1,
+									end = direction === 1 ? ds.length : 0;
 								i !== end;
 								i += direction
 							) {
@@ -301,7 +293,7 @@
 					if (this.neuQuant && !used) {
 						return this.neuQuant.lookupRGB(r, g, b);
 					}
-					var c = b | (g << 8) | (r << 16);
+					var _c = b | (g << 8) | (r << 16);
 					var minpos = 0;
 					var dmin = 256 * 256 * 256;
 					var len = this.colorTab.length;
@@ -409,7 +401,7 @@
 			{ "./LZWEncoder.js": 2, "./TypedNeuQuant.js": 3 },
 		],
 		2: [
-			(require, module, exports) => {
+			(_require, module, _exports) => {
 				var EOF = -1;
 				var BITS = 12;
 				var HSIZE = 5003;
@@ -459,7 +451,7 @@
 						hsize_reg = HSIZE;
 						cl_hash(hsize_reg);
 						output(ClearCode, outs);
-						outer_loop: while ((c = nextPixel()) != EOF) {
+						outer_loop: while ((c = nextPixel()) !== EOF) {
 							fcode = (c << BITS) + ent;
 							i = (c << hshift) ^ ent;
 							if (htab[i] === fcode) {
@@ -527,11 +519,11 @@
 								clear_flg = false;
 							} else {
 								++n_bits;
-								if (n_bits == BITS) maxcode = 1 << BITS;
+								if (n_bits === BITS) maxcode = 1 << BITS;
 								else maxcode = MAXCODE(n_bits);
 							}
 						}
-						if (code == EOFCode) {
+						if (code === EOFCode) {
 							while (cur_bits > 0) {
 								char_out(cur_accum & 255, outs);
 								cur_accum >>= 8;
@@ -547,7 +539,7 @@
 			{},
 		],
 		3: [
-			(require, module, exports) => {
+			(_require, module, _exports) => {
 				var ncycles = 100;
 				var netsize = 256;
 				var maxnetpos = netsize - 1;
@@ -555,7 +547,7 @@
 				var intbiasshift = 16;
 				var intbias = 1 << intbiasshift;
 				var gammashift = 10;
-				var gamma = 1 << gammashift;
+				var _gamma = 1 << gammashift;
 				var betashift = 10;
 				var beta = intbias >> betashift;
 				var betagamma = intbias << (gammashift - betashift);
@@ -566,7 +558,7 @@
 				var radiusdec = 30;
 				var alphabiasshift = 10;
 				var initalpha = 1 << alphabiasshift;
-				var alphadec;
+				var _alphadec;
 				var radbiasshift = 8;
 				var radbias = 1 << radbiasshift;
 				var alpharadbshift = alphabiasshift + radbiasshift;
@@ -680,7 +672,7 @@
 								}
 							}
 							q = network[smallpos];
-							if (i != smallpos) {
+							if (i !== smallpos) {
 								j = q[0];
 								q[0] = p[0];
 								p[0] = j;
@@ -694,7 +686,7 @@
 								q[3] = p[3];
 								p[3] = j;
 							}
-							if (smallval != previouscol) {
+							if (smallval !== previouscol) {
 								netindex[previouscol] = (startpos + i) >> 1;
 								for (j = previouscol + 1; j < smallval; j++) netindex[j] = i;
 								previouscol = smallval;
@@ -835,7 +827,7 @@
 			{},
 		],
 		4: [
-			(require, module, exports) => {
+			(require, _module, _exports) => {
 				var GIFEncoder, renderFrame;
 				GIFEncoder = require("./GIFEncoder.js");
 				renderFrame = (frame) => {

@@ -4793,9 +4793,9 @@ function dayMidpointIso(day) {
 		}
 	}
 	try {
-		const d = new Date(dayStr + "T00:00:00.000Z");
+		const d = new Date(`${dayStr}T00:00:00.000Z`);
 		if (!Number.isNaN(d.getTime())) {
-			return d.toISOString().slice(0, 10) + "T12:00:00.000Z";
+			return `${d.toISOString().slice(0, 10)}T12:00:00.000Z`;
 		}
 	} catch {}
 	return null;
@@ -5381,7 +5381,7 @@ async function migrateVideo({
 			const dateStrWithUTC =
 				tsStr.includes("Z") || tsStr.match(/[+-]\d{2}:?\d{2}$/)
 					? tsStr
-					: tsStr + "T00:00:00.000Z";
+					: `${tsStr}T00:00:00.000Z`;
 			parsedDate = new Date(dateStrWithUTC);
 			if (!Number.isNaN(parsedDate.getTime())) {
 				day = parsedDate.toISOString().slice(0, 10);
