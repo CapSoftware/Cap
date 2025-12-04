@@ -60,7 +60,7 @@ impl Default for CompositeVideoFrameUniforms {
             _padding0: 0.0,
             _padding1: [0.0; 2],
             _padding1b: [0.0; 2],
-            border_color: [1.0, 1.0, 1.0, 0.8],
+            border_color: [0.0, 0.0, 0.0, 0.0],
             _padding2: [0.0; 4],
         }
     }
