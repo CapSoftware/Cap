@@ -54,7 +54,7 @@ const DEFAULT_CURSOR: CursorConfiguration = {
 	hideWhenIdle: false,
 	hideWhenIdleDelay: 2,
 	size: 100,
-	type: "pointer",
+	type: "auto",
 	animationStyle: "mellow",
 	tension: 120,
 	mass: 1.1,
