@@ -276,7 +276,7 @@ impl CapWindow {
                 }
             };
 
-            let window_label = CapWindowId::Editor { id: window_id }.label();
+            let window_label = CapWindowDef::Editor { id: window_id }.label();
             PendingEditorInstances::start_prewarm(app, window_label, project_path.clone()).await;
         }
 
