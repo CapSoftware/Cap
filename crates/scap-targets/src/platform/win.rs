@@ -57,7 +57,7 @@ use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize}
 // On Windows it's nigh impossible to get the logical position of a display
 // or window, since there's no simple API that accounts for each monitor having different DPI.
 
-static IGNORED_EXES: &'static [&str] = &[
+static IGNORED_EXES: &[&str] = &[
     // As it's a system webview it isn't owned by the Cap process.
     "webview2",
     "msedgewebview2",
@@ -557,10 +557,9 @@ impl WindowImpl {
 
             if large_icon.0 != 0
                 && let Some(result) = self.hicon_to_png_bytes_optimized(HICON(large_icon.0 as _))
+                && result.1 >= GOOD_SIZE_THRESHOLD
             {
-                if result.1 >= GOOD_SIZE_THRESHOLD {
-                    return Some(result.0);
-                }
+                return Some(result.0);
             }
 
             // Method 4: Try executable file extraction (fallback to original method)
