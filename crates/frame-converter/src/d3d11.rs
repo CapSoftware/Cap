@@ -499,7 +499,6 @@ fn pixel_to_dxgi(pixel: Pixel) -> Result<DXGI_FORMAT, ConvertError> {
     match pixel {
         Pixel::NV12 => Ok(DXGI_FORMAT_NV12),
         Pixel::YUYV422 => Ok(DXGI_FORMAT_YUY2),
-        Pixel::UYVY422 => Ok(DXGI_FORMAT_YUY2),
         _ => Err(ConvertError::UnsupportedFormat(pixel, Pixel::NV12)),
     }
 }
