@@ -281,7 +281,7 @@ export function ZoomTrack(props: {
 					const { setTrackState } = useTrackContext();
 
 					const zoomPercentage = () => {
-						const amount = segment.amount;
+						const amount = segment().amount;
 						return `${amount.toFixed(1)}x`;
 					};
 
@@ -313,12 +313,11 @@ export function ZoomTrack(props: {
 									e.stopPropagation();
 
 									const currentSelection = editorState.timeline.selection;
-									const segmentIndex = i();
+									const segmentIndex = i;
 									const isMultiSelect = e.ctrlKey || e.metaKey;
 									const isRangeSelect = e.shiftKey;
 
 									if (isRangeSelect && currentSelection?.type === "zoom") {
-										// Range selection: select from last selected to current
 										const existingIndices = currentSelection.indices;
 										const lastIndex =
 											existingIndices[existingIndices.length - 1];
@@ -334,7 +333,6 @@ export function ZoomTrack(props: {
 											indices: rangeIndices,
 										});
 									} else if (isMultiSelect) {
-										// Handle multi-selection with Ctrl/Cmd+click
 										if (currentSelection?.type === "zoom") {
 											const baseIndices = currentSelection.indices;
 											const exists = baseIndices.includes(segmentIndex);
@@ -351,14 +349,12 @@ export function ZoomTrack(props: {
 												setEditorState("timeline", "selection", null);
 											}
 										} else {
-											// Start new multi-selection
 											setEditorState("timeline", "selection", {
 												type: "zoom",
 												indices: [segmentIndex],
 											});
 										}
 									} else {
-										// Normal single selection
 										setEditorState("timeline", "selection", {
 											type: "zoom",
 											indices: [segmentIndex],
@@ -405,200 +401,206 @@ export function ZoomTrack(props: {
 						const selection = editorState.timeline.selection;
 						if (!selection || selection.type !== "zoom") return false;
 
-					const segmentIndex = project.timeline?.zoomSegments?.findIndex(
-						(s) => s.start === segment.start && s.end === segment.end,
-					);
+						const seg = segment();
+						const segmentIndex = project.timeline?.zoomSegments?.findIndex(
+							(s) => s.start === seg.start && s.end === seg.end,
+						);
 
-					if (segmentIndex === undefined || segmentIndex === -1) return false;
+						if (segmentIndex === undefined || segmentIndex === -1) return false;
 
-					return selection.indices.includes(segmentIndex);
-				});
+						return selection.indices.includes(segmentIndex);
+					});
 
-				return (
-					<SegmentRoot
-						class={cx(
-							"border duration-200 hover:border-gray-12 transition-colors group",
-							"bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
-							isSelected() ? "border-gray-12" : "border-transparent",
-						)}
-						innerClass="ring-red-5"
-						segment={segment}
-						onMouseDown={(e) => {
-							e.stopPropagation();
-
-							if (editorState.timeline.interactMode === "split") {
-								const rect = e.currentTarget.getBoundingClientRect();
-								const fraction = (e.clientX - rect.left) / rect.width;
-
-								const splitTime = fraction * (segment.end - segment.start);
-
-								projectActions.splitZoomSegment(i(), splitTime);
-							}
-						}}
-					>
-						<SegmentHandle
-							position="start"
-							onMouseDown={createMouseDownDrag(
-								() => {
-									const start = segment.start;
-
-									let minValue = 0;
-
-									const maxValue = segment.end - 1;
-
-									for (let i = zoomSegments().length - 1; i >= 0; i--) {
-										const segment = zoomSegments()[i]!;
-										if (segment.end <= start) {
-											minValue = segment.end;
-											break;
-										}
-									}
-
-									return { start, minValue, maxValue };
-								},
-								(e, value, initialMouseX) => {
-									const newStart =
-										value.start +
-										(e.clientX - initialMouseX) * secsPerPixel();
-
-									setProject(
-										"timeline",
-										"zoomSegments",
-										i(),
-										"start",
-										Math.min(
-											value.maxValue,
-											Math.max(value.minValue, newStart),
-										),
-									);
-
-									setProject(
-										"timeline",
-										"zoomSegments",
-										produce((s) => {
-											s.sort((a, b) => a.start - b.start);
-										}),
-									);
-								},
+					return (
+						<SegmentRoot
+							class={cx(
+								"border duration-200 hover:border-gray-12 transition-colors group",
+								"bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
-						/>
-						<SegmentContent
-							class="flex justify-center items-center cursor-grab"
-							onMouseDown={createMouseDownDrag(
-								() => {
-									const original = { ...segment };
+							innerClass="ring-red-5"
+							segment={segment()}
+							onMouseDown={(e) => {
+								e.stopPropagation();
 
-									const prevSegment = zoomSegments()[i() - 1];
-									const nextSegment = zoomSegments()[i() + 1];
+								if (editorState.timeline.interactMode === "split") {
+									const rect = e.currentTarget.getBoundingClientRect();
+									const fraction = (e.clientX - rect.left) / rect.width;
+									const seg = segment();
 
-									const minStart = prevSegment?.end ?? 0;
-									const maxEnd = nextSegment?.start ?? duration();
+									const splitTime = fraction * (seg.end - seg.start);
 
-									return {
-										original,
-										minStart,
-										maxEnd,
-									};
-								},
-								(e, value, initialMouseX) => {
-									const rawDelta =
-										(e.clientX - initialMouseX) * secsPerPixel();
-
-									const newStart = value.original.start + rawDelta;
-									const newEnd = value.original.end + rawDelta;
-
-									let delta = rawDelta;
-
-									if (newStart < value.minStart)
-										delta = value.minStart - value.original.start;
-									else if (newEnd > value.maxEnd)
-										delta = value.maxEnd - value.original.end;
-
-									setProject("timeline", "zoomSegments", i(), {
-										start: value.original.start + delta,
-										end: value.original.end + delta,
-									});
-								},
-							)}
+									projectActions.splitZoomSegment(i, splitTime);
+								}
+							}}
 						>
-							{(() => {
-								const ctx = useSegmentContext();
+							<SegmentHandle
+								position="start"
+								onMouseDown={createMouseDownDrag(
+									() => {
+										const seg = segment();
+										const start = seg.start;
 
-								return (
-									<Switch>
-										<Match when={ctx.width() < 40}>
-											<div class="flex justify-center items-center">
-												<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
-											</div>
-										</Match>
-										<Match when={ctx.width() < 100}>
-											<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
-												<IconLucideSearch class="size-3" />
-												<span>{zoomPercentage()}</span>
-											</div>
-										</Match>
-										<Match when={true}>
-											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-												<span class="opacity-70">Zoom</span>
-												<div class="flex gap-1 items-center text-md">
-													<IconLucideSearch class="size-3.5" />
-													{zoomPercentage()}
-												</div>
-											</div>
-										</Match>
-									</Switch>
-								);
-							})()}
-						</SegmentContent>
-						<SegmentHandle
-							position="end"
-							onMouseDown={createMouseDownDrag(
-								() => {
-									const end = segment.end;
+										let minValue = 0;
 
-									const minValue = segment.start + 1;
+										const maxValue = seg.end - 1;
 
-									let maxValue = duration();
-
-									for (let i = 0; i < zoomSegments().length; i++) {
-										const segment = zoomSegments()[i]!;
-										if (segment.start > end) {
-											maxValue = segment.start;
-											break;
+										for (let idx = zoomSegments().length - 1; idx >= 0; idx--) {
+											const zs = zoomSegments()[idx];
+											if (zs && zs.end <= start) {
+												minValue = zs.end;
+												break;
+											}
 										}
-									}
 
-									return { end, minValue, maxValue };
-								},
-								(e, value, initialMouseX) => {
-									const newEnd =
-										value.end + (e.clientX - initialMouseX) * secsPerPixel();
+										return { start, minValue, maxValue };
+									},
+									(e, value, initialMouseX) => {
+										const newStart =
+											value.start +
+											(e.clientX - initialMouseX) * secsPerPixel();
 
-									setProject(
-										"timeline",
-										"zoomSegments",
-										i(),
-										"end",
-										Math.min(
-											value.maxValue,
-											Math.max(value.minValue, newEnd),
-										),
+										setProject(
+											"timeline",
+											"zoomSegments",
+											i,
+											"start",
+											Math.min(
+												value.maxValue,
+												Math.max(value.minValue, newStart),
+											),
+										);
+
+										setProject(
+											"timeline",
+											"zoomSegments",
+											produce((s) => {
+												s.sort((a, b) => a.start - b.start);
+											}),
+										);
+									},
+								)}
+							/>
+							<SegmentContent
+								class="flex justify-center items-center cursor-grab"
+								onMouseDown={createMouseDownDrag(
+									() => {
+										const seg = segment();
+										const original = { ...seg };
+										const currentIndex = i;
+
+										const prevSegment = zoomSegments()[currentIndex - 1];
+										const nextSegment = zoomSegments()[currentIndex + 1];
+
+										const minStart = prevSegment?.end ?? 0;
+										const maxEnd = nextSegment?.start ?? duration();
+
+										return {
+											original,
+											minStart,
+											maxEnd,
+										};
+									},
+									(e, value, initialMouseX) => {
+										const rawDelta =
+											(e.clientX - initialMouseX) * secsPerPixel();
+
+										const newStart = value.original.start + rawDelta;
+										const newEnd = value.original.end + rawDelta;
+
+										let delta = rawDelta;
+
+										if (newStart < value.minStart)
+											delta = value.minStart - value.original.start;
+										else if (newEnd > value.maxEnd)
+											delta = value.maxEnd - value.original.end;
+
+										setProject("timeline", "zoomSegments", i, {
+											start: value.original.start + delta,
+											end: value.original.end + delta,
+										});
+									},
+								)}
+							>
+								{(() => {
+									const ctx = useSegmentContext();
+
+									return (
+										<Switch>
+											<Match when={ctx.width() < 40}>
+												<div class="flex justify-center items-center">
+													<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
+												</div>
+											</Match>
+											<Match when={ctx.width() < 100}>
+												<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+													<IconLucideSearch class="size-3" />
+													<span>{zoomPercentage()}</span>
+												</div>
+											</Match>
+											<Match when={true}>
+												<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
+													<span class="opacity-70">Zoom</span>
+													<div class="flex gap-1 items-center text-md">
+														<IconLucideSearch class="size-3.5" />
+														{zoomPercentage()}
+													</div>
+												</div>
+											</Match>
+										</Switch>
 									);
+								})()}
+							</SegmentContent>
+							<SegmentHandle
+								position="end"
+								onMouseDown={createMouseDownDrag(
+									() => {
+										const seg = segment();
+										const end = seg.end;
 
-									setProject(
-										"timeline",
-										"zoomSegments",
-										produce((s) => {
-											s.sort((a, b) => a.start - b.start);
-										}),
-									);
-								},
-							)}
-						/>
-					</SegmentRoot>
-				);
-			}}
-		</Index>
+										const minValue = seg.start + 1;
+
+										let maxValue = duration();
+
+										for (let idx = 0; idx < zoomSegments().length; idx++) {
+											const zs = zoomSegments()[idx];
+											if (zs && zs.start > end) {
+												maxValue = zs.start;
+												break;
+											}
+										}
+
+										return { end, minValue, maxValue };
+									},
+									(e, value, initialMouseX) => {
+										const newEnd =
+											value.end + (e.clientX - initialMouseX) * secsPerPixel();
+
+										setProject(
+											"timeline",
+											"zoomSegments",
+											i,
+											"end",
+											Math.min(
+												value.maxValue,
+												Math.max(value.minValue, newEnd),
+											),
+										);
+
+										setProject(
+											"timeline",
+											"zoomSegments",
+											produce((s) => {
+												s.sort((a, b) => a.start - b.start);
+											}),
+										);
+									},
+								)}
+							/>
+						</SegmentRoot>
+					);
+				}}
+			</Index>
 			<Show
 				when={
 					!useTrackContext().trackState.draggingSegment && newSegmentDetails()
