@@ -1,5 +1,4 @@
-import type { userSelectProps } from "@cap/database/auth/session";
-import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { comments as commentsSchema } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import type { ImageUpload } from "@cap/web-domain";
@@ -11,7 +10,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import type { VideoData } from "../types";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -133,7 +131,7 @@ export const ShareVideo = forwardRef<
 					setSubtitleUrl(null);
 				}
 			}
-		}, [data.transcriptionStatus, transcriptData]);
+		}, [data.transcriptionStatus, transcriptData, subtitleUrl]);
 
 		// Handle chapters URL creation
 		useEffect(() => {
@@ -159,7 +157,7 @@ export const ShareVideo = forwardRef<
 					setChaptersUrl(null);
 				}
 			}
-		}, [chapters]);
+		}, [chapters, chaptersUrl]);
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";

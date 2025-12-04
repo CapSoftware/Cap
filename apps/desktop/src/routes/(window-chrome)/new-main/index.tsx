@@ -444,13 +444,16 @@ function Page() {
 	);
 
 	createTauriEventListener(events.uploadProgressEvent, (e) => {
-		setUploadProgress(e.video_id, (Number(e.uploaded) / Number(e.total)) * 100);
 		if (e.uploaded === e.total) {
 			setUploadProgress(
 				produce((s) => {
 					delete s[e.video_id];
 				}),
 			);
+		} else {
+			const total = Number(e.total);
+			const progress = total > 0 ? (Number(e.uploaded) / total) * 100 : 0;
+			setUploadProgress(e.video_id, progress);
 		}
 	});
 
@@ -1036,7 +1039,7 @@ function Page() {
 							<IconCapLogoFullDark class="hidden dark:block" />
 							<IconCapLogoFull class="block dark:hidden" />
 						</a>
-						<ErrorBoundary fallback={<></>}>
+						<ErrorBoundary fallback={null}>
 							<Suspense>
 								<span
 									onClick={async () => {

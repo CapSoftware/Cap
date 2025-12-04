@@ -6,13 +6,7 @@ import {
 	type WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import {
-	createEffect,
-	ErrorBoundary,
-	onCleanup,
-	onMount,
-	Suspense,
-} from "solid-js";
+import { createEffect, onCleanup, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";

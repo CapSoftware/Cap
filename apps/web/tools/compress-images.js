@@ -9,12 +9,12 @@
  * replaces the original files with optimized versions.
  */
 
-const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
-const readline = require("readline");
-const os = require("os");
-const crypto = require("crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const { execSync } = require("node:child_process");
+const readline = require("node:readline");
+const os = require("node:os");
+const crypto = require("node:crypto");
 
 // Create a unique temporary directory for installation
 function createTempInstallDir() {
@@ -38,7 +38,7 @@ function loadDependencies() {
 		const chalk = require("chalk");
 
 		return { sharp, glob, chalk };
-	} catch (e) {
+	} catch (_e) {
 		// If dependencies are missing, install them in a temporary directory
 		console.log(`Required dependencies not found. Installing temporarily...`);
 
@@ -84,7 +84,7 @@ function loadDependencies() {
 			if (tempDir && fs.existsSync(tempDir)) {
 				try {
 					fs.rmSync(tempDir, { recursive: true });
-				} catch (e) {}
+				} catch (_e) {}
 			}
 
 			process.exit(1);
@@ -105,7 +105,7 @@ async function askForConfirmation(question) {
 	const rl = createInterface();
 
 	return new Promise((resolve) => {
-		rl.question(question + " (y/n): ", (answer) => {
+		rl.question(`${question} (y/n): `, (answer) => {
 			rl.close();
 			resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
 		});
@@ -207,7 +207,7 @@ async function main() {
 	}
 
 	// Clear the progress line
-	process.stdout.write("\r" + " ".repeat(100) + "\r");
+	process.stdout.write(`\r${" ".repeat(100)}\r`);
 
 	// Calculate total savings
 	const totalSavingsMB = (
@@ -219,21 +219,21 @@ async function main() {
 		100
 	).toFixed(2);
 
-	console.log("\n\n" + chalk.blue("📊 ===== Compression Summary ====="));
+	console.log(`\n\n${chalk.blue("📊 ===== Compression Summary =====")}`);
 	console.log(
 		chalk.blue(
-			`📦 Original Size: ${chalk.yellow((totalSize.original / (1024 * 1024)).toFixed(2) + " MB")}`,
+			`📦 Original Size: ${chalk.yellow(`${(totalSize.original / (1024 * 1024)).toFixed(2)} MB`)}`,
 		),
 	);
 	console.log(
 		chalk.blue(
-			`📦 Compressed Size: ${chalk.yellow((totalSize.compressed / (1024 * 1024)).toFixed(2) + " MB")}`,
+			`📦 Compressed Size: ${chalk.yellow(`${(totalSize.compressed / (1024 * 1024)).toFixed(2)} MB`)}`,
 		),
 	);
 	console.log(
-		chalk.blue(
-			`💰 Saved: ${chalk.green(totalSavingsMB + " MB")} (${chalk.green(totalSavingsPercent + "%")})`,
-		) + "\n",
+		`${chalk.blue(
+			`💰 Saved: ${chalk.green(`${totalSavingsMB} MB`)} (${chalk.green(`${totalSavingsPercent}%`)})`,
+		)}\n`,
 	);
 
 	if (failedImages.length > 0) {
@@ -289,7 +289,7 @@ async function main() {
 		}
 
 		// Clear the progress line
-		process.stdout.write("\r" + " ".repeat(100) + "\r");
+		process.stdout.write(`\r${" ".repeat(100)}\r`);
 
 		// Remove compressed directory
 		fs.rmSync(compressedDir, { recursive: true, force: true });
@@ -312,7 +312,7 @@ async function main() {
 			chalk.blue("   2. Run this tool again if you decide to apply changes"),
 		);
 		console.log(
-			chalk.blue("   3. Or manually replace images you want to use") + "\n",
+			`${chalk.blue("   3. Or manually replace images you want to use")}\n`,
 		);
 	}
 }

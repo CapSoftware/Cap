@@ -6,13 +6,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { type MouseEvent, startTransition, useId, useState } from "react";
 import { toast } from "sonner";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { homepageCopy } from "../../../../data/homepage-copy";
 import { Base } from "./Base";
 

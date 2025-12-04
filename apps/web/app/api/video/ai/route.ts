@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
 			!videoOwnerQuery[0] ||
 			!(await isAiGenerationEnabled(videoOwnerQuery[0]))
 		) {
-			const videoOwner = videoOwnerQuery[0];
+			const _videoOwner = videoOwnerQuery[0];
 			return Response.json(
 				{
 					processing: false,

@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import type { Folder, Organisation } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -205,8 +204,8 @@ async function legacyUploadCap(
 
 					const hasValidDuration =
 						testVideo.duration > 0 &&
-						!isNaN(testVideo.duration) &&
-						isFinite(testVideo.duration);
+						!Number.isNaN(testVideo.duration) &&
+						Number.isFinite(testVideo.duration);
 
 					const hasValidDimensions =
 						(testVideo.videoWidth > 0 && testVideo.videoHeight > 0) ||

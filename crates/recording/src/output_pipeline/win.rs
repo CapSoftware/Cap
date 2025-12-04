@@ -386,15 +386,13 @@ fn duration_to_timespan(duration: Duration) -> TimeSpan {
 
 #[derive(Clone)]
 pub struct NativeCameraFrame {
-    pub buffer: windows::Win32::Media::MediaFoundation::IMFMediaBuffer,
+    pub buffer:
+        std::sync::Arc<std::sync::Mutex<windows::Win32::Media::MediaFoundation::IMFMediaBuffer>>,
     pub pixel_format: cap_camera_windows::PixelFormat,
     pub width: u32,
     pub height: u32,
     pub timestamp: Timestamp,
 }
-
-unsafe impl Send for NativeCameraFrame {}
-unsafe impl Sync for NativeCameraFrame {}
 
 impl VideoFrame for NativeCameraFrame {
     fn timestamp(&self) -> Timestamp {
@@ -708,7 +706,11 @@ fn upload_mf_buffer_to_texture(
         _ => 2,
     };
 
-    let lock = frame.buffer.lock()?;
+    let buffer_guard = frame
+        .buffer
+        .lock()
+        .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
+    let lock = buffer_guard.lock()?;
     let data = &*lock;
 
     let row_pitch = frame.width * bytes_per_pixel;

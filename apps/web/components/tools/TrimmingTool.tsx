@@ -193,7 +193,7 @@ export const TrimmingTool = () => {
 		if (videoPreviewRef.current) {
 			setVideoState((prev) => ({
 				...prev,
-				currentTime: videoPreviewRef.current!.currentTime,
+				currentTime: videoPreviewRef.current?.currentTime,
 			}));
 		}
 	};
@@ -203,7 +203,7 @@ export const TrimmingTool = () => {
 			const video = videoPreviewRef.current;
 
 			if (
-				isNaN(video.duration) ||
+				Number.isNaN(video.duration) ||
 				video.duration === Infinity ||
 				video.duration === 0
 			) {
@@ -400,7 +400,7 @@ export const TrimmingTool = () => {
 
 				if (!supportsAudio) {
 					console.warn(
-						"Selected MIME type does not support audio: " + selectedMimeType,
+						`Selected MIME type does not support audio: ${selectedMimeType}`,
 					);
 					includeAudio = false;
 				}
@@ -413,9 +413,7 @@ export const TrimmingTool = () => {
 						if (
 							(video as any).mozHasAudio ||
 							Boolean((video as any).webkitAudioDecodedByteCount) ||
-							Boolean(
-								(video as any).audioTracks && (video as any).audioTracks.length,
-							)
+							Boolean((video as any).audioTracks?.length)
 						) {
 							const audioContext = new (
 								window.AudioContext || (window as any).webkitAudioContext
@@ -470,8 +468,8 @@ export const TrimmingTool = () => {
 						}));
 
 						trackEvent("trimming_tool_trim_completed", {
-							fileSize: fileState.file!.size,
-							fileName: fileState.file!.name,
+							fileSize: fileState.file?.size,
+							fileName: fileState.file?.name,
 							outputSize: blob.size,
 							startTime: trimState.startTime,
 							endTime: trimState.endTime,
@@ -659,7 +657,7 @@ export const TrimmingTool = () => {
 		if (newEndTime > trimState.startTime && videoState.info) {
 			setTrimState((prev) => ({
 				...prev,
-				endTime: Math.min(newEndTime, videoState.info!.duration),
+				endTime: Math.min(newEndTime, videoState.info?.duration),
 			}));
 		}
 	};
@@ -680,7 +678,7 @@ export const TrimmingTool = () => {
 		if (videoPreviewRef.current && videoState.currentTime < trimState.endTime) {
 			setTrimState((prev) => ({
 				...prev,
-				startTime: videoPreviewRef.current!.currentTime,
+				startTime: videoPreviewRef.current?.currentTime,
 			}));
 		}
 	};
@@ -692,7 +690,7 @@ export const TrimmingTool = () => {
 		) {
 			setTrimState((prev) => ({
 				...prev,
-				endTime: videoPreviewRef.current!.currentTime,
+				endTime: videoPreviewRef.current?.currentTime,
 			}));
 		}
 	};
@@ -722,7 +720,7 @@ export const TrimmingTool = () => {
 			window.removeEventListener("dragover", preventDefaults);
 			window.removeEventListener("drop", preventDefaults);
 		};
-	}, []);
+	}, [cleanupResources, processingState.outputUrl]);
 
 	return (
 		<div className="w-full">

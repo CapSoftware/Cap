@@ -1064,6 +1064,14 @@ fn start_whisperx_server(
     })
 }
 
+fn is_server_communication_error(error: &str) -> bool {
+    error.contains("Failed to send request to server")
+        || error.contains("Failed to flush request")
+        || error.contains("Failed to read response from server")
+        || error.contains("Failed to parse server response")
+        || error.contains("Server not available")
+}
+
 fn transcribe_with_server(
     server: &mut WhisperXServer,
     audio_path: &std::path::Path,
@@ -1553,7 +1561,7 @@ pub async fn transcribe_audio(
                         log::info!("Reusing existing WhisperX server (models already loaded!)");
                     }
 
-                    if let Some(server) = server_guard.as_mut() {
+                    let result = if let Some(server) = server_guard.as_mut() {
                         transcribe_with_server(
                             server,
                             &audio_path_clone,
@@ -1562,7 +1570,19 @@ pub async fn transcribe_audio(
                         )
                     } else {
                         Err("Server not available".to_string())
+                    };
+
+                    if let Err(ref e) = result {
+                        if is_server_communication_error(e) {
+                            log::warn!(
+                                "Server communication error detected, clearing dead server: {}",
+                                e
+                            );
+                            *server_guard = None;
+                        }
                     }
+
+                    result
                 })
                 .await
                 .map_err(|e| format!("WhisperX task panicked: {e}"));

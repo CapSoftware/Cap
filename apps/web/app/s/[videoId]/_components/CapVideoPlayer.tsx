@@ -192,7 +192,7 @@ export function CapVideoPlayer({
 		}
 
 		retryCount.current += 1;
-	}, [maxRetries]);
+	}, [videoRef.current]);
 
 	const setupRetry = useCallback(() => {
 		if (retryTimeout.current) {
@@ -232,7 +232,7 @@ export function CapVideoPlayer({
 		retryTimeout.current = setTimeout(() => {
 			reloadVideo();
 		}, retryInterval);
-	}, [reloadVideo, maxRetries]);
+	}, [reloadVideo]);
 
 	// Reset state when video source changes
 	useEffect(() => {
@@ -248,7 +248,7 @@ export function CapVideoPlayer({
 			clearTimeout(retryTimeout.current);
 			retryTimeout.current = null;
 		}
-	}, [resolvedSrc.refetch, videoSrc, enableCrossOrigin]);
+	}, [resolvedSrc.refetch]);
 
 	// Track video duration for comment markers
 	useEffect(() => {
@@ -264,7 +264,7 @@ export function CapVideoPlayer({
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
 		};
-	}, [resolvedSrc.isLoading]);
+	}, [videoRef.current]);
 
 	// Track when all data is ready for comment markers
 	const [markersReady, setMarkersReady] = useState(false);
@@ -284,7 +284,7 @@ export function CapVideoPlayer({
 		if (duration > 0 && comments.length > 0 && videoRef.current) {
 			setMarkersReady(true);
 		}
-	}, [duration, comments.length]);
+	}, [duration, comments.length, videoRef.current]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -339,11 +339,7 @@ export function CapVideoPlayer({
 		let captionTrack: TextTrack | null = null;
 
 		const handleCueChange = (): void => {
-			if (
-				captionTrack &&
-				captionTrack.activeCues &&
-				captionTrack.activeCues.length > 0
-			) {
+			if (captionTrack?.activeCues && captionTrack.activeCues.length > 0) {
 				const cue = captionTrack.activeCues[0] as VTTCue;
 				const plainText = cue.text.replace(/<[^>]*>/g, "");
 				setCurrentCue(plainText);
@@ -458,30 +454,40 @@ export function CapVideoPlayer({
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
-	}, [hasPlayedOnce, resolvedSrc.isPending]);
+	}, [
+		hasPlayedOnce,
+		resolvedSrc.isPending,
+		hasError,
+		setupRetry,
+		videoLoaded,
+		videoRef.current,
+	]);
 
-	const generateVideoFrameThumbnail = useCallback((time: number): string => {
-		const video = videoRef.current;
+	const generateVideoFrameThumbnail = useCallback(
+		(time: number): string => {
+			const video = videoRef.current;
 
-		if (!video) {
-			return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
-		}
-
-		const canvas = document.createElement("canvas");
-		canvas.width = 224;
-		canvas.height = 128;
-		const ctx = canvas.getContext("2d");
-
-		if (ctx) {
-			try {
-				ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-				return canvas.toDataURL("image/jpeg", 0.8);
-			} catch (error) {
-				return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+			if (!video) {
+				return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
 			}
-		}
-		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-	}, []);
+
+			const canvas = document.createElement("canvas");
+			canvas.width = 224;
+			canvas.height = 128;
+			const ctx = canvas.getContext("2d");
+
+			if (ctx) {
+				try {
+					ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+					return canvas.toDataURL("image/jpeg", 0.8);
+				} catch (_error) {
+					return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+				}
+			}
+			return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+		},
+		[videoRef.current],
+	);
 
 	const isUploadFailed = uploadProgress?.status === "failed";
 

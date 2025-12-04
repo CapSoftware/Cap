@@ -3,10 +3,9 @@
 import { Button } from "@cap/ui";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
-import { Clapperboard, Minus, Plus, Users, Zap } from "lucide-react";
+import { Clapperboard, Minus, Plus, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useState } from "react";
-import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
 import type { SeoPageContent } from "@/components/seo/types";
 
 const PlatformSupportArt = memo(() => {
@@ -529,7 +528,7 @@ export const AgenciesPage = () => {
 													key={cellIndex.toString()}
 													className={`px-6 py-4 text-[15px] text-gray-10 ${
 														rowIndex ===
-														agenciesContent.comparisonTable!.rows.length - 1
+														agenciesContent.comparisonTable?.rows.length - 1
 															? ""
 															: "border-b border-gray-5"
 													}`}

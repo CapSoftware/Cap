@@ -28,25 +28,23 @@ export function GTag() {
 	}
 
 	return (
-		<>
-			<Script
-				id={scriptId}
-				strategy="afterInteractive"
-				src={`https://www.googletagmanager.com/gtag/js?id=${awId}`}
-				onLoad={() => {
-					if (
-						!gtagInitialized.current &&
-						typeof window !== "undefined" &&
-						window.gtag &&
-						awId
-					) {
-						window.gtag("js", new Date());
-						window.gtag("config", awId);
-						gtagInitialized.current = true;
-					}
-				}}
-			/>
-		</>
+		<Script
+			id={scriptId}
+			strategy="afterInteractive"
+			src={`https://www.googletagmanager.com/gtag/js?id=${awId}`}
+			onLoad={() => {
+				if (
+					!gtagInitialized.current &&
+					typeof window !== "undefined" &&
+					window.gtag &&
+					awId
+				) {
+					window.gtag("js", new Date());
+					window.gtag("config", awId);
+					gtagInitialized.current = true;
+				}
+			}}
+		/>
 	);
 }
 

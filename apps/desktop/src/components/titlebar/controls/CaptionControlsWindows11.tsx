@@ -19,7 +19,7 @@ export default function (
 	const currentWindow = getCurrentWindow();
 	const [focused, setFocus] = createSignal(true);
 
-	let unlisten: () => void | undefined;
+	let unlisten: () => undefined | undefined;
 	onMount(async () => {
 		unlisten = await currentWindow.onFocusChanged(({ payload: focused }) =>
 			setFocus(focused),

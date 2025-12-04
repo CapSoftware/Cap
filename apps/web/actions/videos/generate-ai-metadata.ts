@@ -39,7 +39,7 @@ export async function generateAiMetadata(
 
 	if (metadata.aiProcessing === true) {
 		const updatedAtTime = new Date(videoData.updatedAt).getTime();
-		const currentTime = new Date().getTime();
+		const currentTime = Date.now();
 		const tenMinutesInMs = 10 * 60 * 1000;
 
 		if (currentTime - updatedAtTime > tenMinutesInMs) {

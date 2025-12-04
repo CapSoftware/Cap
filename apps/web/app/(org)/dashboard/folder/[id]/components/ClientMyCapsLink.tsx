@@ -1,6 +1,5 @@
 "use client";
 
-import { Avatar } from "@cap/ui";
 import type { Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
@@ -36,7 +35,7 @@ export function ClientMyCapsLink({
 		return () => {
 			unregister();
 		};
-	}, []);
+	}, [handleDrop]);
 
 	// Handle drag events for desktop
 	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {

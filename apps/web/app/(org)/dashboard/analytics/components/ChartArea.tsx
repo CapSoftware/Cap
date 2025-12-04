@@ -53,8 +53,8 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 		if (!data || data.length === 0) return [];
 		const bucketDuration =
 			data.length > 1
-				? new Date(data[1]!.bucket).getTime() -
-					new Date(data[0]!.bucket).getTime()
+				? new Date(data[1]?.bucket).getTime() -
+					new Date(data[0]?.bucket).getTime()
 				: 0;
 		const hourly = bucketDuration > 0 && bucketDuration <= 60 * 60 * 1000;
 		return data.map((point) => ({

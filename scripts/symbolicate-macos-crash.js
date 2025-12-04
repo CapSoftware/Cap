@@ -31,7 +31,7 @@ async function main() {
 
 	for (let i = 1; i < crashedSectionLines.length; i++) {
 		const line = crashedSectionLines[i];
-		const [left, right] = line.split("\t").map((l) => l.trim());
+		const [_left, right] = line.split("\t").map((l) => l.trim());
 		const [address, loadAddressOrSymbol] = right.split(" ");
 		if (!loadAddressOrSymbol.startsWith("0x")) continue;
 		const loadAddress = loadAddressOrSymbol;

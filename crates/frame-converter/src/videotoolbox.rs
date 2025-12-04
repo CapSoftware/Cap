@@ -1,5 +1,6 @@
 use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
 use ffmpeg::{format::Pixel, frame};
+use parking_lot::Mutex;
 use std::{
     ffi::c_void,
     ptr,
@@ -83,8 +84,12 @@ fn pixel_to_cv_format(pixel: Pixel) -> Option<u32> {
     }
 }
 
+struct SessionHandle(VTPixelTransferSessionRef);
+
+unsafe impl Send for SessionHandle {}
+
 pub struct VideoToolboxConverter {
-    session: VTPixelTransferSessionRef,
+    session: Mutex<SessionHandle>,
     input_format: Pixel,
     input_cv_format: u32,
     output_format: Pixel,
@@ -133,7 +138,7 @@ impl VideoToolboxConverter {
         );
 
         Ok(Self {
-            session,
+            session: Mutex::new(SessionHandle(session)),
             input_format: config.input_format,
             input_cv_format,
             output_format: config.output_format,
@@ -248,10 +253,11 @@ impl VideoToolboxConverter {
 
 impl Drop for VideoToolboxConverter {
     fn drop(&mut self) {
-        if !self.session.is_null() {
+        let session = self.session.get_mut().0;
+        if !session.is_null() {
             unsafe {
-                VTPixelTransferSessionInvalidate(self.session);
-                CFRelease(self.session as *const c_void);
+                VTPixelTransferSessionInvalidate(session);
+                CFRelease(session as *const c_void);
             }
         }
     }
@@ -272,8 +278,11 @@ impl FrameConverter for VideoToolboxConverter {
         let input_buffer = self.create_input_pixel_buffer(&input)?;
         let output_buffer = self.create_output_pixel_buffer()?;
 
-        let status = unsafe {
-            VTPixelTransferSessionTransferImage(self.session, input_buffer, output_buffer)
+        let status = {
+            let session_guard = self.session.lock();
+            unsafe {
+                VTPixelTransferSessionTransferImage(session_guard.0, input_buffer, output_buffer)
+            }
         };
 
         unsafe {
@@ -321,6 +330,3 @@ impl FrameConverter for VideoToolboxConverter {
         Some(self.verified_hardware.load(Ordering::Relaxed))
     }
 }
-
-unsafe impl Send for VideoToolboxConverter {}
-unsafe impl Sync for VideoToolboxConverter {}

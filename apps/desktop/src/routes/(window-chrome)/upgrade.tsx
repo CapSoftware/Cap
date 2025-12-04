@@ -33,7 +33,7 @@ RuntimeLoader.setWasmUrl(riveWASMResource);
 export default function Page() {
 	const [isProAnnual, setIsProAnnual] = createSignal(true);
 	const [isCommercialAnnual, setIsCommercialAnnual] = createSignal(true);
-	const [upgradeComplete, setUpgradeComplete] = createSignal(false);
+	const [upgradeComplete, _setUpgradeComplete] = createSignal(false);
 	const [loading, setLoading] = createSignal(false);
 	const signIn = createSignInMutation();
 	const license = createLicenseQuery();

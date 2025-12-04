@@ -110,9 +110,8 @@ fn run_synthetic_benchmark(
 
     let start = Instant::now();
     let mut next_frame_time = start;
-    let mut frame_sequence = 0u64;
 
-    for _ in 0..total_frames {
+    for frame_sequence in 0..total_frames {
         let now = Instant::now();
         if now < next_frame_time {
             std::thread::sleep(next_frame_time - now);

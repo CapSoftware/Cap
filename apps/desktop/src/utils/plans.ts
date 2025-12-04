@@ -1,5 +1,3 @@
-import { commands } from "./tauri";
-
 const planIds = {
 	development: {
 		yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",

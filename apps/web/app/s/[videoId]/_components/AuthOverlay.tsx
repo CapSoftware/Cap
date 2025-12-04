@@ -2,7 +2,6 @@ import { NODE_ENV } from "@cap/env";
 import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
 import { faArrowLeft, faEnvelope } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";

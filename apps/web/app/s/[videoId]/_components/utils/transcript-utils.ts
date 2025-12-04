@@ -93,7 +93,8 @@ export const parseVTT = (vttContent: string): TranscriptEntry[] => {
 		const minutes = parseInt(minutesStr, 10);
 		const seconds = parseInt(secondsStr, 10);
 
-		if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+		if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds))
+			return null;
 
 		return hours * 3600 + minutes * 60 + seconds;
 	};

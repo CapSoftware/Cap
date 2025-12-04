@@ -29,7 +29,7 @@ export function Client(props: { hash?: string }) {
 				});
 			}
 		}
-	}, [props.hash, user]);
+	}, [props.hash, user, isBlogPage, isSharePage]);
 
 	return null;
 }

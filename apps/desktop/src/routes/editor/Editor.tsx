@@ -14,7 +14,6 @@ import {
 	createSignal,
 	Match,
 	on,
-	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";

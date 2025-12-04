@@ -233,7 +233,7 @@ export const SpeedController = () => {
 
 					if (!supportsAudio) {
 						console.warn(
-							"Selected MIME type does not support audio: " + selectedMimeType,
+							`Selected MIME type does not support audio: ${selectedMimeType}`,
 						);
 						includeAudio = false;
 					}
@@ -283,8 +283,8 @@ export const SpeedController = () => {
 								selectedSpeed < 1 ? "slowing_down" : "speeding_up"
 							}_completed`,
 							{
-								fileSize: file!.size,
-								fileName: file!.name,
+								fileSize: file?.size,
+								fileName: file?.name,
 								outputSize: blob.size,
 								speedFactor: selectedSpeed,
 							},

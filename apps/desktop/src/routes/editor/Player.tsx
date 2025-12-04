@@ -50,7 +50,7 @@ export function PlayerContent() {
 
 	// Load captions on mount
 	onMount(async () => {
-		if (editorInstance && editorInstance.path) {
+		if (editorInstance?.path) {
 			// Still load captions into the store since they will be used by the GPU renderer
 			await captionsStore.loadCaptions(editorInstance.path);
 

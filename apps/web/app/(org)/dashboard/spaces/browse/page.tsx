@@ -123,79 +123,75 @@ export default function BrowseSpacesPage() {
 								</td>
 							</tr>
 						)}
-						{filteredSpaces &&
-							filteredSpaces.map((space: Spaces) => {
-								return (
-									<tr
-										key={space.id}
-										onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
-										className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
-									>
-										<td className="flex gap-3 items-center px-6 py-4">
-											<SignedImageUrl
-												image={space.iconUrl}
-												name={space.name}
-												className="relative flex-shrink-0 size-7"
-												letterClass="text-sm"
-											/>
-											<span className="text-sm font-semibold text-gray-12">
-												{space.name}
-											</span>
-										</td>
-										<td className="px-6 py-4 text-sm text-gray-12">
-											{space.memberCount} member
-											{space.memberCount === 1 ? "" : "s"}
-										</td>
-										<td className="px-6 py-4 text-sm text-gray-12">
-											{space.videoCount} video
-											{space.videoCount === 1 ? "" : "s"}
-										</td>
-										<td className="px-6 py-4 text-sm text-gray-12">
-											{space.createdById === user?.id ? "Admin" : "Member"}
-										</td>
-										<td className="px-6">
-											{space.createdById === user?.id && !space.primary ? (
-												<div className="flex gap-2">
-													<Button
-														variant="gray"
-														className="size-8 p-0 min-w-[unset]"
-														size="sm"
-														onClick={(e) => {
-															e.stopPropagation();
-															setEditSpace({
-																id: space.id,
-																name: space.name,
-																members: (trueActiveOrgMembers || []).map(
-																	(m: { user: { id: string } }) => m.user.id,
-																),
-																iconUrl: space.iconUrl,
-															});
-															setShowSpaceDialog(true);
-														}}
-													>
-														<FontAwesomeIcon icon={faEdit} className="size-3" />
-													</Button>
-													<Button
-														variant="gray"
-														onClick={(e) => handleDeleteSpace(e, space)}
-														className="size-8 p-0 min-w-[unset]"
-														size="sm"
-													>
-														<FontAwesomeIcon
-															icon={faTrash}
-															className="size-3"
-														/>
-													</Button>
-												</div>
-											) : (
-												<div className="h-8 text-gray-10">
-													<p>...</p>
-												</div>
-											)}
-										</td>
-									</tr>
-								);
-							})}
+						{filteredSpaces?.map((space: Spaces) => {
+							return (
+								<tr
+									key={space.id}
+									onClick={() => router.push(`/dashboard/spaces/${space.id}`)}
+									className="border-t transition-colors cursor-pointer hover:bg-gray-2 border-gray-3"
+								>
+									<td className="flex gap-3 items-center px-6 py-4">
+										<SignedImageUrl
+											image={space.iconUrl}
+											name={space.name}
+											className="relative flex-shrink-0 size-7"
+											letterClass="text-sm"
+										/>
+										<span className="text-sm font-semibold text-gray-12">
+											{space.name}
+										</span>
+									</td>
+									<td className="px-6 py-4 text-sm text-gray-12">
+										{space.memberCount} member
+										{space.memberCount === 1 ? "" : "s"}
+									</td>
+									<td className="px-6 py-4 text-sm text-gray-12">
+										{space.videoCount} video
+										{space.videoCount === 1 ? "" : "s"}
+									</td>
+									<td className="px-6 py-4 text-sm text-gray-12">
+										{space.createdById === user?.id ? "Admin" : "Member"}
+									</td>
+									<td className="px-6">
+										{space.createdById === user?.id && !space.primary ? (
+											<div className="flex gap-2">
+												<Button
+													variant="gray"
+													className="size-8 p-0 min-w-[unset]"
+													size="sm"
+													onClick={(e) => {
+														e.stopPropagation();
+														setEditSpace({
+															id: space.id,
+															name: space.name,
+															members: (trueActiveOrgMembers || []).map(
+																(m: { user: { id: string } }) => m.user.id,
+															),
+															iconUrl: space.iconUrl,
+														});
+														setShowSpaceDialog(true);
+													}}
+												>
+													<FontAwesomeIcon icon={faEdit} className="size-3" />
+												</Button>
+												<Button
+													variant="gray"
+													onClick={(e) => handleDeleteSpace(e, space)}
+													className="size-8 p-0 min-w-[unset]"
+													size="sm"
+												>
+													<FontAwesomeIcon icon={faTrash} className="size-3" />
+												</Button>
+											</div>
+										) : (
+											<div className="h-8 text-gray-10">
+												<p>...</p>
+											</div>
+										)}
+									</td>
+								</tr>
+							);
+						})}
 					</tbody>
 				</table>
 			</div>

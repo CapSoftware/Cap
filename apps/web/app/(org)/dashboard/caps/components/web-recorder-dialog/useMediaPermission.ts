@@ -57,7 +57,7 @@ export const useMediaPermission = (
 			permissionStatus.onchange = () => {
 				updateState(permissionStatus.state);
 			};
-		} catch (error) {
+		} catch (_error) {
 			updateState("unsupported");
 		}
 	}, [enabled, kind, updateState]);

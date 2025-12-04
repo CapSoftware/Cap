@@ -349,7 +349,7 @@ export const ComparePlans = () => {
 								</th>
 								{plans.map((plan) => (
 									<th
-										key={plan.name + "-cta"}
+										key={`${plan.name}-cta`}
 										className={clsx(
 											"px-4 pb-6 border-b border-gray-5",
 											COLUMN_WIDTH,

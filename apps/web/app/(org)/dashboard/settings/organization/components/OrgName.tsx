@@ -19,7 +19,7 @@ const OrgName = () => {
 			setSaveLoading(true);
 			await updateOrganizationDetails({
 				organizationName: orgName,
-				organizationId: activeOrganization!.organization.id,
+				organizationId: activeOrganization?.organization.id,
 			});
 			toast.success("Settings updated successfully");
 			router.refresh();

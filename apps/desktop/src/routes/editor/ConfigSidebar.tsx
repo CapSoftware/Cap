@@ -57,10 +57,8 @@ import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideGrid from "~icons/lucide/grid";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideMoon from "~icons/lucide/moon";
-import IconLucideMove from "~icons/lucide/move";
 import IconLucidePalette from "~icons/lucide/palette";
 import IconLucideRabbit from "~icons/lucide/rabbit";
-import IconLucideScan from "~icons/lucide/scan";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
@@ -1165,7 +1163,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			try {
 				const path = await resolveResource(`assets/backgrounds/${id}.jpg`);
 				return { id, path };
-			} catch (err) {
+			} catch (_err) {
 				return { id, path: null };
 			}
 		});
@@ -1222,7 +1220,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								);
 
 								debouncedSetProject(rawPath);
-							} catch (err) {
+							} catch (_err) {
 								toast.error("Failed to set wallpaper");
 							}
 						};
@@ -1234,7 +1232,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 						try {
 							const convertedPath = convertFileSrc(path);
 							await fetch(convertedPath, { method: "HEAD" });
-						} catch (err) {
+						} catch (_err) {
 							setProject("background", "source", {
 								type: "image",
 								path: null,
@@ -1562,7 +1560,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									debouncedSetProject(wallpaper.rawPath);
 
 									ensurePaddingForBackground();
-								} catch (err) {
+								} catch (_err) {
 									toast.error("Failed to set wallpaper");
 								}
 							}}
@@ -1709,7 +1707,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 										type: "image",
 										path: fullPath,
 									});
-								} catch (err) {
+								} catch (_err) {
 									toast.error("Failed to save image");
 								}
 							}}
@@ -1838,7 +1836,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 												style={{ transform: `rotate(${angle()}deg)` }}
 												onMouseDown={(downEvent) => {
 													const start = angle();
-													const resumeHistory = projectHistory.pause();
+													const _resumeHistory = projectHistory.pause();
 
 													createRoot((dispose) =>
 														createEventListenerMap(window, {
@@ -2799,7 +2797,7 @@ function MaskSegmentConfig(props: {
 
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? props.segment.start;
-	const maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
+	const _maskState = () => evaluateMask(props.segment, currentAbsoluteTime());
 
 	const clearKeyframes = (segment: MaskSegment) => {
 		segment.keyframes.position = [];
@@ -2807,13 +2805,13 @@ function MaskSegmentConfig(props: {
 		segment.keyframes.intensity = [];
 	};
 
-	const setPosition = (value: { x: number; y: number }) =>
+	const _setPosition = (value: { x: number; y: number }) =>
 		updateSegment((segment) => {
 			segment.center = value;
 			clearKeyframes(segment);
 		});
 
-	const setSize = (value: { x: number; y: number }) =>
+	const _setSize = (value: { x: number; y: number }) =>
 		updateSegment((segment) => {
 			segment.size = value;
 			clearKeyframes(segment);

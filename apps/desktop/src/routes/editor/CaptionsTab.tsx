@@ -378,7 +378,7 @@ export function CaptionsTab() {
 					"Failed to load the caption model. Try downloading it again";
 			}
 
-			toast.error("Failed to generate captions: " + errorMessage);
+			toast.error(`Failed to generate captions: ${errorMessage}`);
 		} finally {
 			setIsGenerating(false);
 		}
