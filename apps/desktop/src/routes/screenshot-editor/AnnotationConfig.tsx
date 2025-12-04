@@ -1,12 +1,12 @@
 import { Popover } from "@kobalte/core/popover";
-import { createMemo, For, Show } from "solid-js";
-import { Portal } from "solid-js/web";
+import { cx } from "cva";
+import { createMemo, For, type JSX, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import { BACKGROUND_COLORS, hexToRgb, RgbInput, rgbToHex } from "./ColorPicker";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 import { Slider } from "./ui";
 
-export function AnnotationConfig() {
+export function AnnotationConfigBar() {
 	const {
 		annotations,
 		selectedAnnotationId,
@@ -35,145 +35,148 @@ export function AnnotationConfig() {
 				const maskType = () => ann().maskType ?? "blur";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
-					<Portal>
-						<div class="fixed left-1/2 -translate-x-1/2 top-20 z-50 overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95">
-							<div class="flex items-center gap-4 p-4">
-								<Show when={!isMask}>
-									<div class="flex flex-col gap-1">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider">
-											{type === "text" ? "Color" : "Stroke"}
-										</span>
-										<ColorPickerButton
-											value={ann().strokeColor}
-											onChange={(c) => update("strokeColor", c)}
-										/>
-									</div>
-								</Show>
+					<div class="w-full border-b border-gray-3 bg-gray-1 dark:bg-gray-2 animate-in fade-in slide-in-from-top-1 duration-150">
+						<div class="flex items-center justify-center gap-6 px-4 h-11">
+							<Show when={!isMask}>
+								<ConfigItem label={type === "text" ? "Color" : "Stroke"}>
+									<ColorPickerButton
+										value={ann().strokeColor}
+										onChange={(c) => update("strokeColor", c)}
+									/>
+								</ConfigItem>
+							</Show>
 
-								<Show when={type !== "text" && !isMask}>
-									<div class="flex flex-col gap-1 w-24">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
-											Width <span>{ann().strokeWidth}px</span>
-										</span>
-										<Slider
-											value={[ann().strokeWidth]}
-											onChange={(v) => update("strokeWidth", v[0])}
-											minValue={1}
-											maxValue={20}
-											step={1}
-											class="w-full"
-										/>
-									</div>
-								</Show>
+							<Show when={type !== "text" && !isMask}>
+								<ConfigItem label="Width" value={`${ann().strokeWidth}px`}>
+									<Slider
+										value={[ann().strokeWidth]}
+										onChange={(v) => update("strokeWidth", v[0])}
+										minValue={1}
+										maxValue={20}
+										step={1}
+										class="w-20"
+									/>
+								</ConfigItem>
+							</Show>
 
-								<Show when={type === "rectangle" || type === "circle"}>
-									<div class="flex flex-col gap-1">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider">
-											Fill
-										</span>
-										<ColorPickerButton
-											value={ann().fillColor}
-											onChange={(c) => update("fillColor", c)}
-											allowTransparent
-										/>
-									</div>
-								</Show>
+							<Show when={type === "rectangle" || type === "circle"}>
+								<ConfigItem label="Fill">
+									<ColorPickerButton
+										value={ann().fillColor}
+										onChange={(c) => update("fillColor", c)}
+										allowTransparent
+									/>
+								</ConfigItem>
+							</Show>
 
-								<Show when={!isMask}>
-									<div class="flex flex-col gap-1 w-24">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
-											Opacity <span>{Math.round(ann().opacity * 100)}%</span>
-										</span>
-										<Slider
-											value={[ann().opacity]}
-											onChange={(v) => update("opacity", v[0])}
-											minValue={0.1}
-											maxValue={1}
-											step={0.1}
-											class="w-full"
-										/>
-									</div>
-								</Show>
-
-								<Show when={type === "mask"}>
-									<div class="flex flex-col gap-1">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider">
-											Style
-										</span>
-										<div class="flex gap-1">
-											<button
-												type="button"
-												class={`px-3 h-8 rounded-lg border ${
-													maskType() === "blur"
-														? "border-blue-7 bg-blue-3 text-blue-11"
-														: "border-gray-4 bg-gray-2 text-gray-11"
-												}`}
-												onClick={() => update("maskType", "blur")}
-											>
-												Blur
-											</button>
-											<button
-												type="button"
-												class={`px-3 h-8 rounded-lg border ${
-													maskType() === "pixelate"
-														? "border-blue-7 bg-blue-3 text-blue-11"
-														: "border-gray-4 bg-gray-2 text-gray-11"
-												}`}
-												onClick={() => update("maskType", "pixelate")}
-											>
-												Pixelate
-											</button>
-										</div>
-									</div>
-								</Show>
-
-								<Show when={type === "mask"}>
-									<div class="flex flex-col gap-1 w-28">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
-											Intensity <span>{Math.round(maskLevel())}</span>
-										</span>
-										<Slider
-											value={[maskLevel()]}
-											onChange={(v) => update("maskLevel", v[0])}
-											minValue={4}
-											maxValue={50}
-											step={1}
-											class="w-full"
-										/>
-									</div>
-								</Show>
-
-								<Show when={type === "text"}>
-									<div class="flex flex-col gap-1 w-24">
-										<span class="text-[10px] text-gray-11 font-medium uppercase tracking-wider flex justify-between">
-											Size <span>{ann().height}px</span>
-										</span>
-										<Slider
-											value={[ann().height]}
-											onChange={(v) => update("height", v[0])}
-											minValue={12}
-											maxValue={100}
-											step={1}
-											class="w-full"
-										/>
-									</div>
-								</Show>
-
-								<div class="w-px h-8 bg-gray-4 mx-1" />
-
-								<button
-									type="button"
-									class="text-xs text-blue-11 font-medium hover:text-blue-9 px-2 h-full"
-									onClick={() => setSelectedAnnotationId(null)}
+							<Show when={!isMask}>
+								<ConfigItem
+									label="Opacity"
+									value={`${Math.round(ann().opacity * 100)}%`}
 								>
-									Done
-								</button>
-							</div>
+									<Slider
+										value={[ann().opacity]}
+										onChange={(v) => update("opacity", v[0])}
+										minValue={0.1}
+										maxValue={1}
+										step={0.1}
+										class="w-20"
+									/>
+								</ConfigItem>
+							</Show>
+
+							<Show when={type === "mask"}>
+								<ConfigItem label="Style">
+									<div class="flex gap-1">
+										<button
+											type="button"
+											class={cx(
+												"px-2.5 h-6 rounded-md text-xs font-medium transition-colors",
+												maskType() === "blur"
+													? "bg-blue-9 text-white"
+													: "bg-gray-3 text-gray-11 hover:bg-gray-4",
+											)}
+											onClick={() => update("maskType", "blur")}
+										>
+											Blur
+										</button>
+										<button
+											type="button"
+											class={cx(
+												"px-2.5 h-6 rounded-md text-xs font-medium transition-colors",
+												maskType() === "pixelate"
+													? "bg-blue-9 text-white"
+													: "bg-gray-3 text-gray-11 hover:bg-gray-4",
+											)}
+											onClick={() => update("maskType", "pixelate")}
+										>
+											Pixelate
+										</button>
+									</div>
+								</ConfigItem>
+							</Show>
+
+							<Show when={type === "mask"}>
+								<ConfigItem
+									label="Intensity"
+									value={`${Math.round(maskLevel())}`}
+								>
+									<Slider
+										value={[maskLevel()]}
+										onChange={(v) => update("maskLevel", v[0])}
+										minValue={4}
+										maxValue={50}
+										step={1}
+										class="w-24"
+									/>
+								</ConfigItem>
+							</Show>
+
+							<Show when={type === "text"}>
+								<ConfigItem label="Size" value={`${ann().height}px`}>
+									<Slider
+										value={[ann().height]}
+										onChange={(v) => update("height", v[0])}
+										minValue={12}
+										maxValue={100}
+										step={1}
+										class="w-20"
+									/>
+								</ConfigItem>
+							</Show>
+
+							<div class="w-px h-5 bg-gray-4" />
+
+							<button
+								type="button"
+								class="text-xs text-blue-11 font-medium hover:text-blue-9 transition-colors"
+								onClick={() => setSelectedAnnotationId(null)}
+							>
+								Done
+							</button>
 						</div>
-					</Portal>
+					</div>
 				);
 			}}
 		</Show>
+	);
+}
+
+function ConfigItem(props: {
+	label: string;
+	value?: string;
+	children: JSX.Element;
+}) {
+	return (
+		<div class="flex items-center gap-2">
+			<span class="text-[11px] text-gray-10 font-medium whitespace-nowrap">
+				{props.label}
+				{props.value && (
+					<span class="text-gray-11 ml-1 tabular-nums">{props.value}</span>
+				)}
+			</span>
+			{props.children}
+		</div>
 	);
 }
 
@@ -182,7 +185,6 @@ function ColorPickerButton(props: {
 	onChange: (value: string) => void;
 	allowTransparent?: boolean;
 }) {
-	// Helper to handle RGB <-> Hex
 	const rgbValue = createMemo(() => {
 		if (props.value === "transparent")
 			return [0, 0, 0] as [number, number, number];
@@ -194,24 +196,24 @@ function ColorPickerButton(props: {
 	const isTransparent = createMemo(() => props.value === "transparent");
 
 	return (
-		<Popover placement="bottom">
+		<Popover placement="bottom" gutter={8}>
 			<Popover.Trigger class="outline-none group">
-				<div class="size-6 rounded-full border border-gray-4 p-0.5 bg-white dark:bg-gray-2 transition-transform group-hover:scale-105 group-active:scale-95 shadow-sm">
+				<div class="size-5 rounded-full border border-gray-5 transition-all group-hover:scale-110 group-hover:border-gray-7 group-active:scale-95 overflow-hidden">
 					<div
-						class="w-full h-full rounded-full border border-black/5"
+						class="w-full h-full"
 						style={{
 							background: isTransparent()
 								? "linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)"
 								: props.value,
-							"background-size": isTransparent() ? "4px 4px" : "auto",
+							"background-size": isTransparent() ? "3px 3px" : "auto",
 							"background-color": isTransparent() ? "white" : props.value,
 						}}
 					/>
 				</div>
 			</Popover.Trigger>
 			<Popover.Portal>
-				<Popover.Content class="z-[200] w-[240px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-3">
-					<div class="flex flex-col gap-3">
+				<Popover.Content class="z-[200] w-[220px] overflow-hidden rounded-lg border border-gray-4 bg-gray-1 dark:bg-gray-2 shadow-lg animate-in fade-in zoom-in-95 p-2.5">
+					<div class="flex flex-col gap-2.5">
 						<RgbInput
 							value={rgbValue()}
 							onChange={(rgb) => {
@@ -219,17 +221,17 @@ function ColorPickerButton(props: {
 							}}
 						/>
 
-						<div class="grid grid-cols-6 gap-2">
+						<div class="grid grid-cols-6 gap-1.5">
 							<Show when={props.allowTransparent}>
 								<Tooltip content="Transparent">
 									<button
 										type="button"
 										onClick={() => props.onChange("transparent")}
-										class="size-6 rounded-full border border-gray-3 relative overflow-hidden hover:scale-110 transition-transform"
+										class="size-5 rounded-full border border-gray-4 relative overflow-hidden hover:scale-110 transition-transform"
 										style={{
 											background:
 												"linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)",
-											"background-size": "4px 4px",
+											"background-size": "3px 3px",
 											"background-color": "white",
 										}}
 									>
@@ -243,14 +245,14 @@ function ColorPickerButton(props: {
 								{(color: string) => (
 									<button
 										type="button"
-										class="size-6 rounded-full border border-black/10 hover:scale-110 transition-transform relative"
+										class="size-5 rounded-full border border-black/10 hover:scale-110 transition-transform relative"
 										style={{ "background-color": color }}
 										onClick={() => props.onChange(color)}
 									>
 										<Show
 											when={props.value.toLowerCase() === color.toLowerCase()}
 										>
-											<div class="absolute inset-0 ring-2 ring-white/50 rounded-full shadow-sm" />
+											<div class="absolute inset-0 ring-2 ring-white/50 rounded-full" />
 										</Show>
 									</button>
 								)}

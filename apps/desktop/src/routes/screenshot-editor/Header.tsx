@@ -15,7 +15,6 @@ import IconLucideMoreHorizontal from "~icons/lucide/more-horizontal";
 import IconLucideSave from "~icons/lucide/save";
 import { AnnotationTools } from "./AnnotationTools";
 import { useScreenshotEditorContext } from "./context";
-import PresetsSubMenu from "./PresetsDropdown";
 import { AspectRatioSelect } from "./popovers/AspectRatioSelect";
 import { BackgroundSettingsPopover } from "./popovers/BackgroundSettingsPopover";
 import { BorderPopover } from "./popovers/BorderPopover";
@@ -32,8 +31,9 @@ import {
 import { useScreenshotExport } from "./useScreenshotExport";
 
 export function Header() {
-	const { path, setDialog, project, latestFrame } =
-		useScreenshotEditorContext();
+	const ctx = useScreenshotEditorContext();
+	const { setDialog, project, latestFrame } = ctx;
+	const path = () => ctx.editorInstance()?.path ?? "";
 
 	const { exportImage, isExporting } = useScreenshotExport();
 
@@ -149,7 +149,7 @@ export function Header() {
 								>
 									<DropdownItem
 										onSelect={() => {
-											revealItemInDir(path);
+											revealItemInDir(path());
 										}}
 									>
 										<IconLucideFolder class="size-4 text-gray-11" />
@@ -162,7 +162,7 @@ export function Header() {
 													"Are you sure you want to delete this screenshot?",
 												)
 											) {
-												await remove(path);
+												await remove(path());
 												await getCurrentWindow().close();
 											}
 										}}
@@ -170,15 +170,6 @@ export function Header() {
 										<IconCapTrash class="size-4 text-gray-11" />
 										<span>Delete</span>
 									</DropdownItem>
-								</MenuItemList>
-
-								<DropdownMenu.Separator class="h-px bg-gray-4 mx-1 my-1" />
-
-								<MenuItemList<typeof DropdownMenu.Group>
-									as={DropdownMenu.Group}
-									class="p-1"
-								>
-									<PresetsSubMenu />
 								</MenuItemList>
 							</PopperContent>
 						</Suspense>
