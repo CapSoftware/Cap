@@ -529,13 +529,13 @@ function Countdown(props: { from: number; current: number }) {
 
 	return (
 		<div
-			class="flex flex-row justify-between p-[0.25rem] flex-1 absolute inset-0 z-10 rounded-[18px] border border-white/15"
+			class="flex flex-row justify-between p-[0.25rem] flex-1 absolute inset-0 z-10 rounded-[18px]"
 			style={{
 				background:
 					"linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.00) 50.48%), var(--neutral-950, #090A0B)",
 				"background-blend-mode": "plus-lighter, normal",
-				"box-shadow":
-					"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
+				// "box-shadow":
+				// 	"0 1px 1px -0.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 3px 3px -1.5px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 6px 6px -3px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16)), 0 12px 12px -6px var(--_shadow-surface-layer, rgba(0, 0, 0, 0.16))",
 			}}
 		>
 			<div class="flex flex-1 gap-3 items-center px-3">
