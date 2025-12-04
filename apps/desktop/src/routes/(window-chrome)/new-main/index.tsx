@@ -71,7 +71,7 @@ import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, NoCameraIcon, SettingsI
 function getWindowSize() {
 	return {
 		width: 272,
-		height: 560,
+		height: 432,
 	};
 }
 

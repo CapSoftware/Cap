@@ -1,13 +1,7 @@
 import { createQuery } from "@tanstack/solid-query";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
 import { cx } from "cva";
-import {
-	type Component,
-	type ComponentProps,
-	createEffect,
-	createSignal,
-	Show,
-} from "solid-js";
+import { type Component, type ComponentProps, createEffect, createSignal, Show } from "solid-js";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import { createCurrentRecordingQuery, getPermissions } from "~/utils/queries";
@@ -28,7 +22,7 @@ export default function MicrophoneSelect(props: {
 	return (
 		<MicrophoneSelectBase
 			{...props}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect group relative overflow-hidden"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group relative overflow-hidden"
 			levelIndicatorClass="bg-blue-7"
 			iconClass="size-4"
 			PillComponent={InfoPill}
@@ -44,9 +38,7 @@ export function MicrophoneSelectBase(props: {
 	class: string;
 	levelIndicatorClass: string;
 	iconClass: string;
-	PillComponent: Component<
-		ComponentProps<"button"> & { variant: "blue" | "red" }
-	>;
+	PillComponent: Component<ComponentProps<"button"> & { variant: "blue" | "red" }>;
 }) {
 	const DB_SCALE = 40;
 
@@ -59,8 +51,7 @@ export function MicrophoneSelectBase(props: {
 	const requestPermission = useRequestPermission();
 
 	const permissionGranted = () =>
-		permissions?.data?.microphone === "granted" ||
-		permissions?.data?.microphone === "notNeeded";
+		permissions?.data?.microphone === "granted" || permissions?.data?.microphone === "notNeeded";
 
 	type Option = { name: string };
 
@@ -81,8 +72,7 @@ export function MicrophoneSelectBase(props: {
 	});
 
 	// visual audio level from 0 -> 1
-	const audioLevel = () =>
-		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
+	const audioLevel = () => (1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
 
 	createEffect(() => {
 		if (!props.value || !permissionGranted() || isInitialized()) return;
@@ -115,7 +105,7 @@ export function MicrophoneSelectBase(props: {
 								text: name,
 								checked: name === props.value,
 								action: () => handleMicrophoneChange({ name: name }),
-							}),
+							})
 						),
 					])
 						.then((items) => Menu.new({ items }))
@@ -129,16 +119,14 @@ export function MicrophoneSelectBase(props: {
 						<div
 							class={cx(
 								"opacity-50 left-0 inset-y-0 absolute transition-[right] duration-100 -z-10",
-								props.levelIndicatorClass,
+								props.levelIndicatorClass
 							)}
 							style={{ right: `${audioLevel() * 100}%` }}
 						/>
 					)}
 				</Show>
 				<MicrophoneIcon class={props.iconClass} />
-				<p class="flex-1 text-sm text-left truncate">
-					{props.value ?? NO_MICROPHONE}
-				</p>
+				<p class="flex-1 text-xs text-left truncate">{props.value ?? NO_MICROPHONE}</p>
 
 				<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
 					<ChevronDown class={props.iconClass} />

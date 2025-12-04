@@ -21,7 +21,7 @@ export default function CameraSelect(props: {
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-neutral-300 hover:text-white KSelect group"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group"
 			iconClass="size-4"
 		/>
 	);
@@ -32,9 +32,7 @@ export function CameraSelectBase(props: {
 	options: CameraInfo[];
 	value: CameraInfo | null;
 	onChange: (camera: CameraInfo | null) => void;
-	PillComponent: Component<
-		ComponentProps<"button"> & { variant: "blue" | "red" }
-	>;
+	PillComponent: Component<ComponentProps<"button"> & { variant: "blue" | "red" }>;
 	class: string;
 	iconClass: string;
 }) {
@@ -42,13 +40,10 @@ export function CameraSelectBase(props: {
 	const permissions = createQuery(() => getPermissions);
 	const requestPermission = useRequestPermission();
 
-	const permissionGranted = () =>
-		permissions?.data?.camera === "granted" ||
-		permissions?.data?.camera === "notNeeded";
+	const permissionGranted = () => permissions?.data?.camera === "granted" || permissions?.data?.camera === "notNeeded";
 
 	const onChange = (cameraLabel: CameraInfo | null) => {
-		if (!cameraLabel && !permissionGranted())
-			return requestPermission("camera");
+		if (!cameraLabel && !permissionGranted()) return requestPermission("camera");
 
 		props.onChange(cameraLabel);
 
@@ -81,7 +76,7 @@ export function CameraSelectBase(props: {
 								text: o.display_name,
 								checked: o === props.value,
 								action: () => onChange(o),
-							}),
+							})
 						),
 					])
 						.then((items) => Menu.new({ items }))
@@ -92,9 +87,7 @@ export function CameraSelectBase(props: {
 				class={props.class}
 			>
 				<CameraIcon class={props.iconClass} />
-				<p class="flex-1 text-sm text-left truncate">
-					{props.value?.display_name ?? NO_CAMERA}
-				</p>
+				<p class="flex-1 text-xs text-left truncate">{props.value?.display_name ?? NO_CAMERA}</p>
 
 				<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
 					<ChevronDown class={props.iconClass} />
