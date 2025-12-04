@@ -874,8 +874,7 @@ function Page() {
 					>
 						<CloseIcon class="text-white size-4" />
 					</button>
-					<InflightLogo class="text-white" />
-					{import.meta.env.DEV && (
+					{/* {import.meta.env.DEV && (
 						<button
 							type="button"
 							onClick={() => {
@@ -885,7 +884,7 @@ function Page() {
 						>
 							<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 						</button>
-					)}
+					)} */}
 					<button
 						type="button"
 						onClick={async () => {
