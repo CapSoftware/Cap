@@ -4,7 +4,7 @@ import type { Space, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { SignedImageUrl } from "@/components/SignedImageUrl";
@@ -22,7 +22,80 @@ export function ClientMyCapsLink({
 	const router = useRouter();
 	const { activeSpace } = useDashboardContext();
 
-	// Register this component as a drop target for mobile drag and drop
+	const processDrop = useCallback(
+		async (capData: { id: Video.VideoId; name: string }) => {
+			setIsDragOver(false);
+
+			try {
+				if (!capData || !capData.id) {
+					console.error("Invalid cap data");
+					return;
+				}
+
+				setIsMovingVideo(true);
+
+				await moveVideoToFolder({
+					videoId: capData.id,
+					folderId: null,
+					spaceId: spaceId ?? null,
+				});
+				router.refresh();
+				if (activeSpace) {
+					toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
+				} else {
+					toast.success(`Moved "${capData.name}" to My Caps`);
+				}
+			} catch (error) {
+				console.error("Error moving video:", error);
+				toast.error("Failed to move video");
+			} finally {
+				setIsMovingVideo(false);
+			}
+		},
+		[spaceId, router, activeSpace],
+	);
+
+	const handleDrop = useCallback(
+		async (
+			e:
+				| React.DragEvent<HTMLAnchorElement>
+				| { id: Video.VideoId; name: string },
+		) => {
+			if ("preventDefault" in e) {
+				e.preventDefault();
+
+				try {
+					const capData = JSON.parse(e.dataTransfer.getData("application/cap"));
+
+					if (!capData || !capData.id) {
+						console.error("Invalid cap data");
+						return;
+					}
+
+					await processDrop(capData);
+				} catch (error) {
+					console.error("Error processing drop:", error);
+					toast.error("Failed to move video");
+				}
+			} else {
+				await processDrop(e);
+			}
+		},
+		[processDrop],
+	);
+
+	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
+		e.preventDefault();
+
+		if (e.dataTransfer.types.includes("application/cap")) {
+			setIsDragOver(true);
+		}
+	};
+
+	const handleDragLeave = () => {
+		setIsDragOver(false);
+	};
+
 	useEffect(() => {
 		if (!linkRef.current) return;
 
@@ -36,78 +109,6 @@ export function ClientMyCapsLink({
 			unregister();
 		};
 	}, [handleDrop]);
-
-	// Handle drag events for desktop
-	const handleDragOver = (e: React.DragEvent<HTMLAnchorElement>) => {
-		e.preventDefault();
-
-		// Check if the dragged item is a cap
-		if (e.dataTransfer.types.includes("application/cap")) {
-			setIsDragOver(true);
-		}
-	};
-
-	const handleDragLeave = () => {
-		setIsDragOver(false);
-	};
-
-	const handleDrop = async (
-		e: React.DragEvent<HTMLAnchorElement> | { id: Video.VideoId; name: string },
-	) => {
-		if ("preventDefault" in e) {
-			e.preventDefault();
-
-			try {
-				// Get the cap data from the data transfer
-				const capData = JSON.parse(e.dataTransfer.getData("application/cap"));
-
-				if (!capData || !capData.id) {
-					console.error("Invalid cap data");
-					return;
-				}
-
-				await processDrop(capData);
-			} catch (error) {
-				console.error("Error processing drop:", error);
-				toast.error("Failed to move video");
-			}
-		} else {
-			// Handle mobile drop with direct data
-			await processDrop(e);
-		}
-	};
-
-	// Common function to process the drop for both desktop and mobile
-	const processDrop = async (capData: { id: Video.VideoId; name: string }) => {
-		setIsDragOver(false);
-
-		try {
-			if (!capData || !capData.id) {
-				console.error("Invalid cap data");
-				return;
-			}
-
-			setIsMovingVideo(true);
-
-			// Move the video to the root folder (null parentId)
-			await moveVideoToFolder({
-				videoId: capData.id,
-				folderId: null,
-				spaceId: spaceId ?? null,
-			});
-			router.refresh();
-			if (activeSpace) {
-				toast.success(`Moved "${capData.name}" to "${activeSpace.name}"`);
-			} else {
-				toast.success(`Moved "${capData.name}" to My Caps`);
-			}
-		} catch (error) {
-			console.error("Error moving video:", error);
-			toast.error("Failed to move video");
-		} finally {
-			setIsMovingVideo(false);
-		}
-	};
 
 	return (
 		<Link

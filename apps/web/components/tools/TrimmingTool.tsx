@@ -193,7 +193,7 @@ export const TrimmingTool = () => {
 		if (videoPreviewRef.current) {
 			setVideoState((prev) => ({
 				...prev,
-				currentTime: videoPreviewRef.current?.currentTime,
+				currentTime: videoPreviewRef.current?.currentTime ?? 0,
 			}));
 		}
 	};
@@ -657,7 +657,7 @@ export const TrimmingTool = () => {
 		if (newEndTime > trimState.startTime && videoState.info) {
 			setTrimState((prev) => ({
 				...prev,
-				endTime: Math.min(newEndTime, videoState.info?.duration),
+				endTime: Math.min(newEndTime, videoState.info?.duration ?? 0),
 			}));
 		}
 	};
@@ -676,9 +676,10 @@ export const TrimmingTool = () => {
 
 	const setCurrentPositionAsStart = () => {
 		if (videoPreviewRef.current && videoState.currentTime < trimState.endTime) {
+			const currentTime = videoPreviewRef.current.currentTime ?? 0;
 			setTrimState((prev) => ({
 				...prev,
-				startTime: videoPreviewRef.current?.currentTime,
+				startTime: currentTime,
 			}));
 		}
 	};
@@ -688,9 +689,10 @@ export const TrimmingTool = () => {
 			videoPreviewRef.current &&
 			videoState.currentTime > trimState.startTime
 		) {
+			const currentTime = videoPreviewRef.current.currentTime ?? 0;
 			setTrimState((prev) => ({
 				...prev,
-				endTime: videoPreviewRef.current?.currentTime,
+				endTime: currentTime,
 			}));
 		}
 	};

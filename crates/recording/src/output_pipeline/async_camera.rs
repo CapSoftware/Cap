@@ -250,19 +250,20 @@ impl VideoMuxer for AsyncCameraMp4Muxer {
             }
 
             let backlog = self.frames_submitted.saturating_sub(self.frames_encoded);
-            if encoded_this_call == 0 && backlog > 10 {
-                if let Some(converted) = pool.recv_timeout(Duration::from_millis(5)) {
-                    let pts = converted.frame.pts().unwrap_or(0);
-                    if self.last_pts.is_none_or(|last| pts > last) {
-                        let frame_timestamp = Duration::from_micros(pts as u64);
-                        encoder.queue_preconverted_frame(
-                            converted.frame,
-                            frame_timestamp,
-                            &mut self.output,
-                        )?;
-                        self.last_pts = Some(pts);
-                        self.frames_encoded += 1;
-                    }
+            if encoded_this_call == 0
+                && backlog > 10
+                && let Some(converted) = pool.recv_timeout(Duration::from_millis(5))
+            {
+                let pts = converted.frame.pts().unwrap_or(0);
+                if self.last_pts.is_none_or(|last| pts > last) {
+                    let frame_timestamp = Duration::from_micros(pts as u64);
+                    encoder.queue_preconverted_frame(
+                        converted.frame,
+                        frame_timestamp,
+                        &mut self.output,
+                    )?;
+                    self.last_pts = Some(pts);
+                    self.frames_encoded += 1;
                 }
             }
 

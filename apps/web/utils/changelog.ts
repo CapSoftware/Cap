@@ -17,6 +17,8 @@ function parseFrontmatter(fileContent: string) {
 	const frontMatterLines = frontMatterBlock?.trim().split("\n");
 	const metadata: Partial<ChangelogMetadata> = {};
 
+	if (!frontMatterLines) return { metadata, content };
+
 	frontMatterLines.forEach((line) => {
 		const [key, ...valueArr] = line.split(": ");
 		if (!key) return;

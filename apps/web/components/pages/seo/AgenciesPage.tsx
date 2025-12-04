@@ -528,7 +528,9 @@ export const AgenciesPage = () => {
 													key={cellIndex.toString()}
 													className={`px-6 py-4 text-[15px] text-gray-10 ${
 														rowIndex ===
-														agenciesContent.comparisonTable?.rows.length - 1
+														(agenciesContent.comparisonTable?.rows.length ??
+															0) -
+															1
 															? ""
 															: "border-b border-gray-5"
 													}`}

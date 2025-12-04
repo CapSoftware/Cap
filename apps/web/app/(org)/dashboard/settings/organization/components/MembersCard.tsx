@@ -87,11 +87,12 @@ export const MembersCard = ({
 
 	const confirmRemoveMember = async () => {
 		if (!pendingMember) return;
+		if (!activeOrganization?.organization.id) return;
 		setRemoving(true);
 		try {
 			await removeOrganizationMember(
 				pendingMember.id,
-				activeOrganization?.organization.id,
+				activeOrganization.organization.id,
 			);
 			toast.success("Member removed successfully");
 			setConfirmOpen(false);
