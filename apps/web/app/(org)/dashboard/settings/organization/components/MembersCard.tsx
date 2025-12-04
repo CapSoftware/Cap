@@ -52,10 +52,15 @@ export const MembersCard = ({
 			return;
 		}
 
+		if (!activeOrganization?.organization.id) {
+			toast.error("Organization not found");
+			return;
+		}
+
 		try {
 			await removeOrganizationInvite(
 				inviteId,
-				activeOrganization?.organization.id,
+				activeOrganization.organization.id,
 			);
 			toast.success("Invite deleted successfully");
 			router.refresh();

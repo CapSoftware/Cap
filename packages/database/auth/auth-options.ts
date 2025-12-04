@@ -153,7 +153,7 @@ export const authOptions = (): NextAuthOptions => {
 				if (!session.user) return session;
 
 				if (token && token.id) {
-					session.user.id = token.id;
+					(session.user as { id: string }).id = token.id;
 					session.user.name = token.name ?? null;
 					session.user.email = token.email ?? null;
 					session.user.image = token.picture ?? null;
