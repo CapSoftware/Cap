@@ -31,8 +31,8 @@ export function AnnotationConfigBar() {
 	return (
 		<Show when={selected()}>
 			{(ann) => {
-				const type = ann().type;
-				const isMask = type === "mask";
+				const type = () => ann().type;
+				const isMask = () => type() === "mask";
 				const maskType = () => ann().maskType ?? "blur";
 				const maskLevel = () => ann().maskLevel ?? 16;
 				return (
@@ -43,8 +43,8 @@ export function AnnotationConfigBar() {
 						)}
 					>
 						<div class="flex items-center justify-center gap-6 px-4 h-11">
-							<Show when={!isMask}>
-								<ConfigItem label={type === "text" ? "Color" : "Stroke"}>
+							<Show when={!isMask()}>
+								<ConfigItem label={type() === "text" ? "Color" : "Stroke"}>
 									<ColorPickerButton
 										value={ann().strokeColor}
 										onChange={(c) => update("strokeColor", c)}
@@ -52,8 +52,11 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={type !== "text" && !isMask}>
-								<ConfigItem label="Width" value={`${ann().strokeWidth}px`}>
+							<Show when={type() !== "text" && !isMask()}>
+								<ConfigItem
+									label="Width"
+									value={`${Math.round(ann().strokeWidth)}px`}
+								>
 									<Slider
 										value={[ann().strokeWidth]}
 										onChange={(v) => update("strokeWidth", v[0])}
@@ -65,7 +68,7 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={type === "rectangle" || type === "circle"}>
+							<Show when={type() === "rectangle" || type() === "circle"}>
 								<ConfigItem label="Fill">
 									<ColorPickerButton
 										value={ann().fillColor}
@@ -75,7 +78,7 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={!isMask}>
+							<Show when={!isMask()}>
 								<ConfigItem
 									label="Opacity"
 									value={`${Math.round(ann().opacity * 100)}%`}
@@ -91,7 +94,7 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={type === "mask"}>
+							<Show when={type() === "mask"}>
 								<ConfigItem label="Style">
 									<div class="flex gap-1">
 										<button
@@ -122,7 +125,7 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={type === "mask"}>
+							<Show when={type() === "mask"}>
 								<ConfigItem
 									label="Intensity"
 									value={`${Math.round(maskLevel())}`}
@@ -138,8 +141,11 @@ export function AnnotationConfigBar() {
 								</ConfigItem>
 							</Show>
 
-							<Show when={type === "text"}>
-								<ConfigItem label="Size" value={`${ann().height}px`}>
+							<Show when={type() === "text"}>
+								<ConfigItem
+									label="Size"
+									value={`${Math.round(ann().height)}px`}
+								>
 									<Slider
 										value={[ann().height]}
 										onChange={(v) => update("height", v[0])}

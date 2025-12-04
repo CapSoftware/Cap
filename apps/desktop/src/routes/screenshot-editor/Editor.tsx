@@ -38,11 +38,11 @@ export function Editor() {
 	const {
 		projectHistory,
 		setActiveTool,
-		setProject,
-		project,
 		setSelectedAnnotationId,
 		layersPanelOpen,
 		setLayersPanelOpen,
+		activePopover,
+		setActivePopover,
 	} = useScreenshotEditorContext();
 
 	createEffect(() => {
@@ -106,14 +106,22 @@ export function Editor() {
 						setActiveTool("select");
 						setSelectedAnnotationId(null);
 						break;
-					case "p": {
-						projectHistory.push();
-						const currentPadding = project.background.padding;
-						setProject("background", "padding", currentPadding === 0 ? 20 : 0);
+					case "p":
+						setActivePopover(activePopover() === "padding" ? null : "padding");
 						break;
-					}
+					case "b":
+						setActivePopover(
+							activePopover() === "background" ? null : "background",
+						);
+						break;
 					case "l":
 						setLayersPanelOpen(!layersPanelOpen());
+						break;
+					case "h":
+						setActivePopover(activePopover() === "shadow" ? null : "shadow");
+						break;
+					case "e":
+						setActivePopover(activePopover() === "border" ? null : "border");
 						break;
 				}
 			}

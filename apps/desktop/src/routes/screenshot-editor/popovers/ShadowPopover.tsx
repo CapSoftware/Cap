@@ -6,7 +6,8 @@ import { EditorButton, Slider } from "../ui";
 import ShadowSettings from "./ShadowSettings";
 
 export function ShadowPopover() {
-	const { project, setProject } = useScreenshotEditorContext();
+	const { project, setProject, activePopover, setActivePopover } =
+		useScreenshotEditorContext();
 	// We need a dummy scrollRef since ShadowSettings expects it,
 	// but in this simple popover we might not need auto-scroll.
 	// Passing undefined might break it if it relies on it, checking ShadowSettings source would be good.
@@ -14,11 +15,16 @@ export function ShadowPopover() {
 	let scrollRef: HTMLDivElement | undefined;
 
 	return (
-		<Popover placement="bottom-start">
+		<Popover
+			placement="bottom-start"
+			open={activePopover() === "shadow"}
+			onOpenChange={(open) => setActivePopover(open ? "shadow" : null)}
+		>
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapShadow class="size-4" />}
 				tooltipText="Shadow"
+				kbd={["H"]}
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[280px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-4">
