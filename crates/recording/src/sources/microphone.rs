@@ -124,12 +124,10 @@ fn downmix_to_mono(data: &[u8], format: SampleFormat, source_channels: usize) ->
 
 fn sample_format_size(format: SampleFormat) -> Option<usize> {
     Some(match format {
-        SampleFormat::U8 => 1,
-        SampleFormat::I16 => 2,
-        SampleFormat::I32 => 4,
-        SampleFormat::I64 => 8,
-        SampleFormat::F32 => 4,
-        SampleFormat::F64 => 8,
+        SampleFormat::I8 | SampleFormat::U8 => 1,
+        SampleFormat::I16 | SampleFormat::U16 => 2,
+        SampleFormat::I32 | SampleFormat::U32 | SampleFormat::F32 => 4,
+        SampleFormat::I64 | SampleFormat::U64 | SampleFormat::F64 => 8,
         _ => return None,
     })
 }
@@ -152,21 +150,37 @@ fn average_frame_sample(
 
 fn sample_to_f64(format: SampleFormat, bytes: &[u8]) -> Option<f64> {
     match format {
+        SampleFormat::I8 => bytes.first().copied().map(|v| v as i8 as f64),
         SampleFormat::U8 => bytes.first().copied().map(|v| v as f64),
         SampleFormat::I16 => {
             let mut buf = [0u8; 2];
             buf.copy_from_slice(bytes);
             Some(i16::from_ne_bytes(buf) as f64)
         }
+        SampleFormat::U16 => {
+            let mut buf = [0u8; 2];
+            buf.copy_from_slice(bytes);
+            Some(u16::from_ne_bytes(buf) as f64)
+        }
         SampleFormat::I32 => {
             let mut buf = [0u8; 4];
             buf.copy_from_slice(bytes);
             Some(i32::from_ne_bytes(buf) as f64)
         }
+        SampleFormat::U32 => {
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(bytes);
+            Some(u32::from_ne_bytes(buf) as f64)
+        }
         SampleFormat::I64 => {
             let mut buf = [0u8; 8];
             buf.copy_from_slice(bytes);
             Some(i64::from_ne_bytes(buf) as f64)
+        }
+        SampleFormat::U64 => {
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(bytes);
+            Some(u64::from_ne_bytes(buf) as f64)
         }
         SampleFormat::F32 => {
             let mut buf = [0u8; 4];
@@ -184,6 +198,10 @@ fn sample_to_f64(format: SampleFormat, bytes: &[u8]) -> Option<f64> {
 
 fn write_sample_from_f64(format: SampleFormat, value: f64, out: &mut [u8]) {
     match format {
+        SampleFormat::I8 => {
+            let sample = value.round().clamp(i8::MIN as f64, i8::MAX as f64) as i8;
+            out[0] = sample as u8;
+        }
         SampleFormat::U8 => {
             let sample = value.round().clamp(u8::MIN as f64, u8::MAX as f64) as u8;
             out[0] = sample;
@@ -192,12 +210,24 @@ fn write_sample_from_f64(format: SampleFormat, value: f64, out: &mut [u8]) {
             let sample = value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16;
             out.copy_from_slice(&sample.to_ne_bytes());
         }
+        SampleFormat::U16 => {
+            let sample = value.round().clamp(u16::MIN as f64, u16::MAX as f64) as u16;
+            out.copy_from_slice(&sample.to_ne_bytes());
+        }
         SampleFormat::I32 => {
             let sample = value.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
             out.copy_from_slice(&sample.to_ne_bytes());
         }
+        SampleFormat::U32 => {
+            let sample = value.round().clamp(u32::MIN as f64, u32::MAX as f64) as u32;
+            out.copy_from_slice(&sample.to_ne_bytes());
+        }
         SampleFormat::I64 => {
             let sample = value.round().clamp(i64::MIN as f64, i64::MAX as f64) as i64;
+            out.copy_from_slice(&sample.to_ne_bytes());
+        }
+        SampleFormat::U64 => {
+            let sample = value.round().clamp(u64::MIN as f64, u64::MAX as f64) as u64;
             out.copy_from_slice(&sample.to_ne_bytes());
         }
         SampleFormat::F32 => {

@@ -317,10 +317,14 @@ impl VideoInfo {
 
 pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
     match sample_format {
+        SampleFormat::I8 => Some(Sample::U8(Type::Planar)),
         SampleFormat::U8 => Some(Sample::U8(Type::Planar)),
         SampleFormat::I16 => Some(Sample::I16(Type::Planar)),
+        SampleFormat::U16 => Some(Sample::I16(Type::Planar)),
         SampleFormat::I32 => Some(Sample::I32(Type::Planar)),
+        SampleFormat::U32 => Some(Sample::I32(Type::Planar)),
         SampleFormat::I64 => Some(Sample::I64(Type::Planar)),
+        SampleFormat::U64 => Some(Sample::I64(Type::Planar)),
         SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
         SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
         _ => None,
