@@ -65,12 +65,13 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 import HorizontalTargetButton from "./HorizontalTargetButton";
-import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, SettingsIcon, WindowIcon } from "~/icons";
+import VerticalTargetButton from "./VerticalTargetButton";
+import { CloseIcon, CropIcon, DisplayIcon, InflightLogo, NoCameraIcon, SettingsIcon, WindowIcon } from "~/icons";
 
 function getWindowSize() {
 	return {
 		width: 272,
-		height: 560,
+		height: 432,
 	};
 }
 
@@ -457,10 +458,17 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 	});
 
 	return (
-		<div class="relative w-full aspect-video bg-gray-2 rounded-lg overflow-hidden border border-white/10">
+		<div class="relative w-full aspect-video bg-neutral-900 overflow-hidden rounded-t-[20px]">
 			<Show
 				when={props.selectedCamera}
-				fallback={<div class="flex items-center justify-center h-full text-xs text-gray-11">No camera selected</div>}
+				// fallback={<div class="flex items-center justify-center h-full text-xs text-gray-11">No camera selected</div>}
+				fallback={
+					<div class="flex items-center justify-center h-full">
+						<div class="flex items-center justify-center size-12 rounded-full bg-white/10">
+							<NoCameraIcon class="text-white size-8 mt-0.5" />
+						</div>
+					</div>
+				}
 			>
 				<Show
 					when={latestFrame()}
@@ -479,6 +487,12 @@ function CameraPreview(props: { selectedCamera: CameraInfo | undefined }) {
 					/>
 				</Show>
 			</Show>
+			<div
+				class="absolute bottom-0 left-0 right-0 h-12 pointer-events-none"
+				style={{
+					background: "linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8))",
+				}}
+			/>
 		</div>
 	);
 }
@@ -835,33 +849,104 @@ function Page() {
 	const signIn = createSignInMutation();
 
 	const BaseControls = () => (
-		<div class="flex flex-col gap-4">
-			<p class="text-xs text-white/70 leading-none">Select inputs</p>
-			<CameraPreview selectedCamera={options.camera()} />
-			<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
-				<CameraSelect
-					disabled={cameras.isPending}
-					options={cameras.data ?? []}
-					value={options.camera() ?? null}
-					onChange={(c) => {
-						if (!c) setCamera.mutate(null);
-						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-						else setCamera.mutate({ DeviceID: c.device_id });
-					}}
-				/>
-				<MicrophoneSelect
-					disabled={mics.isPending}
-					options={mics.isPending ? [] : mics.data ?? []}
-					value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
-					onChange={(v) => setMicInput.mutate(v)}
-				/>
-				<SystemAudio />
+		<div class="flex flex-col">
+			<div class="relative">
+				<CameraPreview selectedCamera={options.camera()} />
+				<div data-tauri-drag-region class="absolute inset-0 z-[5]" />
+				<div class="absolute top-2.5 left-2 right-2 flex items-center justify-between pointer-events-none z-10">
+					<button
+						type="button"
+						onClick={async () => {
+							getCurrentWindow().close();
+						}}
+						class="flex items-center justify-center size-6 bg-black/20 hover:bg-black/30 rounded-[6px] backdrop-blur-sm pointer-events-auto"
+					>
+						<CloseIcon class="text-white size-4" />
+					</button>
+					<InflightLogo class="text-white" />
+					<button
+						type="button"
+						onClick={async () => {
+							await commands.showWindow({ Settings: { page: "general" } });
+							getCurrentWindow().hide();
+						}}
+						class="flex items-center justify-center size-6 bg-black/20 hover:bg-black/30 rounded-[6px] backdrop-blur-sm pointer-events-auto"
+					>
+						<SettingsIcon class="text-white size-4" />
+					</button>
+				</div>
+			</div>
+			<div class="p-[2px] -mt-5 relative z-[6]">
+				<div
+					class="flex flex-col gap-4 p-4 bg-neutral-900 rounded-[16px] border border-white/10 backdrop-blur-sm"
+					data-tauri-drag-region
+				>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">Select inputs</p>
+					<div class="space-y-0 border border-white/10 border-dashed rounded-[12px] p-1">
+						<CameraSelect
+							disabled={cameras.isPending}
+							options={cameras.data ?? []}
+							value={options.camera() ?? null}
+							onChange={(c) => {
+								if (!c) setCamera.mutate(null);
+								else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+								else setCamera.mutate({ DeviceID: c.device_id });
+							}}
+						/>
+						<MicrophoneSelect
+							disabled={mics.isPending}
+							options={mics.isPending ? [] : mics.data ?? []}
+							value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
+							onChange={(v) => setMicInput.mutate(v)}
+						/>
+						<SystemAudio />
+					</div>
+					<p class="text-xs text-white/70 leading-none pointer-events-none">Select what to record</p>
+					<div class="flex flex-row gap-1 w-full">
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "display"}
+							Component={DisplayIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "display" ? null : "display"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Display"
+						/>
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "window"}
+							Component={WindowIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Window"
+						/>
+						<VerticalTargetButton
+							selected={rawOptions.targetMode === "area"}
+							Component={CropIcon}
+							disabled={isRecording()}
+							onClick={() => {
+								if (isRecording()) return;
+								setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+								if (rawOptions.targetMode) commands.openTargetSelectOverlays(null);
+								else commands.closeTargetSelectOverlays();
+							}}
+							name="Area"
+						/>
+					</div>
+				</div>
 			</div>
 		</div>
 	);
 
 	const RecordingControls = () => (
-		<div class="flex flex-col gap-4">
+		<div class="flex flex-col gap-4 px-4 pb-4">
 			<p class="text-xs text-white/70 leading-none">Select what to record</p>
 			<div class="flex flex-col gap-2 w-full">
 				<HorizontalTargetButton
@@ -914,9 +999,8 @@ function Page() {
 			exitClass="scale-100"
 			exitToClass="scale-95"
 		>
-			<div class="flex flex-col gap-4 w-full">
+			<div class="flex flex-col w-full h-full">
 				<BaseControls />
-				<RecordingControls />
 			</div>
 		</Transition>
 	);
@@ -943,128 +1027,9 @@ function Page() {
 		<div
 			class={`flex relative ${
 				displayMenuOpen() || windowMenuOpen() ? "" : "justify-center"
-			} flex-col gap-2 h-full text-[--text-primary] bg-white/5 rounded-[16px] p-4`}
-			style={{
-				"box-shadow": "0 1px 2px 0 rgba(255, 255, 255, 0.05) inset",
-			}}
+			} flex-col h-full text-[--text-primary]`}
+			data-tauri-drag-region
 		>
-			<WindowChromeHeader hideMaximize>
-				<div
-					class={cx("flex items-center justify-between px-3 w-full", ostype() === "macos" && "flex-row")}
-					data-tauri-drag-region
-				>
-					<button
-						type="button"
-						onClick={async () => {
-							getCurrentWindow().close();
-						}}
-						class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[8px]"
-					>
-						<CloseIcon class="text-neutral-300 size-4 group-hover:text-white" />
-					</button>
-
-					<div class="flex items-center gap-1 pointer-events-none">
-						<InflightLogo class="" />
-					</div>
-
-					<div class="flex gap-1 items-center" data-tauri-drag-region>
-						<Tooltip content={<span>Settings</span>}>
-							<button
-								type="button"
-								onClick={async () => {
-									await commands.showWindow({ Settings: { page: "general" } });
-									getCurrentWindow().hide();
-								}}
-								class="flex items-center justify-center size-8 hover:bg-white/5 rounded-[6px]"
-							>
-								<SettingsIcon class="text-neutral-300 size-4 group-hover:text-white" />
-							</button>
-						</Tooltip>
-						{/* {import.meta.env.DEV && (
-							<button
-								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
-								class="flex justify-center items-center"
-							>
-								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
-							</button>
-						)} */}
-						{/* <Tooltip content={<span>Screenshots</span>}>
-							<button
-								type="button"
-								onClick={() => {
-									setScreenshotsMenuOpen((prev) => {
-										const next = !prev;
-										if (next) {
-											setDisplayMenuOpen(false);
-											setWindowMenuOpen(false);
-											setRecordingsMenuOpen(false);
-										}
-										return next;
-									});
-								}}
-								class="flex justify-center items-center size-5"
-							>
-								<IconLucideImage class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
-							</button>
-						</Tooltip>
-						<Tooltip content={<span>Recordings</span>}>
-							<button
-								type="button"
-								onClick={() => {
-									setRecordingsMenuOpen((prev) => {
-										const next = !prev;
-										if (next) {
-											setDisplayMenuOpen(false);
-											setWindowMenuOpen(false);
-											setScreenshotsMenuOpen(false);
-										}
-										return next;
-									});
-								}}
-								class="flex justify-center items-center size-5"
-							>
-								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
-							</button>
-						</Tooltip>
-						<ChangelogButton />
-						{import.meta.env.DEV && (
-							<button
-								type="button"
-								onClick={() => {
-									new WebviewWindow("debug", { url: "/debug" });
-								}}
-								class="flex justify-center items-center"
-							>
-								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
-							</button>
-						)} */}
-					</div>
-					{/* {ostype() === "macos" && <div class="flex-1" data-tauri-drag-region />} */}
-					{/* <ErrorBoundary fallback={<></>}>
-						<Suspense>
-							<span
-								onClick={async () => {
-									if (license.data?.type !== "pro") {
-										await commands.showWindow("Upgrade");
-									}
-								}}
-								class={cx(
-									"text-[0.6rem] ml-2 rounded-full px-1.5 py-0.5",
-									license.data?.type === "pro"
-										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
-										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
-									ostype() === "windows" && "ml-2"
-								)}
-							>
-								{license.data?.type === "commercial" ? "Commercial" : license.data?.type === "pro" ? "Pro" : "Personal"}
-							</span>
-						</Suspense>
-					</ErrorBoundary> */}
-				</div>
-			</WindowChromeHeader>
 			<div class="flex-1 min-h-0 w-full flex flex-col">
 				<Show when={signIn.isPending}>
 					<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">

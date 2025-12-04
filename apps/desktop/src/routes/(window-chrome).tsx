@@ -8,10 +8,7 @@ import { onCleanup, onMount, type ParentProps, Suspense } from "solid-js";
 import { AbsoluteInsetLoader } from "~/components/Loader";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { initializeTitlebar } from "~/utils/titlebar-state";
-import {
-	useWindowChromeContext,
-	WindowChromeContext,
-} from "./(window-chrome)/Context";
+import { useWindowChromeContext, WindowChromeContext } from "./(window-chrome)/Context";
 
 export const route = {
 	info: {
@@ -39,27 +36,13 @@ export default function (props: RouteSectionProps) {
 			<div
 				class={cx(
 					"flex overflow-hidden flex-col w-screen h-screen max-h-screen rounded-[20px] border border-white/10",
-					isSettings ? "pt-4 px-4" : "p-1",
+					isSettings ? "pt-4 px-4" : ""
 				)}
 				style={{
 					background: "rgba(9, 10, 11, 1)",
-					// "box-shadow":
-					// 	"0 1px 1px -0.5px rgba(0, 0, 0, 0.16), 0 3px 3px -1.5px rgba(0, 0, 0, 0.16), 0 6px 6px -3px rgba(0, 0, 0, 0.16), 0 12px 12px -6px rgba(0, 0, 0, 0.16), 0 24px 24px -12px rgba(0, 0, 0, 0.16)",
-					// "backdrop-filter": "blur(15px)",
-					// "-webkit-backdrop-filter": "blur(15px)", // For Safari/WebKit
 				}}
 				data-tauri-drag-region
 			>
-				<Header />
-
-				{/* breaks sometimes */}
-				{/* <Transition
-        mode="outin"
-        enterActiveClass="transition-opacity duration-100"
-        exitActiveClass="transition-opacity duration-100"
-        enterClass="opacity-0"
-        exitToClass="opacity-0"
-        > */}
 				<Suspense
 					fallback={
 						(() => {
@@ -81,7 +64,6 @@ export default function (props: RouteSectionProps) {
 						</Suspense>
 					</Inner>
 				</Suspense>
-				{/* </Transition> */}
 			</div>
 		</WindowChromeContext>
 	);
@@ -99,7 +81,7 @@ function Header() {
 			class={cx(
 				"flex items-center space-x-1 select-none shrink-0",
 				isWindows ? "flex-row" : "flex-row",
-				isSettings ? "h-5" : "h-10",
+				isSettings ? "h-5" : "h-10"
 			)}
 			data-tauri-drag-region
 		>
@@ -114,9 +96,5 @@ function Inner(props: ParentProps) {
 		if (location.pathname !== "/") getCurrentWindow().show();
 	});
 
-	return (
-		<div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">
-			{props.children}
-		</div>
-	);
+	return <div class="flex overflow-y-hidden flex-col flex-1 animate-in fade-in">{props.children}</div>;
 }
