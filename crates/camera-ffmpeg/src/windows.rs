@@ -210,10 +210,10 @@ impl CapturedFrameExt for CapturedFrame {
                     let row_width = width / 2;
                     let src_v = &bytes[v_offset + y * row_width..];
                     let src_u = &bytes[u_offset + y * row_width..];
-                    let dest_u = &mut ff_frame.data_mut(1)[y * stride_u..];
-                    let dest_v = &mut ff_frame.data_mut(2)[y * stride_v..];
-                    dest_u[0..row_width].copy_from_slice(&src_u[0..row_width]);
-                    dest_v[0..row_width].copy_from_slice(&src_v[0..row_width]);
+                    ff_frame.data_mut(1)[y * stride_u..][0..row_width]
+                        .copy_from_slice(&src_u[0..row_width]);
+                    ff_frame.data_mut(2)[y * stride_v..][0..row_width]
+                        .copy_from_slice(&src_v[0..row_width]);
                 }
 
                 ff_frame
