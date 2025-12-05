@@ -4,11 +4,11 @@
 use std::{
     cell::RefCell,
     ffi::{OsString, c_void},
-    mem::{ManuallyDrop, MaybeUninit},
+    mem::ManuallyDrop,
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{self, null, null_mut},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tracing::*;
 use windows::{
@@ -563,11 +563,9 @@ impl AMMediaType {
         Self(unsafe { copy_media_type(typ) })
     }
 
-    pub fn into_inner(mut self) -> AM_MEDIA_TYPE {
-        // SAFETY: Getting the inner value without triggering Drop
-        let inner = std::mem::replace(&mut self.0, unsafe { MaybeUninit::uninit().assume_init() });
-        std::mem::forget(self);
-        inner
+    pub fn into_inner(self) -> AM_MEDIA_TYPE {
+        let me = ManuallyDrop::new(self);
+        unsafe { ptr::read(&me.0) }
     }
 }
 
@@ -614,7 +612,6 @@ impl SinkFilter {
                 current_media_type: Default::default(),
                 connected_pin: Default::default(),
                 owner: Default::default(),
-                first_ref_time: Default::default(),
             }
             .into(),
         }
@@ -801,7 +798,6 @@ struct SinkInputPin {
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
     callback: RefCell<SinkCallback>,
-    first_ref_time: RefCell<Option<Instant>>,
 }
 
 // impl SinkInputPin {
