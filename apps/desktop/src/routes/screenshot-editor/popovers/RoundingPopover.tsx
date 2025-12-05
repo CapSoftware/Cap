@@ -21,10 +21,15 @@ const CORNER_STYLE_OPTIONS = [
 ] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
 export function RoundingPopover() {
-	const { project, setProject } = useScreenshotEditorContext();
+	const { project, setProject, activePopover, setActivePopover } =
+		useScreenshotEditorContext();
 
 	return (
-		<Popover placement="bottom-start">
+		<Popover
+			placement="bottom-start"
+			open={activePopover() === "rounding"}
+			onOpenChange={(open) => setActivePopover(open ? "rounding" : null)}
+		>
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapCorners class="size-4" />}

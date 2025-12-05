@@ -243,12 +243,12 @@ export function AnnotationLayer(props: {
 			let width = currentX - temp.x;
 			let height = currentY - temp.y;
 
-			if (e.shiftKey) {
-				if (
-					temp.type === "rectangle" ||
-					temp.type === "circle" ||
-					temp.type === "mask"
-				) {
+			if (temp.type === "circle" && !e.shiftKey) {
+				const size = Math.max(Math.abs(width), Math.abs(height));
+				width = width < 0 ? -size : size;
+				height = height < 0 ? -size : size;
+			} else if (e.shiftKey) {
+				if (temp.type === "rectangle" || temp.type === "mask") {
 					const size = Math.max(Math.abs(width), Math.abs(height));
 					width = width < 0 ? -size : size;
 					height = height < 0 ? -size : size;
@@ -333,19 +333,25 @@ export function AnnotationLayer(props: {
 						newH = original.height - dy;
 					}
 
-					// Shift constraint during resize
-					if (
-						e.shiftKey &&
-						(original.type === "rectangle" || original.type === "circle")
-					) {
-						// This is complex for corner resizing, simplifying:
-						// Just force aspect ratio based on original
-						const _ratio = original.width / original.height;
-						if (state.handle.includes("e") || state.handle.includes("w")) {
-							// Width driven, adjust height
-							// This is tricky with 8 handles. Skipping proper aspect resize for now to save time/complexity
-							// Or simple implementation:
+					const shouldConstrainCircle =
+						original.type === "circle" && !e.shiftKey;
+					const shouldConstrainRectangle =
+						original.type === "rectangle" && e.shiftKey;
+
+					if (shouldConstrainCircle || shouldConstrainRectangle) {
+						const size = Math.max(Math.abs(newW), Math.abs(newH));
+						const signW = newW < 0 ? -1 : 1;
+						const signH = newH < 0 ? -1 : 1;
+
+						if (state.handle.includes("w")) {
+							newX = original.x + original.width - signW * size;
 						}
+						if (state.handle.includes("n")) {
+							newY = original.y + original.height - signH * size;
+						}
+
+						newW = signW * size;
+						newH = signH * size;
 					}
 				}
 

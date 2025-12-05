@@ -18,6 +18,8 @@ const K_CV_RETURN_SUCCESS: i32 = 0;
 const K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8: u32 = 0x79757679;
 const K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE: u32 = 0x34323076;
 const K_CV_PIXEL_FORMAT_TYPE_2VUY: u32 = 0x32767579;
+const K_CV_PIXEL_FORMAT_TYPE_32_BGRA: u32 = 0x42475241;
+const K_CV_PIXEL_FORMAT_TYPE_32_ARGB: u32 = 0x00000020;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -57,6 +59,9 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
     fn CVPixelBufferGetHeightOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
     fn CVPixelBufferGetPlaneCount(pixel_buffer: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetBaseAddress(pixel_buffer: CVPixelBufferRef) -> *mut u8;
+    fn CVPixelBufferGetBytesPerRow(pixel_buffer: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
 }
 
 #[link(name = "VideoToolbox", kind = "framework")]
@@ -80,6 +85,8 @@ fn pixel_to_cv_format(pixel: Pixel) -> Option<u32> {
         Pixel::YUYV422 => Some(K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8),
         Pixel::UYVY422 => Some(K_CV_PIXEL_FORMAT_TYPE_2VUY),
         Pixel::NV12 => Some(K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE),
+        Pixel::BGRA => Some(K_CV_PIXEL_FORMAT_TYPE_32_BGRA),
+        Pixel::ARGB => Some(K_CV_PIXEL_FORMAT_TYPE_32_ARGB),
         _ => None,
     }
 }
@@ -227,13 +234,13 @@ impl VideoToolboxConverter {
         unsafe {
             let plane_count = CVPixelBufferGetPlaneCount(pixel_buffer);
 
-            for plane in 0..plane_count {
-                let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
-                let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
-                let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
-                let dst_stride = output.stride(plane);
+            if plane_count == 0 {
+                let src_ptr = CVPixelBufferGetBaseAddress(pixel_buffer);
+                let src_stride = CVPixelBufferGetBytesPerRow(pixel_buffer);
+                let height = CVPixelBufferGetHeight(pixel_buffer);
+                let dst_stride = output.stride(0);
 
-                let dst_data = output.data_mut(plane);
+                let dst_data = output.data_mut(0);
                 let dst_ptr = dst_data.as_mut_ptr();
 
                 for row in 0..height {
@@ -241,6 +248,23 @@ impl VideoToolboxConverter {
                     let dst_row = dst_ptr.add(row * dst_stride);
                     let copy_len = src_stride.min(dst_stride);
                     ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                }
+            } else {
+                for plane in 0..plane_count {
+                    let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
+                    let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
+                    let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
+                    let dst_stride = output.stride(plane);
+
+                    let dst_data = output.data_mut(plane);
+                    let dst_ptr = dst_data.as_mut_ptr();
+
+                    for row in 0..height {
+                        let src_row = src_ptr.add(row * src_stride);
+                        let dst_row = dst_ptr.add(row * dst_stride);
+                        let copy_len = src_stride.min(dst_stride);
+                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                    }
                 }
             }
 

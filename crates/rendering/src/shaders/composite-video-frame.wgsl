@@ -226,40 +226,37 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
             sample_uv.x = 1.0 - sample_uv.x;
         }
 
-        let cropped_uv = sample_uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
+        let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+        var cropped_uv = sample_uv * crop_size + crop_bounds_uv.xy;
 
-        // Calculate downscaling ratio
-        let source_size = uniforms.frame_size * (crop_bounds_uv.zw - crop_bounds_uv.xy);
+        let texel_offset = 1.0 / uniforms.frame_size;
+        let safe_min = crop_bounds_uv.xy + texel_offset;
+        let safe_max = crop_bounds_uv.zw - texel_offset;
+        cropped_uv = clamp(cropped_uv, safe_min, safe_max);
+
+        let source_size = uniforms.frame_size * crop_size;
         let target_size = uniforms.target_size;
         let scale_ratio = source_size / target_size;
         let is_downscaling = max(scale_ratio.x, scale_ratio.y) > 1.1;
 
-        // Sample the center pixel
         let center_color = textureSample(frame_texture, frame_sampler, cropped_uv).rgb;
 
-        // Apply sharpening when downscaling to preserve text clarity
         if is_downscaling {
             let texel_size = 1.0 / uniforms.frame_size;
 
-            // Sample neighboring pixels for unsharp mask
             let offset_x = vec2<f32>(texel_size.x, 0.0);
             let offset_y = vec2<f32>(0.0, texel_size.y);
 
-            // 4-tap sampling for edge detection
             let left = textureSample(frame_texture, frame_sampler, cropped_uv - offset_x).rgb;
             let right = textureSample(frame_texture, frame_sampler, cropped_uv + offset_x).rgb;
             let top = textureSample(frame_texture, frame_sampler, cropped_uv - offset_y).rgb;
             let bottom = textureSample(frame_texture, frame_sampler, cropped_uv + offset_y).rgb;
 
-            // Calculate the blurred version (average of neighbors)
             let blurred = (left + right + top + bottom) * 0.25;
 
-            // Unsharp mask: enhance the difference between center and blur
-            // Strength is adaptive based on downscale ratio
-            let sharpness = min(scale_ratio.x * 0.3, 0.7); // Cap at 0.7 to avoid over-sharpening
+            let sharpness = min(scale_ratio.x * 0.3, 0.7);
             let sharpened = center_color + (center_color - blurred) * sharpness;
 
-            // Clamp to avoid color artifacts
             return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
         }
 
@@ -270,14 +267,12 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
-    // Compute the signed distance to the rounded rect in pixel space so we can
-    // blend edges smoothly instead of hard-clipping them (which produced jaggies).
     let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
     let half_size = uniforms.target_size * 0.5;
     let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.rounding_type);
 
-    let anti_alias_width = max(fwidth(distance), 0.001);
-    let coverage = clamp(1.0 - smoothstep(-anti_alias_width, anti_alias_width, distance), 0.0, 1.0);
+    let anti_alias_width = max(fwidth(distance), 0.5);
+    let coverage = clamp(1.0 - smoothstep(0.0, anti_alias_width, distance), 0.0, 1.0);
 
     return vec4(current_color.rgb, current_color.a * coverage);
 }

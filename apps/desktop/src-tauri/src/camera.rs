@@ -43,9 +43,9 @@ pub enum CameraPreviewShape {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct CameraPreviewState {
-    size: f32,
-    shape: CameraPreviewShape,
-    mirrored: bool,
+    pub size: f32,
+    pub shape: CameraPreviewShape,
+    pub mirrored: bool,
 }
 
 impl Default for CameraPreviewState {

@@ -38,11 +38,11 @@ impl RelativeCursorPosition {
         {
             let physical_bounds = display.raw_handle().physical_bounds()?;
 
-            return Some(Self {
+            Some(Self {
                 x: raw.x - physical_bounds.position().x() as i32,
                 y: raw.y - physical_bounds.position().y() as i32,
                 display,
-            });
+            })
         }
 
         #[cfg(target_os = "macos")]

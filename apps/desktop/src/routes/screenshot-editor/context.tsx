@@ -1,6 +1,7 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { debounce } from "@solid-primitives/scheduled";
+import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
@@ -24,7 +25,11 @@ export type CurrentDialog =
 	| { type: "createPreset" }
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
-	| { type: "crop"; position: XY<number>; size: XY<number> };
+	| {
+			type: "crop";
+			originalSize: XY<number>;
+			currentCrop: { position: XY<number>; size: XY<number> } | null;
+	  };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -104,6 +109,18 @@ function createScreenshotEditorContext() {
 	const [activeTool, setActiveTool] = createSignal<AnnotationType | "select">(
 		"select",
 	);
+
+	const [layersPanelOpen, setLayersPanelOpen] = makePersisted(
+		createSignal(false),
+		{ name: "screenshotEditorLayersPanelOpen" },
+	);
+	const [focusAnnotationId, setFocusAnnotationId] = createSignal<string | null>(
+		null,
+	);
+
+	const [activePopover, setActivePopover] = createSignal<
+		"background" | "padding" | "rounding" | "shadow" | "border" | null
+	>(null);
 
 	const [dialog, setDialog] = createSignal<DialogState>({
 		open: false,
@@ -296,6 +313,9 @@ function createScreenshotEditorContext() {
 		get path() {
 			return editorInstance()?.path ?? "";
 		},
+		get prettyName() {
+			return editorInstance()?.prettyName ?? "Screenshot";
+		},
 		project,
 		setProject,
 		annotations,
@@ -304,6 +324,12 @@ function createScreenshotEditorContext() {
 		setSelectedAnnotationId,
 		activeTool,
 		setActiveTool,
+		layersPanelOpen,
+		setLayersPanelOpen,
+		focusAnnotationId,
+		setFocusAnnotationId,
+		activePopover,
+		setActivePopover,
 		projectHistory,
 		dialog,
 		setDialog,

@@ -223,20 +223,16 @@ pub enum FrameInner {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PixelFormat {
-    /// Packed
     ARGB,
-    /// Packed
     RGB24,
-    /// Packed
     RGB32,
-    /// Planar (3)
     YUV420P,
-    /// Planar (2)
     NV12,
-    /// Packed
     YUYV422,
-    /// Packed
     UYVY422,
+    MJPEG,
+    YV12,
+    BGR24,
 }
 
 #[derive(Clone)]
@@ -464,6 +460,8 @@ impl MFPixelFormat {
                 t if t == MFVideoFormat_UYVY => PixelFormat::UYVY422,
                 t if t == MFVideoFormat_ARGB32 => PixelFormat::ARGB,
                 t if t == MFVideoFormat_NV12 => PixelFormat::NV12,
+                t if t == MFVideoFormat_MJPG => PixelFormat::MJPEG,
+                t if t == MFVideoFormat_YV12 => PixelFormat::YV12,
                 _ => return None,
             })
         };
@@ -510,6 +508,8 @@ impl DSPixelFormat {
                 t if t == MEDIASUBTYPE_UYVY => PixelFormat::UYVY422,
                 t if t == MEDIASUBTYPE_ARGB32 => PixelFormat::ARGB,
                 t if t == MEDIASUBTYPE_NV12 => PixelFormat::NV12,
+                t if t == MEDIASUBTYPE_MJPG => PixelFormat::MJPEG,
+                t if t == MEDIASUBTYPE_YV12 => PixelFormat::YV12,
                 _ => return None,
             })
         };

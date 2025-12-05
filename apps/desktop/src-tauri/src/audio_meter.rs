@@ -140,6 +140,6 @@ fn samples_to_f64(samples: &MicrophoneSamples) -> impl Iterator<Item = f64> + us
             SampleFormat::F64 => f64::from_ne_bytes([
                 data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
             ]),
-            _ => todo!(),
+            _ => 0.0,
         })
 }

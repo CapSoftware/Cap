@@ -4,10 +4,15 @@ import { useScreenshotEditorContext } from "../context";
 import { EditorButton, Slider } from "../ui";
 
 export function PaddingPopover() {
-	const { project, setProject } = useScreenshotEditorContext();
+	const { project, setProject, activePopover, setActivePopover } =
+		useScreenshotEditorContext();
 
 	return (
-		<Popover placement="bottom-start">
+		<Popover
+			placement="bottom-start"
+			open={activePopover() === "padding"}
+			onOpenChange={(open) => setActivePopover(open ? "padding" : null)}
+		>
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapPadding class="size-4" />}
