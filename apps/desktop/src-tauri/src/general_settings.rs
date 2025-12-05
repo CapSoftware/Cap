@@ -41,10 +41,10 @@ impl MainWindowRecordingStartBehaviour {
 }
 
 const DEFAULT_EXCLUDED_WINDOW_TITLES: &[&str] = &[
-    "Cap",
-    "Cap Settings",
-    "Cap Recording Controls",
-    "Cap Camera",
+    "Inflight",
+    "Inflight Settings",
+    "Inflight Recording Controls",
+    "Inflight Camera",
 ];
 
 pub fn default_excluded_windows() -> Vec<WindowExclusion> {

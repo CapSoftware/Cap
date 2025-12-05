@@ -131,17 +131,17 @@ impl CapWindowId {
 
     pub fn title(&self) -> String {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
-            Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::RecordingControls => "Cap Recording Controls".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
-            Self::ModeSelect => "Cap Mode Selection".to_string(),
-            Self::Camera => "Cap Camera".to_string(),
-            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
-            _ => "Cap".to_string(),
+            Self::Setup => "Inflight Setup".to_string(),
+            Self::Settings => "Inflight Settings".to_string(),
+            Self::WindowCaptureOccluder { .. } => "Inflight Window Capture Occluder".to_string(),
+            Self::CaptureArea => "Inflight Capture Area".to_string(),
+            Self::RecordingControls => "Inflight Recording Controls".to_string(),
+            Self::Editor { .. } => "Inflight Editor".to_string(),
+            Self::ScreenshotEditor { .. } => "Inflight Screenshot Editor".to_string(),
+            Self::ModeSelect => "Inflight Mode Selection".to_string(),
+            Self::Camera => "Inflight Camera".to_string(),
+            Self::RecordingsOverlay => "Inflight Recordings Overlay".to_string(),
+            _ => "Inflight".to_string(),
         }
     }
 

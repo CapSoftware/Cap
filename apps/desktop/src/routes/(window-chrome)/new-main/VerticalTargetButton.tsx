@@ -30,15 +30,15 @@ function VerticalTargetButton(props: VerticalTargetButtonProps) {
 				"box-shadow": "0 1px 1px -0.5px rgba(0, 0, 0, 0.16)",
 			}}
 		>
-			<div class="relative size-5 flex-shrink-0 items-center justify-center">
+			<div class="relative size-5 flex-shrink-0 items-center justify-center pointer-events-none">
 				<local.Component
 					class={cx(
-						"absolute inset-0 size-5 duration-200",
+						"absolute inset-0 size-5 pointer-events-none",
 						local.selected ? "text-gray-12" : "text-gray-9",
 						"group-hover:opacity-0"
 					)}
 				/>
-				<RecordFill class="absolute inset-0 size-5 duration-200 opacity-0 group-hover:opacity-100 text-[#60ADFA]" />
+				<RecordFill class="absolute inset-0 size-5 opacity-0 group-hover:opacity-100 text-[#60ADFA] pointer-events-none" />
 			</div>
 			<p class="text-xs font-medium">{local.name}</p>
 		</button>
