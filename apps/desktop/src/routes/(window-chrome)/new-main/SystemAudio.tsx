@@ -10,7 +10,7 @@ import { SystemAudioIcon } from "~/icons";
 export default function SystemAudio() {
 	return (
 		<SystemAudioToggleRoot
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect"
 			PillComponent={InfoPillNew}
 			icon={<SystemAudioIcon class="size-4" />}
 		/>

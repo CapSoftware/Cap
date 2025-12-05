@@ -21,7 +21,7 @@ export default function CameraSelect(props: {
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group"
 			iconClass="size-4"
 		/>
 	);
@@ -89,7 +89,7 @@ export function CameraSelectBase(props: {
 				<CameraIcon class={props.iconClass} />
 				<p class="flex-1 text-xs text-left truncate">{props.value?.display_name ?? NO_CAMERA}</p>
 
-				<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+				<div class="opacity-0 group-hover:opacity-100">
 					<ChevronDown class={props.iconClass} />
 				</div>
 				{/* <TargetSelectInfoPill

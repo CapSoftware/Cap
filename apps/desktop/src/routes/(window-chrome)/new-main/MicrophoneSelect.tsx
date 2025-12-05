@@ -22,7 +22,7 @@ export default function MicrophoneSelect(props: {
 	return (
 		<MicrophoneSelectBase
 			{...props}
-			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group relative overflow-hidden"
+			class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg cursor-default disabled:opacity-70 cursor-pointer hover:bg-white/[0.03] disabled:text-gray-11 text-white/80 hover:text-white KSelect group relative overflow-hidden"
 			levelIndicatorClass="bg-blue-7"
 			iconClass="size-4"
 			PillComponent={InfoPill}
@@ -128,7 +128,7 @@ export function MicrophoneSelectBase(props: {
 				<MicrophoneIcon class={props.iconClass} />
 				<p class="flex-1 text-xs text-left truncate">{props.value ?? NO_MICROPHONE}</p>
 
-				<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+				<div class="opacity-0 group-hover:opacity-100">
 					<ChevronDown class={props.iconClass} />
 				</div>
 				{/* <TargetSelectInfoPill
