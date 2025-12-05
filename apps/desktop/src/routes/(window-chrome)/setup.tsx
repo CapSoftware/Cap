@@ -71,6 +71,10 @@ export default function () {
 	);
 
 	const handleContinue = () => {
+		generalSettingsStore.set({
+			hasCompletedStartup: true,
+		});
+
 		// Just proceed to the main window without saving mode to store
 		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
 			getCurrentWindow().close();
