@@ -50,7 +50,7 @@ impl CapturedFrameExt for CapturedFrame {
 
         let bytes = native.bytes().map_err(AsFFmpegError::FailedToGetBytes)?;
 
-        if bytes.len() == 0 {
+        if bytes.is_empty() {
             return Err(AsFFmpegError::Empty);
         }
 
