@@ -127,7 +127,7 @@ export const isSystemAudioSupported = queryOptions({
 });
 
 export function createOptionsQuery() {
-	const PERSIST_KEY = "recording-options-query-2";
+	const PERSIST_KEY = "recording-options-query-3";
 	const [_state, _setState] = createStore<{
 		captureTarget: ScreenCaptureTarget;
 		micName: string | null;
