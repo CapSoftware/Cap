@@ -2,15 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
-import {
-	createEffect,
-	createResource,
-	createSignal,
-	For,
-	onMount,
-	Show,
-	Suspense,
-} from "solid-js";
+import { createEffect, createResource, createSignal, For, onMount, Show, Suspense } from "solid-js";
 import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 import { authStore } from "~/store";
@@ -54,8 +46,7 @@ export default function Settings(props: RouteSectionProps) {
 
 		if (activeIndex !== -1 && tabRefs[activeIndex]) {
 			const activeTab = tabRefs[activeIndex];
-			const parentRect =
-				activeTab.parentElement?.parentElement?.getBoundingClientRect();
+			const parentRect = activeTab.parentElement?.parentElement?.getBoundingClientRect();
 			const tabRect = activeTab.getBoundingClientRect();
 
 			if (parentRect) {
@@ -78,7 +69,7 @@ export default function Settings(props: RouteSectionProps) {
 
 	return (
 		<div class="flex-1 flex flex-col text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
-			<div class="flex flex-row items-center justify-between border-b border-gray-3 h-10 my-4">
+			<div class="flex flex-row items-center justify-between border-b border-white/5 h-10 my-4">
 				<ul class="flex flex-row gap-5 text-gray-12 relative">
 					<For each={TABS}>
 						{(item, index) => (

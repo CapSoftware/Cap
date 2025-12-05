@@ -1,24 +1,9 @@
 import { createEventListener } from "@solid-primitives/event-listener";
-import {
-	batch,
-	createEffect,
-	createResource,
-	createSignal,
-	For,
-	Index,
-	Match,
-	Show,
-	Switch,
-} from "solid-js";
+import { batch, createEffect, createResource, createSignal, For, Index, Match, Show, Switch } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore, hotkeysStore } from "~/store";
 
-import {
-	commands,
-	type Hotkey,
-	type HotkeyAction,
-	type HotkeysStore,
-} from "~/utils/tauri";
+import { commands, type Hotkey, type HotkeyAction, type HotkeysStore } from "~/utils/tauri";
 
 const ACTION_TEXT = {
 	startStudioRecording: "Start studio recording",
@@ -84,11 +69,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			"stopRecording",
 			"restartRecording",
 			...(generalSettings.data?.enableNewRecordingFlow
-				? ([
-						"openRecordingPickerDisplay",
-						"openRecordingPickerWindow",
-						"openRecordingPickerArea",
-					] as const)
+				? (["openRecordingPickerDisplay", "openRecordingPickerWindow", "openRecordingPickerArea"] as const)
 				: []),
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
@@ -100,7 +81,12 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 					Configure system-wide keyboard shortcuts to control Cap
 				</p>
 			</div> */}
-			<div class="flex flex-col gap-4 p-4 w-full rounded-xl border bg-gray-2 border-gray-3">
+			<div
+				class="flex flex-col gap-4 p-4 w-full rounded-xl bg-white/5"
+				style={{
+					"box-shadow": "0 1px 2px 0 rgba(255,255,255,0.05) inset",
+				}}
+			>
 				<Index each={actions()}>
 					{(item, idx) => {
 						createEventListener(window, "click", () => {
@@ -115,18 +101,11 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 						return (
 							<>
 								<div class="flex flex-row justify-between items-center w-full h-8">
-									<p class="text-sm text-gray-12">{ACTION_TEXT[item()]}</p>
+									<p class="text-sm text-white">{ACTION_TEXT[item()]}</p>
 									<Switch>
 										<Match when={listening()?.action === item()}>
 											<div class="flex flex-row-reverse gap-2 justify-between items-center h-full text-sm rounded-lg w-fit">
-												<Show
-													when={hotkeys[item()]}
-													fallback={
-														<p class="text-[13px] text-gray-11">
-															Set hotkeys...
-														</p>
-													}
-												>
+												<Show when={hotkeys[item()]} fallback={<p class="text-[13px] text-gray-11">Set hotkeys...</p>}>
 													{(binding) => <HotkeyText binding={binding()} />}
 												</Show>
 												<div class="flex flex-row items-center gap-[0.125rem]">
@@ -139,13 +118,10 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 																e.stopPropagation();
 
 																setListening();
-																commands.setHotkey(
-																	item(),
-																	hotkeys[item()] ?? null,
-																);
+																commands.setHotkey(item(), hotkeys[item()] ?? null);
 															}}
 														>
-															<IconCapCircleCheck class="transition-colors text-gray-12 hover:text-gray-10 size-5" />
+															<IconCapCircleCheck class="transition-colors text-white/50 hover:text-white/80 size-5" />
 														</button>
 													</Show>
 													<button
@@ -196,9 +172,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 										</Match>
 									</Switch>
 								</div>
-								{idx !== actions().length - 1 && (
-									<div class="w-full h-px bg-gray-3" />
-								)}
+								{idx !== actions().length - 1 && <div class="w-full h-px bg-white/5" />}
 							</>
 						);
 					}}
@@ -218,16 +192,14 @@ function HotkeyText(props: { binding: Hotkey }) {
 	if (props.binding.shift) keys.push("⇧");
 
 	// Add the main key
-	const mainKey = props.binding.code.startsWith("Key")
-		? props.binding.code[3]
-		: props.binding.code;
+	const mainKey = props.binding.code.startsWith("Key") ? props.binding.code[3] : props.binding.code;
 	keys.push(mainKey);
 
 	return (
 		<div class="flex gap-1 items-center w-fit group">
 			<For each={keys}>
 				{(key) => (
-					<kbd class="inline-flex justify-center w-fit text-xs items-center px-3 h-8 text-[13px] font-medium rounded-[8px] border size-6 text-white bg-white/[0.03] border-white/5 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7">
+					<kbd class="inline-flex justify-center w-fit text-xs items-center px-3 h-8 text-[13px] font-medium rounded-[8px] border size-6 text-white bg-white/[0.03] border-white/5 group-hover:border-white/10 transition-colors duration-200 group-hover:bg-white/10">
 						{key}
 					</kbd>
 				)}

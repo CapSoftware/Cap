@@ -40,7 +40,7 @@ function VerticalTargetButton(props: VerticalTargetButtonProps) {
 				/>
 				<RecordFill class="absolute inset-0 size-5 opacity-0 group-hover:opacity-100 text-[#60ADFA] pointer-events-none" />
 			</div>
-			<p class="text-xs font-medium">{local.name}</p>
+			<p class="text-xs font-medium text-white">{local.name}</p>
 		</button>
 	);
 }
