@@ -57,16 +57,16 @@
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"windowSize": {
-					"width": 1200,
-					"height": 840
+					"width": 800,
+					"height": 560
 				},
 				"appPosition": {
-					"x": 270,
-					"y": 450
+					"x": 180,
+					"y": 300
 				},
 				"applicationFolderPosition": {
-					"x": 720,
-					"y": 450
+					"x": 480,
+					"y": 300
 				}
 			},
 			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
