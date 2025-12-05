@@ -564,8 +564,10 @@ impl AMMediaType {
     }
 
     pub fn into_inner(self) -> AM_MEDIA_TYPE {
-        let me = ManuallyDrop::new(self);
-        unsafe { ptr::read(&me.0) }
+        let wrapper = self;
+        let inner = unsafe { ptr::read(&wrapper.0) };
+        std::mem::forget(wrapper);
+        inner
     }
 }
 
