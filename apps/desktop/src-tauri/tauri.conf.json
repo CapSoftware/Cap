@@ -61,12 +61,12 @@
 					"height": 560
 				},
 				"appPosition": {
-					"x": 180,
-					"y": 300
+					"x": 280,
+					"y": 330
 				},
 				"applicationFolderPosition": {
-					"x": 480,
-					"y": 300
+					"x": 520,
+					"y": 330
 				}
 			},
 			"frameworks": ["../../../target/native-deps/Spacedrive.framework"]
