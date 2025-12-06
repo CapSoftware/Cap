@@ -58,7 +58,7 @@ export function CameraSelectBase(props: {
 	};
 
 	return (
-		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+		<div class="flex flex-col gap-1 items-stretch text-(--text-primary)">
 			<button
 				type="button"
 				disabled={!!currentRecording.data || props.disabled}

@@ -20,18 +20,18 @@ const styles = cva(
 				white:
 					"bg-gray-1 border border-gray-6 text-gray-12 hover:bg-gray-3 disabled:bg-gray-8",
 				ghost: "hover:bg-white/20 hover:text-white",
-				gray: "bg-gray-5 data-[selected=true]:!bg-gray-8 dark:data-[selected=true]:!bg-gray-9 hover:bg-gray-7 border gray-button-border gray-button-shadow text-gray-12 disabled:bg-gray-8 disabled:text-gray-9",
+				gray: "bg-gray-5 data-[selected=true]:bg-gray-8! dark:data-[selected=true]:bg-gray-9! hover:bg-gray-7 border gray-button-border gray-button-shadow text-gray-12 disabled:bg-gray-8 disabled:text-gray-9",
 				dark: "bg-gray-12 dark-button-border dark-button-shadow hover:bg-gray-11 border text-gray-1 disabled:cursor-not-allowed disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
 				darkgradient:
-					"bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
+					"bg-linear-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",
 				radialblue:
 					"text-gray-50 border button-gradient-border shadow-[0_0_0_1px] shadow-blue-400 disabled:bg-gray-1 border-0 [background:radial-gradient(90%_100%_at_15%_12%,#9BC4FF_0%,#3588FF_100%)] border-transparent hover:opacity-80",
 			},
 			size: {
-				xs: "text-[0.75rem] px-[0.5rem] h-[1.25rem]",
-				sm: "text-xs px-[0.75rem] h-[1.75rem]",
+				xs: "text-[0.75rem] px-2 h-5",
+				sm: "text-xs px-3 h-7",
 				md: "text-[13px] px-3 py-2",
-				lg: "text-[0.875rem] px-[1rem] h-[2.25rem]",
+				lg: "text-[0.875rem] px-4 h-9",
 			},
 		},
 	},

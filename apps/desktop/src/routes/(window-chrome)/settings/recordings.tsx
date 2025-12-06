@@ -150,7 +150,7 @@ export default function Recordings() {
 			<Show
 				when={recordings.data && recordings.data.length > 0}
 				fallback={
-					<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+					<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 						No recordings found
 					</p>
 				}
@@ -176,11 +176,11 @@ export default function Recordings() {
 
 				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
 					<Show when={filteredRecordings().length === 0}>
-						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+						<p class="text-center text-(--text-tertiary) absolute flex items-center justify-center w-full h-full">
 							No {activeTab()} recordings
 						</p>
 					</Show>
-					<ul class="flex flex-col w-full text-[--text-primary]">
+					<ul class="flex flex-col w-full text-(--text-primary)">
 						<For each={filteredRecordings()}>
 							{(recording) => (
 								<RecordingItem
@@ -233,7 +233,7 @@ function RecordingItem(props: {
 				}
 			}}
 			class={cx(
-				"flex flex-row justify-between p-3 [&:not(:last-child)]:border-b [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200",
+				"flex flex-row justify-between p-3 not-last:border-b not-last:border-gray-3 items-center w-full  transition-colors duration-200",
 				studioCompleteCheck()
 					? "cursor-pointer hover:bg-gray-3"
 					: "cursor-default",

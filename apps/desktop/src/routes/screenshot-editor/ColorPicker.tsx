@@ -30,10 +30,10 @@ export function RgbInput(props: {
 	let colorInput!: HTMLInputElement;
 
 	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
+		<div class="flex flex-row items-center gap-3 relative">
 			<button
 				type="button"
-				class="size-[2rem] rounded-[0.5rem] border border-gray-4"
+				class="size-8 rounded-lg border border-gray-4"
 				style={{
 					"background-color": rgbToHex(props.value),
 				}}
@@ -42,7 +42,7 @@ export function RgbInput(props: {
 			<input
 				ref={colorInput}
 				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				class="absolute left-0 bottom-0 w-12 opacity-0"
 				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
@@ -52,7 +52,7 @@ export function RgbInput(props: {
 				}}
 			/>
 			<TextInput
-				class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
+				class="w-[4.60rem] p-1.5 text-gray-12 text-[13px] border rounded-lg bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
 				value={text()}
 				onFocus={() => {
 					prevHex = rgbToHex(props.value);

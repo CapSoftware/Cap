@@ -139,7 +139,7 @@ export default function S3ConfigPage() {
 								<div class="space-y-2">
 									<label class="text-[13px] text-gray-12">{label}</label>
 									<Input
-										class="!bg-gray-3"
+										class="bg-gray-3!"
 										type={type}
 										value={s3Config()[key] ?? ""}
 										onInput={(
@@ -245,7 +245,7 @@ export default function S3ConfigPage() {
 					</Suspense>
 				</div>
 			</div>
-			<div class="flex-shrink-0 mt-5">
+			<div class="shrink-0 mt-5">
 				<fieldset
 					class="flex justify-between items-center"
 					disabled={

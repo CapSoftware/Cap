@@ -269,9 +269,9 @@ export function ZoomTrack(props: {
 			<Index
 				each={project.timeline?.zoomSegments}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+					<div class="text-center text-sm text-(--text-tertiary) flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
 						<div>Click to add zoom segment</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+						<div class="text-[10px] text-(--text-tertiary)/40 mt-0.5">
 							(Smoothly zoom in on important areas)
 						</div>
 					</div>
@@ -415,7 +415,7 @@ export function ZoomTrack(props: {
 						<SegmentRoot
 							class={cx(
 								"border duration-200 hover:border-gray-12 transition-colors group",
-								"bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+								"bg-linear-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
 								isSelected() ? "border-gray-12" : "border-transparent",
 							)}
 							innerClass="ring-red-5"
@@ -612,7 +612,7 @@ export function ZoomTrack(props: {
 						innerClass="ring-red-300"
 						segment={details()}
 					>
-						<SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+						<SegmentContent class="bg-linear-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
 								+
 							</p>

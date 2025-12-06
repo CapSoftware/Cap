@@ -57,7 +57,7 @@ export function TrackManager(props: {
 			ref={(el) => {
 				addButton = el;
 			}}
-			class="flex h-[3.25rem] w-[3.5rem] items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-sm font-medium text-gray-12 transition-colors duration-150 hover:bg-gray-3 dark:border-gray-4/60 dark:bg-gray-3/40 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
+			class="flex h-13 w-14 items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-sm font-medium text-gray-12 transition-colors duration-150 hover:bg-gray-3 dark:border-gray-4/60 dark:bg-gray-3/40 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)]"
 			onClick={handleOpenMenu}
 			onMouseDown={(e) => e.stopPropagation()}
 		>
@@ -69,7 +69,7 @@ export function TrackManager(props: {
 export function TrackIcon(props: { icon: JSX.Element }) {
 	return (
 		<div
-			class="relative z-10 w-[3.5rem] h-[3.25rem] flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40"
+			class="relative z-10 w-14 h-13 flex items-center justify-center rounded-xl border border-gray-4/70 bg-gray-2/60 text-gray-12 shadow-[0_4px_16px_-12px_rgba(0,0,0,0.8)] dark:border-gray-4/60 dark:bg-gray-3/40"
 			onMouseDown={(e) => e.stopPropagation()}
 		>
 			{props.icon}

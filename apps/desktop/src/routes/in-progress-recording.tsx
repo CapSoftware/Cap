@@ -549,20 +549,20 @@ export default function () {
 				</Show>
 				<div class="h-10 w-full rounded-2xl">
 					<div class="flex h-full w-full flex-row items-stretch overflow-hidden rounded-2xl bg-gray-1 border border-gray-5 shadow-[0_1px_3px_rgba(0,0,0,0.1)] animate-in fade-in">
-						<div class="flex flex-1 flex-col gap-2 p-[0.25rem]">
+						<div class="flex flex-1 flex-col gap-2 p-1">
 							<div class="flex flex-1 flex-row justify-between">
 								<button
 									disabled={
 										stopRecording.isPending || isInitializing() || isCountdown()
 									}
-									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
+									class="flex flex-row items-center gap-1 rounded-lg py-1 px-2 text-red-300 transition-opacity disabled:opacity-60"
 									type="button"
 									onClick={() => stopRecording.mutate()}
 									title="Stop recording"
 									aria-label="Stop recording"
 								>
 									<IconCapStopCircle />
-									<span class="text-[0.875rem] font-[500] tabular-nums">
+									<span class="text-[0.875rem] font-medium tabular-nums">
 										<Show when={!isInitializing()} fallback="Starting">
 											<Show
 												when={!isCountdown()}
@@ -728,7 +728,7 @@ export default function () {
 							</div>
 						</div>
 						<div
-							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move"
+							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-1 hover:cursor-move"
 							data-tauri-drag-region
 						>
 							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
@@ -745,7 +745,7 @@ function ActionButton(props: ComponentProps<"button">) {
 		<button
 			{...props}
 			class={cx(
-				"p-[0.25rem] rounded-lg transition-all",
+				"p-1 rounded-lg transition-all",
 				"text-gray-11",
 				"h-8 w-8 flex items-center justify-center",
 				"disabled:opacity-50 disabled:cursor-not-allowed",

@@ -179,10 +179,10 @@ export default function CaptureArea() {
 				<Transition
 					appear
 					enterClass="-translate-y-5 scale-75 opacity-0 blur-lg"
-					enterActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.175,0.885,0.12,1.175)]"
+					enterActiveClass="duration-500 ease-[cubic-bezier(0.175,0.885,0.12,1.175)]"
 					enterToClass="translate-y-0 scale-100 opacity-100"
 					exitClass="translate-y-0 scale-100 opacity-100"
-					exitActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.275,0.05,0.22,1.3)]"
+					exitActiveClass="duration-500 ease-[cubic-bezier(0.275,0.05,0.22,1.3)]"
 					exitToClass="-translate-y-5 scale-75 opacity-0 blur-lg"
 				>
 					<Show when={visible()}>
@@ -208,7 +208,7 @@ export default function CaptureArea() {
 									>
 										<IconLucideRotateCcw class="group-active:scale-90 transition-transform size-5 *:pointer-events-none" />
 									</button>
-									<div class="inline-block my-3 w-[1px] self-stretch bg-gray-3" />
+									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
 										title="Fill"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
@@ -217,7 +217,7 @@ export default function CaptureArea() {
 									>
 										<IconLucideExpand class="group-active:scale-90 transition-transform size-5 *:pointer-events-none" />
 									</button>
-									<div class="inline-block my-3 w-[1px] self-stretch bg-gray-3" />
+									<div class="inline-block my-3 w-px self-stretch bg-gray-3" />
 									<button
 										title="Aspect Ratio"
 										class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
@@ -231,7 +231,7 @@ export default function CaptureArea() {
 											</Show>
 											<Transition
 												enterClass="scale-50 opacity-0 blur-md"
-												enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+												enterActiveClass="duration-200 ease-[cubic-bezier(0.215,0.61,0.355,1)]"
 												enterToClass="scale-100 opacity-100 blur-0"
 												exitClass="opacity-0"
 												exitActiveClass="duration-0"

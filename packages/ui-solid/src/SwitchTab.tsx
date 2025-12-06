@@ -12,7 +12,7 @@ function List(props: ComponentProps<typeof KTabs.List>) {
 		<KTabs.List
 			{...others}
 			class={cx(
-				"flex flex-row items-center rounded-[0.5rem] relative border",
+				"flex flex-row items-center rounded-lg relative border",
 				local.class,
 			)}
 		>

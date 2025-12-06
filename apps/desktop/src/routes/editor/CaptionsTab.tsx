@@ -106,10 +106,10 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 	let colorInput!: HTMLInputElement;
 
 	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
+		<div class="flex flex-row items-center gap-3 relative">
 			<button
 				type="button"
-				class="size-[3rem] rounded-[0.5rem]"
+				class="size-12 rounded-lg"
 				style={{
 					"background-color": text(),
 				}}
@@ -118,7 +118,7 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 			<input
 				ref={colorInput}
 				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				class="absolute left-0 bottom-0 w-12 opacity-0"
 				value={text()}
 				onChange={(e) => {
 					setText(e.target.value);
@@ -126,7 +126,7 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 				}}
 			/>
 			<TextInput
-				class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
+				class="w-20 p-1.5 border text-gray-400 rounded-lg bg-gray-50"
 				value={text()}
 				onFocus={() => {
 					prevColor = props.value;
@@ -877,7 +877,7 @@ export function CaptionsTab() {
 														</label>
 														<div class="w-full px-3 py-2 bg-white dark:bg-gray-50 border border-gray-200 rounded-lg text-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors">
 															<textarea
-																class="w-full resize-none outline-none bg-transparent text-[--text-primary]"
+																class="w-full resize-none outline-none bg-transparent text-(--text-primary)"
 																value={segment.text}
 																rows={2}
 																onChange={(e) =>

@@ -99,7 +99,7 @@ export default function () {
 
 	return (
 		<div
-			class="w-screen h-[100vh] bg-transparent relative overflow-y-hidden"
+			class="w-screen h-screen bg-transparent relative overflow-y-hidden"
 			style={{
 				"scrollbar-color": "auto transparent",
 			}}
@@ -165,7 +165,7 @@ export default function () {
 											ref={setRef}
 											style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
 											class={cx(
-												"overflow-hidden relative rounded-xl shadow transition-all duration-200 w-[260px] h-[150px] bg-gray-12 border-[1px] group",
+												"overflow-hidden relative rounded-xl shadow transition-all duration-200 w-[260px] h-[150px] bg-gray-12 border group",
 											)}
 										>
 											<div
@@ -310,7 +310,7 @@ export default function () {
 															);
 														}}
 													>
-														<IconCapCircleX class="size-[1rem]" />
+														<IconCapCircleX class="size-4" />
 													</TooltipIconButton>
 													{isRecording ? (
 														<TooltipIconButton
@@ -336,7 +336,7 @@ export default function () {
 																});
 															}}
 														>
-															<IconCapEditor class="size-[1rem]" />
+															<IconCapEditor class="size-4" />
 														</TooltipIconButton>
 													) : (
 														<TooltipIconButton
@@ -347,7 +347,7 @@ export default function () {
 																commands.openFilePath(media.path);
 															}}
 														>
-															<IconLucideEye class="size-[1rem]" />
+															<IconLucideEye class="size-4" />
 														</TooltipIconButton>
 													)}
 													<TooltipIconButton
@@ -360,10 +360,10 @@ export default function () {
 														tooltipPlacement="left"
 														onClick={() => copy.mutate()}
 													>
-														<IconCapCopy class="size-[1rem]" />
+														<IconCapCopy class="size-4" />
 													</TooltipIconButton>
 													<TooltipIconButton
-														class="absolute right-3 bottom-3 z-[998]"
+														class="absolute right-3 bottom-3 z-998"
 														tooltipText={
 															recordingMeta.data?.sharing
 																? "Copy Shareable Link"
@@ -372,7 +372,7 @@ export default function () {
 														tooltipPlacement="left"
 														onClick={() => upload.mutate()}
 													>
-														<IconCapUpload class="size-[1rem]" />
+														<IconCapUpload class="size-4" />
 													</TooltipIconButton>
 													<div class="flex absolute inset-0 justify-center items-center">
 														<Button
@@ -448,7 +448,7 @@ function ActionProgressOverlay(props: {
 			style={{
 				"background-color": "rgba(0, 0, 0, 0.85)",
 			}}
-			class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
+			class="absolute inset-0 flex items-center justify-center z-999999 pointer-events-auto"
 		>
 			<div class="w-[80%] text-center">
 				<h3 class="mb-3 text-sm font-medium text-gray-1 dark:text-gray-12">

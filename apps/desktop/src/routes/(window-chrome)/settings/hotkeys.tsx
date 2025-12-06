@@ -129,7 +129,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 												>
 													{(binding) => <HotkeyText binding={binding()} />}
 												</Show>
-												<div class="flex flex-row items-center gap-[0.125rem]">
+												<div class="flex flex-row items-center gap-0.5">
 													<Show when={hotkeys[item()]}>
 														<button
 															class="w-fit"

@@ -1,6 +1,181 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@plugin "@tailwindcss/typography";
+@plugin "tailwind-scrollbar";
+
+@source "../../../apps/*/src/**/*.{js,ts,jsx,tsx,mdx}";
+@source "../../*/src/**/*.{ts,tsx,html,stories.tsx}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+	--color-gray-a-1: var(--gray-1);
+	--color-gray-a-2: var(--gray-2);
+	--color-gray-a-3: var(--gray-3);
+	--color-gray-a-4: var(--gray-4);
+	--color-gray-a-5: var(--gray-5);
+	--color-gray-a-6: var(--gray-6);
+	--color-gray-a-7: var(--gray-7);
+	--color-gray-a-8: var(--gray-8);
+	--color-gray-a-9: var(--gray-9);
+	--color-gray-a-10: var(--gray-10);
+	--color-gray-a-11: var(--gray-11);
+	--color-gray-a-12: var(--gray-12);
+	--color-gray-a-a1: var(--gray-a1);
+	--color-gray-a-a2: var(--gray-a2);
+	--color-gray-a-a3: var(--gray-a3);
+	--color-gray-a-a4: var(--gray-a4);
+	--color-gray-a-a5: var(--gray-a5);
+	--color-gray-a-a6: var(--gray-a6);
+	--color-gray-a-a7: var(--gray-a7);
+	--color-gray-a-a8: var(--gray-a8);
+	--color-gray-a-a9: var(--gray-a9);
+	--color-gray-a-a10: var(--gray-a10);
+	--color-gray-a-a11: var(--gray-a11);
+	--color-gray-a-a12: var(--gray-a12);
+
+	--color-indigo-1: var(--indigo-1);
+	--color-indigo-2: var(--indigo-2);
+	--color-indigo-3: var(--indigo-3);
+	--color-indigo-4: var(--indigo-4);
+	--color-indigo-5: var(--indigo-5);
+	--color-indigo-6: var(--indigo-6);
+	--color-indigo-7: var(--indigo-7);
+	--color-indigo-8: var(--indigo-8);
+	--color-indigo-9: var(--indigo-9);
+	--color-indigo-10: var(--indigo-10);
+	--color-indigo-11: var(--indigo-11);
+	--color-indigo-12: var(--indigo-12);
+
+	--color-transparent: rgba(0, 0, 0, 0);
+	--color-solid-white: #ffffff;
+	--color-transparent-window: var(--transparent-window);
+
+	--color-gray-1: var(--gray-1);
+	--color-gray-2: var(--gray-2);
+	--color-gray-3: var(--gray-3);
+	--color-gray-4: var(--gray-4);
+	--color-gray-5: var(--gray-5);
+	--color-gray-6: var(--gray-6);
+	--color-gray-7: var(--gray-7);
+	--color-gray-8: var(--gray-8);
+	--color-gray-9: var(--gray-9);
+	--color-gray-10: var(--gray-10);
+	--color-gray-11: var(--gray-11);
+	--color-gray-12: var(--gray-12);
+	--color-gray-50: var(--gray-50);
+	--color-gray-100: var(--gray-100);
+	--color-gray-200: var(--gray-200);
+	--color-gray-300: var(--gray-300);
+	--color-gray-400: var(--gray-400);
+	--color-gray-450: var(--gray-450);
+	--color-gray-500: var(--gray-500);
+
+	--color-gray-transparent-50: var(--gray-50-transparent-50);
+	--color-gray-transparent-100: var(--gray-100-transparent-50);
+	--color-gray-transparent-200: var(--gray-200-transparent-50);
+	--color-gray-transparent-300: var(--gray-300-transparent-50);
+	--color-gray-transparent-400: var(--gray-400-transparent-50);
+	--color-gray-transparent-450: var(--gray-450-transparent-50);
+	--color-gray-transparent-500: var(--gray-500-transparent-50);
+
+	--color-black-transparent-5: var(--black-transparent-5);
+	--color-black-transparent-10: var(--black-transparent-10);
+	--color-black-transparent-20: var(--black-transparent-20);
+	--color-black-transparent-40: var(--black-transparent-40);
+	--color-black-transparent-60: var(--black-transparent-60);
+	--color-black-transparent-80: var(--black-transparent-80);
+
+	--color-white-transparent-5: var(--white-transparent-5);
+	--color-white-transparent-10: var(--white-transparent-10);
+	--color-white-transparent-20: var(--white-transparent-20);
+	--color-white-transparent-40: var(--white-transparent-40);
+	--color-white-transparent-60: var(--white-transparent-60);
+	--color-white-transparent-80: var(--white-transparent-80);
+
+	--color-blue-1: var(--blue-1);
+	--color-blue-2: var(--blue-2);
+	--color-blue-3: var(--blue-3);
+	--color-blue-4: var(--blue-4);
+	--color-blue-5: var(--blue-5);
+	--color-blue-6: var(--blue-6);
+	--color-blue-7: var(--blue-7);
+	--color-blue-8: var(--blue-8);
+	--color-blue-9: var(--blue-9);
+	--color-blue-10: var(--blue-10);
+	--color-blue-11: var(--blue-11);
+	--color-blue-12: var(--blue-12);
+	--color-blue-50: var(--blue-50);
+	--color-blue-100: var(--blue-100);
+	--color-blue-200: var(--blue-200);
+	--color-blue-300: var(--blue-300);
+	--color-blue-400: var(--blue-400);
+
+	--color-blue-transparent-0: var(--blue-transparent-0);
+	--color-blue-transparent-10: var(--blue-transparent-10);
+	--color-blue-transparent-20: var(--blue-transparent-20);
+
+	--color-red-1: var(--red-1);
+	--color-red-2: var(--red-2);
+	--color-red-3: var(--red-3);
+	--color-red-4: var(--red-4);
+	--color-red-5: var(--red-5);
+	--color-red-6: var(--red-6);
+	--color-red-7: var(--red-7);
+	--color-red-8: var(--red-8);
+	--color-red-9: var(--red-9);
+	--color-red-10: var(--red-10);
+	--color-red-11: var(--red-11);
+	--color-red-12: var(--red-12);
+	--color-red-50: var(--red-50);
+	--color-red-100: var(--red-100);
+	--color-red-200: var(--red-200);
+	--color-red-300: var(--red-300);
+	--color-red-400: var(--red-400);
+
+	--color-red-transparent-20: var(--red-transparent-20);
+
+	--shadow-s: var(--shadow-s);
+
+	--animate-collapsible-down: collapsible-down 0.2s ease-out;
+	--animate-collapsible-up: collapsible-up 0.2s ease-out;
+
+	@keyframes collapsible-down {
+		from {
+			height: 0;
+		}
+		to {
+			height: var(--kb-collapsible-content-height);
+		}
+	}
+	@keyframes collapsible-up {
+		from {
+			height: var(--kb-collapsible-content-height);
+		}
+		to {
+			height: 0;
+		}
+	}
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we"ve added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+	*,
+	::after,
+	::before,
+	::backdrop,
+	::file-selector-button {
+		border-color: var(--color-gray-200, currentcolor);
+	}
+}
 
 body {
 	font-family: "Geist Sans", sans-serif;

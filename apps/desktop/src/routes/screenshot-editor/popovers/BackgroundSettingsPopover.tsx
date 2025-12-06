@@ -252,7 +252,7 @@ export function BackgroundSettingsPopover() {
 									}
 								}}
 							>
-								<KTabs.List class="flex flex-row gap-2 items-center rounded-[0.5rem] relative">
+								<KTabs.List class="flex flex-row gap-2 items-center rounded-lg relative">
 									<For each={BACKGROUND_SOURCES_LIST}>
 										{(item) => {
 											return (
@@ -345,7 +345,7 @@ export function BackgroundSettingsPopover() {
 											<button
 												type="button"
 												onClick={() => fileInput.click()}
-												class="p-6 bg-gray-2 text-[13px] w-full rounded-[0.5rem] border border-gray-5 border-dashed flex flex-col items-center justify-center gap-[0.5rem] hover:bg-gray-3 transition-colors duration-100"
+												class="p-6 bg-gray-2 text-[13px] w-full rounded-lg border border-gray-5 border-dashed flex flex-col items-center justify-center gap-2 hover:bg-gray-3 transition-colors duration-100"
 											>
 												<IconCapImage class="text-gray-11 size-6" />
 												<span class="text-gray-12">

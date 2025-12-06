@@ -58,7 +58,7 @@ export function PresetsDropdown() {
 										<KDropdownMenu.Sub gutter={16}>
 											<MenuItem<typeof KDropdownMenu.SubTrigger>
 												as={KDropdownMenu.SubTrigger}
-												class="h-[2.5rem]"
+												class="h-10"
 												onFocusIn={() => setShowSettings(false)}
 												onClick={() => {
 													applyPreset();
