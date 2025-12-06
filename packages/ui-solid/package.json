@@ -20,6 +20,7 @@
 	"devDependencies": {
 		"@fontsource/geist-sans": "^5.0.3",
 		"@iconify/json": "^2.2.239",
+		"@tailwindcss/postcss": "^4.1.17",
 		"@tailwindcss/typography": "^0.5.19",
 		"autoprefixer": "^10.4.20",
 		"postcss": "^8.4.41",

@@ -81,6 +81,8 @@
 		"typescript": "^5.8.3",
 		"vite": "^6.3.5",
 		"vite-tsconfig-paths": "^5.0.1",
-		"vitest": "~2.1.9"
+		"vitest": "~2.1.9",
+		"@tailwindcss/typography": "^0.5.19",
+		"tailwind-scrollbar": "^4.0.2"
 	}
 }

@@ -51,7 +51,7 @@ const CardDescription = forwardRef<
 	<p
 		ref={ref}
 		className={classNames(
-			"text-[0.875rem] text-gray-10 leading-[1.25rem]",
+			"text-[0.875rem] text-gray-10 leading-5",
 			className,
 		)}
 		{...props}

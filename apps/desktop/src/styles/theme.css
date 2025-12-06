@@ -1,3 +1,5 @@
+@import "@cap/ui-solid/main.css";
+
 @import "@radix-ui/colors/red.css";
 @import "@radix-ui/colors/red-dark.css";
 @import "@radix-ui/colors/gray.css";
@@ -9,6 +11,9 @@
 @import "@radix-ui/colors/indigo-dark.css";
 @import "@radix-ui/colors/yellow.css";
 @import "@radix-ui/colors/yellow-dark.css";
+
+@plugin "@tailwindcss/typography";
+@plugin "tailwind-scrollbar";
 
 @tailwind utilities;
 
