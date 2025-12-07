@@ -125,10 +125,16 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 }
 
 fn truncate_title(title: &str) -> String {
-    if title.len() <= MAX_TITLE_LENGTH {
+    if title.chars().count() <= MAX_TITLE_LENGTH {
         title.to_string()
     } else {
-        format!("{}…", &title[..MAX_TITLE_LENGTH - 1])
+        let truncate_at = MAX_TITLE_LENGTH - 1;
+        let byte_index = title
+            .char_indices()
+            .nth(truncate_at)
+            .map(|(i, _)| i)
+            .unwrap_or(title.len());
+        format!("{}…", &title[..byte_index])
     }
 }
 
@@ -178,7 +184,7 @@ fn load_single_item(
     let created_at = path
         .metadata()
         .and_then(|m| m.created())
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        .unwrap_or_else(|_| std::time::SystemTime::now());
 
     let is_screenshot = path.extension().and_then(|s| s.to_str()) == Some("cap")
         && path.parent().map(|p| p == screenshots_dir).unwrap_or(false);
