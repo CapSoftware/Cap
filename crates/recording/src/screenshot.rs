@@ -410,8 +410,7 @@ fn capture_bitmap_with(
 #[cfg(target_os = "windows")]
 fn bgra_to_rgb(buffer: Vec<u8>, width: usize, height: usize) -> anyhow::Result<RgbImage> {
     let stride = width.checked_mul(4).ok_or_else(unsupported_error)?;
-    rgb_from_rgba(&buffer, width, height, stride, ChannelOrder::Bgra)
-        .ok_or_else(|| unsupported_error())
+    rgb_from_rgba(&buffer, width, height, stride, ChannelOrder::Bgra).ok_or_else(unsupported_error)
 }
 
 #[cfg(target_os = "windows")]
@@ -500,22 +499,22 @@ fn capture_window_print(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<V
 fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
     match target {
         ScreenCaptureTarget::Display { id } => {
-            let display = scap_targets::Display::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let display = scap_targets::Display::from_id(&id).ok_or_else(unsupported_error)?;
             let bounds = display
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let image = capture_display_bounds(bounds)?;
             debug!("Windows GDI display capture");
             Ok(image)
         }
         ScreenCaptureTarget::Window { id } => {
-            let window = scap_targets::Window::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let window = scap_targets::Window::from_id(&id).ok_or_else(unsupported_error)?;
             let bounds = window
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let width = bounds.size().width().round() as i32;
             let height = bounds.size().height().round() as i32;
@@ -534,12 +533,11 @@ fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<Rg
             Ok(image)
         }
         ScreenCaptureTarget::Area { screen, .. } => {
-            let display =
-                scap_targets::Display::from_id(&screen).ok_or_else(|| unsupported_error())?;
+            let display = scap_targets::Display::from_id(&screen).ok_or_else(unsupported_error)?;
             let bounds = display
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let image = capture_display_bounds(bounds)?;
             debug!("Windows GDI area capture");

@@ -358,12 +358,11 @@ impl VideoMuxer for WindowsMuxer {
 
 impl AudioMuxer for WindowsMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            if let Some(encoder) = self.audio_encoder.as_mut()
-                && let Ok(mut output) = self.output.lock()
-            {
-                encoder.send_frame(frame.inner, timestamp, &mut output)?;
-            }
+        if let Some(timestamp) = self.pause.adjust(timestamp)?
+            && let Some(encoder) = self.audio_encoder.as_mut()
+            && let Ok(mut output) = self.output.lock()
+        {
+            encoder.send_frame(frame.inner, timestamp, &mut output)?;
         }
 
         Ok(())
@@ -682,12 +681,11 @@ impl VideoMuxer for WindowsCameraMuxer {
 
 impl AudioMuxer for WindowsCameraMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            if let Some(encoder) = self.audio_encoder.as_mut()
-                && let Ok(mut output) = self.output.lock()
-            {
-                encoder.send_frame(frame.inner, timestamp, &mut output)?;
-            }
+        if let Some(timestamp) = self.pause.adjust(timestamp)?
+            && let Some(encoder) = self.audio_encoder.as_mut()
+            && let Ok(mut output) = self.output.lock()
+        {
+            encoder.send_frame(frame.inner, timestamp, &mut output)?;
         }
 
         Ok(())
