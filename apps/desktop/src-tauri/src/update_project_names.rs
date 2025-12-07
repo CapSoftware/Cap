@@ -7,6 +7,7 @@ use std::{
 use cap_project::RecordingMeta;
 use futures::StreamExt;
 use tauri::AppHandle;
+use tauri_plugin_store::StoreExt;
 use tokio::{fs, sync::Mutex};
 
 use crate::recordings_path;
@@ -14,8 +15,6 @@ use crate::recordings_path;
 const STORE_KEY: &str = "uuid_projects_migrated";
 
 pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
-    use tauri_plugin_store::StoreExt;
-
     let store = app
         .store("store")
         .map_err(|e| format!("Failed to access store: {}", e))?;
@@ -28,14 +27,19 @@ pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    if let Err(err) = futures::executor::block_on(migrate(app)) {
-        tracing::error!("Updating project names failed: {err}");
-    }
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        if let Err(err) = migrate(&app_handle).await {
+            tracing::error!("Updating project names failed: {err}");
+        }
 
-    store.set(STORE_KEY, true);
-    store
-        .save()
-        .map_err(|e| format!("Failed to save store: {}", e))?;
+        if let Ok(store) = app_handle.store("store") {
+            store.set(STORE_KEY, true);
+            if let Err(e) = store.save() {
+                tracing::error!("Failed to save store after migration: {}", e);
+            }
+        }
+    });
 
     Ok(())
 }
