@@ -527,7 +527,10 @@ export default function () {
 	};
 
 	return (
-		<div class="flex h-full w-full flex-col justify-end px-3 pb-3">
+		<div
+			class="flex h-full w-full flex-col justify-end px-3 pb-3"
+			onContextMenu={(e) => e.preventDefault()}
+		>
 			<div ref={setInteractiveAreaRef} class="flex w-full flex-col gap-2">
 				<Show when={hasRecordingIssue() && issuePanelVisible()}>
 					<div class="flex w-full flex-row items-start gap-3 rounded-2xl border border-red-8 bg-gray-1 px-4 py-3 text-[12px] leading-snug text-red-11 shadow-lg">
