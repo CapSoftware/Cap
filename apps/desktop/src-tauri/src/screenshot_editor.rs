@@ -141,8 +141,31 @@ impl ScreenshotEditorInstances {
                         let rgba_img: image::RgbaImage = rgb_img.convert();
                         (rgba_img.into_raw(), width, height)
                     } else {
-                        let img =
-                            image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+                        let image_path = if path.is_dir() {
+                            let original = path.join("original.png");
+                            if original.exists() {
+                                original
+                            } else {
+                                std::fs::read_dir(&path)
+                                    .ok()
+                                    .and_then(|dir| {
+                                        dir.flatten()
+                                            .find(|e| {
+                                                e.path().extension().and_then(|s| s.to_str())
+                                                    == Some("png")
+                                            })
+                                            .map(|e| e.path())
+                                    })
+                                    .ok_or_else(|| {
+                                        format!("No PNG file found in directory: {:?}", path)
+                                    })?
+                            }
+                        } else {
+                            path.clone()
+                        };
+
+                        let img = image::open(&image_path)
+                            .map_err(|e| format!("Failed to open image: {e}"))?;
                         let (w, h) = img.dimensions();
 
                         if w > MAX_DIMENSION || h > MAX_DIMENSION {
@@ -157,15 +180,22 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                // Try to load existing meta if in a .cap directory
-                let (recording_meta, loaded_config) = if let Some(parent) = path.parent() {
+                let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                    Some(path.clone())
+                } else if let Some(parent) = path.parent() {
                     if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
-                        let meta = RecordingMeta::load_for_project(parent).ok();
-                        let config = ProjectConfiguration::load(parent).ok();
-                        (meta, config)
+                        Some(parent.to_path_buf())
                     } else {
-                        (None, None)
+                        None
                     }
+                } else {
+                    None
+                };
+
+                let (recording_meta, loaded_config) = if let Some(cap_dir) = &cap_dir {
+                    let meta = RecordingMeta::load_for_project(cap_dir).ok();
+                    let config = ProjectConfiguration::load(cap_dir).ok();
+                    (meta, config)
                 } else {
                     (None, None)
                 };
