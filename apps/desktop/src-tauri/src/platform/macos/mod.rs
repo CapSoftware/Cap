@@ -26,6 +26,25 @@ pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLev
     });
 }
 
+pub fn set_window_visible_on_all_workspaces(window: tauri::Window) {
+    use objc2_app_kit::NSWindowCollectionBehavior;
+
+    let c_window = window.clone();
+    _ = window.run_on_main_thread(move || unsafe {
+        let ns_win = c_window
+            .ns_window()
+            .expect("Failed to get native window handle")
+            as *const objc2_app_kit::NSWindow;
+        let current_behavior = (*ns_win).collectionBehavior();
+        (*ns_win).setCollectionBehavior(
+            current_behavior
+                | NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::Stationary,
+        );
+    });
+}
+
 // pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
 //     let ns_window = ns_window as *const objc2_app_kit::NSWindow;
 

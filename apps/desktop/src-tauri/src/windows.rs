@@ -185,7 +185,7 @@ impl CapWindowId {
             Self::Main => (300.0, 360.0),
             Self::Editor { .. } => (1275.0, 800.0),
             Self::ScreenshotEditor { .. } => (800.0, 600.0),
-            Self::Settings => (600.0, 450.0),
+            Self::Settings => (600.0, 470.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
             Self::ModeSelect => (900.0, 500.0),
@@ -317,7 +317,12 @@ impl ShowCapWindow {
 
                 if new_recording_flow {
                     #[cfg(target_os = "macos")]
-                    crate::platform::set_window_level(window.as_ref().window(), 50);
+                    {
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                        crate::platform::set_window_visible_on_all_workspaces(
+                            window.as_ref().window(),
+                        );
+                    }
                 }
 
                 #[cfg(target_os = "macos")]
@@ -412,6 +417,7 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 45);
+                    crate::platform::set_window_visible_on_all_workspaces(window.as_ref().window());
                 }
 
                 window
@@ -585,16 +591,9 @@ impl ShowCapWindow {
                     #[cfg(target_os = "macos")]
                     {
                         crate::platform::set_window_level(window.as_ref().window(), 60);
-
-                        _ = window.run_on_main_thread({
-                            let window = window.as_ref().window();
-                            move || unsafe {
-                                let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
-                                (*win).setCollectionBehavior(
-                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                                );
-                            }
-                        });
+                        crate::platform::set_window_visible_on_all_workspaces(
+                            window.as_ref().window(),
+                        );
                     }
 
                     window
@@ -640,6 +639,7 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 900);
+                    crate::platform::set_window_visible_on_all_workspaces(window.as_ref().window());
                 }
 
                 window
@@ -655,6 +655,7 @@ impl ShowCapWindow {
                     .shadow(false)
                     .resizable(false)
                     .always_on_top(true)
+                    .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .skip_taskbar(true)
                     .closable(true)
@@ -682,10 +683,13 @@ impl ShowCapWindow {
                 let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(
-                    window.as_ref().window(),
-                    objc2_app_kit::NSPopUpMenuWindowLevel,
-                );
+                {
+                    crate::platform::set_window_level(
+                        window.as_ref().window(),
+                        objc2_app_kit::NSPopUpMenuWindowLevel,
+                    );
+                    crate::platform::set_window_visible_on_all_workspaces(window.as_ref().window());
+                }
 
                 // Hide the main window if the target monitor is the same
                 if let Some(main_window) = CapWindowId::Main.get(app)
@@ -731,6 +735,7 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 1000);
+                    crate::platform::set_window_visible_on_all_workspaces(window.as_ref().window());
                 }
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
