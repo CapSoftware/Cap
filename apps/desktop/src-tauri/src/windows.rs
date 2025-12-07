@@ -444,6 +444,9 @@ impl ShowCapWindow {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
                 };
+                if let Some(camera) = CapWindowId::Camera.get(app) {
+                    let _ = camera.close();
+                };
 
                 self.window_builder(app, "/editor")
                     .maximizable(true)
@@ -454,6 +457,9 @@ impl ShowCapWindow {
             Self::ScreenshotEditor { path: _ } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
+                };
+                if let Some(camera) = CapWindowId::Camera.get(app) {
+                    let _ = camera.close();
                 };
 
                 self.window_builder(app, "/screenshot-editor")
@@ -705,7 +711,7 @@ impl ShowCapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(!cfg!(windows))
+                    .shadow(false)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
@@ -726,6 +732,8 @@ impl ShowCapWindow {
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 1000);
                 }
+
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }

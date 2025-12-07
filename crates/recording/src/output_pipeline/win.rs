@@ -19,7 +19,7 @@ use windows::{
     Graphics::SizeInt32,
     Win32::Graphics::{
         Direct3D11::ID3D11Device,
-        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_UYVY, DXGI_FORMAT_YUY2},
+        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
     },
 };
 
@@ -358,12 +358,11 @@ impl VideoMuxer for WindowsMuxer {
 
 impl AudioMuxer for WindowsMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            if let Some(encoder) = self.audio_encoder.as_mut()
-                && let Ok(mut output) = self.output.lock()
-            {
-                encoder.send_frame(frame.inner, timestamp, &mut output)?;
-            }
+        if let Some(timestamp) = self.pause.adjust(timestamp)?
+            && let Some(encoder) = self.audio_encoder.as_mut()
+            && let Ok(mut output) = self.output.lock()
+        {
+            encoder.send_frame(frame.inner, timestamp, &mut output)?;
         }
 
         Ok(())
@@ -394,6 +393,9 @@ pub struct NativeCameraFrame {
     pub timestamp: Timestamp,
 }
 
+unsafe impl Send for NativeCameraFrame {}
+unsafe impl Sync for NativeCameraFrame {}
+
 impl VideoFrame for NativeCameraFrame {
     fn timestamp(&self) -> Timestamp {
         self.timestamp
@@ -404,8 +406,9 @@ impl NativeCameraFrame {
     pub fn dxgi_format(&self) -> DXGI_FORMAT {
         match self.pixel_format {
             cap_camera_windows::PixelFormat::NV12 => DXGI_FORMAT_NV12,
-            cap_camera_windows::PixelFormat::YUYV422 => DXGI_FORMAT_YUY2,
-            cap_camera_windows::PixelFormat::UYVY422 => DXGI_FORMAT_UYVY,
+            cap_camera_windows::PixelFormat::YUYV422 | cap_camera_windows::PixelFormat::UYVY422 => {
+                DXGI_FORMAT_YUY2
+            }
             _ => DXGI_FORMAT_NV12,
         }
     }
@@ -511,9 +514,9 @@ impl Muxer for WindowsCameraMuxer {
                             let mut output_guard = match output.lock() {
                                 Ok(guard) => guard,
                                 Err(poisoned) => {
-                                    let err = anyhow!("Failed to lock output mutex: {}", poisoned);
-                                    let _ = ready_tx.send(Err(err.clone().into()));
-                                    return Err(err);
+                                    let msg = format!("Failed to lock output mutex: {}", poisoned);
+                                    let _ = ready_tx.send(Err(anyhow!("{}", msg)));
+                                    return Err(anyhow!("{}", msg));
                                 }
                             };
 
@@ -531,16 +534,16 @@ impl Muxer for WindowsCameraMuxer {
                         match muxer {
                             Ok(muxer) => (encoder, muxer),
                             Err(err) => {
-                                let err = anyhow!("Failed to create muxer: {err}");
-                                let _ = ready_tx.send(Err(err.clone().into()));
-                                return Err(err);
+                                let msg = format!("Failed to create muxer: {err}");
+                                let _ = ready_tx.send(Err(anyhow!("{}", msg)));
+                                return Err(anyhow!("{}", msg));
                             }
                         }
                     }
                     Err(err) => {
-                        let err = anyhow!("Failed to create H264 encoder: {err}");
-                        let _ = ready_tx.send(Err(err.clone().into()));
-                        return Err(err);
+                        let msg = format!("Failed to create H264 encoder: {err}");
+                        let _ = ready_tx.send(Err(anyhow!("{}", msg)));
+                        return Err(anyhow!("{}", msg));
                     }
                 };
 
@@ -562,8 +565,8 @@ impl Muxer for WindowsCameraMuxer {
                 let mut first_timestamp: Option<Duration> = None;
                 let mut frame_count = 0u64;
 
-                let process_frame = |frame: NativeCameraFrame,
-                                     timestamp: Duration|
+                let mut process_frame = |frame: NativeCameraFrame,
+                                         timestamp: Duration|
                  -> windows::core::Result<
                     Option<(
                         windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
@@ -667,7 +670,9 @@ impl VideoMuxer for WindowsCameraMuxer {
         timestamp: Duration,
     ) -> anyhow::Result<()> {
         if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            self.video_tx.send(Some((frame, timestamp)))?;
+            self.video_tx
+                .send(Some((frame, timestamp)))
+                .map_err(|_| anyhow!("Video channel closed"))?;
         }
 
         Ok(())
@@ -676,12 +681,11 @@ impl VideoMuxer for WindowsCameraMuxer {
 
 impl AudioMuxer for WindowsCameraMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        if let Some(timestamp) = self.pause.adjust(timestamp)? {
-            if let Some(encoder) = self.audio_encoder.as_mut()
-                && let Ok(mut output) = self.output.lock()
-            {
-                encoder.send_frame(frame.inner, timestamp, &mut output)?;
-            }
+        if let Some(timestamp) = self.pause.adjust(timestamp)?
+            && let Some(encoder) = self.audio_encoder.as_mut()
+            && let Ok(mut output) = self.output.lock()
+        {
+            encoder.send_frame(frame.inner, timestamp, &mut output)?;
         }
 
         Ok(())

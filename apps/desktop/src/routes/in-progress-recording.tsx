@@ -555,7 +555,7 @@ export default function () {
 									disabled={
 										stopRecording.isPending || isInitializing() || isCountdown()
 									}
-									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-opacity disabled:opacity-60"
+									class="flex flex-row items-center gap-[0.25rem] rounded-lg py-[0.25rem] px-[0.5rem] text-red-300 transition-colors duration-100 hover:bg-red-500/[0.08] active:bg-red-500/[0.12] disabled:opacity-60 disabled:hover:bg-transparent"
 									type="button"
 									onClick={() => stopRecording.mutate()}
 									title="Stop recording"
@@ -728,7 +728,7 @@ export default function () {
 							</div>
 						</div>
 						<div
-							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move"
+							class="non-styled-move flex cursor-move items-center justify-center border-l border-gray-5 p-[0.25rem] hover:cursor-move transition-colors duration-100 hover:bg-gray-12/[0.04] dark:hover:bg-white/[0.06]"
 							data-tauri-drag-region
 						>
 							<IconCapMoreVertical class="pointer-events-none text-gray-10" />
@@ -745,10 +745,12 @@ function ActionButton(props: ComponentProps<"button">) {
 		<button
 			{...props}
 			class={cx(
-				"p-[0.25rem] rounded-lg transition-all",
-				"text-gray-11",
+				"p-[0.25rem] rounded-lg transition-colors duration-100",
+				"text-gray-11 hover:text-gray-12",
+				"hover:bg-gray-12/[0.06] dark:hover:bg-white/[0.08]",
+				"active:bg-gray-12/[0.1] dark:active:bg-white/[0.12]",
 				"h-8 w-8 flex items-center justify-center",
-				"disabled:opacity-50 disabled:cursor-not-allowed",
+				"disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent",
 				props.class,
 			)}
 			type="button"

@@ -530,7 +530,6 @@ function PreviewCanvas() {
 										height: `${size().height}px`,
 										...gridStyle,
 									}}
-									class="rounded"
 									ref={canvasRef}
 									id="canvas"
 									width={frameWidth()}

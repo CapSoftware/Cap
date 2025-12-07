@@ -17,8 +17,9 @@ use tokio::{
     runtime::Runtime,
     sync::{broadcast, oneshot},
     task::LocalSet,
+    time::{Duration, Instant},
 };
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
@@ -43,9 +44,9 @@ pub enum CameraPreviewShape {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct CameraPreviewState {
-    size: f32,
-    shape: CameraPreviewShape,
-    mirrored: bool,
+    pub size: f32,
+    pub shape: CameraPreviewShape,
+    pub mirrored: bool,
 }
 
 impl Default for CameraPreviewState {
@@ -496,8 +497,23 @@ impl Renderer {
             return;
         };
 
+        let start_time = Instant::now();
+        let startup_timeout = Duration::from_secs(5);
+        let mut received_first_frame = false;
+
         let mut state = default_state;
         while let Some(event) = loop {
+            let timeout_remaining = if received_first_frame {
+                Duration::MAX
+            } else {
+                startup_timeout.saturating_sub(start_time.elapsed())
+            };
+
+            if timeout_remaining.is_zero() {
+                warn!("Camera preview timed out waiting for first frame, closing window");
+                break None;
+            }
+
             tokio::select! {
                 frame = camera_rx.recv_async() => break frame.ok().map(Ok),
                 result = reconfigure.recv() => {
@@ -507,10 +523,15 @@ impl Renderer {
                         continue;
                     }
                 },
+                _ = tokio::time::sleep(timeout_remaining) => {
+                    warn!("Camera preview timed out waiting for first frame, closing window");
+                    break None;
+                }
             }
         } {
             match event {
                 Ok(frame) => {
+                    received_first_frame = true;
                     let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
 

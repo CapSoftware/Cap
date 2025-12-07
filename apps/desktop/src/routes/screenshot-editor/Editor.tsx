@@ -26,8 +26,10 @@ import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import IconCapCircleX from "~icons/cap/circle-x";
 import IconLucideMaximize from "~icons/lucide/maximize";
 import IconLucideRatio from "~icons/lucide/ratio";
+import { AnnotationConfigBar } from "./AnnotationConfig";
 import { useScreenshotEditorContext } from "./context";
 import { Header } from "./Header";
+import { LayersPanel } from "./LayersPanel";
 import { Preview } from "./Preview";
 import { Dialog, EditorButton } from "./ui";
 
@@ -36,9 +38,11 @@ export function Editor() {
 	const {
 		projectHistory,
 		setActiveTool,
-		setProject,
-		project,
 		setSelectedAnnotationId,
+		layersPanelOpen,
+		setLayersPanelOpen,
+		activePopover,
+		setActivePopover,
 	} = useScreenshotEditorContext();
 
 	createEffect(() => {
@@ -102,14 +106,23 @@ export function Editor() {
 						setActiveTool("select");
 						setSelectedAnnotationId(null);
 						break;
-					case "p": {
-						// Toggle Padding
-						// We need to push history here too if we want undo for padding
-						projectHistory.push();
-						const currentPadding = project.background.padding;
-						setProject("background", "padding", currentPadding === 0 ? 20 : 0);
+					case "p":
+						setActivePopover(activePopover() === "padding" ? null : "padding");
 						break;
-					}
+					case "b":
+						setActivePopover(
+							activePopover() === "background" ? null : "background",
+						);
+						break;
+					case "l":
+						setLayersPanelOpen(!layersPanelOpen());
+						break;
+					case "h":
+						setActivePopover(activePopover() === "shadow" ? null : "shadow");
+						break;
+					case "e":
+						setActivePopover(activePopover() === "border" ? null : "border");
+						break;
 				}
 			}
 		};
@@ -120,11 +133,17 @@ export function Editor() {
 
 	return (
 		<>
-			<Header />
+			<div class="relative">
+				<Header />
+				<AnnotationConfigBar />
+			</div>
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-1 gap-0 pb-0 w-full min-h-0 leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
+				<Show when={layersPanelOpen()}>
+					<LayersPanel />
+				</Show>
 				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
 					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0">
 						<Preview zoom={zoom()} setZoom={setZoom} />
@@ -192,12 +211,21 @@ function Dialogs() {
 									);
 								});
 
-								const initialBounds = {
-									x: cropDialog().position.x,
-									y: cropDialog().position.y,
-									width: cropDialog().size.x,
-									height: cropDialog().size.y,
-								};
+								const originalSize = cropDialog().originalSize;
+								const existingCrop = cropDialog().currentCrop;
+								const initialBounds = existingCrop
+									? {
+											x: existingCrop.position.x,
+											y: existingCrop.position.y,
+											width: existingCrop.size.x,
+											height: existingCrop.size.y,
+										}
+									: {
+											x: 0,
+											y: 0,
+											width: originalSize.x,
+											height: originalSize.y,
+										};
 
 								const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
 									createSignal(true),
@@ -260,17 +288,11 @@ function Dialogs() {
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
 													<span>Size</span>
 													<div class="w-[3.25rem]">
-														<BoundInput
-															field="width"
-															max={cropDialog().size.x}
-														/>
+														<BoundInput field="width" max={originalSize.x} />
 													</div>
 													<span>×</span>
 													<div class="w-[3.25rem]">
-														<BoundInput
-															field="height"
-															max={cropDialog().size.y}
-														/>
+														<BoundInput field="height" max={originalSize.y} />
 													</div>
 												</div>
 												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
@@ -321,8 +343,8 @@ function Dialogs() {
 													leftIcon={<IconLucideMaximize />}
 													onClick={() => cropperRef?.fill()}
 													disabled={
-														crop().width === cropDialog().size.x &&
-														crop().height === cropDialog().size.y
+														crop().width === originalSize.x &&
+														crop().height === originalSize.y
 													}
 												>
 													Full
@@ -334,10 +356,10 @@ function Dialogs() {
 														setAspect(null);
 													}}
 													disabled={
-														crop().x === cropDialog().position.x &&
-														crop().y === cropDialog().position.y &&
-														crop().width === cropDialog().size.x &&
-														crop().height === cropDialog().size.y
+														crop().x === initialBounds.x &&
+														crop().y === initialBounds.y &&
+														crop().width === initialBounds.width &&
+														crop().height === initialBounds.height
 													}
 												>
 													Reset
@@ -350,8 +372,8 @@ function Dialogs() {
 													class="rounded overflow-hidden relative select-none"
 													style={{
 														width: (() => {
-															const srcW = cropDialog().size.x;
-															const srcH = cropDialog().size.y;
+															const srcW = originalSize.x;
+															const srcH = originalSize.y;
 															const maxW = Math.min(
 																windowSize().width * 0.8,
 																768,
@@ -361,8 +383,8 @@ function Dialogs() {
 															return `${srcW * ratio}px`;
 														})(),
 														height: (() => {
-															const srcW = cropDialog().size.x;
-															const srcH = cropDialog().size.y;
+															const srcW = originalSize.x;
+															const srcH = originalSize.y;
 															const maxW = Math.min(
 																windowSize().width * 0.8,
 																768,
@@ -378,8 +400,8 @@ function Dialogs() {
 														onCropChange={setCrop}
 														aspectRatio={aspect() ?? undefined}
 														targetSize={{
-															x: cropDialog().size.x,
-															y: cropDialog().size.y,
+															x: originalSize.x,
+															y: originalSize.y,
 														}}
 														initialCrop={initialBounds}
 														snapToRatioEnabled={snapToRatio()}
