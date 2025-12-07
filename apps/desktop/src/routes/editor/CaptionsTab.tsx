@@ -511,7 +511,7 @@ export function CaptionsTab() {
 										}}
 									</KSelect.Value>
 									<KSelect.Icon>
-										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+										<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180" />
 									</KSelect.Icon>
 								</KSelect.Trigger>
 								<KSelect.Portal>

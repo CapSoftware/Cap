@@ -57,8 +57,8 @@ importers:
         specifier: ^0.0.14
         version: 0.0.14
       '@kobalte/core':
-        specifier: ^0.13.7
-        version: 0.13.9(solid-js@1.9.6)
+        specifier: ^0.13.11
+        version: 0.13.11(solid-js@1.9.6)
       '@radix-ui/colors':
         specifier: ^3.0.0
         version: 3.0.0
@@ -1154,8 +1154,8 @@ importers:
   packages/ui-solid:
     dependencies:
       '@kobalte/core':
-        specifier: ^0.13.7
-        version: 0.13.9(solid-js@1.9.6)
+        specifier: ^0.13.11
+        version: 0.13.11(solid-js@1.9.6)
       cva:
         specifier: npm:class-variance-authority@^0.7.0
         version: class-variance-authority@0.7.1
@@ -3650,8 +3650,8 @@ packages:
   '@juggle/resize-observer@3.4.0':
     resolution: {integrity: sha512-dfLbk+PwWvFzSxwk3n5ySL0hfBog779o8h68wK/7/APo/7cgyWp5jcXockbxdk5kFRkbeXWm4Fbi9FrdN381sA==}
 
-  '@kobalte/core@0.13.9':
-    resolution: {integrity: sha512-TkeSpgNy7I5k8jwjqT9CK3teAxN0aFb3yyL9ODb06JVYMwXIk+UKrizoAF1ahLUP85lKnxv44B4Y5cXkHShgqw==}
+  '@kobalte/core@0.13.11':
+    resolution: {integrity: sha512-hK7TYpdib/XDb/r/4XDBFaO9O+3ZHz4ZWryV4/3BfES+tSQVgg2IJupDnztKXB0BqbSRy/aWlHKw1SPtNPYCFQ==}
     peerDependencies:
       solid-js: ^1.8.15
 
@@ -17228,7 +17228,7 @@ snapshots:
 
   '@juggle/resize-observer@3.4.0': {}
 
-  '@kobalte/core@0.13.9(solid-js@1.9.6)':
+  '@kobalte/core@0.13.11(solid-js@1.9.6)':
     dependencies:
       '@floating-ui/dom': 1.7.0
       '@internationalized/date': 3.8.0
@@ -17246,13 +17246,13 @@ snapshots:
 
   '@kobalte/utils@0.9.1(solid-js@1.9.6)':
     dependencies:
-      '@solid-primitives/event-listener': 2.4.1(solid-js@1.9.6)
+      '@solid-primitives/event-listener': 2.4.3(solid-js@1.9.6)
       '@solid-primitives/keyed': 1.5.1(solid-js@1.9.6)
       '@solid-primitives/map': 0.4.13(solid-js@1.9.6)
       '@solid-primitives/media': 2.3.1(solid-js@1.9.6)
       '@solid-primitives/props': 3.2.1(solid-js@1.9.6)
       '@solid-primitives/refs': 1.1.1(solid-js@1.9.6)
-      '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@kubiks/otel-drizzle@2.1.0(@opentelemetry/api@1.9.0)(drizzle-orm@0.44.6(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.15.2))':
@@ -20106,10 +20106,10 @@ snapshots:
 
   '@solid-primitives/media@2.3.1(solid-js@1.9.6)':
     dependencies:
-      '@solid-primitives/event-listener': 2.4.1(solid-js@1.9.6)
-      '@solid-primitives/rootless': 1.5.1(solid-js@1.9.6)
-      '@solid-primitives/static-store': 0.1.1(solid-js@1.9.6)
-      '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      '@solid-primitives/event-listener': 2.4.3(solid-js@1.9.6)
+      '@solid-primitives/rootless': 1.5.2(solid-js@1.9.6)
+      '@solid-primitives/static-store': 0.1.2(solid-js@1.9.6)
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@solid-primitives/memo@1.4.2(solid-js@1.9.6)':
@@ -20128,7 +20128,7 @@ snapshots:
 
   '@solid-primitives/props@3.2.1(solid-js@1.9.6)':
     dependencies:
-      '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@solid-primitives/refs@1.1.1(solid-js@1.9.6)':
@@ -20190,7 +20190,7 @@ snapshots:
 
   '@solid-primitives/trigger@1.2.1(solid-js@1.9.6)':
     dependencies:
-      '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@solid-primitives/utils@6.3.1(solid-js@1.9.6)':

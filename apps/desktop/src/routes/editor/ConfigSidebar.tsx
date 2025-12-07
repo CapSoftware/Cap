@@ -399,7 +399,7 @@ export function ConfigSidebar() {
 								"flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors group disabled:opacity-50 focus:outline-none",
 								editorState.timeline.selection
 									? "text-gray-11"
-									: "text-gray-11 ui-selected:text-gray-12",
+									: "text-gray-11 data-selected:text-gray-12",
 							)}
 							onClick={() => {
 								// Clear any active selection first
@@ -494,7 +494,7 @@ export function ConfigSidebar() {
 											as={(props) => (
 												<IconCapChevronDown
 													{...props}
-													class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+													class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 												/>
 											)}
 										/>
@@ -637,11 +637,11 @@ export function ConfigSidebar() {
 								{CURSOR_ANIMATION_STYLE_OPTIONS.map((option) => (
 									<RadioGroup.Item
 										value={option.value}
-										class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+										class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 									>
 										<RadioGroup.ItemInput class="sr-only" />
 										<RadioGroup.ItemLabel class="flex cursor-pointer items-start gap-3 p-3">
-											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+											<RadioGroup.ItemControl class="mt-1 size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 											<div class="flex flex-col text-left">
 												<span class="text-sm font-medium text-gray-12">
 													{option.label}
@@ -668,7 +668,7 @@ export function ConfigSidebar() {
 									/>
 								}
 							/>
-							<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+							<KCollapsible.Content class="overflow-hidden border-b opacity-0 transition-opacity border-gray-3 animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 								{/* if Content has padding or margin the animation doesn't look as good */}
 								<div class="flex flex-col gap-4 pt-4 pb-6">
 									<Field name="Tension">
@@ -1384,7 +1384,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 							{(item) => {
 								const el = (props?: object) => (
 									<KTabs.Trigger
-										class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  ui-selected:border-gray-3 ui-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border ui-selected:text-gray-12 peer"
+										class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  data-selected:border-gray-3 data-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border data-selected:text-gray-12 peer"
 										value={item}
 										{...props}
 									>
@@ -1528,7 +1528,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													)
 												}
 												value={key}
-												class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 ui-selected:bg-gray-3 ui-selected:border-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+												class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 data-selected:bg-gray-3 data-selected:border-gray-3 group data-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
 											>
 												{value}
 											</KTabs.Trigger>
@@ -1584,7 +1584,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 											class="relative aspect-square group"
 										>
 											<KRadioGroup.ItemInput class="peer" />
-											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
+											<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 												<img
 													src={photo.url!}
 													loading="eager"
@@ -1605,7 +1605,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 														class="relative aspect-square group"
 													>
 														<KRadioGroup.ItemInput class="peer" />
-														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 ui-checked:border-blue-9 ui-checked:ring-2 ui-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
+														<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg border cursor-pointer border-gray-5 data-checked:border-blue-9 data-checked:ring-2 data-checked:ring-blue-9 peer-focus-visible:border-2 peer-focus-visible:border-blue-9">
 															<img
 																src={photo.url!}
 																alt="Wallpaper option"
@@ -2005,7 +2005,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				}
 			/>
 			<KCollapsible open={project.background.border?.enabled ?? false}>
-				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up ui-expanded:animate-collapsible-down ui-expanded:opacity-100">
+				<KCollapsible.Content class="overflow-hidden opacity-0 transition-opacity animate-collapsible-up data-expanded:animate-collapsible-down data-expanded:opacity-100">
 					<div class="flex flex-col gap-6 pb-6">
 						<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
 							<Slider
@@ -2184,7 +2184,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 										<RadioGroup.ItemInput class="peer" />
 										<RadioGroup.ItemControl
 											class={cx(
-												"cursor-pointer size-6 shrink-0 rounded-md bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 transition-colors duration-100",
+												"cursor-pointer size-6 shrink-0 rounded-md bg-gray-5 absolute flex justify-center items-center data-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 transition-colors duration-100",
 												item.x === "left"
 													? "left-2"
 													: item.x === "right"
@@ -2247,7 +2247,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 									as={(props) => (
 										<IconCapChevronDown
 											{...props}
-											class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+											class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 										/>
 									)}
 								/>
@@ -2427,7 +2427,7 @@ function CornerStyleSelect(props: {
 						as={(iconProps) => (
 							<IconCapChevronDown
 								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+								class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 							/>
 						)}
 					/>
@@ -2625,7 +2625,7 @@ function TextSegmentConfig(props: {
 								as={(selectProps) => (
 									<IconCapChevronDown
 										{...selectProps}
-										class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+										class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 									/>
 								)}
 							/>
@@ -2719,7 +2719,7 @@ function TextSegmentConfig(props: {
 								}}
 							</KSelect.Value>
 							<KSelect.Icon>
-								<IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)" />
+								<IconCapChevronDown class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)" />
 							</KSelect.Icon>
 						</KSelect.Trigger>
 						<KSelect.Portal>
@@ -2851,11 +2851,11 @@ function MaskSegmentConfig(props: {
 						].map((option) => (
 							<RadioGroup.Item
 								value={option.value}
-								class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+								class="rounded-lg border border-gray-3 transition-colors data-checked:border-blue-8 data-checked:bg-blue-3/40"
 							>
 								<RadioGroup.ItemInput class="sr-only" />
 								<RadioGroup.ItemLabel class="flex cursor-pointer items-center gap-2 p-2 text-sm text-gray-12">
-									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9" />
+									<RadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 data-checked:border-blue-9 data-checked:bg-blue-9" />
 									{option.label}
 								</RadioGroup.ItemLabel>
 							</RadioGroup.Item>
@@ -3098,14 +3098,14 @@ function ZoomSegmentConfig(props: {
 					<KTabs.List class="flex flex-row items-center rounded-lg relative border">
 						<KTabs.Trigger
 							value="auto"
-							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none data-selected:text-gray-12 peer"
 							disabled={!generalSettings.data?.custom_cursor_capture2}
 						>
 							Auto
 						</KTabs.Trigger>
 						<KTabs.Trigger
 							value="manual"
-							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none data-selected:text-gray-12 peer"
 						>
 							Manual
 						</KTabs.Trigger>
@@ -3425,7 +3425,7 @@ function ClipSegmentConfig(props: {
 					<For each={[0.25, 0.5, 1, 1.5, 2, 4, 8]}>
 						{(mult) => (
 							<KRadioGroup.Item value={mult.toString()}>
-								<KRadioGroup.ItemControl class="px-2 py-1 text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md ui-checked:bg-gray-3 ui-checked:border-gray-4 ui-checked:text-gray-12">
+								<KRadioGroup.ItemControl class="px-2 py-1 text-gray-11 hover:text-gray-12 bg-gray-1 border border-gray-3 rounded-md data-checked:bg-gray-3 data-checked:border-gray-4 data-checked:text-gray-12">
 									{mult}x
 								</KRadioGroup.ItemControl>
 							</KRadioGroup.Item>
@@ -3583,19 +3583,19 @@ function SceneSegmentConfig(props: {
 						<div class="flex flex-row items-center rounded-lg relative border">
 							<KTabs.Trigger
 								value="default"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none data-selected:text-gray-12 peer"
 							>
 								Default
 							</KTabs.Trigger>
 							<KTabs.Trigger
 								value="cameraOnly"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none data-selected:text-gray-12 peer"
 							>
 								Camera Only
 							</KTabs.Trigger>
 							<KTabs.Trigger
 								value="hideCamera"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none data-selected:text-gray-12 peer"
 							>
 								Hide Camera
 							</KTabs.Trigger>

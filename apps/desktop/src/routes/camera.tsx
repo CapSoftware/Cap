@@ -274,7 +274,7 @@ function ControlButton(
 	return (
 		<KToggleButton
 			type="button"
-			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			class="p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12"
 			{...props}
 		/>
 	);

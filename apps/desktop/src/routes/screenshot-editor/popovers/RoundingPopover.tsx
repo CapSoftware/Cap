@@ -101,7 +101,7 @@ function CornerStyleSelect(props: {
 						as={(iconProps) => (
 							<IconCapChevronDown
 								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-(--gray-500)"
+								class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 							/>
 						)}
 					/>

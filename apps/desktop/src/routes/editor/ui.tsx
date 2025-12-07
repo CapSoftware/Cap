@@ -109,7 +109,7 @@ export function Slider(
 					});
 				}}
 			>
-				<KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-blue-9 ui-disabled:bg-gray-8" />
+				<KSlider.Fill class="absolute -ml-2 h-full rounded-full bg-blue-9 data-disabled:bg-gray-8" />
 				<Tooltip
 					open={dragging() ? true : undefined}
 					getAnchorRect={() => {
@@ -139,7 +139,7 @@ export function Slider(
 							setDragging(false);
 						}}
 						class={cx(
-							"bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-none size-4 -top-[6.3px] ui-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer",
+							"bg-gray-1 dark:bg-gray-12 border border-gray-6 shadow-md rounded-full outline-none size-4 -top-[6.3px] data-disabled:bg-gray-9 after:content-[''] after:absolute after:inset-0 after:-m-3 after:cursor-pointer",
 						)}
 					/>
 				</Tooltip>
@@ -172,13 +172,13 @@ export const Dialog = {
 			<KDialog {...props}>
 				<KDialog.Portal>
 					{!props.hideOverlay && (
-						<KDialog.Overlay class="fixed inset-0 z-50 bg-black/80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
+						<KDialog.Overlay class="fixed inset-0 z-50 bg-black/80 data-expanded:animate-in data-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
 					)}
 					<div class="flex fixed inset-0 z-50 justify-center items-center">
 						<KDialog.Content
 							class={cx(
 								props.contentClass,
-								"z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-88 ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+								"z-50 text-sm rounded-[1.25rem] overflow-hidden border border-gray-3 bg-gray-1 min-w-88 data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
 								(props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl",
 							)}
 						>
@@ -224,9 +224,7 @@ export const Dialog = {
 		);
 	},
 	Header(props: ComponentProps<"div">) {
-		return (
-			<div {...props} class="h-14 px-4 flex flex-row items-center" />
-		);
+		return <div {...props} class="h-14 px-4 flex flex-row items-center" />;
 	},
 	Content(props: ComponentProps<"div">) {
 		return (
@@ -274,7 +272,7 @@ export function MenuItem<T extends ValidComponent = "button">(
 			class={cx(
 				props.class,
 				"flex flex-row shrink-0 items-center gap-1.5 px-[0.675rem] py-1.5 rounded-lg outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
-				"text-[0.875rem] text-gray-10 disabled:text-gray-10 ui-highlighted:bg-gray-3 ui-highlighted:text-gray-12",
+				"text-[0.875rem] text-gray-10 disabled:text-gray-10 data-highlighted:bg-gray-3 data-highlighted:text-gray-12",
 			)}
 		/>
 	);
@@ -302,10 +300,7 @@ export function MenuItemList<T extends ValidComponent = "div">(
 	return (
 		<Polymorphic
 			{...props}
-			class={cx(
-				props.class,
-				"space-y-1.5 p-1.5 overflow-y-auto outline-none",
-			)}
+			class={cx(props.class, "space-y-1.5 p-1.5 overflow-y-auto outline-none")}
 		/>
 	);
 }
@@ -320,9 +315,9 @@ const editorButtonStyles = cva(
 		variants: {
 			variant: {
 				primary:
-					"text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
+					"text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 data-expanded:bg-gray-3 outline-blue-300 focus:bg-transparent",
 				danger:
-					"text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-1 ui-pressed:text-gray-1 outline-red-300",
+					"text-gray-12 enabled:hover:ui-not-pressed:bg-gray-3 data-expanded:bg-red-300 data-pressed:bg-red-300 data-expanded:text-gray-1 data-pressed:text-gray-1 outline-red-300",
 			},
 		},
 		defaultVariants: { variant: "primary" },
@@ -423,16 +418,16 @@ export const dropdownContainerClasses =
 	"z-10 flex flex-col rounded-xl border border-gray-3 bg-gray-1 shadow-s overflow-y-hidden outline-none";
 
 export const topLeftAnimateClasses =
-	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
 
 export const topCenterAnimateClasses =
-	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-center";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-center";
 
 export const topRightAnimateClasses =
-	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
 
 export const topSlideAnimateClasses =
-	"ui-expanded:animate-in ui-expanded:fade-in ui-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
+	"data-expanded:animate-in data-expanded:fade-in data-expanded:slide-in-from-top-1 ui-closed:animate-out ui-closed:fade-out ui-closed:slide-out-to-top-1 origin-top-center";
 
 export function ComingSoonTooltip(
 	props: ComponentProps<typeof KTooltip> & any,
@@ -444,7 +439,7 @@ export function ComingSoonTooltip(
 				{trigger.children}
 			</KTooltip.Trigger>
 			<KTooltip.Portal>
-				<KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-1000">
+				<KTooltip.Content class="p-2 font-medium bg-gray-12 text-gray-1 data-expanded:animate-in data-expanded:slide-in-from-bottom-1 data-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-1000">
 					Coming Soon
 				</KTooltip.Content>
 			</KTooltip.Portal>
