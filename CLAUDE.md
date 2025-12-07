@@ -371,6 +371,66 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Strict TypeScript; avoid `any`; leverage shared types
 - Use Biome for linting/formatting; match existing formatting
 
+## Rust Clippy Rules (Workspace Lints)
+All Rust code must respect these workspace-level lints defined in `Cargo.toml`. Violating any of these will fail CI:
+
+**Rust compiler lints:**
+- `unused_must_use = "deny"` — Always handle `Result`/`Option` or types marked `#[must_use]`; never ignore them.
+
+**Clippy lints (all denied — code MUST NOT contain these patterns):**
+- `dbg_macro` — Never use `dbg!()` in code; use proper logging (`tracing::debug!`, etc.) instead.
+- `let_underscore_future` — Never write `let _ = async_fn()` which silently drops futures; await or explicitly handle them.
+- `unchecked_duration_subtraction` — Use `duration.saturating_sub(other)` instead of `duration - other` to avoid panics on underflow.
+- `collapsible_if` — Merge nested `if` statements: write `if a && b { }` instead of `if a { if b { } }`.
+- `clone_on_copy` — Don't call `.clone()` on `Copy` types (integers, bools, etc.); just copy them directly.
+- `redundant_closure` — Use function references directly: `iter.map(foo)` instead of `iter.map(|x| foo(x))`.
+- `ptr_arg` — Accept `&[T]` or `&str` instead of `&Vec<T>` or `&String` in function parameters for flexibility.
+- `len_zero` — Use `.is_empty()` instead of `.len() == 0` or `.len() > 0` / `.len() != 0`.
+- `let_unit_value` — Don't assign `()` to a variable: write `foo();` instead of `let _ = foo();` or `let x = foo();` when return is unit.
+- `unnecessary_lazy_evaluations` — Use `.unwrap_or(val)` instead of `.unwrap_or_else(|| val)` when the default is a simple/cheap value.
+- `needless_range_loop` — Use `for item in &collection` or `for (i, item) in collection.iter().enumerate()` instead of `for i in 0..collection.len()`.
+- `manual_clamp` — Use `value.clamp(min, max)` instead of manual `if` chains or `.min(max).max(min)` patterns.
+
+**Examples of violations to avoid:**
+
+```rust
+dbg!(value);
+let _ = some_async_function();
+let duration = duration_a - duration_b;
+if condition {
+    if other_condition {
+        do_something();
+    }
+}
+let x = 5.clone();
+vec.iter().map(|x| process(x))
+fn example(v: &Vec<i32>) { }
+if vec.len() == 0 { }
+let _ = returns_unit();
+option.unwrap_or_else(|| 42)
+for i in 0..vec.len() { println!("{}", vec[i]); }
+value.min(max).max(min)
+```
+
+**Correct alternatives:**
+
+```rust
+tracing::debug!(?value);
+some_async_function().await;
+let duration = duration_a.saturating_sub(duration_b);
+if condition && other_condition {
+    do_something();
+}
+let x = 5;
+vec.iter().map(process)
+fn example(v: &[i32]) { }
+if vec.is_empty() { }
+returns_unit();
+option.unwrap_or(42)
+for item in &vec { println!("{}", item); }
+value.clamp(min, max)
+```
+
 ## Security & Privacy Considerations
 
 ### Data Handling
