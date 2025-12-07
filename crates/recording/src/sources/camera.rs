@@ -69,7 +69,7 @@ impl VideoSource for Camera {
                                 match video_tx.try_send(frame) {
                                     Ok(()) => {
                                         sent_count += 1;
-                                        if sent_count % 30 == 0 {
+                                        if sent_count.is_multiple_of(30) {
                                             tracing::debug!(
                                                 "Camera source: sent {} frames, dropped {} in {:?}",
                                                 sent_count,
@@ -81,7 +81,7 @@ impl VideoSource for Camera {
                                     Err(e) => {
                                         if e.is_full() {
                                             dropped_count += 1;
-                                            if dropped_count % 30 == 0 {
+                                            if dropped_count.is_multiple_of(30) {
                                                 tracing::warn!(
                                                     "Camera source: encoder can't keep up, dropped {} frames so far",
                                                     dropped_count

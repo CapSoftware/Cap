@@ -267,7 +267,7 @@ impl VideoMuxer for AsyncCameraMp4Muxer {
                 }
             }
 
-            if self.frames_submitted % 60 == 0 {
+            if self.frames_submitted.is_multiple_of(60) {
                 trace!(
                     "Camera encoder progress: submitted={}, encoded={}, backlog={}",
                     self.frames_submitted, self.frames_encoded, backlog
