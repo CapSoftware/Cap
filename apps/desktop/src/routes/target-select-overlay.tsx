@@ -756,7 +756,7 @@ function Inner() {
 					});
 
 					return (
-						<div class="fixed w-screen h-screen bg-black/60">
+						<div class="fixed w-screen h-screen">
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
