@@ -444,6 +444,9 @@ impl ShowCapWindow {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
                 };
+                if let Some(camera) = CapWindowId::Camera.get(app) {
+                    let _ = camera.close();
+                };
 
                 self.window_builder(app, "/editor")
                     .maximizable(true)
@@ -454,6 +457,9 @@ impl ShowCapWindow {
             Self::ScreenshotEditor { path: _ } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
+                };
+                if let Some(camera) = CapWindowId::Camera.get(app) {
+                    let _ = camera.close();
                 };
 
                 self.window_builder(app, "/screenshot-editor")
