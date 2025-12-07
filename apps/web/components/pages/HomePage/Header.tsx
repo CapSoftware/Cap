@@ -2,7 +2,7 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faAngleRight, faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
@@ -66,7 +66,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 		);
 	};
 
-	const proArtRef = useRef<ProArtRef>(null);
+	const _proArtRef = useRef<ProArtRef>(null);
 
 	const headerContent = getHeaderContent();
 

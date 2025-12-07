@@ -15,11 +15,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { runPromise } from "@/lib/server";
-import {
-	isAtLeastSemver,
-	isFromDesktopSemver,
-	UPLOAD_PROGRESS_VERSION,
-} from "@/utils/desktop";
+import { isFromDesktopSemver, UPLOAD_PROGRESS_VERSION } from "@/utils/desktop";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
@@ -84,7 +80,7 @@ app.post(
 						),
 					});
 
-					const pathToInvalidate = "/" + fileKey;
+					const pathToInvalidate = `/${fileKey}`;
 
 					try {
 						const invalidation = await cloudfront.send(

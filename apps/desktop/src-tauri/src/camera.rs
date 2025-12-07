@@ -43,9 +43,9 @@ pub enum CameraPreviewShape {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 pub struct CameraPreviewState {
-    size: f32,
-    shape: CameraPreviewShape,
-    mirrored: bool,
+    pub size: f32,
+    pub shape: CameraPreviewShape,
+    pub mirrored: bool,
 }
 
 impl Default for CameraPreviewState {
@@ -123,6 +123,11 @@ impl CameraPreviewManager {
     ) -> anyhow::Result<()> {
         let (camera_tx, camera_rx) = flume::bounded(4);
 
+        actor
+            .ask(feeds::camera::AddSender(camera_tx))
+            .await
+            .context("Error attaching camera feed consumer")?;
+
         let default_state = self
             .get_state()
             .map_err(|err| error!("Error getting camera preview state: {err}"))
@@ -143,11 +148,6 @@ impl CameraPreviewManager {
         });
 
         self.preview = Some(InitializedCameraPreview { reconfigure });
-
-        actor
-            .ask(feeds::camera::AddSender(camera_tx))
-            .await
-            .context("Error attaching camera feed consumer")?;
 
         Ok(())
     }

@@ -7,3 +7,4 @@ pub mod screen_capture;
 pub use camera::*;
 pub use microphone::*;
 pub use native_camera::*;
+pub use screen_capture::*;

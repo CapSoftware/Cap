@@ -1,5 +1,5 @@
-import { promises as fs } from "fs";
-import path from "path";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { getBlogPosts, getDocs } from "@/utils/blog";
 import { seoPages } from "../lib/seo-pages";
 
@@ -32,7 +32,7 @@ async function getPagePaths(
 					(segment) => !(segment.startsWith("(") && segment.endsWith(")")),
 				);
 			const routePath =
-				pathSegments.length > 0 ? "/" + pathSegments.join("/") : "/";
+				pathSegments.length > 0 ? `/${pathSegments.join("/")}` : "/";
 
 			if (!routePath.includes("/dashboard") && !routePath.includes("[")) {
 				const stats = await fs.stat(fullPath);

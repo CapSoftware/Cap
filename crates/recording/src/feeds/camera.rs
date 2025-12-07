@@ -506,7 +506,7 @@ async fn setup_camera(
                 }))
                 .try_send();
 
-            if callback_num % 30 == 0 {
+            if callback_num.is_multiple_of(30) {
                 tracing::debug!(
                     "Camera callback: sent frame {} to actor, result={:?}",
                     callback_num,
@@ -514,7 +514,7 @@ async fn setup_camera(
                 );
             }
 
-            if send_result.is_err() && callback_num % 30 == 0 {
+            if send_result.is_err() && callback_num.is_multiple_of(30) {
                 tracing::warn!(
                     "Camera callback: failed to send frame {} to actor (mailbox full?)",
                     callback_num
@@ -559,21 +559,25 @@ async fn setup_camera(
 
             if let Ok(bytes) = frame.native().bytes() {
                 use cap_mediafoundation_utils::IMFMediaBufferExt;
-                use windows::Win32::Media::MediaFoundation::{
-                    IMFMediaBuffer, MFCreateMemoryBuffer,
-                };
-                use windows::core::Interface;
+                use windows::Win32::Media::MediaFoundation::MFCreateMemoryBuffer;
 
                 let data_len = bytes.len();
-                if let Ok(buffer) = (unsafe { MFCreateMemoryBuffer(data_len as u32) }) {
-                    if let Ok(mut lock) = buffer.lock_mut() {
-                        lock.copy_from_slice(&*bytes);
-                        drop(lock);
+                if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
+                    let buffer_ready = {
+                        if let Ok(mut lock) = buffer.lock() {
+                            lock.copy_from_slice(&*bytes);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if buffer_ready {
                         let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
 
                         let _ = native_recipient
                             .tell(NewNativeFrame(NativeCameraFrame {
-                                buffer,
+                                buffer: std::sync::Arc::new(std::sync::Mutex::new(buffer)),
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
@@ -608,7 +612,7 @@ async fn setup_camera(
                 }))
                 .try_send();
 
-            if callback_num % 30 == 0 {
+            if callback_num.is_multiple_of(30) {
                 tracing::debug!(
                     "Camera callback: sent frame {} to actor, result={:?}",
                     callback_num,
@@ -616,7 +620,7 @@ async fn setup_camera(
                 );
             }
 
-            if send_result.is_err() && callback_num % 30 == 0 {
+            if send_result.is_err() && callback_num.is_multiple_of(30) {
                 tracing::warn!(
                     "Camera callback: failed to send frame {} to actor (mailbox full?)",
                     callback_num
@@ -785,7 +789,7 @@ impl Message<NewFrame> for CameraFeed {
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if frame_num % 30 == 0 {
+        if frame_num.is_multiple_of(30) {
             debug!(
                 "CameraFeed: received frame {}, broadcasting to {} senders",
                 frame_num,
@@ -799,7 +803,7 @@ impl Message<NewFrame> for CameraFeed {
             match sender.try_send(msg.0.clone()) {
                 Ok(()) => {}
                 Err(flume::TrySendError::Full(_)) => {
-                    if frame_num % 30 == 0 {
+                    if frame_num.is_multiple_of(30) {
                         warn!(
                             "Camera sender {} channel full at frame {}, dropping frame",
                             i, frame_num
@@ -839,7 +843,7 @@ impl Message<NewNativeFrame> for CameraFeed {
         let frame_num =
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if frame_num % 30 == 0 {
+        if frame_num.is_multiple_of(30) {
             debug!(
                 "CameraFeed: received native frame {}, broadcasting to {} native senders",
                 frame_num,
@@ -853,7 +857,7 @@ impl Message<NewNativeFrame> for CameraFeed {
             match sender.try_send(msg.0.clone()) {
                 Ok(()) => {}
                 Err(flume::TrySendError::Full(_)) => {
-                    if frame_num % 30 == 0 {
+                    if frame_num.is_multiple_of(30) {
                         warn!(
                             "Native camera sender {} channel full at frame {}, dropping frame",
                             i, frame_num

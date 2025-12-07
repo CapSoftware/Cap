@@ -179,7 +179,6 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 						onChange={(e) => setTitle(e.target.value)}
 						onBlur={() => handleTitleBlur(cap.name)}
 						onKeyDown={(e) => handleTitleKeyDown(e)}
-						autoFocus
 						className="text-md resize-none bg-transparent truncate w-full border-0 outline-0 text-gray-12 font-medium p-0 m-0 h-[1.25rem] overflow-hidden leading-[1.25rem] tracking-normal font-[inherit]"
 					/>
 				) : (
@@ -209,7 +208,6 @@ export const CapCardContent: React.FC<CapContentProps> = ({
 							onChange={handleDateChange}
 							onBlur={handleDateBlur}
 							onKeyDown={handleDateKeyDown}
-							autoFocus
 							className="text-sm w-full truncate text-gray-10 bg-transparent focus:outline-none h-full leading-[1.5rem]"
 							placeholder="YYYY-MM-DD HH:mm:ss"
 						/>

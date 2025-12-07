@@ -3,10 +3,10 @@ use cap_fail::fail;
 use cap_project::CursorMoveEvent;
 use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
-    CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
-    RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
-    TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
-    cursor::CursorEvents,
+    CameraShape, CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
+    StudioRecordingStatus, TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode,
+    ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::feeds::camera::CameraFeedLock;
 #[cfg(target_os = "macos")]
@@ -45,6 +45,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::*;
 
+use crate::camera::{CameraPreviewManager, CameraPreviewShape};
 use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
@@ -1776,6 +1777,24 @@ fn project_config_from_recording(
         .unwrap_or_default();
 
     let mut config = default_config.unwrap_or_default();
+
+    let camera_preview_manager = CameraPreviewManager::new(app);
+    if let Ok(camera_preview_state) = camera_preview_manager.get_state() {
+        match camera_preview_state.shape {
+            CameraPreviewShape::Round => {
+                config.camera.shape = CameraShape::Square;
+                config.camera.rounding = 100.0;
+            }
+            CameraPreviewShape::Square => {
+                config.camera.shape = CameraShape::Square;
+                config.camera.rounding = 25.0;
+            }
+            CameraPreviewShape::Full => {
+                config.camera.shape = CameraShape::Source;
+                config.camera.rounding = 25.0;
+            }
+        }
+    }
 
     let timeline_segments = recordings
         .segments

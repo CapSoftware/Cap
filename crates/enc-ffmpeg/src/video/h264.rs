@@ -133,6 +133,7 @@ impl H264EncoderBuilder {
         Err(last_error.unwrap_or(H264EncoderError::CodecNotFound))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_with_codec(
         codec: Codec,
         encoder_options: Dictionary<'static>,
@@ -165,7 +166,9 @@ impl H264EncoderBuilder {
             format
         };
 
-        if is_420(output_format) && (output_width % 2 != 0 || output_height % 2 != 0) {
+        if is_420(output_format)
+            && (!output_width.is_multiple_of(2) || !output_height.is_multiple_of(2))
+        {
             return Err(H264EncoderError::InvalidOutputDimensions {
                 width: output_width,
                 height: output_height,
@@ -384,7 +387,12 @@ fn get_codec_and_options(
     preset: H264Preset,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = 2;
-    let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
+    let denominator = config.frame_rate.denominator();
+    let frames_per_sec = config.frame_rate.numerator() as f64
+        / if denominator == 0 { 1 } else { denominator } as f64;
+    let keyframe_interval = (keyframe_interval_secs as f64 * frames_per_sec)
+        .round()
+        .max(1.0) as i32;
     let keyframe_interval_str = keyframe_interval.to_string();
 
     let encoder_priority: &[&str] = if cfg!(target_os = "macos") {

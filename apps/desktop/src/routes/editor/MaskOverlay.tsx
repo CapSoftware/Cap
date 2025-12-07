@@ -48,6 +48,29 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		);
 	};
 
+	const currentMaskState = maskState();
+	const selected = selectedMask();
+
+	return (
+		<Show when={selected && currentMaskState}>
+			<MaskOverlayContent
+				size={props.size}
+				maskState={currentMaskState as ReturnType<typeof evaluateMask>}
+				updateSegment={updateSegment}
+				projectHistory={projectHistory}
+			/>
+		</Show>
+	);
+}
+
+function MaskOverlayContent(props: {
+	size: { width: number; height: number };
+	maskState: ReturnType<typeof evaluateMask>;
+	updateSegment: (fn: (segment: MaskSegment) => void) => void;
+	projectHistory: ReturnType<typeof useEditorContext>["projectHistory"];
+}) {
+	const { projectHistory, updateSegment } = props;
+
 	function createMouseDownDrag<T>(
 		setup: () => T,
 		update: (
@@ -85,116 +108,106 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		};
 	}
 
+	const state = () => props.maskState;
+	const rect = () => {
+		const width = state().size.x * props.size.width;
+		const height = state().size.y * props.size.height;
+		const left = state().position.x * props.size.width - width / 2;
+		const top = state().position.y * props.size.height - height / 2;
+		return { width, height, left, top };
+	};
+
+	const onMove = createMouseDownDrag(
+		() => ({
+			startPos: { ...state().position },
+		}),
+		(e, { startPos }, initialMouse) => {
+			const dx = (e.clientX - initialMouse.x) / props.size.width;
+			const dy = (e.clientY - initialMouse.y) / props.size.height;
+
+			updateSegment((s) => {
+				s.center.x = Math.max(0, Math.min(1, startPos.x + dx));
+				s.center.y = Math.max(0, Math.min(1, startPos.y + dy));
+			});
+		},
+	);
+
+	const createResizeHandler = (dirX: -1 | 0 | 1, dirY: -1 | 0 | 1) => {
+		return createMouseDownDrag(
+			() => ({
+				startPos: { ...state().position },
+				startSize: { ...state().size },
+			}),
+			(e, { startPos, startSize }, initialMouse) => {
+				const dx = (e.clientX - initialMouse.x) / props.size.width;
+				const dy = (e.clientY - initialMouse.y) / props.size.height;
+
+				updateSegment((s) => {
+					if (dirX !== 0) {
+						const newWidth = Math.max(0.01, startSize.x + dx * dirX);
+						s.size.x = newWidth;
+						s.center.x = startPos.x + dx / 2;
+					}
+
+					if (dirY !== 0) {
+						const newHeight = Math.max(0.01, startSize.y + dy * dirY);
+						s.size.y = newHeight;
+						s.center.y = startPos.y + dy / 2;
+					}
+				});
+			},
+		);
+	};
+
 	return (
-		<Show when={selectedMask() && maskState()}>
-			{() => {
-				const state = () => maskState()!;
-				const rect = () => {
-					const width = state().size.x * props.size.width;
-					const height = state().size.y * props.size.height;
-					const left = state().position.x * props.size.width - width / 2;
-					const top = state().position.y * props.size.height - height / 2;
-					return { width, height, left, top };
-				};
+		<div class="absolute inset-0 pointer-events-none">
+			<div
+				class="absolute pointer-events-auto group"
+				style={{
+					left: `${rect().left}px`,
+					top: `${rect().top}px`,
+					width: `${rect().width}px`,
+					height: `${rect().height}px`,
+				}}
+				onMouseDown={onMove}
+			>
+				<div class="absolute inset-0 rounded-md border-2 border-blue-9 bg-blue-9/10 cursor-move" />
 
-				const onMove = createMouseDownDrag(
-					() => ({
-						startPos: { ...state().position },
-					}),
-					(e, { startPos }, initialMouse) => {
-						const dx = (e.clientX - initialMouse.x) / props.size.width;
-						const dy = (e.clientY - initialMouse.y) / props.size.height;
+				<ResizeHandle
+					class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"
+					onMouseDown={createResizeHandler(-1, -1)}
+				/>
+				<ResizeHandle
+					class="top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-ne-resize"
+					onMouseDown={createResizeHandler(1, -1)}
+				/>
+				<ResizeHandle
+					class="bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-sw-resize"
+					onMouseDown={createResizeHandler(-1, 1)}
+				/>
+				<ResizeHandle
+					class="bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-se-resize"
+					onMouseDown={createResizeHandler(1, 1)}
+				/>
 
-						updateSegment((s) => {
-							s.center.x = Math.max(0, Math.min(1, startPos.x + dx));
-							s.center.y = Math.max(0, Math.min(1, startPos.y + dy));
-						});
-					},
-				);
-
-				const createResizeHandler = (dirX: -1 | 0 | 1, dirY: -1 | 0 | 1) => {
-					return createMouseDownDrag(
-						() => ({
-							startPos: { ...state().position },
-							startSize: { ...state().size },
-						}),
-						(e, { startPos, startSize }, initialMouse) => {
-							const dx = (e.clientX - initialMouse.x) / props.size.width;
-							const dy = (e.clientY - initialMouse.y) / props.size.height;
-
-							updateSegment((s) => {
-								if (dirX !== 0) {
-									const newWidth = Math.max(0.01, startSize.x + dx * dirX);
-									s.size.x = newWidth;
-									s.center.x = startPos.x + dx / 2;
-								}
-
-								if (dirY !== 0) {
-									const newHeight = Math.max(0.01, startSize.y + dy * dirY);
-									s.size.y = newHeight;
-									s.center.y = startPos.y + dy / 2;
-								}
-							});
-						},
-					);
-				};
-
-				return (
-					<div class="absolute inset-0 pointer-events-none">
-						<div
-							class="absolute pointer-events-auto group"
-							style={{
-								left: `${rect().left}px`,
-								top: `${rect().top}px`,
-								width: `${rect().width}px`,
-								height: `${rect().height}px`,
-							}}
-							onMouseDown={onMove}
-						>
-							{/* Border/Highlight */}
-							<div class="absolute inset-0 rounded-md border-2 border-blue-9 bg-blue-9/10 cursor-move" />
-
-							{/* Handles */}
-							{/* Corners */}
-							<ResizeHandle
-								class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"
-								onMouseDown={createResizeHandler(-1, -1)}
-							/>
-							<ResizeHandle
-								class="top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-ne-resize"
-								onMouseDown={createResizeHandler(1, -1)}
-							/>
-							<ResizeHandle
-								class="bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-sw-resize"
-								onMouseDown={createResizeHandler(-1, 1)}
-							/>
-							<ResizeHandle
-								class="bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-se-resize"
-								onMouseDown={createResizeHandler(1, 1)}
-							/>
-
-							{/* Sides */}
-							<ResizeHandle
-								class="top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 cursor-n-resize"
-								onMouseDown={createResizeHandler(0, -1)}
-							/>
-							<ResizeHandle
-								class="bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-s-resize"
-								onMouseDown={createResizeHandler(0, 1)}
-							/>
-							<ResizeHandle
-								class="left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-w-resize"
-								onMouseDown={createResizeHandler(-1, 0)}
-							/>
-							<ResizeHandle
-								class="right-0 top-1/2 translate-x-1/2 -translate-y-1/2 cursor-e-resize"
-								onMouseDown={createResizeHandler(1, 0)}
-							/>
-						</div>
-					</div>
-				);
-			}}
-		</Show>
+				<ResizeHandle
+					class="top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 cursor-n-resize"
+					onMouseDown={createResizeHandler(0, -1)}
+				/>
+				<ResizeHandle
+					class="bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-s-resize"
+					onMouseDown={createResizeHandler(0, 1)}
+				/>
+				<ResizeHandle
+					class="left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-w-resize"
+					onMouseDown={createResizeHandler(-1, 0)}
+				/>
+				<ResizeHandle
+					class="right-0 top-1/2 translate-x-1/2 -translate-y-1/2 cursor-e-resize"
+					onMouseDown={createResizeHandler(1, 0)}
+				/>
+			</div>
+		</div>
 	);
 }
 

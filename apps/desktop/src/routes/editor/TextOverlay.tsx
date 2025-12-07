@@ -115,7 +115,7 @@ export function TextOverlay(props: TextOverlayProps) {
 							const normalizedWidth = naturalWidth / deps.containerWidth;
 							const normalizedHeight = naturalHeight / deps.containerHeight;
 
-							const newFontSize = deps.fontSize;
+							const _newFontSize = deps.fontSize;
 							const newSizeX = normalizedWidth;
 							const newSizeY = normalizedHeight;
 
@@ -223,10 +223,10 @@ export function TextOverlay(props: TextOverlayProps) {
 									);
 								} else if (isCorner) {
 									// Scale uniformly
-									const currentWidthPx = startSize.x * props.size.width;
+									const _currentWidthPx = startSize.x * props.size.width;
 									const currentHeightPx = startSize.y * props.size.height;
 
-									const deltaPxX = dx * props.size.width * dirX;
+									const _deltaPxX = dx * props.size.width * dirX;
 									const deltaPxY = dy * props.size.height * dirY;
 
 									const scaleY = (currentHeightPx + deltaPxY) / currentHeightPx;

@@ -5,8 +5,6 @@ import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,
 	Headers,
-	HttpApiBuilder,
-	HttpMiddleware,
 	HttpRouter,
 	HttpServer,
 } from "@effect/platform";

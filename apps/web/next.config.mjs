@@ -2,8 +2,8 @@
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 const packageJson = JSON.parse(
 	fs.readFileSync(path.resolve("./package.json"), "utf8"),

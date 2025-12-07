@@ -77,7 +77,7 @@ impl TextLayer {
                     }
                     "serif" | "system serif" => Family::Serif,
                     "mono" | "monospace" | "system mono" | "system monospace" => Family::Monospace,
-                    _ => Family::Name(name.into()),
+                    _ => Family::Name(name),
                 },
             };
             let weight = Weight(text.font_weight.round().clamp(100.0, 900.0) as u16);
@@ -118,7 +118,7 @@ impl TextLayer {
         let text_areas = self
             .buffers
             .iter()
-            .zip(text_area_data.into_iter())
+            .zip(text_area_data)
             .map(|(buffer, (bounds, left, top, color))| TextArea {
                 buffer,
                 left,

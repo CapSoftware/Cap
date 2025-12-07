@@ -11,7 +11,7 @@ if (key && host) {
 		posthog.init(key, {
 			api_host: host,
 			capture_pageview: false,
-			loaded: (posthogInstance) => {
+			loaded: (_posthogInstance) => {
 				isPostHogInitialized = true;
 			},
 		});

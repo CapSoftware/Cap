@@ -33,7 +33,8 @@ async fn run_export(project_path: PathBuf) -> Result<(PathBuf, Duration, u32), S
 
     let output_path = settings
         .export(exporter_base, move |frame| {
-            frame_counter.store(frame, Ordering::Relaxed)
+            frame_counter.store(frame, Ordering::Relaxed);
+            true
         })
         .await
         .map_err(|err| format!("Exporter error: {err}"))?;

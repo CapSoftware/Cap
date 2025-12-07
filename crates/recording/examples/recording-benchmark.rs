@@ -71,8 +71,8 @@ async fn run_recording_benchmark(
 
     println!("\n=== Recording Benchmark Results ===\n");
     println!("Recording duration: {:.2}s", config.duration_secs);
-    println!("Stop/finalize time: {:?}", stop_duration);
-    println!("Total time: {:?}", total_duration);
+    println!("Stop/finalize time: {stop_duration:?}");
+    println!("Total time: {total_duration:?}");
     println!("Output path: {}", result.project_path.display());
 
     let content_dir = result
@@ -85,8 +85,8 @@ async fn run_recording_benchmark(
         let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
         let bitrate_mbps = size_mb * 8.0 / config.duration_secs as f64;
         println!("\nScreen recording:");
-        println!("  Size: {:.2} MB", size_mb);
-        println!("  Bitrate: {:.2} Mbps", bitrate_mbps);
+        println!("  Size: {size_mb:.2} MB");
+        println!("  Bitrate: {bitrate_mbps:.2} Mbps");
     }
 
     if include_camera {
@@ -94,8 +94,8 @@ async fn run_recording_benchmark(
             let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
             let bitrate_mbps = size_mb * 8.0 / config.duration_secs as f64;
             println!("\nCamera recording:");
-            println!("  Size: {:.2} MB", size_mb);
-            println!("  Bitrate: {:.2} Mbps", bitrate_mbps);
+            println!("  Size: {size_mb:.2} MB");
+            println!("  Bitrate: {bitrate_mbps:.2} Mbps");
         }
     }
 
@@ -156,10 +156,7 @@ async fn stress_test_recording(
     cycle_duration_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== Recording Stress Test ===\n");
-    println!(
-        "Running {} cycles of {}s recordings\n",
-        cycles, cycle_duration_secs
-    );
+    println!("Running {cycles} cycles of {cycle_duration_secs}s recordings\n");
 
     let mut start_times = Vec::new();
     let mut stop_times = Vec::new();
@@ -199,18 +196,18 @@ async fn stress_test_recording(
     let min_start = start_times.iter().min().unwrap();
 
     println!("Start times:");
-    println!("  Average: {:?}", avg_start);
-    println!("  Min: {:?}", min_start);
-    println!("  Max: {:?}", max_start);
+    println!("  Average: {avg_start:?}");
+    println!("  Min: {min_start:?}");
+    println!("  Max: {max_start:?}");
 
     let avg_stop: Duration = stop_times.iter().sum::<Duration>() / cycles;
     let max_stop = stop_times.iter().max().unwrap();
     let min_stop = stop_times.iter().min().unwrap();
 
     println!("\nStop times:");
-    println!("  Average: {:?}", avg_stop);
-    println!("  Min: {:?}", min_stop);
-    println!("  Max: {:?}", max_stop);
+    println!("  Average: {avg_stop:?}");
+    println!("  Min: {min_stop:?}");
+    println!("  Max: {max_stop:?}");
 
     Ok(())
 }

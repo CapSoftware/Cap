@@ -115,7 +115,6 @@ export const MemberSelect = forwardRef<HTMLDivElement, MemberSelectProps>(
 					className,
 					disabled && "pointer-events-none",
 				)}
-				tabIndex={0}
 				aria-disabled={disabled}
 				{...props}
 			>

@@ -263,53 +263,53 @@ impl MetricsSnapshot {
 
         println!("\n--- Conversion Timing ---");
         if let Some(avg) = self.avg_conversion_time() {
-            println!("  Average:  {:?}", avg);
+            println!("  Average:  {avg:?}");
         }
         if let Some(p50) = self.percentile_conversion_time(50.0) {
-            println!("  P50:      {:?}", p50);
+            println!("  P50:      {p50:?}");
         }
         if let Some(p95) = self.percentile_conversion_time(95.0) {
-            println!("  P95:      {:?}", p95);
+            println!("  P95:      {p95:?}");
         }
         if let Some(p99) = self.percentile_conversion_time(99.0) {
-            println!("  P99:      {:?}", p99);
+            println!("  P99:      {p99:?}");
         }
         if let Some(max) = self.max_conversion_time() {
-            println!("  Max:      {:?}", max);
+            println!("  Max:      {max:?}");
         }
 
         println!("\n--- Encoding Timing ---");
         if let Some(avg) = self.avg_encode_time() {
-            println!("  Average:  {:?}", avg);
+            println!("  Average:  {avg:?}");
         }
         if let Some(p50) = self.percentile_encode_time(50.0) {
-            println!("  P50:      {:?}", p50);
+            println!("  P50:      {p50:?}");
         }
         if let Some(p95) = self.percentile_encode_time(95.0) {
-            println!("  P95:      {:?}", p95);
+            println!("  P95:      {p95:?}");
         }
         if let Some(p99) = self.percentile_encode_time(99.0) {
-            println!("  P99:      {:?}", p99);
+            println!("  P99:      {p99:?}");
         }
         if let Some(max) = self.max_encode_time() {
-            println!("  Max:      {:?}", max);
+            println!("  Max:      {max:?}");
         }
 
         println!("\n--- Total Pipeline Latency ---");
         if let Some(avg) = self.avg_pipeline_latency() {
-            println!("  Average:  {:?}", avg);
+            println!("  Average:  {avg:?}");
         }
         if let Some(p50) = self.percentile_pipeline_latency(50.0) {
-            println!("  P50:      {:?}", p50);
+            println!("  P50:      {p50:?}");
         }
         if let Some(p95) = self.percentile_pipeline_latency(95.0) {
-            println!("  P95:      {:?}", p95);
+            println!("  P95:      {p95:?}");
         }
         if let Some(p99) = self.percentile_pipeline_latency(99.0) {
-            println!("  P99:      {:?}", p99);
+            println!("  P99:      {p99:?}");
         }
         if let Some(max) = self.max_pipeline_latency() {
-            println!("  Max:      {:?}", max);
+            println!("  Max:      {max:?}");
         }
 
         println!("\n--- Performance Assessment ---");
@@ -455,7 +455,7 @@ impl EncoderInfo {
     pub fn print_info(&self) {
         println!("Encoder: {} (Hardware: {})", self.name, self.is_hardware);
         if let Some(gpu) = &self.gpu_type {
-            println!("GPU: {}", gpu);
+            println!("GPU: {gpu}");
         }
     }
 }

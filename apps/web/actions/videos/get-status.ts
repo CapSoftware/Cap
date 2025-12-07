@@ -97,7 +97,7 @@ export async function getVideoStatus(
 
 	if (metadata.aiProcessing) {
 		const updatedAtTime = new Date(video.updatedAt).getTime();
-		const currentTime = new Date().getTime();
+		const currentTime = Date.now();
 
 		if (currentTime - updatedAtTime > MAX_AI_PROCESSING_TIME) {
 			console.log(

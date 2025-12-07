@@ -1,5 +1,6 @@
 use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
 use ffmpeg::{format::Pixel, frame};
+use parking_lot::Mutex;
 use std::{
     ffi::c_void,
     ptr,
@@ -17,6 +18,8 @@ const K_CV_RETURN_SUCCESS: i32 = 0;
 const K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8: u32 = 0x79757679;
 const K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE: u32 = 0x34323076;
 const K_CV_PIXEL_FORMAT_TYPE_2VUY: u32 = 0x32767579;
+const K_CV_PIXEL_FORMAT_TYPE_32_BGRA: u32 = 0x42475241;
+const K_CV_PIXEL_FORMAT_TYPE_32_ARGB: u32 = 0x00000020;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
@@ -56,6 +59,9 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
     fn CVPixelBufferGetHeightOfPlane(pixel_buffer: CVPixelBufferRef, plane: usize) -> usize;
     fn CVPixelBufferGetPlaneCount(pixel_buffer: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetBaseAddress(pixel_buffer: CVPixelBufferRef) -> *mut u8;
+    fn CVPixelBufferGetBytesPerRow(pixel_buffer: CVPixelBufferRef) -> usize;
+    fn CVPixelBufferGetHeight(pixel_buffer: CVPixelBufferRef) -> usize;
 }
 
 #[link(name = "VideoToolbox", kind = "framework")]
@@ -79,12 +85,18 @@ fn pixel_to_cv_format(pixel: Pixel) -> Option<u32> {
         Pixel::YUYV422 => Some(K_CV_PIXEL_FORMAT_TYPE_422_YP_CB_YP_CR8),
         Pixel::UYVY422 => Some(K_CV_PIXEL_FORMAT_TYPE_2VUY),
         Pixel::NV12 => Some(K_CV_PIXEL_FORMAT_TYPE_420_YP_CB_CR8_BI_PLANAR_VIDEO_RANGE),
+        Pixel::BGRA => Some(K_CV_PIXEL_FORMAT_TYPE_32_BGRA),
+        Pixel::ARGB => Some(K_CV_PIXEL_FORMAT_TYPE_32_ARGB),
         _ => None,
     }
 }
 
+struct SessionHandle(VTPixelTransferSessionRef);
+
+unsafe impl Send for SessionHandle {}
+
 pub struct VideoToolboxConverter {
-    session: VTPixelTransferSessionRef,
+    session: Mutex<SessionHandle>,
     input_format: Pixel,
     input_cv_format: u32,
     output_format: Pixel,
@@ -99,21 +111,20 @@ pub struct VideoToolboxConverter {
 
 impl VideoToolboxConverter {
     pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
-        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let input_cv_format = pixel_to_cv_format(config.input_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
-        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or_else(|| {
-            ConvertError::UnsupportedFormat(config.input_format, config.output_format)
-        })?;
+        let output_cv_format = pixel_to_cv_format(config.output_format).ok_or(
+            ConvertError::UnsupportedFormat(config.input_format, config.output_format),
+        )?;
 
         let mut session: VTPixelTransferSessionRef = ptr::null_mut();
         let status = unsafe { VTPixelTransferSessionCreate(ptr::null(), &mut session) };
 
         if status != 0 {
             return Err(ConvertError::HardwareUnavailable(format!(
-                "VTPixelTransferSessionCreate failed with status: {}",
-                status
+                "VTPixelTransferSessionCreate failed with status: {status}"
             )));
         }
 
@@ -134,7 +145,7 @@ impl VideoToolboxConverter {
         );
 
         Ok(Self {
-            session,
+            session: Mutex::new(SessionHandle(session)),
             input_format: config.input_format,
             input_cv_format,
             output_format: config.output_format,
@@ -174,8 +185,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreateWithBytes failed: {}",
-                status
+                "CVPixelBufferCreateWithBytes failed: {status}"
             )));
         }
 
@@ -198,8 +208,7 @@ impl VideoToolboxConverter {
 
         if status != K_CV_RETURN_SUCCESS {
             return Err(ConvertError::ConversionFailed(format!(
-                "CVPixelBufferCreate failed: {}",
-                status
+                "CVPixelBufferCreate failed: {status}"
             )));
         }
 
@@ -214,8 +223,7 @@ impl VideoToolboxConverter {
             let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, 0);
             if lock_status != K_CV_RETURN_SUCCESS {
                 return Err(ConvertError::ConversionFailed(format!(
-                    "CVPixelBufferLockBaseAddress failed: {}",
-                    lock_status
+                    "CVPixelBufferLockBaseAddress failed: {lock_status}"
                 )));
             }
         }
@@ -226,13 +234,13 @@ impl VideoToolboxConverter {
         unsafe {
             let plane_count = CVPixelBufferGetPlaneCount(pixel_buffer);
 
-            for plane in 0..plane_count {
-                let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
-                let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
-                let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
-                let dst_stride = output.stride(plane);
+            if plane_count == 0 {
+                let src_ptr = CVPixelBufferGetBaseAddress(pixel_buffer);
+                let src_stride = CVPixelBufferGetBytesPerRow(pixel_buffer);
+                let height = CVPixelBufferGetHeight(pixel_buffer);
+                let dst_stride = output.stride(0);
 
-                let dst_data = output.data_mut(plane);
+                let dst_data = output.data_mut(0);
                 let dst_ptr = dst_data.as_mut_ptr();
 
                 for row in 0..height {
@@ -240,6 +248,23 @@ impl VideoToolboxConverter {
                     let dst_row = dst_ptr.add(row * dst_stride);
                     let copy_len = src_stride.min(dst_stride);
                     ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                }
+            } else {
+                for plane in 0..plane_count {
+                    let src_ptr = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, plane);
+                    let src_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, plane);
+                    let height = CVPixelBufferGetHeightOfPlane(pixel_buffer, plane);
+                    let dst_stride = output.stride(plane);
+
+                    let dst_data = output.data_mut(plane);
+                    let dst_ptr = dst_data.as_mut_ptr();
+
+                    for row in 0..height {
+                        let src_row = src_ptr.add(row * src_stride);
+                        let dst_row = dst_ptr.add(row * dst_stride);
+                        let copy_len = src_stride.min(dst_stride);
+                        ptr::copy_nonoverlapping(src_row, dst_row, copy_len);
+                    }
                 }
             }
 
@@ -252,10 +277,11 @@ impl VideoToolboxConverter {
 
 impl Drop for VideoToolboxConverter {
     fn drop(&mut self) {
-        if !self.session.is_null() {
+        let session = self.session.get_mut().0;
+        if !session.is_null() {
             unsafe {
-                VTPixelTransferSessionInvalidate(self.session);
-                CFRelease(self.session as *const c_void);
+                VTPixelTransferSessionInvalidate(session);
+                CFRelease(session as *const c_void);
             }
         }
     }
@@ -276,8 +302,11 @@ impl FrameConverter for VideoToolboxConverter {
         let input_buffer = self.create_input_pixel_buffer(&input)?;
         let output_buffer = self.create_output_pixel_buffer()?;
 
-        let status = unsafe {
-            VTPixelTransferSessionTransferImage(self.session, input_buffer, output_buffer)
+        let status = {
+            let session_guard = self.session.lock();
+            unsafe {
+                VTPixelTransferSessionTransferImage(session_guard.0, input_buffer, output_buffer)
+            }
         };
 
         unsafe {
@@ -289,8 +318,7 @@ impl FrameConverter for VideoToolboxConverter {
                 CVPixelBufferRelease(output_buffer);
             }
             return Err(ConvertError::ConversionFailed(format!(
-                "VTPixelTransferSessionTransferImage failed: {}",
-                status
+                "VTPixelTransferSessionTransferImage failed: {status}"
             )));
         }
 
@@ -326,6 +354,3 @@ impl FrameConverter for VideoToolboxConverter {
         Some(self.verified_hardware.load(Ordering::Relaxed))
     }
 }
-
-unsafe impl Send for VideoToolboxConverter {}
-unsafe impl Sync for VideoToolboxConverter {}

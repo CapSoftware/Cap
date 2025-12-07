@@ -4,7 +4,6 @@ import {
 	CurrentUser,
 	type DatabaseError,
 	HttpAuthMiddleware,
-	type ImageUpload,
 } from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";

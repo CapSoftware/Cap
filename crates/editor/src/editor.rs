@@ -81,6 +81,7 @@ impl Renderer {
             uniforms: ProjectUniforms,
             finished: oneshot::Sender<()>,
             cursor: Arc<CursorEvents>,
+            #[allow(dead_code)]
             frame_number: u32,
         }
 

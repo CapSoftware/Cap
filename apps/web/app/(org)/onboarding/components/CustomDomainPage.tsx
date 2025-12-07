@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { Effect } from "effect";
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import { toast } from "sonner";

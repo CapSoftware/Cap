@@ -16,7 +16,7 @@ export function AuthorByline({ authors }: AuthorBylineProps) {
 	return (
 		<div className="mt-16 pt-8 border-t border-gray-200">
 			<div className="flex flex-wrap gap-1 sm:gap-6">
-				{authorList.map((author, index) => (
+				{authorList.map((author, _index) => (
 					<div key={author.name} className="flex items-center space-x-3">
 						<Image
 							src={author.image}

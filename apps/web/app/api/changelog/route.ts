@@ -12,7 +12,7 @@ export async function GET(request: Request) {
 		.map((post) => ({
 			metadata: post.metadata,
 			content: post.content,
-			slug: parseInt(post.slug),
+			slug: parseInt(post.slug, 10),
 		}))
 		.sort((a, b) => b.slug - a.slug)
 		.map(({ metadata, content }) => ({ ...metadata, content }));

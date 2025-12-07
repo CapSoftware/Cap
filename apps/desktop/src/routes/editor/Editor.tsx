@@ -190,7 +190,6 @@ function Inner() {
 		await commands.updateProjectConfigInMemory(config);
 		renderFrame(time);
 	}, 1000 / FPS);
-
 	createEffect(
 		on(
 			() => trackDeep(project),

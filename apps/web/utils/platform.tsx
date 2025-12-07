@@ -50,11 +50,11 @@ export const getPlatformIcon = (platform: string | null): React.ReactNode => {
 
 export const getVersionText = (platform: string | null): React.ReactNode => {
 	if (platform === "macos") {
-		return <>macOS 13.1+ recommended</>;
+		return "macOS 13.1+ recommended";
 	} else if (platform === "windows") {
-		return <>Windows 10+ recommended</>;
+		return "Windows 10+ recommended";
 	} else {
-		return <>macOS 13.1+ recommended</>;
+		return "macOS 13.1+ recommended";
 	}
 };
 
