@@ -193,6 +193,14 @@ impl ScreenCaptureTarget {
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
         }
     }
+
+    pub fn kind_str(&self) -> &str {
+        match self {
+            ScreenCaptureTarget::Display { .. } => "Display",
+            ScreenCaptureTarget::Window { .. } => "Window",
+            ScreenCaptureTarget::Area { .. } => "Area",
+        }
+    }
 }
 
 pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {

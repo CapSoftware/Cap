@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["apps/cli", "apps/desktop/src-tauri", "crates/*", "crates/workspace-hack"]
+members = [
+    "apps/cli",
+    "apps/desktop/src-tauri",
+    "crates/*",
+    "crates/workspace-hack",
+]
 
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
@@ -22,6 +27,7 @@ specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
     "uuid",
+    "chrono"
 ] }
 serde = { version = "1", features = ["derive"] }
 
@@ -40,6 +46,7 @@ sentry = { version = "0.42.0", features = [
 ] }
 tracing = "0.1.41"
 futures = "0.3.31"
+aho-corasick = "1.1.4"
 
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
     "macos_12_7",
