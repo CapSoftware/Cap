@@ -8,7 +8,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
-    FutureExt, SinkExt, StreamExt,
+    FutureExt, StreamExt,
     channel::{mpsc, oneshot},
 };
 use scap_ffmpeg::*;
@@ -201,7 +201,7 @@ impl output_pipeline::VideoSource for VideoSource {
 	                }
                 },
                 {
-                    let error_tx = error_tx.clone();
+                    let mut error_tx = error_tx.clone();
                     move || {
                         drop(error_tx.try_send(anyhow!("closed")));
 

@@ -640,7 +640,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
     }
 
     #[cfg(target_os = "windows")]
-    let mut cropped_in_capture = false;
+    let cropped_in_capture;
 
     let (tx, rx) = oneshot::channel::<anyhow::Result<RgbImage>>();
     let tx = Arc::new(Mutex::new(Some(tx)));

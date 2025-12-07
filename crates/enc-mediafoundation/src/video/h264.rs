@@ -101,6 +101,7 @@ pub enum HandleNeedsInputError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
+    #[allow(clippy::too_many_arguments)]
     fn new_with_scaled_output_with_flags(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
@@ -210,7 +211,10 @@ impl H264Encoder {
         unsafe {
             let temp = media_device_manager.clone();
             transform
-                .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, std::mem::transmute(temp))
+                .ProcessMessage(
+                    MFT_MESSAGE_SET_D3D_MANAGER,
+                    std::mem::transmute::<_, usize>(temp),
+                )
                 .map_err(NewVideoEncoderError::EncoderTransform)?;
         };
 
