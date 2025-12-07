@@ -59,10 +59,12 @@ function Page() {
 	const currentRecording = createCurrentRecordingQuery();
 	const generalSettings = generalSettingsStore.createQuery();
 
-	// We do this on focus so the window doesn't get revealed when toggling the setting
 	const navigate = useNavigate();
 	createEventListener(window, "focus", () => {
-		if (generalSettings.data?.enableNewRecordingFlow === true)
+		if (
+			window.location.pathname === "/" &&
+			generalSettings.data?.enableNewRecordingFlow === true
+		)
 			navigate("/new-main");
 	});
 

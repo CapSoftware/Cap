@@ -343,7 +343,11 @@ export default function () {
 
 	const navigate = useNavigate();
 	createEventListener(window, "focus", () => {
-		if (generalSettings.data?.enableNewRecordingFlow === false) navigate("/");
+		if (
+			window.location.pathname === "/new-main" &&
+			generalSettings.data?.enableNewRecordingFlow === false
+		)
+			navigate("/");
 	});
 
 	return (
