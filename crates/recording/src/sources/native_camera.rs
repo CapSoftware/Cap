@@ -68,7 +68,7 @@ impl VideoSource for NativeCamera {
                                 match video_tx.try_send(frame) {
                                     Ok(()) => {
                                         sent_count += 1;
-                                        if sent_count % 30 == 0 {
+                                        if sent_count.is_multiple_of(30) {
                                             tracing::debug!(
                                                 "Native camera source: sent {} frames, dropped {} in {:?}",
                                                 sent_count,
@@ -80,7 +80,7 @@ impl VideoSource for NativeCamera {
                                     Err(e) => {
                                         if e.is_full() {
                                             dropped_count += 1;
-                                            if dropped_count % 30 == 0 {
+                                            if dropped_count.is_multiple_of(30) {
                                                 tracing::warn!(
                                                     "Native camera source: encoder can't keep up, dropped {} frames so far",
                                                     dropped_count

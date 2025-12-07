@@ -22,7 +22,7 @@ unsafe fn MFSetAttribute2UINT32asUINT64(
     unsafe { attributes.SetUINT64(key, pack_2_u32_as_u64(high, low)) }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::missing_safety_doc)]
 pub unsafe fn MFSetAttributeSize(
     attributes: &IMFAttributes,
     key: &GUID,
@@ -32,7 +32,7 @@ pub unsafe fn MFSetAttributeSize(
     unsafe { MFSetAttribute2UINT32asUINT64(attributes, key, width, height) }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::missing_safety_doc)]
 pub unsafe fn MFSetAttributeRatio(
     attributes: &IMFAttributes,
     key: &GUID,
