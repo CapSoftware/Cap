@@ -500,6 +500,10 @@ impl CursorConfiguration {
     fn default_hide_when_idle_delay() -> f32 {
         2.0
     }
+
+    pub fn cursor_type(&self) -> &CursorType {
+        &self.r#type
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

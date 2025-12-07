@@ -26,7 +26,7 @@ const CURSOR_MAX_STRENGTH: f32 = 5.0;
 /// The size to render the svg to.
 static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
 
-const CIRCLE_CURSOR_SIZE: u32 = 64;
+const CIRCLE_CURSOR_SIZE: u32 = 256;
 
 pub struct CursorLayer {
     statics: Statics,
@@ -201,36 +201,38 @@ impl CursorLayer {
         let size = CIRCLE_CURSOR_SIZE;
         let mut rgba = vec![0u8; (size * size * 4) as usize];
         let center = size as f32 / 2.0;
-        let outer_radius = center - 2.0;
-        let inner_radius = outer_radius - 4.0;
+        let outer_radius = center - size as f32 * 0.08;
+        let border_width = size as f32 * 0.025;
+        let edge_softness = size as f32 * 0.015;
+
+        let fill_alpha = 0.2_f32;
+        let border_alpha = 0.55_f32;
 
         for y in 0..size {
             for x in 0..size {
-                let dx = x as f32 - center;
-                let dy = y as f32 - center;
+                let dx = x as f32 - center + 0.5;
+                let dy = y as f32 - center + 0.5;
                 let dist = (dx * dx + dy * dy).sqrt();
                 let idx = ((y * size + x) * 4) as usize;
 
-                if dist <= outer_radius && dist >= inner_radius {
-                    let edge_softness = 1.5;
-                    let outer_alpha = 1.0
-                        - ((dist - outer_radius + edge_softness) / edge_softness).clamp(0.0, 1.0);
-                    let inner_alpha = ((dist - inner_radius) / edge_softness).clamp(0.0, 1.0);
-                    let alpha = (outer_alpha * inner_alpha * 255.0) as u8;
+                if dist <= outer_radius + edge_softness {
+                    let outer_fade = 1.0 - ((dist - outer_radius) / edge_softness).clamp(0.0, 1.0);
 
-                    rgba[idx] = 80;
-                    rgba[idx + 1] = 80;
-                    rgba[idx + 2] = 80;
-                    rgba[idx + 3] = alpha;
-                } else if dist < inner_radius {
-                    let fill_alpha = 0.15;
-                    let edge_alpha = ((inner_radius - dist) / 2.0).clamp(0.0, 1.0);
-                    let alpha = (fill_alpha * edge_alpha * 255.0) as u8;
+                    let border_start = outer_radius - border_width;
+                    let border_factor = if dist >= border_start {
+                        ((dist - border_start) / border_width).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
 
-                    rgba[idx] = 128;
-                    rgba[idx + 1] = 128;
-                    rgba[idx + 2] = 128;
-                    rgba[idx + 3] = alpha;
+                    let base_alpha = fill_alpha + border_factor * (border_alpha - fill_alpha);
+                    let alpha = base_alpha * outer_fade;
+
+                    let premul = (255.0 * alpha) as u8;
+                    rgba[idx] = premul;
+                    rgba[idx + 1] = premul;
+                    rgba[idx + 2] = premul;
+                    rgba[idx + 3] = premul;
                 }
             }
         }
@@ -317,7 +319,7 @@ impl CursorLayer {
             }
         }
 
-        let cursor_type = uniforms.project.cursor.r#type.clone();
+        let cursor_type = uniforms.project.cursor.cursor_type().clone();
 
         if self.prev_cursor_type.as_ref() != Some(&cursor_type) {
             self.prev_cursor_type = Some(cursor_type.clone());
