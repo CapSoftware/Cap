@@ -238,10 +238,10 @@ export function makeUseEffectMutation<R>(
 		const mutationFn = options.mutationFn;
 		const throwOnDefect = options.throwOnDefect ?? false;
 		const throwOnError = options.throwOnError;
-		const onMutate = options.onMutate;
-		const onSuccess = options.onSuccess;
-		const onError = options.onError;
-		const onSettled = options.onSettled;
+		const _onMutate = options.onMutate;
+		const _onSuccess = options.onSuccess;
+		const _onError = options.onError;
+		const _onSettled = options.onSettled;
 
 		const runtime = useEffectRuntime();
 

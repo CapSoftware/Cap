@@ -8,6 +8,7 @@ export {}
 declare global {
   const IconCapArrows: typeof import('~icons/cap/arrows.jsx')['default']
   const IconCapAudioOn: typeof import('~icons/cap/audio-on.jsx')['default']
+  const IconCapAuto: typeof import('~icons/cap/auto.jsx')['default']
   const IconCapBgBlur: typeof import('~icons/cap/bg-blur.jsx')['default']
   const IconCapCamera: typeof import('~icons/cap/camera.jsx')['default']
   const IconCapCaptions: typeof import('~icons/cap/captions.jsx')['default']
@@ -94,6 +95,7 @@ declare global {
   const IconLucideSearch: typeof import('~icons/lucide/search.jsx')['default']
   const IconLucideSquarePlay: typeof import('~icons/lucide/square-play.jsx')['default']
   const IconLucideTimer: typeof import('~icons/lucide/timer.jsx')['default']
+  const IconLucideType: typeof import('~icons/lucide/type.jsx')['default']
   const IconLucideUnplug: typeof import('~icons/lucide/unplug.jsx')['default']
   const IconLucideVideo: typeof import('~icons/lucide/video.jsx')['default']
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']

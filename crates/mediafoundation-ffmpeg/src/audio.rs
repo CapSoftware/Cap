@@ -22,7 +22,7 @@ impl AudioExt for ffmpeg::frame::Audio {
         unsafe { buffer.Lock(&mut buffer_ptr, None, None)? };
 
         unsafe {
-            std::ptr::copy_nonoverlapping(self.data(0).as_ptr(), buffer_ptr, length as usize);
+            std::ptr::copy_nonoverlapping(self.data(0).as_ptr(), buffer_ptr, length);
         }
 
         unsafe { buffer.SetCurrentLength(length as u32)? }

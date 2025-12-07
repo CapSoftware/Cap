@@ -15,6 +15,7 @@ import {
 	useEditorContext,
 } from "./context";
 import { MaskOverlay } from "./MaskOverlay";
+import { TextOverlay } from "./TextOverlay";
 import {
 	EditorButton,
 	MenuItem,
@@ -26,7 +27,7 @@ import {
 import { useEditorShortcuts } from "./useEditorShortcuts";
 import { formatTime } from "./utils";
 
-export function Player() {
+export function PlayerContent() {
 	const {
 		project,
 		editorInstance,
@@ -44,11 +45,12 @@ export function Player() {
 	const previewOptions = [
 		{ label: "Full", value: "full" as PreviewQuality },
 		{ label: "Half", value: "half" as PreviewQuality },
+		{ label: "Quarter", value: "quarter" as PreviewQuality },
 	];
 
 	// Load captions on mount
 	onMount(async () => {
-		if (editorInstance && editorInstance.path) {
+		if (editorInstance?.path) {
 			// Still load captions into the store since they will be used by the GPU renderer
 			await captionsStore.loadCaptions(editorInstance.path);
 
@@ -83,6 +85,8 @@ export function Player() {
 							outlineColor: captionsStore.state.settings.outlineColor,
 							exportWithSubtitles:
 								captionsStore.state.settings.exportWithSubtitles,
+							highlightColor: captionsStore.state.settings.highlightColor,
+							fadeDuration: captionsStore.state.settings.fadeDuration,
 						},
 					};
 
@@ -246,7 +250,7 @@ export function Player() {
 	]);
 
 	return (
-		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">
+		<div class="flex flex-col flex-1 min-h-0">
 			<div class="flex items-center justify-between gap-3 p-3">
 				<div class="flex items-center gap-3">
 					<AspectRatioSelect />
@@ -259,7 +263,7 @@ export function Player() {
 					</EditorButton>
 				</div>
 				<div class="flex items-center gap-2">
-					<span class="text-xs font-medium text-gray-11">Preview</span>
+					<span class="text-xs font-medium text-gray-11">Preview quality</span>
 					<KSelect<{ label: string; value: PreviewQuality }>
 						options={previewOptions}
 						optionValue="value"
@@ -286,10 +290,10 @@ export function Player() {
 						)}
 					>
 						<KSelect.Trigger class="flex items-center gap-2 h-9 px-3 rounded-lg border border-gray-3 bg-gray-2 dark:bg-gray-3 text-sm text-gray-12">
-							<KSelect.Value<{ label: string; value: PreviewQuality }>
-								class="flex-1 text-left truncate"
-								placeholder="Select preview quality"
-							>
+							<KSelect.Value<{
+								label: string;
+								value: PreviewQuality;
+							}> class="flex-1 text-left truncate">
 								{(state) =>
 									state.selectedOption()?.label ?? "Select preview quality"
 								}
@@ -303,9 +307,6 @@ export function Player() {
 								as={KSelect.Content}
 								class={cx(topLeftAnimateClasses, "w-44")}
 							>
-								<MenuItem as="div" class="text-gray-11" data-disabled="true">
-									Select preview quality
-								</MenuItem>
 								<MenuItemList<typeof KSelect.Listbox>
 									as={KSelect.Listbox}
 									class="max-h-40"
@@ -511,10 +512,7 @@ function PreviewCanvas() {
 							height = width / frameAspect();
 						}
 
-						return {
-							width: Math.min(width, frameWidth()),
-							height: Math.min(height, frameHeight()),
-						};
+						return { width, height };
 					};
 
 					return (
@@ -532,13 +530,13 @@ function PreviewCanvas() {
 										height: `${size().height}px`,
 										...gridStyle,
 									}}
-									class="rounded"
 									ref={canvasRef}
 									id="canvas"
 									width={frameWidth()}
 									height={frameHeight()}
 								/>
 								<MaskOverlay size={size()} />
+								<TextOverlay size={size()} />
 							</div>
 						</div>
 					);

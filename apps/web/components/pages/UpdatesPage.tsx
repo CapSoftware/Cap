@@ -105,15 +105,14 @@ export const UpdatesPage = () => {
 											)}
 										</div>
 										<div className="flex flex-wrap gap-2">
-											{post.metadata.tags &&
-												post.metadata.tags.split(", ").map((tag, index) => (
-													<p
-														key={index}
-														className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
-													>
-														{tag}
-													</p>
-												))}
+											{post.metadata.tags?.split(", ").map((tag, index) => (
+												<p
+													key={index}
+													className="rounded-md bg-gray-3 font-medium px-2 py-0.5 text-sm text-gray-12"
+												>
+													{tag}
+												</p>
+											))}
 										</div>
 									</div>
 								</Link>

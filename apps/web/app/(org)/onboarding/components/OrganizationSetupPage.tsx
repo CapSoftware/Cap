@@ -9,7 +9,6 @@ import { useRouter } from "next/navigation";
 import { startTransition, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
-import { withRpc } from "@/lib/Rpcs";
 import { Base } from "./Base";
 
 export function OrganizationSetupPage({

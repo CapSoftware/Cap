@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, use, useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { checkAndMarkUserSignedUpTracked } from "@/actions/analytics/track-user-signed-up";
 import {
 	identifyUser,

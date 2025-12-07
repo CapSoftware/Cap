@@ -6,7 +6,6 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useId } from "react";
 import { formatDate } from "../../lib/utils";
-import { generateGradientFromSlug } from "../../utils/gradients";
 
 interface BlogPost {
 	title: string;

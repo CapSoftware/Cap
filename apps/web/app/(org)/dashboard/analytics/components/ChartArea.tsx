@@ -52,9 +52,9 @@ function ChartArea({ selectedMetrics, data, isLoading }: ChartAreaProps) {
 	const chartData = useMemo(() => {
 		if (!data || data.length === 0) return [];
 		const bucketDuration =
-			data.length > 1
-				? new Date(data[1]!.bucket).getTime() -
-					new Date(data[0]!.bucket).getTime()
+			data.length > 1 && data[1]?.bucket && data[0]?.bucket
+				? new Date(data[1].bucket).getTime() -
+					new Date(data[0].bucket).getTime()
 				: 0;
 		const hourly = bucketDuration > 0 && bucketDuration <= 60 * 60 * 1000;
 		return data.map((point) => ({

@@ -1,4 +1,3 @@
-import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";

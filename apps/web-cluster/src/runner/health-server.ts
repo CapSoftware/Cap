@@ -13,7 +13,7 @@ const app = router.pipe(HttpServer.serve());
 
 // Specify the port
 const port = process.env.HEALTH_CHECK_PORT
-	? parseInt(process.env.HEALTH_CHECK_PORT)
+	? parseInt(process.env.HEALTH_CHECK_PORT, 10)
 	: 3000;
 
 // Create a server layer with the specified port

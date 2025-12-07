@@ -30,25 +30,26 @@ import {
 import { Toggle } from "~/components/Toggle";
 import { composeEventHandlers } from "~/utils/composeEventHandlers";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { events } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
 	EditorInstanceContextProvider,
 	FPS,
+	serializeProjectConfiguration,
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
 import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
-import { Player } from "./Player";
+import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
 const MIN_TIMELINE_HEIGHT = 240;
-const RESIZE_HANDLE_HEIGHT = 16;
+const RESIZE_HANDLE_HEIGHT = 8;
 const MIN_PLAYER_HEIGHT = MIN_PLAYER_CONTENT_HEIGHT + RESIZE_HANDLE_HEIGHT;
 
 export function Editor() {
@@ -179,15 +180,22 @@ function Inner() {
 			() => [frameNumberToRender(), previewResolutionBase()],
 			([number]) => {
 				if (editorState.playing) return;
-				renderFrame(number);
+				renderFrame(number as number);
 			},
 		),
 	);
 
+	const updateConfigAndRender = throttle(async (time: number) => {
+		const config = serializeProjectConfiguration(project);
+		await commands.updateProjectConfigInMemory(config);
+		renderFrame(time);
+	}, 1000 / FPS);
 	createEffect(
 		on(
 			() => trackDeep(project),
-			() => renderFrame(editorState.playbackTime),
+			() => {
+				updateConfigAndRender(editorState.playbackTime);
+			},
 		),
 	);
 
@@ -203,34 +211,35 @@ function Inner() {
 					class="flex overflow-hidden flex-col flex-1 min-h-0"
 				>
 					<div
-						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 relative"
+						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
 						style={{
 							"min-height": `${MIN_PLAYER_HEIGHT}px`,
-							"padding-bottom": `${RESIZE_HANDLE_HEIGHT}px`,
 						}}
 					>
-						<Player />
-						<ConfigSidebar />
-						<div
-							role="separator"
-							aria-orientation="horizontal"
-							class="absolute inset-x-0 bottom-0"
-							style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
-						>
+						<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
+							<PlayerContent />
 							<div
-								class="flex items-center h-full px-3 cursor-row-resize select-none group"
-								classList={{ "bg-gray-3": isResizingTimeline() }}
-								onMouseDown={handleTimelineResizeStart}
+								role="separator"
+								aria-orientation="horizontal"
+								class="flex-none transition-colors hover:bg-gray-3/30"
+								style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 							>
 								<div
-									class="h-1 w-full rounded-full bg-gray-5 transition-colors group-hover:bg-gray-7"
-									classList={{ "bg-gray-8": isResizingTimeline() }}
-								/>
+									class="flex justify-center items-center h-full cursor-row-resize select-none group"
+									classList={{ "bg-gray-3/50": isResizingTimeline() }}
+									onMouseDown={handleTimelineResizeStart}
+								>
+									<div
+										class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
+										classList={{ "bg-gray-7": isResizingTimeline() }}
+									/>
+								</div>
 							</div>
 						</div>
+						<ConfigSidebar />
 					</div>
 					<div
-						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden"
+						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
 						style={{ height: `${timelineHeight()}px` }}
 					>
 						<div class="h-full">

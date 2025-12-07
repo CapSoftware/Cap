@@ -119,7 +119,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		commands.awaitCameraPreviewReady(),
 	);
 
-	const setCamera = createCameraMutation();
+	const _setCamera = createCameraMutation();
 
 	const scale = () => {
 		const normalized =
@@ -345,7 +345,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 	}
 
 	const { cameraWsPort } = window.__CAP__;
-	const [isConnected, setIsConnected] = createSignal(false);
+	const [_isConnected, setIsConnected] = createSignal(false);
 	let ws: WebSocket | undefined;
 
 	const createSocket = () => {
@@ -507,7 +507,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 		}
 	});
 
-	const [windowSize] = createResource(
+	const [_windowSize] = createResource(
 		() =>
 			[
 				state.size,

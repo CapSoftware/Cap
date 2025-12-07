@@ -1,8 +1,7 @@
 use anyhow::Result;
 use cap_project::{
     AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, MaskSegment, ProjectConfiguration, RecordingMeta, StudioRecordingMeta,
-    XY,
+    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -13,7 +12,7 @@ use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
-    MaskLayer,
+    MaskLayer, TextLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -32,6 +31,7 @@ mod mask;
 mod project_recordings;
 mod scene;
 mod spring_mass_damper;
+mod text;
 mod zoom;
 
 pub use coord::*;
@@ -41,6 +41,7 @@ pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
 use mask::interpolate_masks;
 use scene::*;
+use text::{PreparedText, prepare_texts};
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
@@ -423,6 +424,7 @@ pub struct ProjectUniforms {
     pub display_parent_motion_px: XY<f32>,
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
+    pub texts: Vec<PreparedText>,
 }
 
 #[derive(Debug, Clone)]
@@ -1213,7 +1215,7 @@ impl ProjectUniforms {
                             (b.opacity / 100.0).clamp(0.0, 1.0),
                         ]
                     } else {
-                        [1.0, 1.0, 1.0, 0.8]
+                        [0.0, 0.0, 0.0, 0.0]
                     },
                     _padding2: [0.0; 4],
                 },
@@ -1228,6 +1230,10 @@ impl ProjectUniforms {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
+
+                const BASE_HEIGHT: f32 = 1080.0;
+                let resolution_scale = output_size[1] / BASE_HEIGHT;
+                let camera_padding = CAMERA_PADDING * resolution_scale;
 
                 let base_size = project.camera.size / 100.0;
                 let zoom_size = project
@@ -1245,19 +1251,19 @@ impl ProjectUniforms {
                     CameraShape::Source => {
                         if aspect >= 1.0 {
                             [
-                                (min_axis * scale + CAMERA_PADDING) * aspect,
-                                min_axis * scale + CAMERA_PADDING,
+                                (min_axis * scale + camera_padding) * aspect,
+                                min_axis * scale + camera_padding,
                             ]
                         } else {
                             [
-                                min_axis * scale + CAMERA_PADDING,
-                                (min_axis * scale + CAMERA_PADDING) / aspect,
+                                min_axis * scale + camera_padding,
+                                (min_axis * scale + camera_padding) / aspect,
                             ]
                         }
                     }
                     CameraShape::Square => [
-                        min_axis * scale + CAMERA_PADDING,
-                        min_axis * scale + CAMERA_PADDING,
+                        min_axis * scale + camera_padding,
+                        min_axis * scale + camera_padding,
                     ],
                 };
 
@@ -1266,14 +1272,14 @@ impl ProjectUniforms {
 
                 let position_for = |subject_size: [f32; 2]| {
                     let x = match &project.camera.position.x {
-                        CameraXPosition::Left => CAMERA_PADDING,
+                        CameraXPosition::Left => camera_padding,
                         CameraXPosition::Center => output_size[0] / 2.0 - subject_size[0] / 2.0,
-                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - subject_size[0],
+                        CameraXPosition::Right => output_size[0] - camera_padding - subject_size[0],
                     };
                     let y = match &project.camera.position.y {
-                        CameraYPosition::Top => CAMERA_PADDING,
+                        CameraYPosition::Top => camera_padding,
                         CameraYPosition::Bottom => {
-                            output_size[1] - subject_size[1] - CAMERA_PADDING
+                            output_size[1] - subject_size[1] - camera_padding
                         }
                     };
 
@@ -1474,6 +1480,19 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let texts = project
+            .timeline
+            .as_ref()
+            .map(|timeline| {
+                prepare_texts(
+                    XY::new(output_size.0, output_size.1),
+                    frame_time as f64,
+                    &timeline.text_segments,
+                    &project.hidden_text_segments,
+                )
+            })
+            .unwrap_or_default();
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -1490,6 +1509,7 @@ impl ProjectUniforms {
             display_parent_motion_px: display_motion_parent,
             motion_blur_amount: user_motion_blur,
             masks,
+            texts,
         }
     }
 }
@@ -1555,7 +1575,7 @@ pub struct RendererLayers {
     camera: CameraLayer,
     camera_only: CameraLayer,
     mask: MaskLayer,
-    #[allow(unused)]
+    text: TextLayer,
     captions: CaptionsLayer,
 }
 
@@ -1569,6 +1589,7 @@ impl RendererLayers {
             camera: CameraLayer::new(device),
             camera_only: CameraLayer::new(device),
             mask: MaskLayer::new(device),
+            text: TextLayer::new(device, queue),
             captions: CaptionsLayer::new(device, queue),
         }
     }
@@ -1631,6 +1652,20 @@ impl RendererLayers {
                     segment_frames.camera_frame.as_ref()?,
                 ))
             })(),
+        );
+
+        self.text.prepare(
+            &constants.device,
+            &constants.queue,
+            uniforms.output_size,
+            &uniforms.texts,
+        );
+
+        self.captions.prepare(
+            uniforms,
+            segment_frames,
+            XY::new(uniforms.output_size.0, uniforms.output_size.1),
+            constants,
         );
 
         Ok(())
@@ -1707,6 +1742,16 @@ impl RendererLayers {
             for mask in &uniforms.masks {
                 self.mask.render(device, queue, session, encoder, mask);
             }
+        }
+
+        if !uniforms.texts.is_empty() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.text.render(&mut pass);
+        }
+
+        if self.captions.has_content() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.captions.render(&mut pass);
         }
     }
 }

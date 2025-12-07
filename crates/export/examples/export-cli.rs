@@ -55,6 +55,7 @@ async fn main() {
             settings
                 .export(base, move |progress| {
                     print!("Exporting frame {progress} of {total_frames}\r");
+                    true
                 })
                 .await
                 .unwrap();
@@ -65,6 +66,7 @@ async fn main() {
             settings
                 .export(base, move |progress| {
                     print!("Exporting frame {progress} of {total_frames}\r");
+                    true
                 })
                 .await
                 .unwrap();

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod api;
 mod audio;
 mod audio_meter;
@@ -26,6 +28,7 @@ mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
+mod update_project_names;
 mod upload;
 mod web_api;
 mod window_exclusion;
@@ -454,12 +457,17 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
+            {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = Some(id.clone());
+                app.camera_in_use = true;
+                app.camera_cleanup_done = false;
+            }
+
             let mut attempts = 0;
-            loop {
+            let init_result: Result<(), String> = loop {
                 attempts += 1;
 
-                // We first ask the actor to set the input
-                // This returns a future that resolves when the camera is actually ready
                 let request = camera_feed
                     .ask(feeds::camera::SetInput { id: id.clone() })
                     .await
@@ -471,10 +479,10 @@ async fn set_camera_input(
                 };
 
                 match result {
-                    Ok(_) => break,
+                    Ok(_) => break Ok(()),
                     Err(e) => {
                         if attempts >= 3 {
-                            return Err(format!(
+                            break Err(format!(
                                 "Failed to initialize camera after {} attempts: {}",
                                 attempts, e
                             ));
@@ -486,6 +494,13 @@ async fn set_camera_input(
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 }
+            };
+
+            if let Err(e) = init_result {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = None;
+                app.camera_in_use = false;
+                return Err(e);
             }
 
             ShowCapWindow::Camera
@@ -649,10 +664,18 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
                 )
             };
 
-            if should_check && let Some(selected_id) = camera_id {
-                let available = is_camera_available(&selected_id);
+            if should_check && let Some(ref selected_id) = camera_id {
+                let available = is_camera_available(selected_id);
+                debug!(
+                    "Camera watcher: checking availability for {:?}, available={}, is_marked={}",
+                    selected_id, available, is_marked
+                );
 
                 if !available && !is_marked {
+                    warn!(
+                        "Camera watcher: camera {:?} detected as unavailable, pausing recording",
+                        selected_id
+                    );
                     let mut app = state.write().await;
                     if let Err(err) = app
                         .handle_input_disconnect(RecordingInputKind::Camera)
@@ -674,7 +697,21 @@ fn spawn_camera_watcher(app_handle: AppHandle) {
 }
 
 fn is_camera_available(id: &DeviceOrModelID) -> bool {
-    cap_camera::list_cameras().any(|info| match id {
+    let cameras: Vec<_> = cap_camera::list_cameras().collect();
+    debug!(
+        "is_camera_available: looking for {:?} in {} cameras",
+        id,
+        cameras.len()
+    );
+    for camera in &cameras {
+        debug!(
+            "  - device_id={}, model_id={:?}, name={}",
+            camera.device_id(),
+            camera.model_id(),
+            camera.display_name()
+        );
+    }
+    cameras.iter().any(|info| match id {
         DeviceOrModelID::DeviceID(device_id) => info.device_id() == device_id,
         DeviceOrModelID::ModelID(model_id) => {
             info.model_id().is_some_and(|existing| existing == model_id)
@@ -1467,6 +1504,17 @@ async fn set_project_config(
 
     editor_instance.project_config.0.send(config).ok();
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(editor_instance))]
+async fn update_project_config_in_memory(
+    editor_instance: WindowEditorInstance,
+    config: ProjectConfiguration,
+) -> Result<(), String> {
+    editor_instance.project_config.0.send(config).ok();
     Ok(())
 }
 
@@ -2301,6 +2349,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            update_project_config_in_memory,
             generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
@@ -2338,6 +2387,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
+            captions::prewarm_whisperx,
             captions::transcribe_audio,
             captions::save_captions,
             captions::load_captions,
@@ -2351,7 +2401,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            format_project_name,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2496,6 +2547,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+
+            if let Err(err) = update_project_names::migrate_if_needed(&app) {
+                tracing::error!("Failed to migrate project file names: {}", err);
+            }
+
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
@@ -2721,7 +2777,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    if !app_state.is_recording_active_or_pending() {
+                                    let camera_window_open =
+                                        CapWindowId::Camera.get(&app).is_some();
+
+                                    if !app_state.is_recording_active_or_pending()
+                                        && !camera_window_open
+                                        && !app_state.camera_in_use
+                                    {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         let _ = app_state
@@ -2731,7 +2793,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
-                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
@@ -3114,6 +3175,24 @@ async fn write_clipboard_string(
     writer
         .set_text(text)
         .map_err(|e| format!("Failed to write text to clipboard: {e}"))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn format_project_name(
+    template: Option<String>,
+    target_name: String,
+    target_kind: String,
+    recording_mode: RecordingMode,
+    datetime: Option<chrono::DateTime<chrono::Local>>,
+) -> String {
+    recording::format_project_name(
+        template.as_deref(),
+        target_name.as_str(),
+        target_kind.as_str(),
+        recording_mode,
+        datetime,
+    )
 }
 
 trait EventExt: tauri_specta::Event {

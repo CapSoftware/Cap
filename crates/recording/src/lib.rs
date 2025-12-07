@@ -1,3 +1,4 @@
+pub mod benchmark;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;

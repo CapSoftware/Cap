@@ -8,7 +8,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { startTransition, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export function VerifyOTPForm({
@@ -22,7 +22,7 @@ export function VerifyOTPForm({
 }) {
 	const [code, setCode] = useState(["", "", "", "", "", ""]);
 	const [lastResendTime, setLastResendTime] = useState<number | null>(
-		lastSent ? parseInt(lastSent) : null,
+		lastSent ? parseInt(lastSent, 10) : null,
 	);
 	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 	const router = useRouter();
@@ -42,7 +42,7 @@ export function VerifyOTPForm({
 			});
 			setCode(newCode);
 
-			const nextEmptyIndex = newCode.findIndex((digit) => digit === "");
+			const nextEmptyIndex = newCode.indexOf("");
 			if (nextEmptyIndex !== -1) {
 				inputRefs.current[nextEmptyIndex]?.focus();
 			} else {

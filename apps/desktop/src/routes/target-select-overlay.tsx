@@ -67,6 +67,7 @@ import {
 } from "./(window-chrome)/OptionsContext";
 
 const MIN_SIZE = { width: 150, height: 150 };
+const MIN_SCREENSHOT_SIZE = { width: 1, height: 1 };
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
@@ -431,9 +432,13 @@ function Inner() {
 						return bounds.width <= 1 && bounds.height <= 1 && !isInteracting();
 					});
 
+					const minSize = () =>
+						options.mode === "screenshot" ? MIN_SCREENSHOT_SIZE : MIN_SIZE;
+
 					const isValid = createMemo(() => {
 						const b = crop();
-						return b.width >= MIN_SIZE.width && b.height >= MIN_SIZE.height;
+						const min = minSize();
+						return b.width >= min.width && b.height >= min.height;
 					});
 
 					const [targetState, setTargetState] = createSignal<{
@@ -467,12 +472,12 @@ function Inner() {
 								if (changed) {
 									processing = true;
 									try {
-										await invoke("update_camera_overlay_bounds", {
-											x: target.x,
-											y: target.y,
-											width: target.width,
-											height: target.height,
-										});
+										await commands.updateCameraOverlayBounds(
+											target.x,
+											target.y,
+											target.width,
+											target.height,
+										);
 										lastApplied = target;
 									} catch (e) {
 										console.error("Failed to update camera window", e);
@@ -751,7 +756,7 @@ function Inner() {
 					});
 
 					return (
-						<div class="fixed w-screen h-screen bg-black/60">
+						<div class="fixed w-screen h-screen">
 							<div
 								ref={controlsEl}
 								class="fixed z-50 transition-opacity"
@@ -781,7 +786,9 @@ function Inner() {
 									</Show>
 									<Show when={!isValid()}>
 										<div class="flex flex-col gap-1 items-center p-2.5 my-2 rounded-xl border min-w-fit w-fit bg-red-2 shadow-sm border-red-4 text-sm">
-											<p>Minimum size is 150 x 150</p>
+											<p>
+												Minimum size is {minSize().width} x {minSize().height}
+											</p>
 											<small>
 												<code>
 													{crop().width} x {crop().height}

@@ -1,6 +1,6 @@
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::ExporterBase;
-use cap_project::{RecordingMeta, XY};
+use cap_project::RecordingMeta;
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;
@@ -90,14 +90,12 @@ pub struct ExportEstimates {
     pub estimated_size_mb: f64,
 }
 
-// This will need to be refactored at some point to be more accurate.
 #[tauri::command]
 #[specta::specta]
 #[instrument]
 pub async fn get_export_estimates(
     path: PathBuf,
-    resolution: XY<u32>,
-    fps: u32,
+    settings: ExportSettings,
 ) -> Result<ExportEstimates, String> {
     let metadata = get_video_metadata(path.clone()).await?;
 
@@ -109,38 +107,56 @@ pub async fn get_export_estimates(
         metadata.duration
     };
 
+    let (resolution, fps) = match &settings {
+        ExportSettings::Mp4(s) => (s.resolution_base, s.fps),
+        ExportSettings::Gif(s) => (s.resolution_base, s.fps),
+    };
+
     let (width, height) = (resolution.x, resolution.y);
+    let total_pixels = (width * height) as f64;
+    let fps_f64 = fps as f64;
+    let total_frames = (duration_seconds * fps_f64).ceil();
 
-    let base_bitrate = if width <= 1280 && height <= 720 {
-        4_000_000.0
-    } else if width <= 1920 && height <= 1080 {
-        8_000_000.0
-    } else if width <= 2560 && height <= 1440 {
-        14_000_000.0
-    } else {
-        20_000_000.0
+    let (estimated_size_mb, time_factor) = match &settings {
+        ExportSettings::Mp4(mp4_settings) => {
+            let bits_per_pixel = mp4_settings.compression.bits_per_pixel() as f64;
+            let video_bitrate = total_pixels * bits_per_pixel * fps_f64;
+            let audio_bitrate = 192_000.0;
+            let total_bitrate = video_bitrate + audio_bitrate;
+            let size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
+
+            let base_time_factor = match (width, height) {
+                (w, h) if w <= 1280 && h <= 720 => 0.35,
+                (w, h) if w <= 1920 && h <= 1080 => 0.50,
+                (w, h) if w <= 2560 && h <= 1440 => 0.65,
+                _ => 0.80,
+            };
+
+            let compression_factor = match mp4_settings.compression {
+                cap_export::mp4::ExportCompression::Minimal => 1.0,
+                cap_export::mp4::ExportCompression::Social => 1.1,
+                cap_export::mp4::ExportCompression::Web => 1.15,
+                cap_export::mp4::ExportCompression::Potato => 1.2,
+            };
+
+            (size_mb, base_time_factor * compression_factor)
+        }
+        ExportSettings::Gif(_) => {
+            let bytes_per_frame = total_pixels * 0.5;
+            let size_mb = (bytes_per_frame * total_frames) / (1024.0 * 1024.0);
+
+            let base_time_factor = match (width, height) {
+                (w, h) if w <= 1280 && h <= 720 => 0.8,
+                (w, h) if w <= 1920 && h <= 1080 => 1.2,
+                _ => 1.5,
+            };
+
+            (size_mb, base_time_factor)
+        }
     };
 
-    let fps_factor = (fps as f64) / 30.0;
-    let video_bitrate = base_bitrate * fps_factor;
-
-    let audio_bitrate = 192_000.0;
-
-    let total_bitrate = video_bitrate + audio_bitrate;
-
-    let estimated_size_mb = (total_bitrate * duration_seconds) / (8.0 * 1024.0 * 1024.0);
-
-    let base_factor = match (width, height) {
-        (w, h) if w <= 1280 && h <= 720 => 0.43,
-        (w, h) if w <= 1920 && h <= 1080 => 0.64,
-        (w, h) if w <= 2560 && h <= 1440 => 0.75,
-        _ => 0.86,
-    };
-
-    let processing_time = duration_seconds * base_factor * fps_factor;
-    let overhead_time = 0.0;
-
-    let estimated_time_seconds = processing_time + overhead_time;
+    let fps_factor = fps_f64 / 30.0;
+    let estimated_time_seconds = duration_seconds * time_factor * fps_factor;
 
     Ok(ExportEstimates {
         duration_seconds,

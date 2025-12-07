@@ -1,28 +1,10 @@
-import { createEffect, createRoot } from "solid-js";
+import { createRoot } from "solid-js";
 import { createStore } from "solid-js/store";
-import { type CaptionSegment, commands } from "~/utils/tauri";
-
-// export type CaptionSegment = {
-//   id: string;
-//   start: number;
-//   end: number;
-//   text: string;
-// };
-
-export type CaptionSettings = {
-	enabled: boolean;
-	font: string;
-	size: number;
-	color: string;
-	backgroundColor: string;
-	backgroundOpacity: number;
-	position: string;
-	bold: boolean;
-	italic: boolean;
-	outline: boolean;
-	outlineColor: string;
-	exportWithSubtitles: boolean;
-};
+import {
+	type CaptionSegment,
+	type CaptionSettings,
+	commands,
+} from "~/utils/tauri";
 
 export type CaptionsState = {
 	segments: CaptionSegment[];
@@ -30,23 +12,29 @@ export type CaptionsState = {
 	currentCaption: string | null;
 };
 
+export const defaultCaptionSettings: CaptionSettings = {
+	enabled: false,
+	font: "System Sans-Serif",
+	size: 45,
+	color: "#A0A0A0",
+	backgroundColor: "#000000",
+	backgroundOpacity: 95,
+	position: "bottom-center",
+	bold: false,
+	italic: false,
+	outline: true,
+	outlineColor: "#000000",
+	exportWithSubtitles: false,
+	highlightColor: "#FFFFFF",
+	fadeDuration: 0.2,
+	lingerDuration: 0.4,
+	wordTransitionDuration: 0.25,
+};
+
 function createCaptionsStore() {
 	const [state, setState] = createStore<CaptionsState>({
 		segments: [],
-		settings: {
-			enabled: false,
-			font: "System Sans-Serif",
-			size: 24,
-			color: "#FFFFFF",
-			backgroundColor: "#000000",
-			backgroundOpacity: 80,
-			position: "bottom",
-			bold: true,
-			italic: false,
-			outline: true,
-			outlineColor: "#000000",
-			exportWithSubtitles: false,
-		},
+		settings: { ...defaultCaptionSettings },
 		currentCaption: null,
 	});
 
@@ -103,23 +91,13 @@ function createCaptionsStore() {
 			try {
 				const captionsData = await commands.loadCaptions(videoPath);
 				if (captionsData) {
+					const loadedSettings = captionsData.settings
+						? { ...defaultCaptionSettings, ...captionsData.settings }
+						: { ...defaultCaptionSettings, enabled: true };
 					setState((prev) => ({
 						...prev,
 						segments: captionsData.segments,
-						settings: captionsData.settings || {
-							enabled: true,
-							font: "Arial",
-							size: 24,
-							color: "#FFFFFF",
-							backgroundColor: "#000000",
-							backgroundOpacity: 80,
-							position: "bottom",
-							bold: true,
-							italic: false,
-							outline: true,
-							outlineColor: "#000000",
-							exportWithSubtitles: false,
-						},
+						settings: loadedSettings,
 					}));
 				}
 
@@ -132,7 +110,10 @@ function createCaptionsStore() {
 						setState("segments", localCaptionsData.segments);
 					}
 					if (localCaptionsData.settings) {
-						setState("settings", localCaptionsData.settings);
+						setState("settings", {
+							...defaultCaptionSettings,
+							...localCaptionsData.settings,
+						});
 					}
 				} catch (e) {
 					console.error("Error loading saved captions from localStorage:", e);
@@ -160,6 +141,10 @@ function createCaptionsStore() {
 						outline: state.settings.outline,
 						outlineColor: state.settings.outlineColor,
 						exportWithSubtitles: state.settings.exportWithSubtitles,
+						highlightColor: state.settings.highlightColor,
+						fadeDuration: state.settings.fadeDuration,
+						lingerDuration: state.settings.lingerDuration,
+						wordTransitionDuration: state.settings.wordTransitionDuration,
 					},
 				};
 

@@ -14,7 +14,7 @@ const renderHTML = (content: string) => {
 	return <span dangerouslySetInnerHTML={{ __html: styledContent }} />;
 };
 
-const LeftBlueHue = () => {
+const _LeftBlueHue = () => {
 	return (
 		<svg
 			className="absolute top-0 -left-24 z-0 opacity-20 pointer-events-none md:opacity-40"

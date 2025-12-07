@@ -1,8 +1,6 @@
 import { Button } from "@cap/ui-solid";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
@@ -17,7 +15,7 @@ import {
 import Tooltip from "~/components/Tooltip";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import { trackEvent } from "~/utils/analytics";
-import { commands, events } from "~/utils/tauri";
+import { commands } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import PresetsDropdown from "./PresetsDropdown";

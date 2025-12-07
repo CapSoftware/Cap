@@ -1,4 +1,4 @@
-import { produce, unwrap } from "solid-js/store";
+import { produce } from "solid-js/store";
 import { presetsStore } from "~/store";
 import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 

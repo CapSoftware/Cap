@@ -77,8 +77,8 @@ async getCurrentRecording() : Promise<JsonValue<CurrentRecording | null>> {
 async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, settings: ExportSettings) : Promise<string> {
     return await TAURI_INVOKE("export_video", { projectPath, progress, settings });
 },
-async getExportEstimates(path: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
-    return await TAURI_INVOKE("get_export_estimates", { path, resolution, fps });
+async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { path, settings });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -118,6 +118,9 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 },
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
+},
+async updateProjectConfigInMemory(config: ProjectConfiguration) : Promise<null> {
+    return await TAURI_INVOKE("update_project_config_in_memory", { config });
 },
 async generateZoomSegmentsFromClicks() : Promise<ZoomSegment[]> {
     return await TAURI_INVOKE("generate_zoom_segments_from_clicks");
@@ -229,57 +232,33 @@ async setCameraPreviewState(state: CameraPreviewState) : Promise<null> {
 async awaitCameraPreviewReady() : Promise<boolean> {
     return await TAURI_INVOKE("await_camera_preview_ready");
 },
-/**
- * Function to handle creating directories for the model
- */
 async createDir(path: string, recursive: boolean) : Promise<null> {
     return await TAURI_INVOKE("create_dir", { path, recursive });
 },
-/**
- * Function to save the model file
- */
 async saveModelFile(path: string, data: number[]) : Promise<null> {
     return await TAURI_INVOKE("save_model_file", { path, data });
 },
-/**
- * Function to transcribe audio from a video file using Whisper
- */
+async prewarmWhisperx(modelPath: string) : Promise<boolean> {
+    return await TAURI_INVOKE("prewarm_whisperx", { modelPath });
+},
 async transcribeAudio(videoPath: string, modelPath: string, language: string) : Promise<CaptionData> {
     return await TAURI_INVOKE("transcribe_audio", { videoPath, modelPath, language });
 },
-/**
- * Function to save caption data to a file
- */
 async saveCaptions(videoId: string, captions: CaptionData) : Promise<null> {
     return await TAURI_INVOKE("save_captions", { videoId, captions });
 },
-/**
- * Function to load caption data from a file
- */
 async loadCaptions(videoId: string) : Promise<CaptionData | null> {
     return await TAURI_INVOKE("load_captions", { videoId });
 },
-/**
- * Helper function to download a Whisper model from Hugging Face Hub
- */
 async downloadWhisperModel(modelName: string, outputPath: string) : Promise<null> {
     return await TAURI_INVOKE("download_whisper_model", { modelName, outputPath });
 },
-/**
- * Function to check if a model file exists
- */
 async checkModelExists(modelPath: string) : Promise<boolean> {
     return await TAURI_INVOKE("check_model_exists", { modelPath });
 },
-/**
- * Function to delete a downloaded model
- */
 async deleteWhisperModel(modelPath: string) : Promise<null> {
     return await TAURI_INVOKE("delete_whisper_model", { modelPath });
 },
-/**
- * Export captions to an SRT file
- */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
 },
@@ -303,6 +282,9 @@ async focusWindow(windowId: WindowId) : Promise<null> {
 },
 async editorDeleteProject() : Promise<null> {
     return await TAURI_INVOKE("editor_delete_project");
+},
+async formatProjectName(template: string | null, targetName: string, targetKind: string, recordingMode: RecordingMode, datetime: string | null) : Promise<string> {
+    return await TAURI_INVOKE("format_project_name", { template, targetName, targetKind, recordingMode, datetime });
 }
 }
 
@@ -387,8 +369,9 @@ export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
-export type CaptionSegment = { id: string; start: number; end: number; text: string }
-export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
+export type CaptionSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[] }
+export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position?: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor?: string; fadeDuration?: number; lingerDuration?: number; wordTransitionDuration?: number }
+export type CaptionWord = { text: string; start: number; end: number }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
 export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
 export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
@@ -418,7 +401,7 @@ export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; recordingPickerPreferenceSet?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number }
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; custom_cursor_capture2?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; recordingPickerPreferenceSet?: boolean; postDeletionBehaviour?: PostDeletionBehaviour; excludedWindows?: WindowExclusion[]; deleteInstantRecordingsAfterUpload?: boolean; instantModeMaxResolution?: number; defaultProjectNameTemplate?: string | null }
 export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
 export type GifQuality = { 
 /**
@@ -492,7 +475,7 @@ export type SceneSegment = { start: number; end: number; mode?: SceneMode }
 export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "display"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
-export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null }
+export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path: string; config: ProjectConfiguration | null; prettyName: string }
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
@@ -503,7 +486,8 @@ export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "Failed"; error: string } | { status: "Complete" }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[] }
+export type TextSegment = { start: number; end: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[] }
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMeta = { state: "MultipartUpload"; video_id: string; file_path: string; pre_created_video: VideoUploadInfo; recording_dir: string } | { state: "SinglePartUpload"; video_id: string; recording_dir: string; file_path: string; screenshot_path: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"

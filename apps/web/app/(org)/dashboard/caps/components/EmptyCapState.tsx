@@ -21,7 +21,7 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 		<div className="flex flex-col flex-1 justify-center items-center w-full h-full">
 			<div className="flex flex-col gap-3 justify-center items-center h-full text-center">
 				<div className="mx-auto w-full mb-10 max-w-[450px] flex justify-center items-center">
-					<EmptyCap key={theme + "empty-cap"} className="h-[150px] w-[400px]" />
+					<EmptyCap key={`${theme}empty-cap`} className="h-[150px] w-[400px]" />
 				</div>
 				<div className="flex flex-col items-center px-5">
 					<p className="mb-1 text-xl font-semibold text-gray-12">

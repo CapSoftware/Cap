@@ -350,8 +350,8 @@ export async function getDashboardData(user: typeof userSelectProps) {
 											...m.member,
 											user: {
 												...m.user!,
-												image: m.user!.image
-													? yield* imageUploads.resolveImageUrl(m.user!.image)
+												image: m.user?.image
+													? yield* imageUploads.resolveImageUrl(m.user?.image)
 													: null,
 											},
 										};

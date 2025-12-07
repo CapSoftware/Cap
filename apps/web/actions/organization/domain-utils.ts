@@ -97,7 +97,7 @@ export const getRequiredConfig = async (domain: string) => {
 				};
 			}
 		}
-	} catch (error) {
+	} catch (_error) {
 		// Continue to fallback
 	}
 
@@ -159,7 +159,7 @@ export const checkDomainStatus = async (domain: string) => {
 			verified = true;
 		} else {
 			const verificationJson = await verifyDomain(domain);
-			verified = verificationJson && verificationJson.verified;
+			verified = verificationJson?.verified;
 		}
 
 		// Get the current and required A records
@@ -176,7 +176,7 @@ export const checkDomainStatus = async (domain: string) => {
 			},
 			status: domainJson,
 		};
-	} catch (error) {
+	} catch (_error) {
 		return {
 			verified: false,
 			error: "Failed to check domain status",

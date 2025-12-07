@@ -1,5 +1,4 @@
-import type { userSelectProps } from "@cap/database/auth/session";
-import { Avatar, Button } from "@cap/ui";
+import { Button } from "@cap/ui";
 import type { Comment } from "@cap/web-domain";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";

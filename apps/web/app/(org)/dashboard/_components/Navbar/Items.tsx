@@ -1,7 +1,6 @@
 "use client";
 import { buildEnv } from "@cap/env";
 import {
-	Avatar,
 	Button,
 	Command,
 	CommandEmpty,
@@ -26,7 +25,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -38,7 +37,6 @@ import { UsageButton } from "@/components/UsageButton";
 import { useDashboardContext } from "../../Contexts";
 import { CapIcon, ChartLineIcon, CogIcon, RecordIcon } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
-import CapAIBox from "./CapAIBox";
 import SpacesList from "./SpacesList";
 import { updateActiveOrganization } from "./server";
 
@@ -88,7 +86,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const [createLoading, setCreateLoading] = useState(false);
 	const [organizationName, setOrganizationName] = useState("");
 	const isOwner = activeOrg?.organization.ownerId === user.id;
-	const [openAIDialog, setOpenAIDialog] = useState(false);
+	const [_openAIDialog, _setOpenAIDialog] = useState(false);
 	const router = useRouter();
 
 	const isPathActive = (path: string, matchChildren: boolean = false) => {

@@ -1,4 +1,3 @@
-import type { RecordingMode } from "./RecordingModeSelector";
 import {
 	type DetectedDisplayRecordingMode,
 	DISPLAY_SURFACE_TO_RECORDING_MODE,
