@@ -456,12 +456,17 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
+            {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = Some(id.clone());
+                app.camera_in_use = true;
+                app.camera_cleanup_done = false;
+            }
+
             let mut attempts = 0;
-            loop {
+            let init_result: Result<(), String> = loop {
                 attempts += 1;
 
-                // We first ask the actor to set the input
-                // This returns a future that resolves when the camera is actually ready
                 let request = camera_feed
                     .ask(feeds::camera::SetInput { id: id.clone() })
                     .await
@@ -473,10 +478,10 @@ async fn set_camera_input(
                 };
 
                 match result {
-                    Ok(_) => break,
+                    Ok(_) => break Ok(()),
                     Err(e) => {
                         if attempts >= 3 {
-                            return Err(format!(
+                            break Err(format!(
                                 "Failed to initialize camera after {} attempts: {}",
                                 attempts, e
                             ));
@@ -488,6 +493,13 @@ async fn set_camera_input(
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 }
+            };
+
+            if let Err(e) = init_result {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = None;
+                app.camera_in_use = false;
+                return Err(e);
             }
 
             ShowCapWindow::Camera
@@ -2758,7 +2770,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    if !app_state.is_recording_active_or_pending() {
+                                    let camera_window_open =
+                                        CapWindowId::Camera.get(&app).is_some();
+
+                                    if !app_state.is_recording_active_or_pending()
+                                        && !camera_window_open
+                                        && !app_state.camera_in_use
+                                    {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         let _ = app_state
@@ -2768,7 +2786,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
-                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
