@@ -1,20 +1,24 @@
-use crate::output_pipeline::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer};
+#[cfg(target_os = "macos")]
+use crate::{
+    VideoFrame,
+    output_pipeline::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer},
+    sources::screen_capture,
+};
+
+#[cfg(target_os = "macos")]
 use anyhow::anyhow;
+#[cfg(target_os = "macos")]
+use cap_enc_avfoundation::SegmentedMP4Encoder;
+#[cfg(target_os = "macos")]
 use cap_media_info::{AudioInfo, VideoInfo};
+#[cfg(target_os = "macos")]
+use cap_timestamp::Timestamp;
+#[cfg(target_os = "macos")]
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
-
-#[cfg(target_os = "macos")]
-use crate::sources::screen_capture;
-
-#[cfg(target_os = "macos")]
-use cap_enc_avfoundation::SegmentedMP4Encoder;
-
-#[cfg(target_os = "macos")]
-use cap_timestamp::Timestamp;
 
 #[cfg(target_os = "macos")]
 pub struct FragmentedAVFoundationMp4Muxer {
@@ -139,10 +143,18 @@ impl VideoMuxer for FragmentedAVFoundationMp4Muxer {
 #[cfg(target_os = "macos")]
 impl AudioMuxer for FragmentedAVFoundationMp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        let mut retry_count = 0;
         loop {
             match self.inner.queue_audio_frame(&frame.inner, timestamp) {
                 Ok(()) => break,
                 Err(cap_enc_avfoundation::QueueFrameError::NotReadyForMore) => {
+                    retry_count += 1;
+                    if retry_count >= Self::MAX_QUEUE_RETRIES {
+                        return Err(anyhow!(
+                            "send_audio_frame/retries_exceeded after {} retries",
+                            Self::MAX_QUEUE_RETRIES
+                        ));
+                    }
                     std::thread::sleep(Duration::from_millis(2));
                     continue;
                 }
@@ -258,10 +270,18 @@ impl VideoMuxer for FragmentedAVFoundationCameraMuxer {
 #[cfg(target_os = "macos")]
 impl AudioMuxer for FragmentedAVFoundationCameraMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        let mut retry_count = 0;
         loop {
             match self.inner.queue_audio_frame(&frame.inner, timestamp) {
                 Ok(()) => break,
                 Err(cap_enc_avfoundation::QueueFrameError::NotReadyForMore) => {
+                    retry_count += 1;
+                    if retry_count >= Self::MAX_QUEUE_RETRIES {
+                        return Err(anyhow!(
+                            "send_audio_frame/retries_exceeded after {} retries",
+                            Self::MAX_QUEUE_RETRIES
+                        ));
+                    }
                     std::thread::sleep(Duration::from_millis(2));
                     continue;
                 }

@@ -96,11 +96,11 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
         .map_err(|e| format!("Failed to create screenshots directory: {e}"))?;
 
     let display_screenshot = screenshots_dir.join("display.jpg");
-    tokio::spawn(create_screenshot(
-        display_output_path,
-        display_screenshot,
-        None,
-    ));
+    tokio::spawn(async move {
+        if let Err(e) = create_screenshot(display_output_path, display_screenshot, None).await {
+            tracing::error!("Failed to create screenshot during recovery: {}", e);
+        }
+    });
 
     Ok(project_path)
 }

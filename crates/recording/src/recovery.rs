@@ -688,9 +688,9 @@ impl RecoveryManager {
             if path.extension().map(|e| e == "png").unwrap_or(false)
                 && let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
                 && let Some(id_str) = file_name.strip_prefix("cursor_")
+                && let Some(full_file_name) = path.file_name().and_then(|n| n.to_str())
             {
-                let relative_path = RelativePathBuf::from("content/cursors")
-                    .join(path.file_name().unwrap().to_str().unwrap());
+                let relative_path = RelativePathBuf::from("content/cursors").join(full_file_name);
 
                 cursors.insert(
                     id_str.to_string(),
