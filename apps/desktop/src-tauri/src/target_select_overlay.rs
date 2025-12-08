@@ -142,7 +142,7 @@ fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
 
     exclusions.iter().any(|entry| {
         entry.matches(
-            bundle_identifier,
+            bundle_identifier.as_deref(),
             owner_name.as_deref(),
             window_title.as_deref(),
         )

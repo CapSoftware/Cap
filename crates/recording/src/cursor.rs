@@ -48,14 +48,14 @@ fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[Cu
         clicks: clicks.to_vec(),
         moves: moves.to_vec(),
     };
-    if let Ok(json) = serde_json::to_string_pretty(&events) {
-        if let Err(e) = std::fs::write(output_path, json) {
-            tracing::error!(
-                "Failed to write cursor data to {}: {}",
-                output_path.display(),
-                e
-            );
-        }
+    if let Ok(json) = serde_json::to_string_pretty(&events)
+        && let Err(e) = std::fs::write(output_path, json)
+    {
+        tracing::error!(
+            "Failed to write cursor data to {}: {}",
+            output_path.display(),
+            e
+        );
     }
 }
 
