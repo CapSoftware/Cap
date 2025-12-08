@@ -81,18 +81,16 @@ impl RecoveryManager {
                 continue;
             };
 
-            if let Some(studio_meta) = meta.studio_meta() {
-                let status = studio_meta.status();
-                if matches!(
-                    status,
+            if let Some(studio_meta) = meta.studio_meta()
+                && matches!(
+                    studio_meta.status(),
                     StudioRecordingStatus::InProgress
                         | StudioRecordingStatus::NeedsRemux
                         | StudioRecordingStatus::Failed { .. }
-                ) {
-                    if let Some(incomplete_recording) = Self::analyze_incomplete(&path, &meta) {
-                        incomplete.push(incomplete_recording);
-                    }
-                }
+                )
+                && let Some(incomplete_recording) = Self::analyze_incomplete(&path, &meta)
+            {
+                incomplete.push(incomplete_recording);
             }
         }
 
@@ -128,12 +126,11 @@ impl RecoveryManager {
             let display_dir = segment_path.join("display");
             let mut display_fragments = Self::find_complete_fragments(&display_dir);
 
-            if display_fragments.is_empty() {
-                if let Some(display_mp4) =
+            if display_fragments.is_empty()
+                && let Some(display_mp4) =
                     Self::probe_single_file(&segment_path.join("display.mp4"))
-                {
-                    display_fragments = vec![display_mp4];
-                }
+            {
+                display_fragments = vec![display_mp4];
             }
 
             if display_fragments.is_empty() {
@@ -197,27 +194,25 @@ impl RecoveryManager {
     fn find_complete_fragments(dir: &Path) -> Vec<PathBuf> {
         let manifest_path = dir.join("manifest.json");
 
-        if manifest_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-                if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(fragments) = manifest.get("fragments").and_then(|f| f.as_array()) {
-                        let result: Vec<PathBuf> = fragments
-                            .iter()
-                            .filter(|f| {
-                                f.get("is_complete")
-                                    .and_then(|c| c.as_bool())
-                                    .unwrap_or(false)
-                            })
-                            .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
-                            .map(|p| dir.join(p))
-                            .filter(|p| p.exists())
-                            .collect();
+        if manifest_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&manifest_path)
+            && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(fragments) = manifest.get("fragments").and_then(|f| f.as_array())
+        {
+            let result: Vec<PathBuf> = fragments
+                .iter()
+                .filter(|f| {
+                    f.get("is_complete")
+                        .and_then(|c| c.as_bool())
+                        .unwrap_or(false)
+                })
+                .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
+                .map(|p| dir.join(p))
+                .filter(|p| p.exists())
+                .collect();
 
-                        if !result.is_empty() {
-                            return result;
-                        }
-                    }
-                }
+            if !result.is_empty() {
+                return result;
             }
         }
 
@@ -671,14 +666,11 @@ impl RecoveryManager {
             return Cursors::default();
         }
 
-        if let Ok(meta) = RecordingMeta::load_for_project(project_path) {
-            if let Some(studio_meta) = meta.studio_meta() {
-                if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio_meta {
-                    if !inner.cursors.is_empty() {
-                        return inner.cursors.clone();
-                    }
-                }
-            }
+        if let Ok(meta) = RecordingMeta::load_for_project(project_path)
+            && let Some(StudioRecordingMeta::MultipleSegments { inner, .. }) = meta.studio_meta()
+            && !inner.cursors.is_empty()
+        {
+            return inner.cursors.clone();
         }
 
         Self::scan_cursor_images(&cursors_dir)
@@ -693,28 +685,27 @@ impl RecoveryManager {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e == "png").unwrap_or(false) {
-                if let Some(file_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    if let Some(id_str) = file_name.strip_prefix("cursor_") {
-                        let relative_path = RelativePathBuf::from("content/cursors")
-                            .join(path.file_name().unwrap().to_str().unwrap());
+            if path.extension().map(|e| e == "png").unwrap_or(false)
+                && let Some(file_name) = path.file_stem().and_then(|s| s.to_str())
+                && let Some(id_str) = file_name.strip_prefix("cursor_")
+            {
+                let relative_path = RelativePathBuf::from("content/cursors")
+                    .join(path.file_name().unwrap().to_str().unwrap());
 
-                        cursors.insert(
-                            id_str.to_string(),
-                            cap_project::CursorMeta {
-                                image_path: relative_path,
-                                hotspot: cap_project::XY::new(0.0, 0.0),
-                                shape: None,
-                            },
-                        );
+                cursors.insert(
+                    id_str.to_string(),
+                    cap_project::CursorMeta {
+                        image_path: relative_path,
+                        hotspot: cap_project::XY::new(0.0, 0.0),
+                        shape: None,
+                    },
+                );
 
-                        info!(
-                            "Recovered cursor {} from image file: {:?}",
-                            id_str,
-                            path.file_name()
-                        );
-                    }
-                }
+                info!(
+                    "Recovered cursor {} from image file: {:?}",
+                    id_str,
+                    path.file_name()
+                );
             }
         }
 

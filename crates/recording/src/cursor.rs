@@ -191,11 +191,11 @@ pub fn spawn_cursor_recorder(
 
             last_mouse_state = mouse_state;
 
-            if let Some(ref path) = output_path {
-                if last_flush.elapsed() >= flush_interval {
-                    flush_cursor_data(path, &response.moves, &response.clicks);
-                    last_flush = Instant::now();
-                }
+            if let Some(ref path) = output_path
+                && last_flush.elapsed() >= flush_interval
+            {
+                flush_cursor_data(path, &response.moves, &response.clicks);
+                last_flush = Instant::now();
             }
         }
 
