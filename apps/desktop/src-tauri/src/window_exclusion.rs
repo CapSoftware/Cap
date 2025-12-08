@@ -1,5 +1,4 @@
-use scap_targets::Window;
-use scap_targets::WindowId;
+use scap_targets::{Window, WindowId};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 

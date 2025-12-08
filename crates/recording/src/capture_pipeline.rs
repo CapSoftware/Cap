@@ -4,6 +4,11 @@ use crate::{
     sources,
     sources::screen_capture::{self, CropBounds, ScreenCaptureFormat, ScreenCaptureTarget},
 };
+
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::{
+    FragmentedAVFoundationMp4Muxer, FragmentedAVFoundationMp4MuxerConfig,
+};
 use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
@@ -15,6 +20,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone, Debug)]
 pub struct EncoderPreferences {
     force_software: Arc<AtomicBool>,
+}
+
+#[cfg(windows)]
+impl Default for EncoderPreferences {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(windows)]
@@ -39,6 +51,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        fragmented: bool,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -64,12 +77,28 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        fragmented: bool,
     ) -> anyhow::Result<OutputPipeline> {
-        OutputPipeline::builder(output_path.clone())
-            .with_video::<screen_capture::VideoSource>(screen_capture)
-            .with_timestamps(start_time)
-            .build::<AVFoundationMp4Muxer>(Default::default())
-            .await
+        if fragmented {
+            let fragments_dir = output_path
+                .parent()
+                .map(|p| p.join("display"))
+                .unwrap_or_else(|| output_path.with_file_name("display"));
+
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<FragmentedAVFoundationMp4Muxer>(
+                    FragmentedAVFoundationMp4MuxerConfig::default(),
+                )
+                .await
+        } else {
+            OutputPipeline::builder(output_path.clone())
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<AVFoundationMp4Muxer>(Default::default())
+                .await
+        }
     }
 
     async fn make_instant_mode_pipeline(
@@ -104,11 +133,21 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
+        fragmented: bool,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
 
-        OutputPipeline::builder(output_path.clone())
+        let actual_output_path = if fragmented {
+            output_path
+                .parent()
+                .map(|p| p.join("display.mp4"))
+                .unwrap_or_else(|| output_path.with_file_name("display.mp4"))
+        } else {
+            output_path.clone()
+        };
+
+        OutputPipeline::builder(actual_output_path)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
             .build::<WindowsMuxer>(WindowsMuxerConfig {
@@ -118,6 +157,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 frame_rate: 30u32,
                 output_size: None,
                 encoder_preferences,
+                fragmented,
+                frag_duration_us: 2_000_000,
             })
             .await
     }
@@ -154,6 +195,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     Height: output_resolution.1 as i32,
                 }),
                 encoder_preferences,
+                fragmented: false,
+                frag_duration_us: 2_000_000,
             })
             .await
     }

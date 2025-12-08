@@ -589,7 +589,10 @@ impl ShowCapWindow {
                         _ = window.run_on_main_thread({
                             let window = window.as_ref().window();
                             move || unsafe {
-                                let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                                let Ok(win) = window.ns_window() else {
+                                    return;
+                                };
+                                let win = win as *const objc2_app_kit::NSWindow;
                                 (*win).setCollectionBehavior(
                                 		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
                                 );

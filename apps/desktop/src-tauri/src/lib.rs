@@ -24,6 +24,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod recovery;
 mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
@@ -2164,7 +2165,7 @@ async fn editor_delete_project(
 #[specta::specta]
 #[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
-    let _ = window.show(&app).await;
+    window.show(&app).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2403,6 +2404,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::focus_window,
             editor_delete_project,
             format_project_name,
+            recovery::find_incomplete_recordings,
+            recovery::recover_recording,
+            recovery::discard_incomplete_recording,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2803,8 +2807,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowId::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowId::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowId::ScreenshotEditor { id } => {
@@ -2815,8 +2819,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowId::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowId::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowId::Settings => {
@@ -2834,8 +2838,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
 
                                 #[cfg(target_os = "windows")]
-                                if !has_open_editor_window(&app) {
-                                    reopen_main_window(&app);
+                                if !has_open_editor_window(app) {
+                                    reopen_main_window(app);
                                 }
 
                                 return;
@@ -3122,6 +3126,11 @@ async fn create_editor_instance_impl(
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
+            tracing::debug!(
+                frame = e.payload.frame_number,
+                fps = e.payload.fps,
+                "RenderFrameEvent received"
+            );
             preview_tx.send_modify(|v| {
                 *v = Some((
                     e.payload.frame_number,

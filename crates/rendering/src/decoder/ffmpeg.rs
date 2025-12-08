@@ -81,6 +81,8 @@ impl FfmpegDecoder {
 
             let time_base = this.decoder().time_base();
             let start_time = this.start_time();
+            let video_width = this.decoder().width();
+            let video_height = this.decoder().height();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
@@ -240,16 +242,24 @@ impl FfmpegDecoder {
                             }
                         }
 
-                        // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                         let last_sent_frame = last_sent_frame.borrow().clone();
-                        if let Some((sender, last_sent_frame)) = sender.take().zip(last_sent_frame)
-                        {
-                            // info!(
-                            //     "sending hail mary frame {} for {requested_frame}",
-                            //     last_sent_frame.0
-                            // );
-
-                            (sender)(last_sent_frame);
+                        if let Some(sender) = sender.take() {
+                            if let Some(last_sent_frame) = last_sent_frame {
+                                (sender)(last_sent_frame);
+                            } else {
+                                debug!(
+                                    "No frames available for request {requested_frame}, sending black frame"
+                                );
+                                let black_frame_data =
+                                    vec![0u8; (video_width * video_height * 4) as usize];
+                                let black_frame = ProcessedFrame {
+                                    number: requested_frame,
+                                    data: Arc::new(black_frame_data),
+                                    width: video_width,
+                                    height: video_height,
+                                };
+                                (sender)(black_frame);
+                            }
                         }
                     }
                 }

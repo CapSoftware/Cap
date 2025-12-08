@@ -1,19 +1,32 @@
 use cap_mediafoundation_utils::*;
 use ffmpeg::{Rational, ffi::av_rescale_q, packet};
+use std::ffi::CString;
 use tracing::*;
 use windows::Win32::Media::MediaFoundation::{IMFSample, MFSampleExtension_CleanPoint};
 
-/// Configuration for H264 muxing
 #[derive(Clone, Debug)]
 pub struct MuxerConfig {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
     pub bitrate: u32,
+    pub fragmented: bool,
+    pub frag_duration_us: i64,
 }
 
-/// H264 stream muxer that works with external FFmpeg output contexts
-/// This version doesn't hold a reference to the output, making it easier to integrate
+impl Default for MuxerConfig {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            fps: 30,
+            bitrate: 0,
+            fragmented: false,
+            frag_duration_us: 2_000_000,
+        }
+    }
+}
+
 pub struct H264StreamMuxer {
     stream_index: usize,
     time_base: ffmpeg::Rational,
@@ -22,27 +35,21 @@ pub struct H264StreamMuxer {
 }
 
 impl H264StreamMuxer {
-    /// Add an H264 stream to an output context and create a muxer for it
-    /// Returns the muxer which can be used to write packets to the stream
-    /// Note: The caller must call write_header() on the output after adding all streams
     pub fn new(
         output: &mut ffmpeg::format::context::Output,
         config: MuxerConfig,
     ) -> Result<Self, ffmpeg::Error> {
         info!("Adding H264 stream to output context");
 
-        // Find H264 codec
         let h264_codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::H264)
             .ok_or(ffmpeg::Error::DecoderNotFound)?;
 
-        // Add video stream
         let mut stream = output.add_stream(h264_codec)?;
         let stream_index = stream.index();
 
         let time_base = ffmpeg::Rational::new(1, config.fps as i32 * 1000);
         stream.set_time_base(time_base);
 
-        // Configure stream parameters
         unsafe {
             let codecpar = (*stream.as_mut_ptr()).codecpar;
             (*codecpar).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO;
@@ -52,7 +59,6 @@ impl H264StreamMuxer {
             (*codecpar).bit_rate = config.bitrate as i64;
             (*codecpar).format = ffmpeg::ffi::AVPixelFormat::AV_PIX_FMT_NV12 as i32;
 
-            // Set frame rate
             (*stream.as_mut_ptr()).avg_frame_rate = ffmpeg::ffi::AVRational {
                 num: config.fps as i32,
                 den: 1,
@@ -64,11 +70,12 @@ impl H264StreamMuxer {
         }
 
         info!(
-            "H264 stream added: {}x{} @ {} fps, {} kbps",
+            "H264 stream added: {}x{} @ {} fps, {} kbps, fragmented={}",
             config.width,
             config.height,
             config.fps,
-            config.bitrate / 1000
+            config.bitrate / 1000,
+            config.fragmented
         );
 
         Ok(Self {
@@ -79,7 +86,6 @@ impl H264StreamMuxer {
         })
     }
 
-    /// Write an H264 sample from MediaFoundation to the output
     pub fn write_sample(
         &mut self,
         sample: &IMFSample,
@@ -135,19 +141,9 @@ impl H264StreamMuxer {
 
         packet.set_stream(self.stream_index);
 
-        // if let Ok(decode_timestamp) =
-        //     unsafe { sample.GetUINT64(&MFSampleExtension_DecodeTimestamp) }
-        // {
-        //     packet.set_dts(Some(mf_from_mf_time(
-        //         self.time_base,
-        //         decode_timestamp as i64,
-        //     )));
-        // }
-
         Ok(packet)
     }
 
-    /// Mark the muxer as finished (note: does not write trailer, caller is responsible)
     pub fn finish(&mut self) -> Result<(), ffmpeg::Error> {
         if self.is_finished {
             return Ok(());
@@ -157,17 +153,13 @@ impl H264StreamMuxer {
 
         info!("Finishing H264 muxer, wrote {} frames", self.frame_count);
 
-        // Note: Caller is responsible for writing trailer to the output context
-
         Ok(())
     }
 
-    /// Get the number of frames written
     pub fn frame_count(&self) -> u64 {
         self.frame_count
     }
 
-    /// Check if the muxer is finished
     pub fn is_finished(&self) -> bool {
         self.is_finished
     }
@@ -177,4 +169,46 @@ const MF_TIMEBASE: ffmpeg::Rational = ffmpeg::Rational(1, 10_000_000);
 
 fn mf_from_mf_time(tb: Rational, stime: i64) -> i64 {
     unsafe { av_rescale_q(stime, MF_TIMEBASE.into(), tb.into()) }
+}
+
+pub fn set_fragmented_mp4_options(
+    output: &mut ffmpeg::format::context::Output,
+    frag_duration_us: i64,
+) -> Result<(), ffmpeg::Error> {
+    unsafe {
+        let ctx = output.as_mut_ptr();
+
+        let movflags_key = CString::new("movflags").unwrap();
+        let movflags_val = CString::new("frag_keyframe+empty_moov+default_base_moof").unwrap();
+
+        let ret = ffmpeg::ffi::av_opt_set(
+            (*ctx).priv_data,
+            movflags_key.as_ptr(),
+            movflags_val.as_ptr(),
+            0,
+        );
+        if ret < 0 {
+            warn!("Failed to set movflags: {}", ret);
+        }
+
+        let frag_duration_key = CString::new("frag_duration").unwrap();
+        let frag_duration_val = CString::new(frag_duration_us.to_string()).unwrap();
+
+        let ret = ffmpeg::ffi::av_opt_set(
+            (*ctx).priv_data,
+            frag_duration_key.as_ptr(),
+            frag_duration_val.as_ptr(),
+            0,
+        );
+        if ret < 0 {
+            warn!("Failed to set frag_duration: {}", ret);
+        }
+
+        info!(
+            "Set fMP4 options: movflags=frag_keyframe+empty_moov+default_base_moof, frag_duration={}us",
+            frag_duration_us
+        );
+    }
+
+    Ok(())
 }

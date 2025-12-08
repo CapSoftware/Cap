@@ -565,7 +565,7 @@ async fn setup_camera(
                 if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
                     let buffer_ready = {
                         if let Ok(mut lock) = buffer.lock() {
-                            lock.copy_from_slice(&*bytes);
+                            lock.copy_from_slice(&bytes);
                             true
                         } else {
                             false

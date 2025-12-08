@@ -137,6 +137,14 @@ impl AVAssetReaderDecoder {
             track_output: &mut self.track_output,
         }
     }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
 }
 
 pub struct FramesIter<'a> {

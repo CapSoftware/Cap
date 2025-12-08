@@ -740,22 +740,30 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			data: ImageData;
 		}>();
 
-		const [editorInstance] = createResource(async () => {
-			const instance = await commands.createEditorInstance();
+		const [isConnected, setIsConnected] = createSignal(false);
 
-			const [_ws, isConnected] = createImageDataWS(
+		const [editorInstance] = createResource(async () => {
+			console.log("[Editor] Creating editor instance...");
+			const instance = await commands.createEditorInstance();
+			console.log("[Editor] Editor instance created, setting up WebSocket");
+
+			const [ws, wsConnected] = createImageDataWS(
 				instance.framesSocketUrl,
 				setLatestFrame,
 			);
 
-			createEffect(() => {
-				if (isConnected()) {
-					events.renderFrameEvent.emit({
-						frame_number: Math.floor(0),
-						fps: FPS,
-						resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
-					});
-				}
+			ws.addEventListener("open", () => {
+				console.log("[Editor] WebSocket open event - emitting initial frame");
+				setIsConnected(true);
+				events.renderFrameEvent.emit({
+					frame_number: 0,
+					fps: FPS,
+					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+				});
+			});
+
+			ws.addEventListener("close", () => {
+				setIsConnected(false);
 			});
 
 			return instance;

@@ -15,6 +15,7 @@ use cap_recording::{
     RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
+    recovery::RecoveryManager,
     sources::MicrophoneSourceError,
     sources::{
         screen_capture,
@@ -30,10 +31,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::borrow::Cow;
+use std::error::Error as StdError;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
-    error::Error as StdError,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -721,6 +722,12 @@ pub async fn start_recording(
                                     .as_ref()
                                     .map(|s| s.custom_cursor_capture)
                                     .unwrap_or_default(),
+                            )
+                            .with_fragmented(
+                                general_settings
+                                    .as_ref()
+                                    .map(|s| s.crash_recovery_recording)
+                                    .unwrap_or_default(),
                             );
 
                             #[cfg(target_os = "macos")]
@@ -1358,41 +1365,68 @@ async fn handle_recording_finish(
     let screenshots_dir = recording_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir).ok();
 
-    let display_output_path = match &completed_recording {
-        CompletedRecording::Studio { recording, .. } => match &recording.meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                segment.display.path.to_path(&recording_dir)
-            }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.segments[0].display.path.to_path(&recording_dir)
-            }
-        },
-        CompletedRecording::Instant { recording, .. } => {
-            recording.project_path.join("./content/output.mp4")
-        }
-    };
-
-    let display_screenshot = screenshots_dir.join("display.jpg");
-    let screenshot_task = tokio::spawn(create_screenshot(
-        display_output_path,
-        display_screenshot.clone(),
-        None,
-    ));
-
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
-            let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
+            let meta_inner = RecordingMetaInner::Studio(recording.meta.clone());
+
+            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+                error!("Failed to load recording meta while saving finished recording: {err}")
+            }) {
+                meta.inner = meta_inner.clone();
+                meta.sharing = None;
+                meta.save_for_project()
+                    .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+            }
+
+            let updated_studio_meta = if needs_fragment_remux(&recording_dir, &recording.meta) {
+                info!("Recording has fragments that need remuxing");
+                if let Err(e) = remux_fragmented_recording(&recording_dir) {
+                    error!("Failed to remux fragmented recording: {e}");
+                    return Err(format!("Failed to remux fragmented recording: {e}"));
+                }
+
+                let updated_meta = RecordingMeta::load_for_project(&recording_dir)
+                    .map_err(|e| format!("Failed to reload recording meta: {e}"))?;
+                updated_meta
+                    .studio_meta()
+                    .ok_or_else(|| "Expected studio meta after remux".to_string())?
+                    .clone()
+            } else {
+                recording.meta.clone()
+            };
+
+            let display_output_path = match &updated_studio_meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    segment.display.path.to_path(&recording_dir)
+                }
+                StudioRecordingMeta::MultipleSegments { inner, .. } => {
+                    inner.segments[0].display.path.to_path(&recording_dir)
+                }
+            };
+
+            let display_screenshot = screenshots_dir.join("display.jpg");
+            tokio::spawn(create_screenshot(
+                display_output_path,
+                display_screenshot.clone(),
+                None,
+            ));
+
+            let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)?;
 
             let config = project_config_from_recording(
                 app,
-                &recording,
+                &cap_recording::studio_recording::CompletedRecording {
+                    project_path: recording.project_path,
+                    meta: updated_studio_meta.clone(),
+                    cursor_data: recording.cursor_data,
+                },
                 &recordings,
                 PresetsStore::get_default_preset(app)?.map(|p| p.config),
             );
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
 
-            (RecordingMetaInner::Studio(recording.meta), None)
+            (RecordingMetaInner::Studio(updated_studio_meta), None)
         }
         CompletedRecording::Instant {
             recording,
@@ -1402,6 +1436,13 @@ async fn handle_recording_finish(
         } => {
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
+
+            let display_screenshot = screenshots_dir.join("display.jpg");
+            let screenshot_task = tokio::spawn(create_screenshot(
+                output_path.clone(),
+                display_screenshot.clone(),
+                None,
+            ));
 
             let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
@@ -1499,9 +1540,11 @@ async fn handle_recording_finish(
         }
     };
 
-    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
-        error!("Failed to load recording meta while saving finished recording: {err}")
-    }) {
+    if let RecordingMetaInner::Instant(_) = &meta_inner
+        && let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            error!("Failed to load recording meta while saving finished recording: {err}")
+        })
+    {
         meta.inner = meta_inner.clone();
         meta.sharing = sharing;
         meta.save_for_project()
@@ -1827,6 +1870,148 @@ fn project_config_from_recording(
     });
 
     config
+}
+
+fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {
+    let StudioRecordingMeta::MultipleSegments { inner, .. } = meta else {
+        return false;
+    };
+
+    for segment in &inner.segments {
+        let display_path = segment.display.path.to_path(recording_dir);
+        if display_path.is_dir() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
+    let meta = RecordingMeta::load_for_project(recording_dir)
+        .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+
+    let incomplete =
+        RecoveryManager::find_incomplete(recording_dir.parent().unwrap_or(recording_dir));
+
+    let incomplete_recording = incomplete
+        .into_iter()
+        .find(|r| r.project_path == recording_dir)
+        .or_else(|| analyze_recording_for_remux(recording_dir, &meta));
+
+    if let Some(recording) = incomplete_recording {
+        RecoveryManager::recover(&recording)
+            .map_err(|e| format!("Failed to remux recording: {e}"))?;
+        info!("Successfully remuxed fragmented recording");
+        Ok(())
+    } else {
+        Err("Could not find fragments to remux".to_string())
+    }
+}
+
+fn analyze_recording_for_remux(
+    project_path: &Path,
+    meta: &RecordingMeta,
+) -> Option<cap_recording::recovery::IncompleteRecording> {
+    use cap_recording::recovery::{IncompleteRecording, RecoverableSegment};
+
+    let StudioRecordingMeta::MultipleSegments { inner, .. } = meta.studio_meta()? else {
+        return None;
+    };
+
+    let mut recoverable_segments = Vec::new();
+
+    for (index, segment) in inner.segments.iter().enumerate() {
+        let display_path = segment.display.path.to_path(project_path);
+        let display_fragments = if display_path.is_dir() {
+            find_fragments_in_dir(&display_path)
+        } else if display_path.exists() {
+            vec![display_path]
+        } else {
+            continue;
+        };
+
+        if display_fragments.is_empty() {
+            continue;
+        }
+
+        let camera_fragments = segment.camera.as_ref().and_then(|cam| {
+            let cam_path = cam.path.to_path(project_path);
+            if cam_path.is_dir() {
+                let frags = find_fragments_in_dir(&cam_path);
+                if frags.is_empty() { None } else { Some(frags) }
+            } else if cam_path.exists() {
+                Some(vec![cam_path])
+            } else {
+                None
+            }
+        });
+
+        let cursor_path = segment
+            .cursor
+            .as_ref()
+            .map(|c| c.to_path(project_path))
+            .filter(|p| p.exists());
+
+        let mic_fragments = segment.mic.as_ref().and_then(|mic| {
+            let mic_path = mic.path.to_path(project_path);
+            if mic_path.is_dir() {
+                let frags = find_fragments_in_dir(&mic_path);
+                if frags.is_empty() { None } else { Some(frags) }
+            } else if mic_path.exists() {
+                Some(vec![mic_path])
+            } else {
+                None
+            }
+        });
+
+        let system_audio_fragments = segment.system_audio.as_ref().and_then(|sys| {
+            let sys_path = sys.path.to_path(project_path);
+            if sys_path.is_dir() {
+                let frags = find_fragments_in_dir(&sys_path);
+                if frags.is_empty() { None } else { Some(frags) }
+            } else if sys_path.exists() {
+                Some(vec![sys_path])
+            } else {
+                None
+            }
+        });
+
+        recoverable_segments.push(RecoverableSegment {
+            index: index as u32,
+            display_fragments,
+            camera_fragments,
+            mic_fragments,
+            system_audio_fragments,
+            cursor_path,
+        });
+    }
+
+    if recoverable_segments.is_empty() {
+        return None;
+    }
+
+    Some(IncompleteRecording {
+        project_path: project_path.to_path_buf(),
+        meta: meta.clone(),
+        recoverable_segments,
+        estimated_duration: Duration::ZERO,
+    })
+}
+
+fn find_fragments_in_dir(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut fragments: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "mp4" || e == "m4a"))
+        .collect();
+
+    fragments.sort();
+    fragments
 }
 
 #[cfg(test)]

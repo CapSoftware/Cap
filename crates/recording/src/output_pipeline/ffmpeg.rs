@@ -3,7 +3,10 @@ use crate::{
     output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
 };
 use anyhow::{Context, anyhow};
-use cap_enc_ffmpeg::{aac::AACEncoder, h264::*, ogg::*, opus::OpusEncoder};
+use cap_enc_ffmpeg::{
+    aac::AACEncoder, fragmented_audio::FragmentedAudioFile, h264::*, ogg::*, opus::OpusEncoder,
+    segmented_audio::SegmentedAudioEncoder,
+};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
 use std::{
@@ -152,5 +155,97 @@ impl Muxer for OggMuxer {
 impl AudioMuxer for OggMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
         Ok(self.0.queue_frame(frame.inner, timestamp)?)
+    }
+}
+
+pub struct FragmentedAudioMuxer(FragmentedAudioFile);
+
+impl Muxer for FragmentedAudioMuxer {
+    type Config = ();
+
+    async fn setup(
+        _: Self::Config,
+        output_path: PathBuf,
+        _: Option<VideoInfo>,
+        audio_config: Option<AudioInfo>,
+        _: Arc<AtomicBool>,
+        _: &mut TaskPool,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let audio_config =
+            audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
+
+        Ok(Self(
+            FragmentedAudioFile::init(output_path, audio_config)
+                .map_err(|e| anyhow!("Failed to initialize fragmented audio encoder: {e}"))?,
+        ))
+    }
+
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.0
+            .finish()
+            .map_err(Into::into)
+            .map(|r| r.map_err(Into::into))
+    }
+}
+
+impl AudioMuxer for FragmentedAudioMuxer {
+    fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        Ok(self.0.queue_frame(frame.inner, timestamp)?)
+    }
+}
+
+pub struct SegmentedAudioMuxer(SegmentedAudioEncoder);
+
+pub struct SegmentedAudioMuxerConfig {
+    pub segment_duration: Duration,
+}
+
+impl Default for SegmentedAudioMuxerConfig {
+    fn default() -> Self {
+        Self {
+            segment_duration: Duration::from_secs(3),
+        }
+    }
+}
+
+impl Muxer for SegmentedAudioMuxer {
+    type Config = SegmentedAudioMuxerConfig;
+
+    async fn setup(
+        config: Self::Config,
+        output_path: PathBuf,
+        _: Option<VideoInfo>,
+        audio_config: Option<AudioInfo>,
+        _: Arc<AtomicBool>,
+        _: &mut TaskPool,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let audio_config =
+            audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
+
+        Ok(Self(
+            SegmentedAudioEncoder::init(output_path, audio_config, config.segment_duration)
+                .map_err(|e| anyhow!("Failed to initialize segmented audio encoder: {e}"))?,
+        ))
+    }
+
+    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.0
+            .finish_with_timestamp(timestamp)
+            .map_err(Into::into)
+            .map(|_| Ok(()))
+    }
+}
+
+impl AudioMuxer for SegmentedAudioMuxer {
+    fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
+        self.0
+            .queue_frame(frame.inner, timestamp)
+            .map_err(|e| anyhow!("Failed to queue audio frame: {e}"))
     }
 }

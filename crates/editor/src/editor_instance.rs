@@ -2,10 +2,13 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle, PlaybackStartError};
 use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
-use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
+use cap_project::{
+    CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
+    TimelineSegment, XY,
+};
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    RenderedFrame, SegmentVideoPaths, get_duration,
+    RenderedFrame, SegmentVideoPaths, Video, get_duration,
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
@@ -35,29 +38,123 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
+        trace!("EditorInstance::new starting for {:?}", project_path);
+
         if !project_path.exists() {
-            println!("Video path {} not found!", project_path.display());
-            panic!("Video path {} not found!", project_path.display());
+            return Err(format!("Video path {} not found!", project_path.display()));
         }
 
-        let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
+        trace!("Loading recording meta");
+        let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path)
+            .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err("Cannot edit non-studio recordings".to_string());
         };
-        let project = recording_meta.project_config();
+
+        let segment_count = match meta {
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+        };
+
+        trace!("Recording has {} segments", segment_count);
+
+        if segment_count == 0 {
+            return Err(
+                "Recording has no segments. It may need to be recovered first.".to_string(),
+            );
+        }
+
+        let mut project = recording_meta.project_config();
+
+        if project.timeline.is_none() {
+            warn!("Project config has no timeline, creating one from recording segments");
+            let timeline_segments = match meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    let display_path = recording_meta.path(&segment.display.path);
+                    let duration = match Video::new(&display_path, 0.0) {
+                        Ok(v) => v.duration,
+                        Err(e) => {
+                            warn!(
+                                "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                e,
+                                display_path.display()
+                            );
+                            5.0
+                        }
+                    };
+                    vec![TimelineSegment {
+                        recording_clip: 0,
+                        start: 0.0,
+                        end: duration,
+                        timescale: 1.0,
+                    }]
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => inner
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, segment)| {
+                        let display_path = recording_meta.path(&segment.display.path);
+                        let duration = match Video::new(&display_path, 0.0) {
+                            Ok(v) => v.duration,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                    e,
+                                    display_path.display()
+                                );
+                                5.0
+                            }
+                        };
+                        if duration <= 0.0 {
+                            return None;
+                        }
+                        Some(TimelineSegment {
+                            recording_clip: i as u32,
+                            start: 0.0,
+                            end: duration,
+                            timescale: 1.0,
+                        })
+                    })
+                    .collect(),
+            };
+
+            if !timeline_segments.is_empty() {
+                project.timeline = Some(TimelineConfiguration {
+                    segments: timeline_segments,
+                    zoom_segments: Vec::new(),
+                    scene_segments: Vec::new(),
+                    mask_segments: Vec::new(),
+                    text_segments: Vec::new(),
+                });
+
+                if let Err(e) = project.write(&recording_meta.project_path) {
+                    warn!("Failed to save auto-generated timeline: {}", e);
+                } else {
+                    trace!("Auto-generated timeline saved to project config");
+                }
+            }
+        }
+
+        trace!("Creating ProjectRecordingsMeta");
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
             meta,
         )?);
 
+        trace!("Creating segments with decoders");
         let segments = create_segments(&recording_meta, meta).await?;
+        trace!("Segments created successfully");
 
+        trace!("Creating render constants");
         let render_constants = Arc::new(
             RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
-                .unwrap(),
+                .map_err(|e| format!("Failed to create render constants: {e}"))?,
         );
 
+        trace!("Spawning renderer");
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
             frame_cb,
@@ -87,6 +184,7 @@ impl EditorInstance {
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
 
+        trace!("EditorInstance::new completed successfully");
         Ok(this)
     }
 
@@ -196,9 +294,13 @@ impl EditorInstance {
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
+        trace!("Starting preview renderer task");
         tokio::spawn(async move {
+            trace!("Preview renderer task running");
             loop {
+                trace!("Preview renderer: waiting for frame request");
                 preview_rx.changed().await.unwrap();
+                trace!("Preview renderer: received change notification");
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
@@ -207,11 +309,17 @@ impl EditorInstance {
                         break;
                     };
 
+                    trace!("Preview renderer: processing frame {}", frame_number);
+
                     let project = self.project_config.1.borrow().clone();
 
                     let Some((segment_time, segment)) =
                         project.get_segment_time(frame_number as f64 / fps as f64)
                     else {
+                        warn!(
+                            "Preview renderer: no segment found for frame {}",
+                            frame_number
+                        );
                         break;
                     };
 
@@ -241,6 +349,7 @@ impl EditorInstance {
                             }
 
                             if let Some(segment_frames) = segment_frames_opt {
+                                trace!("Preview renderer: rendering frame {}", frame_number);
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
                                     &project,
@@ -253,6 +362,8 @@ impl EditorInstance {
                                 self.renderer
                                     .render_frame(segment_frames, uniforms, segment_medias.cursor.clone(), frame_number)
                                     .await;
+                            } else {
+                                warn!("Preview renderer: no frames returned for frame {}", frame_number);
                             }
                         }
                     }

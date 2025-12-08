@@ -260,8 +260,10 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             // Only restore if the window is actually minimized
             if IsIconic(hwnd).as_bool() {
                 // Get current window placement to preserve size/position
-                let mut wp = WINDOWPLACEMENT::default();
-                wp.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+                let mut wp = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    ..Default::default()
+                };
 
                 if GetWindowPlacement(hwnd, &mut wp).is_ok() {
                     // Restore using the previous placement to avoid resizing
