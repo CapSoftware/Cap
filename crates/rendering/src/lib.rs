@@ -1215,7 +1215,7 @@ impl ProjectUniforms {
                             (b.opacity / 100.0).clamp(0.0, 1.0),
                         ]
                     } else {
-                        [1.0, 1.0, 1.0, 0.8]
+                        [0.0, 0.0, 0.0, 0.0]
                     },
                     _padding2: [0.0; 4],
                 },

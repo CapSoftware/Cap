@@ -122,7 +122,13 @@ const BACKGROUND_THEMES = {
 };
 
 export function BackgroundSettingsPopover() {
-	const { project, setProject, projectHistory } = useScreenshotEditorContext();
+	const {
+		project,
+		setProject,
+		projectHistory,
+		activePopover,
+		setActivePopover,
+	} = useScreenshotEditorContext();
 
 	let scrollRef!: HTMLDivElement;
 
@@ -194,11 +200,16 @@ export function BackgroundSettingsPopover() {
 	};
 
 	return (
-		<Popover placement="bottom-start">
+		<Popover
+			placement="bottom-start"
+			open={activePopover() === "background"}
+			onOpenChange={(open) => setActivePopover(open ? "background" : null)}
+		>
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapImage class="size-4" />}
 				tooltipText="Background"
+				kbd={["B"]}
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[400px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95">

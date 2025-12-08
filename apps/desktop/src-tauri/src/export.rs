@@ -1,6 +1,6 @@
 use crate::{FramesRendered, get_video_metadata};
 use cap_export::ExporterBase;
-use cap_project::{RecordingMeta, XY};
+use cap_project::RecordingMeta;
 use serde::Deserialize;
 use specta::Type;
 use std::path::PathBuf;

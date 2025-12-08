@@ -60,6 +60,7 @@ tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
+regex = "1.10.4"
 rodio = "0.19.0"
 png = "0.17.13"
 device_query = "4.0.1"
@@ -106,6 +107,7 @@ tauri-plugin-sentry = "0.5.0"
 thiserror.workspace = true
 bytes = "1.10.1"
 async-stream = "0.3.6"
+sanitize-filename = "0.6.0"
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
@@ -113,6 +115,7 @@ opentelemetry-otlp = "0.31.0"                                                 #{
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
+aho-corasick.workspace = true
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

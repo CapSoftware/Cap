@@ -2,26 +2,31 @@ use crate::{ConversionConfig, ConvertError, ConverterBackend, FrameConverter};
 use ffmpeg::{format::Pixel, frame};
 use parking_lot::Mutex;
 use std::{
+    mem::ManuallyDrop,
     ptr,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use windows::{
-    Win32::Graphics::{
-        Direct3D::D3D_DRIVER_TYPE_HARDWARE,
-        Direct3D11::{
-            D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
-            D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAP_WRITE, D3D11_SDK_VERSION,
-            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-            D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
-            D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice,
-            ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
-            ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
-            ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-        },
-        Dxgi::{
-            Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
-            IDXGIAdapter, IDXGIDevice,
+    Win32::{
+        Foundation::HMODULE,
+        Graphics::{
+            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+            Direct3D11::{
+                D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAP_WRITE,
+                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+                D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D,
+                D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device,
+                ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
+                ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+                ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
+            },
+            Dxgi::{
+                Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
+                IDXGIAdapter, IDXGIDevice,
+            },
         },
     },
     core::Interface,
@@ -150,7 +155,7 @@ impl D3D11Converter {
             D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
-                None,
+                HMODULE::default(),
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 None,
                 D3D11_SDK_VERSION,
@@ -243,7 +248,7 @@ impl D3D11Converter {
             config.input_height,
             input_dxgi,
             D3D11_USAGE_DEFAULT,
-            D3D11_BIND_RENDER_TARGET.0,
+            D3D11_BIND_RENDER_TARGET.0 as u32,
             0,
         )?;
 
@@ -253,7 +258,7 @@ impl D3D11Converter {
             config.output_height,
             output_dxgi,
             D3D11_USAGE_DEFAULT,
-            D3D11_BIND_RENDER_TARGET.0,
+            D3D11_BIND_RENDER_TARGET.0 as u32,
             0,
         )?;
 
@@ -264,7 +269,7 @@ impl D3D11Converter {
             input_dxgi,
             D3D11_USAGE_STAGING,
             0,
-            D3D11_CPU_ACCESS_WRITE.0,
+            D3D11_CPU_ACCESS_WRITE.0 as u32,
         )?;
 
         let staging_output = create_texture(
@@ -274,7 +279,7 @@ impl D3D11Converter {
             output_dxgi,
             D3D11_USAGE_STAGING,
             0,
-            D3D11_CPU_ACCESS_READ.0,
+            D3D11_CPU_ACCESS_READ.0 as u32,
         )?;
 
         let resources = D3D11Resources {
@@ -333,12 +338,19 @@ impl FrameConverter for D3D11Converter {
         }
 
         let pts = input.pts();
-        let mut resources = self.resources.lock();
+        let resources = self.resources.lock();
 
         unsafe {
-            let mapped = resources
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            resources
                 .context
-                .Map(&resources.staging_input, 0, D3D11_MAP_WRITE, 0)
+                .Map(
+                    &resources.staging_input,
+                    0,
+                    D3D11_MAP_WRITE,
+                    0,
+                    Some(&mut mapped),
+                )
                 .map_err(|e| {
                     ConvertError::ConversionFailed(format!("Map input failed: {:?}", e))
                 })?;
@@ -363,16 +375,21 @@ impl FrameConverter for D3D11Converter {
                     },
             };
 
-            let input_view: ID3D11VideoProcessorInputView = resources
+            let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
+            resources
                 .video_device
                 .CreateVideoProcessorInputView(
                     &resources.input_texture,
                     &resources.enumerator,
                     &input_view_desc,
+                    Some(&mut input_view),
                 )
                 .map_err(|e| {
                     ConvertError::ConversionFailed(format!("CreateInputView failed: {:?}", e))
                 })?;
+            let input_view = input_view.ok_or_else(|| {
+                ConvertError::ConversionFailed("CreateInputView returned null".to_string())
+            })?;
 
             let output_view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
                 ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
@@ -384,16 +401,21 @@ impl FrameConverter for D3D11Converter {
                     },
             };
 
-            let output_view: ID3D11VideoProcessorOutputView = resources
+            let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
+            resources
                 .video_device
                 .CreateVideoProcessorOutputView(
                     &resources.output_texture,
                     &resources.enumerator,
                     &output_view_desc,
+                    Some(&mut output_view),
                 )
                 .map_err(|e| {
                     ConvertError::ConversionFailed(format!("CreateOutputView failed: {:?}", e))
                 })?;
+            let output_view = output_view.ok_or_else(|| {
+                ConvertError::ConversionFailed("CreateOutputView returned null".to_string())
+            })?;
 
             let stream = D3D11_VIDEO_PROCESSOR_STREAM {
                 Enable: true.into(),
@@ -405,7 +427,7 @@ impl FrameConverter for D3D11Converter {
                 pInputSurface: std::mem::transmute_copy(&input_view),
                 ppFutureSurfaces: ptr::null_mut(),
                 ppPastSurfacesRight: ptr::null_mut(),
-                pInputSurfaceRight: None,
+                pInputSurfaceRight: ManuallyDrop::new(None),
                 ppFutureSurfacesRight: ptr::null_mut(),
             };
 
@@ -427,9 +449,16 @@ impl FrameConverter for D3D11Converter {
                 .context
                 .CopyResource(&resources.staging_output, &resources.output_texture);
 
-            let mapped = resources
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            resources
                 .context
-                .Map(&resources.staging_output, 0, D3D11_MAP_READ, 0)
+                .Map(
+                    &resources.staging_output,
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(&mut mapped),
+                )
                 .map_err(|e| {
                     ConvertError::ConversionFailed(format!("Map output failed: {:?}", e))
                 })?;
@@ -494,16 +523,20 @@ fn create_texture(
             Quality: 0,
         },
         Usage: usage,
-        BindFlags: windows::Win32::Graphics::Direct3D11::D3D11_BIND_FLAG(bind_flags as i32),
-        CPUAccessFlags: windows::Win32::Graphics::Direct3D11::D3D11_CPU_ACCESS_FLAG(
-            cpu_access as i32,
-        ),
-        MiscFlags: windows::Win32::Graphics::Direct3D11::D3D11_RESOURCE_MISC_FLAG(0),
+        BindFlags: bind_flags,
+        CPUAccessFlags: cpu_access,
+        MiscFlags: 0,
     };
 
     unsafe {
-        device.CreateTexture2D(&desc, None).map_err(|e| {
-            ConvertError::HardwareUnavailable(format!("CreateTexture2D failed: {:?}", e))
+        let mut texture: Option<ID3D11Texture2D> = None;
+        device
+            .CreateTexture2D(&desc, None, Some(&mut texture))
+            .map_err(|e| {
+                ConvertError::HardwareUnavailable(format!("CreateTexture2D failed: {:?}", e))
+            })?;
+        texture.ok_or_else(|| {
+            ConvertError::HardwareUnavailable("CreateTexture2D returned null".to_string())
         })
     }
 }
@@ -515,29 +548,35 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
     match format {
         Pixel::NV12 => {
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    frame.data(0).as_ptr().add(y * frame.stride(0)),
-                    dst.add(y * dst_stride),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        frame.width() as usize,
+                    );
+                }
             }
             let uv_offset = height * dst_stride;
             for y in 0..height / 2 {
-                ptr::copy_nonoverlapping(
-                    frame.data(1).as_ptr().add(y * frame.stride(1)),
-                    dst.add(uv_offset + y * dst_stride),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(1).as_ptr().add(y * frame.stride(1)),
+                        dst.add(uv_offset + y * dst_stride),
+                        frame.width() as usize,
+                    );
+                }
             }
         }
         Pixel::YUYV422 | Pixel::UYVY422 => {
             let row_bytes = frame.width() as usize * 2;
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    frame.data(0).as_ptr().add(y * frame.stride(0)),
-                    dst.add(y * dst_stride),
-                    row_bytes,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        row_bytes,
+                    );
+                }
             }
         }
         _ => {}
@@ -551,30 +590,36 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
     match format {
         Pixel::NV12 => {
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    src.add(y * src_stride),
-                    frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        frame.width() as usize,
+                    );
+                }
             }
             let uv_offset = height * src_stride;
             for y in 0..height / 2 {
-                ptr::copy_nonoverlapping(
-                    src.add(uv_offset + y * src_stride),
-                    frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(uv_offset + y * src_stride),
+                        frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
+                        frame.width() as usize,
+                    );
+                }
             }
         }
         Pixel::YUYV422 => {
             let bytes_per_pixel = 2;
             let row_bytes = frame.width() as usize * bytes_per_pixel;
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    src.add(y * src_stride),
-                    frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
-                    row_bytes,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        row_bytes,
+                    );
+                }
             }
         }
         _ => {}

@@ -115,30 +115,28 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     if mixed_samples.is_empty() {
                         mixed_samples = audio.samples().to_vec();
                         channel_count = audio.channels() as usize;
-                    } else {
-                        if audio.channels() as usize != channel_count {
-                            log::info!(
-                                "Channel count mismatch: {} vs {}, mixing to mono",
-                                channel_count,
-                                audio.channels()
-                            );
+                    } else if audio.channels() as usize != channel_count {
+                        log::info!(
+                            "Channel count mismatch: {} vs {}, mixing to mono",
+                            channel_count,
+                            audio.channels()
+                        );
 
-                            if channel_count > 1 {
-                                let mono_samples = convert_to_mono(&mixed_samples, channel_count);
-                                mixed_samples = mono_samples;
-                                channel_count = 1;
-                            }
-
-                            let samples = if audio.channels() > 1 {
-                                convert_to_mono(audio.samples(), audio.channels() as usize)
-                            } else {
-                                audio.samples().to_vec()
-                            };
-
-                            mix_samples(&mut mixed_samples, &samples);
-                        } else {
-                            mix_samples(&mut mixed_samples, audio.samples());
+                        if channel_count > 1 {
+                            let mono_samples = convert_to_mono(&mixed_samples, channel_count);
+                            mixed_samples = mono_samples;
+                            channel_count = 1;
                         }
+
+                        let samples = if audio.channels() > 1 {
+                            convert_to_mono(audio.samples(), audio.channels() as usize)
+                        } else {
+                            audio.samples().to_vec()
+                        };
+
+                        mix_samples(&mut mixed_samples, &samples);
+                    } else {
+                        mix_samples(&mut mixed_samples, audio.samples());
                     }
                 }
                 Err(e) => {
@@ -1012,13 +1010,11 @@ fn start_whisperx_server(
     std::thread::spawn(move || {
         use std::io::BufRead;
         let reader = std::io::BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                if line.starts_with("STDERR:") {
-                    log::info!("[WhisperX] {}", &line[7..]);
-                } else {
-                    log::info!("[WhisperX stderr] {}", line);
-                }
+        for line in reader.lines().flatten() {
+            if let Some(stripped) = line.strip_prefix("STDERR:") {
+                log::info!("[WhisperX] {}", stripped);
+            } else {
+                log::info!("[WhisperX stderr] {}", line);
             }
         }
     });

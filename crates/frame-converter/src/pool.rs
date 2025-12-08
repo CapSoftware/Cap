@@ -185,7 +185,7 @@ impl AsyncConverterPool {
             Err(flume::TrySendError::Full(_)) => {
                 self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
                 let dropped = self.stats.frames_dropped.load(Ordering::Relaxed);
-                if dropped % 30 == 0 {
+                if dropped.is_multiple_of(30) {
                     warn!(
                         "Converter pool input full, dropped {} frames so far",
                         dropped
