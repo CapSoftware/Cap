@@ -290,7 +290,6 @@ pub fn probe_video_can_decode(path: &Path) -> Result<bool, String> {
         .map_err(|e| format!("Failed to create video decoder: {e}"))?;
 
     let stream_index = input_stream.index();
-    drop(input_stream);
 
     let mut input = avformat::input(path).map_err(|e| format!("Failed to reopen file: {e}"))?;
 

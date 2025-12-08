@@ -12,6 +12,7 @@ pub struct SegmentedAudioEncoder {
     current_index: u32,
     segment_duration: Duration,
     segment_start_time: Option<Duration>,
+    last_frame_timestamp: Option<Duration>,
 
     completed_segments: Vec<SegmentInfo>,
 }
@@ -87,6 +88,7 @@ impl SegmentedAudioEncoder {
             current_index: 0,
             segment_duration,
             segment_start_time: None,
+            last_frame_timestamp: None,
             completed_segments: Vec::new(),
         })
     }
@@ -124,6 +126,8 @@ impl SegmentedAudioEncoder {
         if self.segment_start_time.is_none() {
             self.segment_start_time = Some(timestamp);
         }
+
+        self.last_frame_timestamp = Some(timestamp);
 
         let segment_elapsed =
             timestamp.saturating_sub(self.segment_start_time.unwrap_or(Duration::ZERO));
@@ -205,15 +209,15 @@ impl SegmentedAudioEncoder {
         if let Some(mut encoder) = self.current_encoder.take() {
             if encoder.has_frames {
                 if let Some(segment_start) = self.segment_start_time {
-                    let final_duration = Duration::from_secs(5);
+                    let final_duration = self
+                        .last_frame_timestamp
+                        .unwrap_or(segment_start)
+                        .saturating_sub(segment_start);
 
                     self.completed_segments.push(SegmentInfo {
                         path: self.current_segment_path(),
                         index: self.current_index,
-                        duration: final_duration.saturating_sub(
-                            final_duration
-                                .saturating_sub(segment_start.saturating_sub(segment_start)),
-                        ),
+                        duration: final_duration,
                     });
                 }
 
