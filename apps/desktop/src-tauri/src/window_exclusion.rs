@@ -61,34 +61,3 @@ impl WindowExclusion {
         false
     }
 }
-
-pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
-    if exclusions.is_empty() {
-        return Vec::new();
-    }
-
-    Window::list()
-        .into_iter()
-        .filter_map(|window| {
-            let owner_name = window.owner_name();
-            let window_title = window.name();
-
-            #[cfg(target_os = "macos")]
-            let bundle_identifier = window.raw_handle().bundle_identifier();
-
-            #[cfg(not(target_os = "macos"))]
-            let bundle_identifier = None::<&str>;
-
-            exclusions
-                .iter()
-                .find(|entry| {
-                    entry.matches(
-                        bundle_identifier.as_deref(),
-                        owner_name.as_deref(),
-                        window_title.as_deref(),
-                    )
-                })
-                .map(|_| window.id())
-        })
-        .collect()
-}
