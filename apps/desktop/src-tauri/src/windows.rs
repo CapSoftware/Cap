@@ -343,7 +343,7 @@ impl CapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     if new_recording_flow {
-                        _ = window.run_on_main_thread({
+                        let _ = window.run_on_main_thread({
                             let window = window.clone();
                             move || window.objc2_nswindow().setLevel(50)
                         });
