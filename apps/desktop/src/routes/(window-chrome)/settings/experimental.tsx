@@ -91,7 +91,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							label="Crash-recoverable recording"
 							description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
 							value={!!settings.crashRecoveryRecording}
-							onChange={(value) => handleChange("crashRecoveryRecording", value)}
+							onChange={(value) =>
+								handleChange("crashRecoveryRecording", value)
+							}
 						/>
 					</div>
 				</div>

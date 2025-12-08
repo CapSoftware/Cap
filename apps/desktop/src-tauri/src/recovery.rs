@@ -85,9 +85,10 @@ pub async fn recover_recording(app: AppHandle, project_path: String) -> Result<S
         StudioRecordingMeta::SingleSegment { segment } => {
             segment.display.path.to_path(&recovered.project_path)
         }
-        StudioRecordingMeta::MultipleSegments { inner, .. } => {
-            inner.segments[0].display.path.to_path(&recovered.project_path)
-        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner.segments[0]
+            .display
+            .path
+            .to_path(&recovered.project_path),
     };
 
     let screenshots_dir = recovered.project_path.join("screenshots");
