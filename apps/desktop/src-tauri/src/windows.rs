@@ -463,7 +463,7 @@ impl CapWindow {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
                     let _ = camera.close();
                 };
 
@@ -477,7 +477,7 @@ impl CapWindow {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
                     let _ = camera.close();
                 };
 
@@ -705,7 +705,7 @@ impl CapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
-                
+
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window

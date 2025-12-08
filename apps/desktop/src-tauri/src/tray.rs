@@ -427,7 +427,7 @@ fn handle_previous_item_click(app: &AppHandle, path_str: &str) {
             let app = app.clone();
             let project_path = path.clone();
             tokio::spawn(async move {
-                let _ = ShowCapWindow::Editor { project_path }.show(&app).await;
+                let _ = CapWindow::Editor { project_path }.show(&app).await;
             });
         }
         RecordingMetaInner::Instant(_) => {

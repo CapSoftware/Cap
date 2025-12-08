@@ -2776,8 +2776,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    let camera_window_open =
-                                        CapWindowId::Camera.get(&app).is_some();
+                                    let camera_window_open = CapWindowDef::Camera.get(&app).is_some();
 
                                     if !app_state.is_recording_active_or_pending()
                                         && !camera_window_open
