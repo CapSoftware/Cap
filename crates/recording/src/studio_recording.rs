@@ -5,20 +5,26 @@ use crate::{
     },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
-    ffmpeg::OggMuxer,
+    ffmpeg::{OggMuxer, SegmentedAudioMuxer, SegmentedAudioMuxerConfig},
     output_pipeline::{DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError},
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
 };
 
 #[cfg(target_os = "macos")]
-use crate::output_pipeline::{AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig};
+use crate::output_pipeline::{
+    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, FragmentedAVFoundationCameraMuxer,
+    FragmentedAVFoundationCameraMuxerConfig,
+};
 
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsCameraMuxer, WindowsCameraMuxerConfig};
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
-use cap_project::{CursorEvents, StudioRecordingMeta};
+use cap_project::{
+    CursorEvents, MultipleSegments, Platform, RecordingMeta, RecordingMetaInner,
+    StudioRecordingMeta, StudioRecordingStatus,
+};
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, future::OptionFuture, stream::FuturesUnordered};
 use kameo::{Actor as _, prelude::*};
@@ -442,6 +448,7 @@ pub struct ActorBuilder {
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
+    fragmented: bool,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
 }
@@ -455,6 +462,7 @@ impl ActorBuilder {
             mic_feed: None,
             camera_feed: None,
             custom_cursor: false,
+            fragmented: false,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -477,6 +485,11 @@ impl ActorBuilder {
 
     pub fn with_custom_cursor(mut self, custom_cursor: bool) -> Self {
         self.custom_cursor = custom_cursor;
+        self
+    }
+
+    pub fn with_fragmented(mut self, fragmented: bool) -> Self {
+        self.fragmented = fragmented;
         self
     }
 
@@ -503,6 +516,7 @@ impl ActorBuilder {
                 excluded_windows: self.excluded_windows,
             },
             self.custom_cursor,
+            self.fragmented,
         )
         .await
     }
@@ -513,6 +527,7 @@ async fn spawn_studio_recording_actor(
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    fragmented: bool,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -542,9 +557,14 @@ async fn spawn_studio_recording_actor(
         cursors_dir,
         base_inputs.clone(),
         custom_cursor_capture,
+        fragmented,
         start_time,
         completion_tx.clone(),
     );
+
+    if fragmented {
+        write_in_progress_meta(&recording_dir)?;
+    }
 
     let index = 0;
     let pipeline = segment_pipeline_factory
@@ -674,6 +694,7 @@ struct SegmentPipelineFactory {
     cursors_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
+    fragmented: bool,
     start_time: Timestamps,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -688,6 +709,7 @@ impl SegmentPipelineFactory {
         cursors_dir: PathBuf,
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
+        fragmented: bool,
         start_time: Timestamps,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
@@ -696,6 +718,7 @@ impl SegmentPipelineFactory {
             cursors_dir,
             base_inputs,
             custom_cursor_capture,
+            fragmented,
             start_time,
             index: 0,
             completion_tx,
@@ -717,6 +740,7 @@ impl SegmentPipelineFactory {
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
+            self.fragmented,
             self.start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
@@ -785,6 +809,7 @@ async fn create_segment_pipeline(
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
+    fragmented: bool,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
@@ -823,6 +848,7 @@ async fn create_segment_pipeline(
         capture_source,
         screen_output_path.clone(),
         start_time,
+        fragmented,
         #[cfg(windows)]
         encoder_preferences,
     )
@@ -831,16 +857,29 @@ async fn create_segment_pipeline(
     .context("screen pipeline setup")?;
 
     #[cfg(target_os = "macos")]
-    let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
-        OutputPipeline::builder(dir.join("camera.mp4"))
-            .with_video::<sources::NativeCamera>(camera_feed)
-            .with_timestamps(start_time)
-            .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
-            .instrument(error_span!("camera-out"))
-    }))
-    .await
-    .transpose()
-    .context("camera pipeline setup")?;
+    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+        let pipeline = if fragmented {
+            let fragments_dir = dir.join("camera");
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<FragmentedAVFoundationCameraMuxer>(
+                    FragmentedAVFoundationCameraMuxerConfig::default(),
+                )
+                .instrument(error_span!("camera-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("camera.mp4"))
+                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
+                .instrument(error_span!("camera-out"))
+                .await
+        };
+        Some(pipeline.context("camera pipeline setup")?)
+    } else {
+        None
+    };
 
     #[cfg(windows)]
     let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
@@ -854,27 +893,49 @@ async fn create_segment_pipeline(
     .transpose()
     .context("camera pipeline setup")?;
 
-    let microphone = OptionFuture::from(base_inputs.mic_feed.map(|mic_feed| {
-        OutputPipeline::builder(dir.join("audio-input.ogg"))
-            .with_audio_source::<sources::Microphone>(mic_feed)
-            .with_timestamps(start_time)
-            .build::<OggMuxer>(())
-            .instrument(error_span!("mic-out"))
-    }))
-    .await
-    .transpose()
-    .context("microphone pipeline setup")?;
+    let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
+        let pipeline = if fragmented {
+            let fragments_dir = dir.join("audio-input");
+            OutputPipeline::builder(fragments_dir)
+                .with_audio_source::<sources::Microphone>(mic_feed)
+                .with_timestamps(start_time)
+                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .instrument(error_span!("mic-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("audio-input.ogg"))
+                .with_audio_source::<sources::Microphone>(mic_feed)
+                .with_timestamps(start_time)
+                .build::<OggMuxer>(())
+                .instrument(error_span!("mic-out"))
+                .await
+        };
+        Some(pipeline.context("microphone pipeline setup")?)
+    } else {
+        None
+    };
 
-    let system_audio = OptionFuture::from(system_audio.map(|system_audio| {
-        OutputPipeline::builder(dir.join("system_audio.ogg"))
-            .with_audio_source::<screen_capture::SystemAudioSource>(system_audio)
-            .with_timestamps(start_time)
-            .build::<OggMuxer>(())
-            .instrument(error_span!("system-audio-out"))
-    }))
-    .await
-    .transpose()
-    .context("system audio pipeline setup")?;
+    let system_audio = if let Some(system_audio_source) = system_audio {
+        let pipeline = if fragmented {
+            let fragments_dir = dir.join("system_audio");
+            OutputPipeline::builder(fragments_dir)
+                .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
+                .with_timestamps(start_time)
+                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .instrument(error_span!("system-audio-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("system_audio.ogg"))
+                .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
+                .with_timestamps(start_time)
+                .build::<OggMuxer>(())
+                .instrument(error_span!("system-audio-out"))
+                .await
+        };
+        Some(pipeline.context("system audio pipeline setup")?)
+    } else {
+        None
+    };
 
     let cursor = custom_cursor_capture
         .then(move || {
@@ -883,6 +944,13 @@ async fn create_segment_pipeline(
                 .cursor_crop()
                 .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
+            let cursor_output_path = dir.join("cursor.json");
+            let incremental_output = if fragmented {
+                Some(cursor_output_path.clone())
+            } else {
+                None
+            };
+
             let cursor = spawn_cursor_recorder(
                 cursor_crop_bounds,
                 display,
@@ -890,10 +958,11 @@ async fn create_segment_pipeline(
                 prev_cursors,
                 next_cursors_id,
                 start_time,
+                incremental_output,
             );
 
             Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                output_path: dir.join("cursor.json"),
+                output_path: cursor_output_path,
                 actor: cursor,
             })
         })
@@ -921,4 +990,28 @@ fn current_time_f64() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs_f64()
+}
+
+fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
+    use chrono::Local;
+
+    let pretty_name = Local::now().format("Cap %Y-%m-%d at %H.%M.%S").to_string();
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.to_path_buf(),
+        pretty_name,
+        sharing: None,
+        inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: Vec::new(),
+                cursors: cap_project::Cursors::default(),
+                status: Some(StudioRecordingStatus::InProgress),
+            },
+        }),
+        upload: None,
+    };
+
+    meta.save_for_project()
+        .map_err(|e| anyhow!("Failed to save in-progress meta: {:?}", e))
 }

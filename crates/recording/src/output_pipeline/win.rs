@@ -72,7 +72,6 @@ impl PauseTracker {
     }
 }
 
-/// Muxes to MP4 using a combination of FFmpeg and Media Foundation
 pub struct WindowsMuxer {
     video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
@@ -87,6 +86,8 @@ pub struct WindowsMuxerConfig {
     pub bitrate_multiplier: f32,
     pub output_size: Option<SizeInt32>,
     pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+    pub fragmented: bool,
+    pub frag_duration_us: i64,
 }
 
 impl Muxer for WindowsMuxer {
@@ -110,9 +111,15 @@ impl Muxer for WindowsMuxer {
             Height: video_config.height as i32,
         };
         let output_size = config.output_size.unwrap_or(input_size);
+        let fragmented = config.fragmented;
+        let frag_duration_us = config.frag_duration_us;
         let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
 
         let mut output = ffmpeg::format::output(&output_path)?;
+
+        if fragmented {
+            cap_mediafoundation_ffmpeg::set_fragmented_mp4_options(&mut output, frag_duration_us)?;
+        }
         let audio_encoder = audio_config
             .map(|config| AACEncoder::init(config, &mut output))
             .transpose()?;
@@ -218,6 +225,8 @@ impl Muxer for WindowsMuxer {
                                         height,
                                         fps: config.frame_rate,
                                         bitrate: encoder.bitrate(),
+                                        fragmented,
+                                        frag_duration_us,
                                     },
                                 )
                             };
@@ -421,9 +430,20 @@ pub struct WindowsCameraMuxer {
     pause: PauseTracker,
 }
 
-#[derive(Default)]
 pub struct WindowsCameraMuxerConfig {
     pub output_height: Option<u32>,
+    pub fragmented: bool,
+    pub frag_duration_us: i64,
+}
+
+impl Default for WindowsCameraMuxerConfig {
+    fn default() -> Self {
+        Self {
+            output_height: None,
+            fragmented: false,
+            frag_duration_us: 2_000_000,
+        }
+    }
 }
 
 impl Muxer for WindowsCameraMuxer {
@@ -460,10 +480,17 @@ impl Muxer for WindowsCameraMuxer {
 
         let frame_rate = video_config.fps();
         let bitrate_multiplier = 0.2;
+        let fragmented = config.fragmented;
+        let frag_duration_us = config.frag_duration_us;
 
         let (video_tx, video_rx) = sync_channel::<Option<(NativeCameraFrame, Duration)>>(30);
 
         let mut output = ffmpeg::format::output(&output_path)?;
+
+        if fragmented {
+            cap_mediafoundation_ffmpeg::set_fragmented_mp4_options(&mut output, frag_duration_us)?;
+        }
+
         let audio_encoder = audio_config
             .map(|config| AACEncoder::init(config, &mut output))
             .transpose()?;
@@ -527,6 +554,8 @@ impl Muxer for WindowsCameraMuxer {
                                     height: output_height,
                                     fps: frame_rate,
                                     bitrate: encoder.bitrate(),
+                                    fragmented,
+                                    frag_duration_us,
                                 },
                             )
                         };

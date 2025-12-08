@@ -30,6 +30,7 @@ specta = { version = "=2.0.0-rc.20", features = [
     "chrono"
 ] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
     "input-native",

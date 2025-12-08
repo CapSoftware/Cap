@@ -1,9 +1,9 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
+use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time::Instant};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -37,6 +37,22 @@ impl CursorActor {
     }
 }
 
+const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+
+fn flush_cursor_data(
+    output_path: &PathBuf,
+    moves: &[CursorMoveEvent],
+    clicks: &[CursorClickEvent],
+) {
+    let events = CursorEvents {
+        clicks: clicks.to_vec(),
+        moves: moves.to_vec(),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&events) {
+        let _ = std::fs::write(output_path, json);
+    }
+}
+
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     crop_bounds: CursorCropBounds,
@@ -45,6 +61,7 @@ pub fn spawn_cursor_recorder(
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: Timestamps,
+    output_path: Option<PathBuf>,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
@@ -66,7 +83,6 @@ pub fn spawn_cursor_recorder(
 
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
-        // Create cursors directory if it doesn't exist
         std::fs::create_dir_all(&cursors_dir).unwrap();
 
         let mut response = CursorActorResponse {
@@ -75,6 +91,9 @@ pub fn spawn_cursor_recorder(
             moves: vec![],
             clicks: vec![],
         };
+
+        let mut last_flush = Instant::now();
+        let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(10));
@@ -93,17 +112,14 @@ pub fn spawn_cursor_recorder(
                 data.image.hash(&mut hasher);
                 let id = hasher.finish();
 
-                // Check if we've seen this cursor data before
                 if let Some(existing_id) = response.cursors.get(&id) {
                     existing_id.id.to_string()
                 } else {
-                    // New cursor data - save it
                     let cursor_id = response.next_cursor_id.to_string();
                     let file_name = format!("cursor_{cursor_id}.png");
                     let cursor_path = cursors_dir.join(&file_name);
 
                     if let Ok(image) = image::load_from_memory(&data.image) {
-                        // Convert to RGBA
                         let rgba_image = image.into_rgba8();
 
                         if let Err(e) = rgba_image.save(&cursor_path) {
@@ -174,9 +190,20 @@ pub fn spawn_cursor_recorder(
             }
 
             last_mouse_state = mouse_state;
+
+            if let Some(ref path) = output_path {
+                if last_flush.elapsed() >= flush_interval {
+                    flush_cursor_data(path, &response.moves, &response.clicks);
+                    last_flush = Instant::now();
+                }
+            }
         }
 
         info!("cursor recorder done");
+
+        if let Some(ref path) = output_path {
+            flush_cursor_data(path, &response.moves, &response.clicks);
+        }
 
         let _ = tx.send(response);
     });

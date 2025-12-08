@@ -1307,6 +1307,8 @@ dependencies = [
  "cap-media-info",
  "cidre",
  "ffmpeg-next",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -1318,6 +1320,8 @@ version = "0.1.0"
 dependencies = [
  "cap-media-info",
  "ffmpeg-next",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",

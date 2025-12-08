@@ -27,6 +27,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNewRecordingFlow: true,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
+			crashRecoveryRecording: false,
 		},
 	);
 
@@ -85,6 +86,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									5,
 								);
 							}}
+						/>
+						<ToggleSettingItem
+							label="Crash-recoverable recording"
+							description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
+							value={!!settings.crashRecoveryRecording}
+							onChange={(value) => handleChange("crashRecoveryRecording", value)}
 						/>
 					</div>
 				</div>

@@ -37,7 +37,7 @@ mod zoom;
 pub use coord::*;
 pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
-pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
+pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
 use mask::interpolate_masks;
 use scene::*;
@@ -211,6 +211,8 @@ impl RecordingSegmentDecoders {
 pub enum RenderingError {
     #[error("No GPU adapter found")]
     NoAdapter,
+    #[error("No segments available in recording")]
+    NoSegments,
     #[error(transparent)]
     RequestDeviceFailed(#[from] wgpu::RequestDeviceError),
     #[error("Failed to wait for buffer mapping")]
@@ -366,9 +368,11 @@ impl RenderVideoConstants {
         recording_meta: RecordingMeta,
         meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
+        let first_segment = segments.first().ok_or(RenderingError::NoSegments)?;
+
         let options = RenderOptions {
-            screen_size: XY::new(segments[0].display.width, segments[0].display.height),
-            camera_size: segments[0]
+            screen_size: XY::new(first_segment.display.width, first_segment.display.height),
+            camera_size: first_segment
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
