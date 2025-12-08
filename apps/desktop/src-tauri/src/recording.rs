@@ -34,7 +34,6 @@ use std::borrow::Cow;
 use std::{
     any::Any,
     collections::{HashMap, VecDeque},
-    error::Error as StdError,
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     str::FromStr,
@@ -55,9 +54,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{
-        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
-    },
+    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     thumbnails::*,
@@ -1540,15 +1537,15 @@ async fn handle_recording_finish(
         }
     };
 
-    if let RecordingMetaInner::Instant(_) = &meta_inner {
-        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+    if let RecordingMetaInner::Instant(_) = &meta_inner
+        && let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
             error!("Failed to load recording meta while saving finished recording: {err}")
-        }) {
-            meta.inner = meta_inner.clone();
-            meta.sharing = sharing;
-            meta.save_for_project()
-                .map_err(|e| format!("Failed to save recording meta: {e}"))?;
-        }
+        })
+    {
+        meta.inner = meta_inner.clone();
+        meta.sharing = sharing;
+        meta.save_for_project()
+            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
     }
 
     if let RecordingMetaInner::Studio(_) = meta_inner {
@@ -1897,13 +1894,7 @@ fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     let incomplete_recording = incomplete
         .into_iter()
         .find(|r| r.project_path == recording_dir)
-        .or_else(|| {
-            if let Some(analyzed) = analyze_recording_for_remux(recording_dir, &meta) {
-                Some(analyzed)
-            } else {
-                None
-            }
-        });
+        .or_else(|| analyze_recording_for_remux(recording_dir, &meta));
 
     if let Some(recording) = incomplete_recording {
         RecoveryManager::recover(&recording)
