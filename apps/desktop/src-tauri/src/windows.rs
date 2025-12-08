@@ -161,8 +161,8 @@ impl CapWindowDef {
     #[cfg(target_os = "macos")]
     pub const fn pre_solarium_traffic_lights_position(&self) -> LogicalPosition<f64> {
         match self {
-            Self::Editor { .. } | Self::ScreenshotEditor { .. } => LogicalPosition::new(20.0, 32.0),
-            _ => LogicalPosition::new(12.0, 12.0),
+            Self::Editor { .. } | Self::ScreenshotEditor { .. } => LogicalPosition::new(20.0, 25.0),
+            _ => LogicalPosition::new(12.0, 16.0),
         }
     }
 
