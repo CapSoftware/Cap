@@ -72,9 +72,17 @@ impl EditorInstance {
             let timeline_segments = match meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     let display_path = recording_meta.path(&segment.display.path);
-                    let duration = Video::new(&display_path, 0.0)
-                        .map(|v| v.duration)
-                        .unwrap_or(5.0);
+                    let duration = match Video::new(&display_path, 0.0) {
+                        Ok(v) => v.duration,
+                        Err(e) => {
+                            warn!(
+                                "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                e,
+                                display_path.display()
+                            );
+                            5.0
+                        }
+                    };
                     vec![TimelineSegment {
                         recording_clip: 0,
                         start: 0.0,
@@ -88,9 +96,17 @@ impl EditorInstance {
                     .enumerate()
                     .filter_map(|(i, segment)| {
                         let display_path = recording_meta.path(&segment.display.path);
-                        let duration = Video::new(&display_path, 0.0)
-                            .map(|v| v.duration)
-                            .unwrap_or(5.0);
+                        let duration = match Video::new(&display_path, 0.0) {
+                            Ok(v) => v.duration,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                    e,
+                                    display_path.display()
+                                );
+                                5.0
+                            }
+                        };
                         if duration <= 0.0 {
                             return None;
                         }

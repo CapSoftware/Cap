@@ -25,7 +25,6 @@ use tracing::*;
 
 // const WINDOW_DURATION: Duration = Duration::from_secs(3);
 // const LOG_INTERVAL: Duration = Duration::from_secs(5);
-const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
 
 #[derive(Debug)]
 pub struct Direct3DCapture;

@@ -145,6 +145,7 @@ impl Message<Stop> for Actor {
             self.recording_dir.clone(),
             std::mem::take(&mut self.segments),
             cursors,
+            self.segment_factory.fragmented,
         )
         .await?;
 
@@ -610,6 +611,7 @@ async fn stop_recording(
     recording_dir: PathBuf,
     segments: Vec<RecordingSegment>,
     cursors: Cursors,
+    fragmented: bool,
 ) -> Result<CompletedRecording, RecordingError> {
     use cap_project::*;
 
@@ -617,44 +619,61 @@ async fn stop_recording(
         RelativePathBuf::from_path(path.strip_prefix(&recording_dir).unwrap()).unwrap()
     };
 
+    let segment_metas: Vec<_> = futures::stream::iter(segments)
+        .then(async |s| {
+            let to_start_time = |timestamp: Timestamp| {
+                timestamp
+                    .duration_since(s.pipeline.start_time)
+                    .as_secs_f64()
+            };
+
+            MultipleSegment {
+                display: VideoMeta {
+                    path: make_relative(&s.pipeline.screen.path),
+                    fps: s.pipeline.screen.video_info.unwrap().fps(),
+                    start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
+                },
+                camera: s.pipeline.camera.map(|camera| VideoMeta {
+                    path: make_relative(&camera.path),
+                    fps: camera.video_info.unwrap().fps(),
+                    start_time: Some(to_start_time(camera.first_timestamp)),
+                }),
+                mic: s.pipeline.microphone.map(|mic| AudioMeta {
+                    path: make_relative(&mic.path),
+                    start_time: Some(to_start_time(mic.first_timestamp)),
+                }),
+                system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
+                    path: make_relative(&audio.path),
+                    start_time: Some(to_start_time(audio.first_timestamp)),
+                }),
+                cursor: s
+                    .pipeline
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| make_relative(&cursor.output_path)),
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    let needs_remux = if fragmented {
+        segment_metas.iter().any(|seg| {
+            let display_path = seg.display.path.to_path(&recording_dir);
+            display_path.is_dir()
+        })
+    } else {
+        false
+    };
+
+    let status = if needs_remux {
+        Some(StudioRecordingStatus::NeedsRemux)
+    } else {
+        Some(StudioRecordingStatus::Complete)
+    };
+
     let meta = StudioRecordingMeta::MultipleSegments {
         inner: MultipleSegments {
-            segments: futures::stream::iter(segments)
-                .then(async |s| {
-                    let to_start_time = |timestamp: Timestamp| {
-                        timestamp
-                            .duration_since(s.pipeline.start_time)
-                            .as_secs_f64()
-                    };
-
-                    MultipleSegment {
-                        display: VideoMeta {
-                            path: make_relative(&s.pipeline.screen.path),
-                            fps: s.pipeline.screen.video_info.unwrap().fps(),
-                            start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
-                        },
-                        camera: s.pipeline.camera.map(|camera| VideoMeta {
-                            path: make_relative(&camera.path),
-                            fps: camera.video_info.unwrap().fps(),
-                            start_time: Some(to_start_time(camera.first_timestamp)),
-                        }),
-                        mic: s.pipeline.microphone.map(|mic| AudioMeta {
-                            path: make_relative(&mic.path),
-                            start_time: Some(to_start_time(mic.first_timestamp)),
-                        }),
-                        system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
-                            path: make_relative(&audio.path),
-                            start_time: Some(to_start_time(audio.first_timestamp)),
-                        }),
-                        cursor: s
-                            .pipeline
-                            .cursor
-                            .as_ref()
-                            .map(|cursor| make_relative(&cursor.output_path)),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .await,
+            segments: segment_metas,
             cursors: cap_project::Cursors::Correct(
                 cursors
                     .into_values()
@@ -671,7 +690,7 @@ async fn stop_recording(
                     })
                     .collect(),
             ),
-            status: Some(StudioRecordingStatus::Complete),
+            status,
         },
     };
 
