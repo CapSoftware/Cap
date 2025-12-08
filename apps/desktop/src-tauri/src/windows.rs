@@ -7,7 +7,6 @@ use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
-    f64,
     ops::Deref,
     path::PathBuf,
     str::FromStr,
@@ -259,8 +258,6 @@ pub enum CapWindow {
 
 impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        use std::fmt::Write;
-
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
             let window_id = {
@@ -400,7 +397,7 @@ impl CapWindow {
 
                 #[cfg(windows)]
                 {
-                    builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
+                    builder = builder.inner_size(100.0, 100.0).position(0.0, 0.0);
                 }
 
                 let window = builder.build()?;

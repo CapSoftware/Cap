@@ -2969,9 +2969,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
 #[cfg(target_os = "windows")]
 fn has_open_editor_window(app: &AppHandle) -> bool {
-    app.webview_windows()
-        .keys()
-        .any(|label| matches!(CapWindow::from_str(label), Ok(CapWindow::Editor { .. })))
+    app.webview_windows().keys().any(|label| {
+        matches!(
+            CapWindowDef::from_str(label),
+            Ok(CapWindowDef::Editor { .. })
+        )
+    })
 }
 
 #[cfg(target_os = "windows")]
