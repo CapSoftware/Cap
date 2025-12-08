@@ -317,8 +317,10 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                     ))
                 }
 
-                #[cfg(windows)]
-                Some(b.size().map(|v| (v / 2.0).floor() * 2.0))
+                #[cfg(target_os = "windows")]
+                {
+                    Some(b.size().map(|v| (v / 2.0).floor() * 2.0))
+                }
             })
             .or_else(|| display.physical_size())
             .ok_or(ScreenCaptureInitError::NoBounds)?;
