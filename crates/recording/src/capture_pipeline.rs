@@ -23,6 +23,13 @@ pub struct EncoderPreferences {
 }
 
 #[cfg(windows)]
+impl Default for EncoderPreferences {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(windows)]
 impl EncoderPreferences {
     pub fn new() -> Self {
         Self {

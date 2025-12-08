@@ -169,7 +169,7 @@ impl Muxer for WindowsMuxer {
 
                         cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
                             .with_output_size(fallback_width, fallback_height)
-                            .and_then(|builder| builder.build(&mut *output_guard))
+                            .and_then(|builder| builder.build(&mut output_guard))
                             .map(either::Right)
                             .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
@@ -219,7 +219,7 @@ impl Muxer for WindowsMuxer {
                                 };
 
                                 cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                    &mut *output_guard,
+                                    &mut output_guard,
                                     cap_mediafoundation_ffmpeg::MuxerConfig {
                                         width,
                                         height,
@@ -548,7 +548,7 @@ impl Muxer for WindowsCameraMuxer {
                             };
 
                             cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                &mut *output_guard,
+                                &mut output_guard,
                                 cap_mediafoundation_ffmpeg::MuxerConfig {
                                     width: output_width,
                                     height: output_height,
@@ -625,7 +625,7 @@ impl Muxer for WindowsCameraMuxer {
                                         return Ok(None);
                                     };
                                     frame_count += 1;
-                                    if frame_count % 30 == 0 {
+                                    if frame_count.is_multiple_of(30) {
                                         debug!(
                                             "Windows camera encoder: processed {} frames",
                                             frame_count
@@ -639,7 +639,7 @@ impl Muxer for WindowsCameraMuxer {
                             |output_sample| {
                                 let mut output = output.lock().unwrap();
                                 let _ = muxer
-                                    .write_sample(&output_sample, &mut *output)
+                                    .write_sample(&output_sample, &mut output)
                                     .map_err(|e| format!("WriteSample: {e}"));
                                 Ok(())
                             },

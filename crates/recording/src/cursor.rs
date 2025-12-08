@@ -3,7 +3,11 @@ use cap_cursor_info::CursorShape;
 use cap_project::{CursorClickEvent, CursorEvents, CursorMoveEvent, XY};
 use cap_timestamp::Timestamps;
 use futures::{FutureExt, future::Shared};
-use std::{collections::HashMap, path::PathBuf, time::Instant};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -39,17 +43,19 @@ impl CursorActor {
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 
-fn flush_cursor_data(
-    output_path: &PathBuf,
-    moves: &[CursorMoveEvent],
-    clicks: &[CursorClickEvent],
-) {
+fn flush_cursor_data(output_path: &Path, moves: &[CursorMoveEvent], clicks: &[CursorClickEvent]) {
     let events = CursorEvents {
         clicks: clicks.to_vec(),
         moves: moves.to_vec(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&events) {
-        let _ = std::fs::write(output_path, json);
+        if let Err(e) = std::fs::write(output_path, json) {
+            tracing::error!(
+                "Failed to write cursor data to {}: {}",
+                output_path.display(),
+                e
+            );
+        }
     }
 }
 
