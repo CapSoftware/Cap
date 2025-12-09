@@ -1,6 +1,5 @@
 "use client";
 
-import { buildEnv } from "@cap/env";
 import {
 	Button,
 	Logo,
@@ -132,14 +131,7 @@ export const Navbar = () => {
 
 	return (
 		<>
-			<header
-				className={classNames(
-					"fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500",
-					buildEnv.NEXT_PUBLIC_IS_CAP === "true"
-						? "top-[60px] lg:top-[65px]"
-						: "top-4 lg:top-10",
-				)}
-			>
+			<header className="fixed left-0 right-0 z-[51] animate-in fade-in slide-in-from-top-4 duration-500 top-4 lg:top-6">
 				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
 					<div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
 						<div className="flex items-center">
