@@ -28,6 +28,7 @@ export interface VideoMetadata {
 	 */
 	chapters?: { title: string; start: number }[];
 	aiProcessing?: boolean;
+	aiGenerationSkipped?: boolean;
 }
 
 /**

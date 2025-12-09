@@ -138,6 +138,7 @@ export async function generateAiMetadata(
 					metadata: {
 						...metadata,
 						aiProcessing: false,
+						aiGenerationSkipped: true,
 					},
 				})
 				.where(eq(videos.id, videoId));
@@ -166,6 +167,7 @@ export async function generateAiMetadata(
 					metadata: {
 						...metadata,
 						aiProcessing: false,
+						aiGenerationSkipped: true,
 					},
 				})
 				.where(eq(videos.id, videoId));
