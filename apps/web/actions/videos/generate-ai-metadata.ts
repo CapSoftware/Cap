@@ -129,13 +129,19 @@ export async function generateAiMetadata(
 		}).pipe(runPromise);
 
 		if (Option.isNone(vtt)) {
-			console.error(`[generateAiMetadata] Transcript is empty`);
-			throw new Error("Transcript is empty");
-		} else if (vtt.value.length < 10) {
-			console.error(
-				`[generateAiMetadata] Transcript is too short (${vtt.value.length} chars)`,
+			console.log(
+				`[generateAiMetadata] Transcript is empty for ${videoId}, skipping AI metadata`,
 			);
-			throw new Error("Transcript is too short");
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: false,
+					},
+				})
+				.where(eq(videos.id, videoId));
+			return;
 		}
 
 		const transcriptText = vtt.value
@@ -147,7 +153,24 @@ export async function generateAiMetadata(
 					!/^\d+$/.test(l.trim()) &&
 					!l.includes("-->"),
 			)
-			.join(" ");
+			.join(" ")
+			.trim();
+
+		if (transcriptText.length < 10) {
+			console.log(
+				`[generateAiMetadata] Transcript content too short for ${videoId} (${transcriptText.length} chars), skipping AI metadata`,
+			);
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: false,
+					},
+				})
+				.where(eq(videos.id, videoId));
+			return;
+		}
 
 		const prompt = `You are Cap AI. Summarize the transcript and provide JSON in the following format:
 {
