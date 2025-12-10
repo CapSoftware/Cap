@@ -48,7 +48,7 @@ impl Default for CompositeVideoFrameUniforms {
             motion_blur_params: Default::default(),
             target_size: Default::default(),
             rounding_px: Default::default(),
-            corner_exponent: Default::default(),
+            corner_exponent: 0.6,
             mirror_x: Default::default(),
             shadow: Default::default(),
             shadow_size: Default::default(),

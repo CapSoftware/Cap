@@ -1159,11 +1159,9 @@ impl ProjectUniforms {
                     target_size: [target_size.x as f32, target_size.y as f32],
                     rounding_px: compute_adjusted_radius(
                         project.background.rounding as f32 / 100.0 * 0.5 * min_target_axis as f32,
-                        project.background.rounding_smoothness as f32,
+                        project.background.rounding_smoothness,
                     ),
-                    corner_exponent: smoothness_to_exponent(
-                        project.background.rounding_smoothness as f32,
-                    ),
+                    corner_exponent: smoothness_to_exponent(project.background.rounding_smoothness),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
                     motion_blur_zoom_center: descriptor.zoom_center_uv,
@@ -1342,11 +1340,9 @@ impl ProjectUniforms {
                     ],
                     rounding_px: compute_adjusted_radius(
                         project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]) as f32,
-                        project.background.rounding_smoothness as f32,
+                        project.background.rounding_smoothness,
                     ),
-                    corner_exponent: smoothness_to_exponent(
-                        project.background.rounding_smoothness as f32,
-                    ),
+                    corner_exponent: smoothness_to_exponent(project.background.rounding_smoothness),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_descriptor.movement_vector_uv,
                     motion_blur_zoom_center: camera_descriptor.zoom_center_uv,
