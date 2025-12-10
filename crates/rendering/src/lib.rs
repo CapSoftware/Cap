@@ -2018,7 +2018,7 @@ fn srgb_to_linear(c: u16) -> f32 {
 
 // Converts a smoothness value (0.0 to 1.0) to a super ellipse exponent.
 #[inline]
-fn smoothness_to_exponent(smoothness: f32) -> f32 {
+pub(crate) fn smoothness_to_exponent(smoothness: f32) -> f32 {
     2.0 + smoothness * 6.0
 }
 

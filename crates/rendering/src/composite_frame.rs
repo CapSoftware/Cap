@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::{include_wgsl, util::DeviceExt};
 
-use crate::create_shader_render_pipeline;
+use crate::{create_shader_render_pipeline, smoothness_to_exponent};
 
 pub struct CompositeVideoFramePipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -48,7 +48,7 @@ impl Default for CompositeVideoFrameUniforms {
             motion_blur_params: Default::default(),
             target_size: Default::default(),
             rounding_px: Default::default(),
-            corner_exponent: 0.6,
+            corner_exponent: smoothness_to_exponent(0.6),
             mirror_x: Default::default(),
             shadow: Default::default(),
             shadow_size: Default::default(),
