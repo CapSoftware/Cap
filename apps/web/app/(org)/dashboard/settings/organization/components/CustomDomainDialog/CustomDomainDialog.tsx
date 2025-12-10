@@ -138,8 +138,11 @@ const CustomDomainDialog = ({
 	const router = useRouter();
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	const confettiRef = useRef<ConfettiRef>(null);
-
 	const pollInterval = useRef<NodeJS.Timeout | undefined>(undefined);
+	const checkDomainMutationRef = useRef<{
+		mutate: (args: { orgId: string; showToasts: boolean }) => void;
+		isPending: boolean;
+	} | null>(null);
 
 	const updateDomainMutation = useMutation({
 		mutationFn: async ({
@@ -218,6 +221,11 @@ const CustomDomainDialog = ({
 		},
 	});
 
+	checkDomainMutationRef.current = {
+		mutate: checkDomainMutation.mutate,
+		isPending: checkDomainMutation.isPending,
+	};
+
 	const [stepState, dispatch] = useReducer(stepReducer, {
 		currentIndex: 0,
 		totalSteps: STEP_CONFIGS.length,
@@ -267,7 +275,7 @@ const CustomDomainDialog = ({
 			)
 				return;
 
-			checkDomainMutation.mutate({
+			checkDomainMutationRef.current?.mutate({
 				orgId: activeOrganization.organization.id,
 				showToasts,
 			});
@@ -275,7 +283,6 @@ const CustomDomainDialog = ({
 		[
 			activeOrganization?.organization.id,
 			activeOrganization?.organization.customDomain,
-			checkDomainMutation,
 		],
 	);
 
