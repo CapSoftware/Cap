@@ -65,7 +65,7 @@ import IconLucideTimer from "~icons/lucide/timer";
 import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
-import { type CornerRoundingType, useEditorContext } from "./context";
+import { useEditorContext } from "./context";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
@@ -218,11 +218,6 @@ const CAMERA_SHAPES = [
 		value: "source",
 	},
 ] satisfies Array<{ name: string; value: CameraShape }>;
-
-const CORNER_STYLE_OPTIONS = [
-	{ name: "Squircle", value: "squircle" },
-	{ name: "Rounded", value: "rounded" },
-] satisfies Array<{ name: string; value: CornerRoundingType }>;
 
 const BACKGROUND_THEMES = {
 	macOS: "macOS",
@@ -1718,9 +1713,9 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 								if (!file) return;
 
 								/*
-                    this is a Tauri bug in WebKit so we need to validate the file type manually
-                    https://github.com/tauri-apps/tauri/issues/9158
-                    */
+					this is a Tauri bug in WebKit so we need to validate the file type manually
+					https://github.com/tauri-apps/tauri/issues/9158
+					*/
 								const validExtensions = [
 									"jpg",
 									"jpeg",
@@ -1986,23 +1981,27 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
-					<Slider
-						value={[project.background.rounding]}
-						onChange={(v) => setProject("background", "rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.background.roundingType}
-						onChange={(value) =>
-							setProject("background", "roundingType", value)
-						}
-					/>
-				</div>
+				<Slider
+					value={[project.background.rounding]}
+					onChange={(v) => setProject("background", "rounding", v[0])}
+					minValue={0}
+					maxValue={100}
+					step={0.1}
+					formatTooltip="%"
+				/>
+			</Field>
+			<Field
+				name="Corner Smoothness"
+				icon={<IconLucideSquareRoundCorner class="size-4" />}
+			>
+				<Slider
+					value={[project.background.roundingSmoothness ?? 0]}
+					onChange={(v) => setProject("background", "roundingSmoothness", v[0])}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip={(value) => `${Math.round(value * 100)}%`}
+				/>
 			</Field>
 			<Field name="Motion Blur" icon={<IconLucideWind class="size-4" />}>
 				<Slider
@@ -2340,21 +2339,27 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 				/>
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
-				<div class="flex flex-col gap-3">
-					<Slider
-						value={[project.camera.rounding!]}
-						onChange={(v) => setProject("camera", "rounding", v[0])}
-						minValue={0}
-						maxValue={100}
-						step={0.1}
-						formatTooltip="%"
-					/>
-					<CornerStyleSelect
-						label="Corner Style"
-						value={project.camera.roundingType}
-						onChange={(value) => setProject("camera", "roundingType", value)}
-					/>
-				</div>
+				<Slider
+					value={[project.camera.rounding!]}
+					onChange={(v) => setProject("camera", "rounding", v[0])}
+					minValue={0}
+					maxValue={100}
+					step={0.1}
+					formatTooltip="%"
+				/>
+			</Field>
+			<Field
+				name="Corner Smoothness"
+				icon={<IconLucideSquareRoundCorner class="size-4" />}
+			>
+				<Slider
+					value={[project.camera.roundingSmoothness ?? 0]}
+					onChange={(v) => setProject("camera", "roundingSmoothness", v[0])}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip={(value) => `${Math.round(value * 100)}%`}
+				/>
 			</Field>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<div class="space-y-8">
@@ -2422,72 +2427,6 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
             </Field>
           </ComingSoonTooltip> */}
 		</KTabs.Content>
-	);
-}
-
-function CornerStyleSelect(props: {
-	label?: string;
-	value: CornerRoundingType;
-	onChange: (value: CornerRoundingType) => void;
-}) {
-	return (
-		<div class="flex flex-col gap-1.5">
-			<Show when={props.label}>
-				{(label) => (
-					<span class="text-[0.65rem] uppercase tracking-wide text-gray-11">
-						{label()}
-					</span>
-				)}
-			</Show>
-			<KSelect<{ name: string; value: CornerRoundingType }>
-				options={CORNER_STYLE_OPTIONS}
-				optionValue="value"
-				optionTextValue="name"
-				value={CORNER_STYLE_OPTIONS.find(
-					(option) => option.value === props.value,
-				)}
-				onChange={(option) => option && props.onChange(option.value)}
-				disallowEmptySelection
-				itemComponent={(itemProps) => (
-					<MenuItem<typeof KSelect.Item>
-						as={KSelect.Item}
-						item={itemProps.item}
-					>
-						<KSelect.ItemLabel class="flex-1">
-							{itemProps.item.rawValue.name}
-						</KSelect.ItemLabel>
-					</MenuItem>
-				)}
-			>
-				<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
-					<KSelect.Value<{
-						name: string;
-						value: CornerRoundingType;
-					}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
-						{(state) => <span>{state.selectedOption().name}</span>}
-					</KSelect.Value>
-					<KSelect.Icon<ValidComponent>
-						as={(iconProps) => (
-							<IconCapChevronDown
-								{...iconProps}
-								class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
-							/>
-						)}
-					/>
-				</KSelect.Trigger>
-				<KSelect.Portal>
-					<PopperContent<typeof KSelect.Content>
-						as={KSelect.Content}
-						class={cx(topSlideAnimateClasses, "z-50")}
-					>
-						<MenuItemList<typeof KSelect.Listbox>
-							class="overflow-y-auto max-h-32"
-							as={KSelect.Listbox}
-						/>
-					</PopperContent>
-				</KSelect.Portal>
-			</KSelect>
-		</div>
 	);
 }
 
