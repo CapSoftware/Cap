@@ -219,23 +219,23 @@ impl AVAssetReaderDecoder {
         let mut frames = this.inner.frames();
         let mut processor = ImageBufProcessor::new();
 
-        let mut cache_hits = 0u64;
-        let mut cache_misses = 0u64;
-        let mut total_requests = 0u64;
-        let mut total_decode_time_us = 0u64;
-        let mut total_reset_count = 0u64;
-        let mut total_reset_time_us = 0u64;
+        let mut _cache_hits = 0u64;
+        let mut _cache_misses = 0u64;
+        let mut _total_requests = 0u64;
+        let _total_decode_time_us = 0u64;
+        let mut _total_reset_count = 0u64;
+        let mut _total_reset_time_us = 0u64;
         let last_metrics_log = Rc::new(RefCell::new(Instant::now()));
 
         while let Ok(r) = rx.recv() {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     let request_start = Instant::now();
-                    total_requests += 1;
+                    _total_requests += 1;
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
                     let mut sender = if let Some(cached) = cache.get(&requested_frame) {
-                        cache_hits += 1;
+                        _cache_hits += 1;
                         let data = cached.data().clone();
                         let total_time = request_start.elapsed();
 
@@ -256,7 +256,7 @@ impl AVAssetReaderDecoder {
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
-                        cache_misses += 1;
+                        _cache_misses += 1;
                         let last_sent_frame = last_sent_frame.clone();
                         let request_start_clone = request_start;
                         let last_metrics_log_clone = last_metrics_log.clone();
@@ -302,7 +302,7 @@ impl AVAssetReaderDecoder {
 
                     if needs_reset {
                         let reset_start = Instant::now();
-                        total_reset_count += 1;
+                        _total_reset_count += 1;
                         this.reset(requested_time);
                         frames = this.inner.frames();
                         *last_sent_frame.borrow_mut() = None;
@@ -316,7 +316,7 @@ impl AVAssetReaderDecoder {
                         let cleared = old_cache_size - retained;
 
                         let reset_time = reset_start.elapsed();
-                        total_reset_time_us += reset_time.as_micros() as u64;
+                        _total_reset_time_us += reset_time.as_micros() as u64;
 
                         tracing::info!(
                             decoder = name,
@@ -325,7 +325,7 @@ impl AVAssetReaderDecoder {
                             reset_time_ms = reset_time.as_millis() as u64,
                             cleared_cache_entries = cleared,
                             retained_cache_entries = retained,
-                            total_resets = total_reset_count,
+                            total_resets = _total_reset_count,
                             "[PERF:DECODER] decoder reset/seek"
                         );
                     }

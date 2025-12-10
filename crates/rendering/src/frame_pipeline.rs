@@ -386,7 +386,7 @@ pub async fn finish_encoder(
     let total_start = Instant::now();
 
     let previous_pending = session.pipelined_readback.take_pending();
-    let has_previous = previous_pending.is_some();
+    let _has_previous = previous_pending.is_some();
 
     let texture = if session.current_is_left {
         &session.textures.0
