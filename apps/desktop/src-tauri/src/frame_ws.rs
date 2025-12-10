@@ -1,5 +1,18 @@
+use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
+
+fn compress_frame_data(mut data: Vec<u8>, stride: u32, height: u32, width: u32) -> Vec<u8> {
+    data.extend_from_slice(&stride.to_le_bytes());
+    data.extend_from_slice(&height.to_le_bytes());
+    data.extend_from_slice(&width.to_le_bytes());
+
+    let data_len = data.len();
+    let mut result = Vec::with_capacity(data_len + 4);
+    result.extend_from_slice(&(data_len as u32).to_le_bytes());
+    result.extend_from_slice(&data);
+    result
+}
 
 #[derive(Clone)]
 pub struct WSFrame {
@@ -7,6 +20,7 @@ pub struct WSFrame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    pub created_at: Instant,
 }
 
 pub async fn create_watch_frame_ws(
@@ -36,19 +50,36 @@ pub async fn create_watch_frame_ws(
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
-        // Send the current frame immediately upon connection (if one exists)
-        // This ensures the client doesn't wait for the next config change to see the image
+        let mut frames_sent = 0u64;
+        let mut total_latency_us = 0u64;
+        let mut max_latency_us = 0u64;
+
         {
             let frame_opt = camera_rx.borrow().clone();
-            if let Some(mut frame) = frame_opt {
-                frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                frame.data.extend_from_slice(&frame.width.to_le_bytes());
+            if let Some(frame) = frame_opt {
+                let frame_latency = frame.created_at.elapsed();
+                let latency_us = frame_latency.as_micros() as u64;
+                total_latency_us += latency_us;
+                max_latency_us = max_latency_us.max(latency_us);
+                frames_sent += 1;
 
-                if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                let original_size = frame.data.len();
+                let packed =
+                    compress_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                let compressed_size = packed.len();
+
+                if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
                     return;
                 }
+
+                tracing::debug!(
+                    frame_latency_us = latency_us,
+                    original_size_bytes = original_size,
+                    compressed_size_bytes = compressed_size,
+                    compression_ratio = %format!("{:.1}%", (compressed_size as f64 / original_size as f64) * 100.0),
+                    "[PERF:WS_WATCH] initial frame sent (compressed)"
+                );
             }
         }
 
@@ -75,18 +106,56 @@ pub async fn create_watch_frame_ws(
                          break;
                     }
                     let frame_opt = camera_rx.borrow().clone();
-                    if let Some(mut frame) = frame_opt {
-                        frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                        frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                        frame.data.extend_from_slice(&frame.width.to_le_bytes());
+                    if let Some(frame) = frame_opt {
+                        let frame_latency = frame.created_at.elapsed();
+                        let latency_us = frame_latency.as_micros() as u64;
+                        total_latency_us += latency_us;
+                        max_latency_us = max_latency_us.max(latency_us);
+                        frames_sent += 1;
 
-                        if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                        let send_start = Instant::now();
+                        let original_size = frame.data.len();
+                        let compress_start = Instant::now();
+                        let packed = compress_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                        let compress_time = compress_start.elapsed();
+                        let compressed_size = packed.len();
+
+                        let ws_send_start = Instant::now();
+                        if let Err(e) = socket.send(Message::Binary(packed)).await {
                             tracing::error!("Failed to send frame to socket: {:?}", e);
                             break;
                         }
+                        let ws_send_time = ws_send_start.elapsed();
+                        let send_time = send_start.elapsed();
+
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
+                            let _ = writeln!(f, r#"{{"hypothesisId":"D","location":"frame_ws.rs:ws_send","message":"WebSocket frame sent","data":{{"frame_latency_us":{},"compress_time_us":{},"ws_send_time_us":{},"total_send_time_us":{},"original_bytes":{},"compressed_bytes":{}}},"timestamp":{}}}"#,
+                                latency_us, compress_time.as_micros(), ws_send_time.as_micros(), send_time.as_micros(), original_size, compressed_size, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                        }
+                        // #endregion
+
+                        tracing::debug!(
+                            frame_latency_us = latency_us,
+                            send_time_us = send_time.as_micros() as u64,
+                            original_size_bytes = original_size,
+                            compressed_size_bytes = compressed_size,
+                            "[PERF:WS_WATCH] frame sent (compressed)"
+                        );
                     }
                 }
             }
+        }
+
+        if frames_sent > 0 {
+            let avg_latency = total_latency_us / frames_sent;
+            tracing::info!(
+                total_frames_sent = frames_sent,
+                avg_latency_us = avg_latency,
+                max_latency_us = max_latency_us,
+                "[PERF:WS_WATCH] session ended - final metrics"
+            );
         }
 
         let elapsed = now.elapsed();
@@ -143,6 +212,12 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
+        let mut frames_sent = 0u64;
+        let mut frames_lagged = 0u64;
+        let mut total_latency_us = 0u64;
+        let mut max_latency_us = 0u64;
+        let mut last_metrics_log = Instant::now();
+
         loop {
             tokio::select! {
                 msg = socket.recv() => {
@@ -162,14 +237,51 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                 },
                 incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
-                        Ok(mut frame) => {
-                            frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                            frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                            frame.data.extend_from_slice(&frame.width.to_le_bytes());
+                        Ok(frame) => {
+                            let frame_latency = frame.created_at.elapsed();
+                            let latency_us = frame_latency.as_micros() as u64;
+                            total_latency_us += latency_us;
+                            max_latency_us = max_latency_us.max(latency_us);
+                            frames_sent += 1;
 
-                            if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                            let send_start = Instant::now();
+                            let original_size = frame.data.len();
+                            let compress_start = Instant::now();
+                            let packed = compress_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                            let compress_time = compress_start.elapsed();
+                            let compressed_size = packed.len();
+
+                            let ws_send_start = Instant::now();
+                            if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);
                                 break;
+                            }
+                            let ws_send_time = ws_send_start.elapsed();
+                            let send_time = send_start.elapsed();
+
+                            // #region agent log
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
+                                let _ = writeln!(f, r#"{{"hypothesisId":"WS_BROADCAST","location":"frame_ws.rs:broadcast_send","message":"WebSocket broadcast frame sent","data":{{"frame_latency_us":{},"compress_time_us":{},"ws_send_time_us":{},"total_send_time_us":{},"width":{},"height":{}}},"timestamp":{}}}"#,
+                                    latency_us, compress_time.as_micros(), ws_send_time.as_micros(), send_time.as_micros(), frame.width, frame.height, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                            }
+                            // #endregion
+
+                            tracing::debug!(
+                                frame_latency_us = latency_us,
+                                send_time_us = send_time.as_micros() as u64,
+                                original_size_bytes = original_size,
+                                compressed_size_bytes = compressed_size,
+                                width = frame.width,
+                                height = frame.height,
+                                "[PERF:WS] frame sent (compressed)"
+                            );
+
+                            if frame_latency.as_millis() > 50 {
+                                tracing::warn!(
+                                    frame_latency_ms = frame_latency.as_millis() as u64,
+                                    "[PERF:WS] high frame latency detected"
+                                );
                             }
                         }
                         Err(broadcast::error::RecvError::Closed) => {
@@ -179,12 +291,40 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                             break;
                         }
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!("Missed {skipped} frames on websocket receiver");
+                            frames_lagged += skipped;
+                            tracing::warn!(
+                                skipped = skipped,
+                                total_lagged = frames_lagged,
+                                "[PERF:WS] frames lagged/dropped"
+                            );
                             continue;
                         }
                     }
                 }
             }
+
+            if last_metrics_log.elapsed().as_secs() >= 2 && frames_sent > 0 {
+                let avg_latency = total_latency_us / frames_sent;
+                tracing::info!(
+                    frames_sent = frames_sent,
+                    frames_lagged = frames_lagged,
+                    avg_latency_us = avg_latency,
+                    max_latency_us = max_latency_us,
+                    "[PERF:WS] periodic metrics"
+                );
+                last_metrics_log = Instant::now();
+            }
+        }
+
+        if frames_sent > 0 {
+            let avg_latency = total_latency_us / frames_sent;
+            tracing::info!(
+                total_frames_sent = frames_sent,
+                total_frames_lagged = frames_lagged,
+                avg_latency_us = avg_latency,
+                max_latency_us = max_latency_us,
+                "[PERF:WS] session ended - final metrics"
+            );
         }
 
         let elapsed = now.elapsed();

@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Instant,
 };
 
 use cidre::{
@@ -27,13 +28,7 @@ struct ProcessedFrame {
 }
 
 #[derive(Clone)]
-enum CachedFrame {
-    Raw {
-        image_buf: R<cv::ImageBuf>,
-        number: u32,
-    },
-    Processed(ProcessedFrame),
-}
+struct CachedFrame(ProcessedFrame);
 
 struct ImageBufProcessor {
     converter: FrameConverter,
@@ -148,23 +143,19 @@ impl ImageBufProcessor {
 }
 
 impl CachedFrame {
-    fn process(&mut self, processor: &mut ImageBufProcessor) -> ProcessedFrame {
-        match self {
-            CachedFrame::Raw { image_buf, number } => {
-                let frame_buffer = processor.convert(image_buf);
-                let data = ProcessedFrame {
-                    number: *number,
-                    data: Arc::new(frame_buffer),
-                    width: image_buf.width() as u32,
-                    height: image_buf.height() as u32,
-                };
+    fn new(processor: &mut ImageBufProcessor, mut image_buf: R<cv::ImageBuf>, number: u32) -> Self {
+        let frame_buffer = processor.convert(&mut image_buf);
+        let data = ProcessedFrame {
+            number,
+            data: Arc::new(frame_buffer),
+            width: image_buf.width() as u32,
+            height: image_buf.height() as u32,
+        };
+        Self(data)
+    }
 
-                *self = Self::Processed(data.clone());
-
-                data
-            }
-            CachedFrame::Processed(data) => data.clone(),
-        }
+    fn data(&self) -> &ProcessedFrame {
+        &self.0
     }
 }
 
@@ -198,7 +189,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn run(
-        _name: &'static str,
+        name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -228,13 +219,34 @@ impl AVAssetReaderDecoder {
         let mut frames = this.inner.frames();
         let mut processor = ImageBufProcessor::new();
 
+        let mut cache_hits = 0u64;
+        let mut cache_misses = 0u64;
+        let mut total_requests = 0u64;
+        let mut total_decode_time_us = 0u64;
+        let mut total_reset_count = 0u64;
+        let mut total_reset_time_us = 0u64;
+        let last_metrics_log = Rc::new(RefCell::new(Instant::now()));
+
         while let Ok(r) = rx.recv() {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                    let request_start = Instant::now();
+                    total_requests += 1;
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
-                    let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                        let data = cached.process(&mut processor);
+                    let mut sender = if let Some(cached) = cache.get(&requested_frame) {
+                        cache_hits += 1;
+                        let data = cached.data().clone();
+                        let total_time = request_start.elapsed();
+
+                        tracing::debug!(
+                            decoder = name,
+                            frame = requested_frame,
+                            cache_hit = true,
+                            total_time_us = total_time.as_micros() as u64,
+                            cache_size = cache.len(),
+                            "[PERF:DECODER] cache hit"
+                        );
 
                         let _ = sender.send(DecodedFrame {
                             data: data.data.clone(),
@@ -244,34 +256,78 @@ impl AVAssetReaderDecoder {
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
+                        cache_misses += 1;
                         let last_sent_frame = last_sent_frame.clone();
+                        let request_start_clone = request_start;
+                        let last_metrics_log_clone = last_metrics_log.clone();
+                        let decoder_name = name;
                         Some(move |data: ProcessedFrame| {
+                            let total_time = request_start_clone.elapsed();
+                            tracing::debug!(
+                                decoder = decoder_name,
+                                frame = data.number,
+                                cache_hit = false,
+                                total_time_us = total_time.as_micros() as u64,
+                                "[PERF:DECODER] cache miss - frame decoded"
+                            );
                             *last_sent_frame.borrow_mut() = Some(data.clone());
                             let _ = sender.send(DecodedFrame {
                                 data: data.data.clone(),
                                 width: data.width,
                                 height: data.height,
                             });
+
+                            let mut last_log = last_metrics_log_clone.borrow_mut();
+                            if last_log.elapsed().as_secs() >= 2 {
+                                *last_log = Instant::now();
+                            }
                         })
                     };
 
                     let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                     let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-                    if requested_frame == 0
-                        || last_sent_frame
-                            .borrow()
-                            .as_ref()
-                            .map(|last| {
-                                requested_frame < last.number
-                                    || requested_frame - last.number > FRAME_CACHE_SIZE as u32
-                            })
-                            .unwrap_or(true)
-                    {
+                    let cache_frame_min = cache.keys().next().copied();
+                    let cache_frame_max = cache.keys().next_back().copied();
+
+                    let needs_reset =
+                        if let (Some(c_min), Some(c_max)) = (cache_frame_min, cache_frame_max) {
+                            let is_backward_seek_beyond_cache = requested_frame < c_min;
+                            let is_forward_seek_beyond_cache =
+                                requested_frame > c_max + FRAME_CACHE_SIZE as u32 / 4;
+                            is_backward_seek_beyond_cache || is_forward_seek_beyond_cache
+                        } else {
+                            true
+                        };
+
+                    if needs_reset {
+                        let reset_start = Instant::now();
+                        total_reset_count += 1;
                         this.reset(requested_time);
                         frames = this.inner.frames();
                         *last_sent_frame.borrow_mut() = None;
-                        cache.clear();
+
+                        let old_cache_size = cache.len();
+                        let retained = cache
+                            .keys()
+                            .filter(|&&f| f >= cache_min && f <= cache_max)
+                            .count();
+                        cache.retain(|&f, _| f >= cache_min && f <= cache_max);
+                        let cleared = old_cache_size - retained;
+
+                        let reset_time = reset_start.elapsed();
+                        total_reset_time_us += reset_time.as_micros() as u64;
+
+                        tracing::info!(
+                            decoder = name,
+                            requested_frame = requested_frame,
+                            requested_time = requested_time,
+                            reset_time_ms = reset_time.as_millis() as u64,
+                            cleared_cache_entries = cleared,
+                            retained_cache_entries = retained,
+                            total_resets = total_reset_count,
+                            "[PERF:DECODER] decoder reset/seek"
+                        );
                     }
 
                     last_active_frame = Some(requested_frame);
@@ -293,37 +349,22 @@ impl AVAssetReaderDecoder {
                             continue;
                         };
 
-                        let mut cache_frame = CachedFrame::Raw {
-                            image_buf: frame.retained(),
-                            number: current_frame,
-                        };
+                        let cache_frame =
+                            CachedFrame::new(&mut processor, frame.retained(), current_frame);
 
                         this.is_done = false;
 
-                        // Handles frame skips.
-                        // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
-                            cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                            cache.iter().rev().find(|v| *v.0 < requested_frame)
                             && let Some(sender) = sender.take()
                         {
-                            (sender)(most_recent_prev_frame.1.process(&mut processor));
+                            (sender)(most_recent_prev_frame.1.data().clone());
                         }
 
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
                         if !too_small_for_cache_bounds {
-                            if current_frame == requested_frame
-                                && let Some(sender) = sender.take()
-                            {
-                                let data = cache_frame.process(&mut processor);
-                                // info!("sending frame {requested_frame}");
-
-                                (sender)(data);
-
-                                break;
-                            }
-
                             if cache.len() >= FRAME_CACHE_SIZE {
                                 if let Some(last_active_frame) = &last_active_frame {
                                     let frame = if requested_frame > *last_active_frame {
@@ -344,6 +385,13 @@ impl AVAssetReaderDecoder {
                             }
 
                             cache.insert(current_frame, cache_frame.clone());
+
+                            if current_frame == requested_frame
+                                && let Some(sender) = sender.take()
+                            {
+                                (sender)(cache_frame.data().clone());
+                                break;
+                            }
                         }
 
                         if current_frame > requested_frame && sender.is_some() {
@@ -360,11 +408,7 @@ impl AVAssetReaderDecoder {
 
                                 (sender)(last_sent_frame);
                             } else if let Some(sender) = sender.take() {
-                                // info!(
-                                //     "sending forward frame {current_frame} for {requested_frame}",
-                                // );
-
-                                (sender)(cache_frame.process(&mut processor));
+                                (sender)(cache_frame.data().clone());
                             }
                         }
 

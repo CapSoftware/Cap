@@ -12,14 +12,14 @@ use cpal::{
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::{
     collections::{HashSet, VecDeque},
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 use tokio::{
     sync::{mpsc as tokio_mpsc, watch},
     time::Instant,
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
@@ -28,8 +28,9 @@ use crate::{
     segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 16;
-const PARALLEL_DECODE_TASKS: usize = 4;
+const PREFETCH_BUFFER_SIZE: usize = 64;
+const PARALLEL_DECODE_TASKS: usize = 8;
+const MAX_PREFETCH_AHEAD: u32 = 90;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -90,6 +91,11 @@ impl Playback {
         let (prefetch_tx, mut prefetch_rx) =
             tokio_mpsc::channel::<PrefetchedFrame>(PREFETCH_BUFFER_SIZE * 2);
         let (frame_request_tx, mut frame_request_rx) = watch::channel(self.start_frame_number);
+        let (playback_position_tx, playback_position_rx) = watch::channel(self.start_frame_number);
+
+        let in_flight_frames: Arc<RwLock<HashSet<u32>>> = Arc::new(RwLock::new(HashSet::new()));
+        let prefetch_in_flight = in_flight_frames.clone();
+        let main_in_flight = in_flight_frames;
 
         let prefetch_stop_rx = stop_rx.clone();
         let prefetch_project = self.project.clone();
@@ -103,7 +109,6 @@ impl Playback {
         tokio::spawn(async move {
             let mut next_prefetch_frame = *frame_request_rx.borrow();
             let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
-            let mut in_flight_frames: HashSet<u32> = HashSet::new();
 
             loop {
                 if *prefetch_stop_rx.borrow() {
@@ -114,19 +119,33 @@ impl Playback {
                     let requested = *frame_request_rx.borrow_and_update();
                     if requested > next_prefetch_frame {
                         next_prefetch_frame = requested;
-                        in_flight_frames.retain(|&f| f >= requested);
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.retain(|&f| f >= requested);
+                        }
                     }
                 }
 
+                let current_playback_frame = *playback_position_rx.borrow();
+                let max_prefetch_frame = current_playback_frame + MAX_PREFETCH_AHEAD;
+
                 while in_flight.len() < PARALLEL_DECODE_TASKS {
                     let frame_num = next_prefetch_frame;
+
+                    if frame_num > max_prefetch_frame {
+                        break;
+                    }
+
                     let prefetch_time = frame_num as f64 / fps_f64;
 
                     if prefetch_time >= prefetch_duration {
                         break;
                     }
 
-                    if in_flight_frames.contains(&frame_num) {
+                    let already_in_flight = prefetch_in_flight
+                        .read()
+                        .map(|guard| guard.contains(&frame_num))
+                        .unwrap_or(false);
+                    if already_in_flight {
                         next_prefetch_frame += 1;
                         continue;
                     }
@@ -148,12 +167,25 @@ impl Playback {
                         let hide_camera = project.camera.hide;
                         let segment_index = segment.recording_clip;
 
-                        in_flight_frames.insert(frame_num);
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.insert(frame_num);
+                        }
 
                         in_flight.push(async move {
+                            let decode_start = Instant::now();
                             let result = decoders
                                 .get_frames(segment_time as f32, !hide_camera, clip_offsets)
                                 .await;
+                            let decode_time = decode_start.elapsed();
+
+                            // #region agent log
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
+                                let _ = writeln!(f, r#"{{"hypothesisId":"DECODE","location":"playback.rs:prefetch_decode","message":"Frame decoded by prefetch","data":{{"frame_number":{},"decode_time_ms":{}}},"timestamp":{}}}"#,
+                                    frame_num, decode_time.as_millis(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                            }
+                            // #endregion
+
                             (frame_num, segment_index, result)
                         });
                     }
@@ -165,7 +197,9 @@ impl Playback {
                     biased;
 
                     Some((frame_num, segment_index, result)) = in_flight.next() => {
-                        in_flight_frames.remove(&frame_num);
+                        if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
+                            in_flight_guard.remove(&frame_num);
+                        }
                         if let Some(segment_frames) = result {
                             let _ = prefetch_tx.send(PrefetchedFrame {
                                 frame_number: frame_num,
@@ -181,8 +215,6 @@ impl Playback {
         });
 
         tokio::spawn(async move {
-            let start = Instant::now();
-
             let duration = if let Some(timeline) = &self.project.borrow().timeline {
                 timeline.duration()
             } else {
@@ -204,12 +236,122 @@ impl Playback {
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let max_frame_skip = 3u32;
 
+            let mut total_frames_rendered = 0u64;
+            let mut total_frames_skipped = 0u64;
+            let mut prefetch_hits = 0u64;
+            let mut prefetch_misses = 0u64;
+            let mut total_render_time_us = 0u64;
+            let mut max_render_time_us = 0u64;
+            let mut last_metrics_log = Instant::now();
+
+            info!(
+                start_frame = self.start_frame_number,
+                fps = fps,
+                duration_secs = duration,
+                "[PERF:PLAYBACK] starting playback"
+            );
+
+            let warmup_target_frames = 10usize;
+            let warmup_first_frame_timeout = Duration::from_millis(3000);
+            let warmup_additional_timeout = Duration::from_millis(2000);
+            let warmup_start = Instant::now();
+            let mut first_frame_time: Option<Instant> = None;
+
+            while !*stop_rx.borrow() {
+                let timed_out = if let Some(first_time) = first_frame_time {
+                    first_time.elapsed() > warmup_additional_timeout
+                } else {
+                    warmup_start.elapsed() > warmup_first_frame_timeout
+                };
+
+                if timed_out {
+                    if prefetch_buffer.is_empty() {
+                        warn!(
+                            elapsed_ms = warmup_start.elapsed().as_millis() as u64,
+                            "[PERF:PLAYBACK] warmup timeout waiting for first frame"
+                        );
+                    }
+                    break;
+                }
+
+                if first_frame_time.is_some() && prefetch_buffer.len() >= warmup_target_frames {
+                    break;
+                }
+
+                tokio::select! {
+                    Some(prefetched) = prefetch_rx.recv() => {
+                        if prefetched.frame_number >= frame_number {
+                            let received_frame = prefetched.frame_number;
+                            prefetch_buffer.push_back(prefetched);
+                            if first_frame_time.is_none() {
+                                first_frame_time = Some(Instant::now());
+                                debug!(
+                                    frame = received_frame,
+                                    wait_ms = warmup_start.elapsed().as_millis() as u64,
+                                    "[PERF:PLAYBACK] first frame received"
+                                );
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+                }
+            }
+
+            prefetch_buffer
+                .make_contiguous()
+                .sort_by_key(|p| p.frame_number);
+
+            let warmup_time = warmup_start.elapsed();
+            info!(
+                warmup_frames = prefetch_buffer.len(),
+                warmup_time_ms = warmup_time.as_millis() as u64,
+                first_frame_ready = first_frame_time.is_some(),
+                "[PERF:PLAYBACK] warmup complete"
+            );
+
+            // #region agent log
+            {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                {
+                    let _ = writeln!(
+                        f,
+                        r#"{{"hypothesisId":"WARMUP","location":"playback.rs:warmup","message":"Warmup phase completed","data":{{"warmup_frames":{},"warmup_time_ms":{},"first_frame_ready":{}}},"timestamp":{}}}"#,
+                        prefetch_buffer.len(),
+                        warmup_time.as_millis(),
+                        first_frame_time.is_some(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis()
+                    );
+                }
+            }
+            // #endregion
+
+            let start = Instant::now();
+
             'playback: loop {
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
                     if prefetched.frame_number >= frame_number {
                         prefetch_buffer.push_back(prefetched);
-                        if prefetch_buffer.len() > PREFETCH_BUFFER_SIZE {
-                            prefetch_buffer.pop_front();
+                        while prefetch_buffer.len() > PREFETCH_BUFFER_SIZE {
+                            if let Some(idx) = prefetch_buffer
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, p)| {
+                                    p.frame_number > frame_number + PREFETCH_BUFFER_SIZE as u32
+                                })
+                                .max_by_key(|(_, p)| p.frame_number)
+                                .map(|(i, _)| i)
+                            {
+                                prefetch_buffer.remove(idx);
+                            } else {
+                                prefetch_buffer.pop_front();
+                            }
                         }
                     }
                 }
@@ -217,10 +359,40 @@ impl Playback {
                 let frame_offset = frame_number.saturating_sub(self.start_frame_number) as f64;
                 let next_deadline = start + frame_duration.mul_f64(frame_offset);
 
+                // #region agent log
+                let sleep_start = Instant::now();
+                let time_until_deadline = next_deadline.saturating_duration_since(Instant::now());
+                // #endregion
+
                 tokio::select! {
                     _ = stop_rx.changed() => break 'playback,
                     _ = tokio::time::sleep_until(next_deadline) => {}
                 }
+
+                // #region agent log
+                let sleep_time = sleep_start.elapsed();
+                use std::io::Write;
+                if sleep_time.as_millis() > 50 || time_until_deadline.as_millis() > 50 {
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                    {
+                        let _ = writeln!(
+                            f,
+                            r#"{{"hypothesisId":"SLEEP","location":"playback.rs:sleep_until","message":"Frame deadline sleep","data":{{"frame_number":{},"time_until_deadline_ms":{},"actual_sleep_ms":{},"elapsed_since_start_ms":{}}},"timestamp":{}}}"#,
+                            frame_number,
+                            time_until_deadline.as_millis(),
+                            sleep_time.as_millis(),
+                            start.elapsed().as_millis(),
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                        );
+                    }
+                }
+                // #endregion
 
                 if *stop_rx.borrow() {
                     break;
@@ -237,38 +409,172 @@ impl Playback {
                     .iter()
                     .position(|p| p.frame_number == frame_number);
 
+                let frame_fetch_start = Instant::now();
+                let was_prefetched = prefetched_idx.is_some();
+
                 let segment_frames_opt = if let Some(idx) = prefetched_idx {
+                    prefetch_hits += 1;
                     let prefetched = prefetch_buffer.remove(idx).unwrap();
                     Some((prefetched.segment_frames, prefetched.segment_index))
                 } else {
-                    let Some((segment_time, segment)) = project.get_segment_time(playback_time)
-                    else {
-                        break;
-                    };
+                    let is_in_flight = main_in_flight
+                        .read()
+                        .map(|guard| guard.contains(&frame_number))
+                        .unwrap_or(false);
 
-                    let Some(segment_media) =
-                        self.segment_medias.get(segment.recording_clip as usize)
-                    else {
-                        frame_number = frame_number.saturating_add(1);
-                        continue;
-                    };
+                    if is_in_flight {
+                        let wait_start = Instant::now();
+                        let max_wait = Duration::from_millis(100);
+                        let mut found_frame = None;
 
-                    let clip_offsets = project
-                        .clips
-                        .iter()
-                        .find(|v| v.index == segment.recording_clip)
-                        .map(|v| v.offsets)
-                        .unwrap_or_default();
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                        {
+                            let _ = writeln!(
+                                f,
+                                r#"{{"hypothesisId":"INFLIGHT_WAIT","location":"playback.rs:in_flight_wait_start","message":"Frame in flight - waiting on channel","data":{{"frame_number":{},"elapsed_since_start_ms":{}}},"timestamp":{}}}"#,
+                                frame_number,
+                                start.elapsed().as_millis(),
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+                        // #endregion
 
-                    let data = tokio::select! {
-                        _ = stop_rx.changed() => break 'playback,
-                        data = segment_media
-                            .decoders
-                            .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => data,
-                    };
+                        while wait_start.elapsed() < max_wait {
+                            tokio::select! {
+                                _ = stop_rx.changed() => break 'playback,
+                                Some(prefetched) = prefetch_rx.recv() => {
+                                    if prefetched.frame_number == frame_number {
+                                        found_frame = Some(prefetched);
+                                        break;
+                                    } else if prefetched.frame_number >= self.start_frame_number {
+                                        prefetch_buffer.push_back(prefetched);
+                                    }
+                                }
+                                _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                                    let still_in_flight = main_in_flight
+                                        .read()
+                                        .map(|guard| guard.contains(&frame_number))
+                                        .unwrap_or(false);
+                                    if !still_in_flight {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
 
-                    data.map(|frames| (frames, segment.recording_clip))
+                        // #region agent log
+                        let wait_time = wait_start.elapsed();
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                        {
+                            let _ = writeln!(
+                                f,
+                                r#"{{"hypothesisId":"INFLIGHT_WAIT","location":"playback.rs:in_flight_wait_done","message":"In-flight wait completed","data":{{"frame_number":{},"wait_ms":{},"found":{}}},"timestamp":{}}}"#,
+                                frame_number,
+                                wait_time.as_millis(),
+                                found_frame.is_some(),
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+                        // #endregion
+
+                        if let Some(prefetched) = found_frame {
+                            prefetch_hits += 1;
+                            Some((prefetched.segment_frames, prefetched.segment_index))
+                        } else {
+                            let prefetched_idx = prefetch_buffer
+                                .iter()
+                                .position(|p| p.frame_number == frame_number);
+                            if let Some(idx) = prefetched_idx {
+                                prefetch_hits += 1;
+                                let prefetched = prefetch_buffer.remove(idx).unwrap();
+                                Some((prefetched.segment_frames, prefetched.segment_index))
+                            } else {
+                                frame_number = frame_number.saturating_add(1);
+                                total_frames_skipped += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        prefetch_misses += 1;
+
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                        {
+                            let _ = writeln!(
+                                f,
+                                r#"{{"hypothesisId":"C","location":"playback.rs:prefetch_miss","message":"Prefetch miss - decoding on main loop","data":{{"frame_number":{},"prefetch_buffer_size":{}}},"timestamp":{}}}"#,
+                                frame_number,
+                                prefetch_buffer.len(),
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                        }
+                        // #endregion
+                        let Some((segment_time, segment)) = project.get_segment_time(playback_time)
+                        else {
+                            break;
+                        };
+
+                        let Some(segment_media) =
+                            self.segment_medias.get(segment.recording_clip as usize)
+                        else {
+                            frame_number = frame_number.saturating_add(1);
+                            continue;
+                        };
+
+                        let clip_offsets = project
+                            .clips
+                            .iter()
+                            .find(|v| v.index == segment.recording_clip)
+                            .map(|v| v.offsets)
+                            .unwrap_or_default();
+
+                        if let Ok(mut guard) = main_in_flight.write() {
+                            guard.insert(frame_number);
+                        }
+
+                        let data = tokio::select! {
+                            _ = stop_rx.changed() => {
+                                if let Ok(mut guard) = main_in_flight.write() {
+                                    guard.remove(&frame_number);
+                                }
+                                break 'playback
+                            },
+                            data = segment_media
+                                .decoders
+                                .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => {
+                                if let Ok(mut guard) = main_in_flight.write() {
+                                    guard.remove(&frame_number);
+                                }
+                                data
+                            },
+                        };
+
+                        data.map(|frames| (frames, segment.recording_clip))
+                    }
                 };
+
+                let frame_fetch_time = frame_fetch_start.elapsed();
 
                 if let Some((segment_frames, segment_index)) = segment_frames_opt {
                     let Some(segment_media) = self.segment_medias.get(segment_index as usize)
@@ -277,6 +583,7 @@ impl Playback {
                         continue;
                     };
 
+                    let uniforms_start = Instant::now();
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
                         &project,
@@ -286,7 +593,31 @@ impl Playback {
                         &segment_media.cursor,
                         &segment_frames,
                     );
+                    let uniforms_time = uniforms_start.elapsed();
 
+                    // #region agent log
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                    {
+                        let _ = writeln!(
+                            f,
+                            r#"{{"hypothesisId":"B","location":"playback.rs:render_frame_start","message":"About to call render_frame","data":{{"frame_number":{},"prefetch_hit":{},"prefetch_buffer_size":{},"frame_fetch_us":{}}},"timestamp":{}}}"#,
+                            frame_number,
+                            was_prefetched,
+                            prefetch_buffer.len(),
+                            frame_fetch_time.as_micros(),
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                        );
+                    }
+                    // #endregion
+
+                    let render_start = Instant::now();
                     self.renderer
                         .render_frame(
                             segment_frames,
@@ -295,32 +626,149 @@ impl Playback {
                             frame_number,
                         )
                         .await;
+                    let render_time = render_start.elapsed();
+
+                    // #region agent log
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                    {
+                        let _ = writeln!(
+                            f,
+                            r#"{{"hypothesisId":"B","location":"playback.rs:render_frame_done","message":"render_frame returned (channel send complete)","data":{{"frame_number":{},"render_send_time_us":{}}},"timestamp":{}}}"#,
+                            frame_number,
+                            render_time.as_micros(),
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                        );
+                    }
+                    // #endregion
+
+                    total_frames_rendered += 1;
+                    let render_time_us = render_time.as_micros() as u64;
+                    total_render_time_us += render_time_us;
+                    max_render_time_us = max_render_time_us.max(render_time_us);
+
+                    debug!(
+                        frame = frame_number,
+                        prefetch_hit = was_prefetched,
+                        prefetch_buffer_size = prefetch_buffer.len(),
+                        frame_fetch_us = frame_fetch_time.as_micros() as u64,
+                        uniforms_us = uniforms_time.as_micros() as u64,
+                        render_us = render_time_us,
+                        "[PERF:PLAYBACK] frame rendered"
+                    );
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
                 frame_number = frame_number.saturating_add(1);
+                let _ = playback_position_tx.send(frame_number);
 
                 let expected_frame = self.start_frame_number
                     + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
-                    if frames_behind <= max_frame_skip {
+                    let skipped = if frames_behind <= max_frame_skip {
                         frame_number = expected_frame;
-                        trace!("Skipping {} frames to catch up", frames_behind);
+                        frames_behind
                     } else {
                         frame_number += max_frame_skip;
-                        trace!(
-                            "Limiting frame skip to {} (was {} behind)",
-                            max_frame_skip, frames_behind
+                        max_frame_skip
+                    };
+
+                    total_frames_skipped += skipped as u64;
+
+                    // #region agent log
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                    {
+                        let _ = writeln!(
+                            f,
+                            r#"{{"hypothesisId":"B","location":"playback.rs:frame_skip","message":"Playback loop skipping frames","data":{{"frames_behind":{},"frames_skipped":{},"new_frame_number":{},"total_skipped":{},"elapsed_since_start_ms":{}}},"timestamp":{}}}"#,
+                            frames_behind,
+                            skipped,
+                            frame_number,
+                            total_frames_skipped,
+                            start.elapsed().as_millis(),
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
                         );
                     }
+                    // #endregion
+
+                    info!(
+                        frames_behind = frames_behind,
+                        frames_skipped = skipped,
+                        current_frame = frame_number,
+                        total_skipped = total_frames_skipped,
+                        "[PERF:PLAYBACK] skipping frames to catch up"
+                    );
 
                     prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                     let _ = frame_request_tx.send(frame_number);
+                    let _ = playback_position_tx.send(frame_number);
+                }
+
+                if last_metrics_log.elapsed().as_secs() >= 2 {
+                    let avg_render_time = if total_frames_rendered > 0 {
+                        total_render_time_us / total_frames_rendered
+                    } else {
+                        0
+                    };
+
+                    info!(
+                        total_rendered = total_frames_rendered,
+                        total_skipped = total_frames_skipped,
+                        prefetch_hit_rate = format!(
+                            "{:.1}%",
+                            (prefetch_hits as f64
+                                / (prefetch_hits + prefetch_misses).max(1) as f64)
+                                * 100.0
+                        ),
+                        avg_render_time_us = avg_render_time,
+                        max_render_time_us = max_render_time_us,
+                        prefetch_buffer_size = prefetch_buffer.len(),
+                        "[PERF:PLAYBACK] periodic metrics"
+                    );
+
+                    last_metrics_log = Instant::now();
                 }
             }
+
+            let total_elapsed = start.elapsed();
+            let avg_render_time = if total_frames_rendered > 0 {
+                total_render_time_us / total_frames_rendered
+            } else {
+                0
+            };
+
+            info!(
+                total_elapsed_ms = total_elapsed.as_millis() as u64,
+                total_rendered = total_frames_rendered,
+                total_skipped = total_frames_skipped,
+                prefetch_hit_rate = format!(
+                    "{:.1}%",
+                    (prefetch_hits as f64 / (prefetch_hits + prefetch_misses).max(1) as f64)
+                        * 100.0
+                ),
+                avg_render_time_us = avg_render_time,
+                max_render_time_us = max_render_time_us,
+                effective_fps = format!(
+                    "{:.1}",
+                    total_frames_rendered as f64 / total_elapsed.as_secs_f64()
+                ),
+                "[PERF:PLAYBACK] playback ended - final metrics"
+            );
 
             stop_tx.send(true).ok();
 

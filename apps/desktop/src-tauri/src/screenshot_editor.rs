@@ -15,6 +15,7 @@ use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
 use std::str::FromStr;
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
     Manager, Runtime, Window,
@@ -353,6 +354,7 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    created_at: Instant::now(),
                                 }));
                             }
                             Err(e) => {
