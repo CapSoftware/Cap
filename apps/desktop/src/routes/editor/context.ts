@@ -202,7 +202,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						let searchTime = time;
 						let _prevDuration = 0;
 						const currentSegmentIndex = segments.findIndex((segment) => {
-							const duration = segment.end - segment.start;
+							const duration =
+								(segment.end - segment.start) / segment.timescale;
 							if (searchTime > duration) {
 								searchTime -= duration;
 								_prevDuration += duration;
@@ -215,12 +216,15 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						if (currentSegmentIndex === -1) return;
 						const segment = segments[currentSegmentIndex];
 
+						const splitPositionInRecording = searchTime * segment.timescale;
+
 						segments.splice(currentSegmentIndex + 1, 0, {
 							...segment,
-							start: segment.start + searchTime,
+							start: segment.start + splitPositionInRecording,
 							end: segment.end,
 						});
-						segments[currentSegmentIndex].end = segment.start + searchTime;
+						segments[currentSegmentIndex].end =
+							segment.start + splitPositionInRecording;
 					}),
 				);
 			},
