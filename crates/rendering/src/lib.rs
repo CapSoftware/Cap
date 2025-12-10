@@ -2020,34 +2020,13 @@ fn srgb_to_linear(c: u16) -> f32 {
     }
 }
 
-/// Converts a smoothness value (0.0 to 1.0) to a super ellipse exponent.
-///
-/// When `smoothness` is 0.0, returns 2.0 (circular/rounded rectangle).
-/// As smoothness increases toward 1.0, the exponent increases, creating
-/// a more squared-off super ellipse shape.
-///
-/// # Arguments
-/// * `smoothness` - Smoothness factor (0.0 = rounded rect, 1.0 = super ellipse)
-///
-/// # Returns
-/// Super ellipse exponent value
+// Converts a smoothness value (0.0 to 1.0) to a super ellipse exponent.
 #[inline]
 fn smoothness_to_exponent(smoothness: f32) -> f32 {
     2.0 + smoothness * 6.0
 }
 
-/// Adjusts radius to maintain visual consistency across different super ellipse exponents.
-///
-/// Combines two compensations:
-/// 1. Capsule scaling - ensures 100% radius produces a capsule regardless of smoothness
-/// 2. Visual normalization - compensates for super ellipses appearing smaller at higher exponents
-///
-/// # Arguments
-/// * `radius` - Base corner radius in pixels
-/// * `smoothness` - Smoothness factor (0.0 to 1.0)
-///
-/// # Returns
-/// Adjusted radius that maintains visual consistency and capsule behavior
+// Adjusts radius to maintain visual consistency across different super ellipse exponents.
 fn compute_adjusted_radius(radius: f32, smoothness: f32) -> f32 {
     if smoothness == 0.0 {
         return radius;

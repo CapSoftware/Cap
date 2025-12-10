@@ -2340,7 +2340,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 			</Field>
 			<Field name="Rounded Corners" icon={<IconCapCorners class="size-4" />}>
 				<Slider
-					value={[project.camera.rounding!]}
+					value={[project.camera.rounding ?? 0]}
 					onChange={(v) => setProject("camera", "rounding", v[0])}
 					minValue={0}
 					maxValue={100}
