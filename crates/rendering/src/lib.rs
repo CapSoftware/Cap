@@ -7,7 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::finish_encoder;
+use frame_pipeline::{RenderSession, finish_encoder};
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
@@ -32,10 +32,11 @@ mod project_recordings;
 mod scene;
 mod spring_mass_damper;
 mod text;
+pub mod yuv_converter;
 mod zoom;
 
 pub use coord::*;
-pub use decoder::DecodedFrame;
+pub use decoder::{DecodedFrame, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
@@ -198,9 +199,33 @@ impl RecordingSegmentDecoders {
             )
         );
 
+        let camera_frame = camera.flatten();
+
+        // #region agent log
+        if needs_camera && camera_frame.is_none() {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+            {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                writeln!(
+                    file,
+                    r#"{{"location":"lib.rs:get_frames","message":"camera frame missing","data":{{"segment_time":{},"has_camera_decoder":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"O"}}"#,
+                    segment_time, self.camera.is_some(), ts
+                )
+                .ok();
+            }
+        }
+        // #endregion
+
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
-            camera_frame: camera.flatten(),
+            camera_frame,
             segment_time,
             recording_time: segment_time + self.segment_offset as f32,
         })
@@ -1518,6 +1543,7 @@ impl ProjectUniforms {
     }
 }
 
+#[derive(Clone)]
 pub struct DecodedSegmentFrames {
     pub screen_frame: DecodedFrame,
     pub camera_frame: Option<DecodedFrame>,
@@ -1605,6 +1631,9 @@ impl RendererLayers {
         segment_frames: &DecodedSegmentFrames,
         cursor: &CursorEvents,
     ) -> Result<(), RenderingError> {
+        let prepare_start = Instant::now();
+
+        let bg_start = Instant::now();
         self.background
             .prepare(
                 constants,
@@ -1612,19 +1641,25 @@ impl RendererLayers {
                 Background::from(uniforms.project.background.source.clone()),
             )
             .await?;
+        let bg_time = bg_start.elapsed();
 
+        let blur_start = Instant::now();
         if uniforms.project.background.blur > 0.0 {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
+        let blur_time = blur_start.elapsed();
 
-        self.display.prepare(
+        let display_start = Instant::now();
+        let (display_skipped, frame_width, frame_height) = self.display.prepare(
             &constants.device,
             &constants.queue,
             segment_frames,
             constants.options.screen_size,
             uniforms.display,
         );
+        let display_time = display_start.elapsed();
 
+        let cursor_start = Instant::now();
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -1633,7 +1668,9 @@ impl RendererLayers {
             uniforms,
             constants,
         );
+        let cursor_time = cursor_start.elapsed();
 
+        let camera_start = Instant::now();
         self.camera.prepare(
             &constants.device,
             &constants.queue,
@@ -1645,7 +1682,9 @@ impl RendererLayers {
                 ))
             })(),
         );
+        let camera_time = camera_start.elapsed();
 
+        let camera_only_start = Instant::now();
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
@@ -1657,26 +1696,78 @@ impl RendererLayers {
                 ))
             })(),
         );
+        let camera_only_time = camera_only_start.elapsed();
 
+        let text_start = Instant::now();
         self.text.prepare(
             &constants.device,
             &constants.queue,
             uniforms.output_size,
             &uniforms.texts,
         );
+        let text_time = text_start.elapsed();
 
+        let captions_start = Instant::now();
         self.captions.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
         );
+        let captions_time = captions_start.elapsed();
+
+        let total_time = prepare_start.elapsed();
+
+        if total_time.as_millis() > 5 {
+            tracing::debug!(
+                total_us = total_time.as_micros() as u64,
+                bg_us = bg_time.as_micros() as u64,
+                blur_us = blur_time.as_micros() as u64,
+                display_us = display_time.as_micros() as u64,
+                cursor_us = cursor_time.as_micros() as u64,
+                camera_us = camera_time.as_micros() as u64,
+                camera_only_us = camera_only_time.as_micros() as u64,
+                text_us = text_time.as_micros() as u64,
+                captions_us = captions_time.as_micros() as u64,
+                "[PERF:PREPARE] layer prepare breakdown"
+            );
+        }
+
+        // #region agent log
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+        {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let frame_bytes = frame_width * frame_height * 4;
+            writeln!(
+                file,
+                r#"{{"location":"lib.rs:prepare_breakdown","message":"layer prepare timing breakdown","data":{{"total_us":{},"display_us":{},"display_skipped":{},"frame_width":{},"frame_height":{},"frame_bytes":{},"camera_us":{},"bg_us":{},"cursor_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"F"}}"#,
+                total_time.as_micros() as u64,
+                display_time.as_micros() as u64,
+                display_skipped,
+                frame_width,
+                frame_height,
+                frame_bytes,
+                camera_time.as_micros() as u64,
+                bg_time.as_micros() as u64,
+                cursor_time.as_micros() as u64,
+                ts
+            )
+            .ok();
+        }
+        // #endregion
 
         Ok(())
     }
 
     pub fn render(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -1701,6 +1792,10 @@ impl RendererLayers {
                 })
             };
         }
+
+        self.display.copy_to_texture(encoder);
+        self.camera.copy_to_texture(encoder);
+        self.camera_only.copy_to_texture(encoder);
 
         {
             let mut pass = render_pass!(
@@ -1760,147 +1855,6 @@ impl RendererLayers {
     }
 }
 
-pub struct RenderSession {
-    textures: (wgpu::Texture, wgpu::Texture),
-    texture_views: (wgpu::TextureView, wgpu::TextureView),
-    current_is_left: bool,
-    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
-    readback_buffer_size: u64,
-    current_readback_is_left: bool,
-}
-
-impl RenderSession {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let make_texture = || {
-            device.create_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-                label: Some("Intermediate Texture"),
-                view_formats: &[],
-            })
-        };
-
-        let textures = (make_texture(), make_texture());
-
-        Self {
-            current_is_left: true,
-            texture_views: (
-                textures.0.create_view(&Default::default()),
-                textures.1.create_view(&Default::default()),
-            ),
-            textures,
-            readback_buffers: (None, None),
-            readback_buffer_size: 0,
-            current_readback_is_left: true,
-        }
-    }
-
-    pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let make_texture = || {
-            device.create_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-                label: Some("Intermediate Texture"),
-                view_formats: &[],
-            })
-        };
-
-        self.textures = (make_texture(), make_texture());
-        self.texture_views = (
-            self.textures.0.create_view(&Default::default()),
-            self.textures.1.create_view(&Default::default()),
-        );
-    }
-
-    pub fn current_texture(&self) -> &wgpu::Texture {
-        if self.current_is_left {
-            &self.textures.0
-        } else {
-            &self.textures.1
-        }
-    }
-
-    pub fn current_texture_view(&self) -> &wgpu::TextureView {
-        if self.current_is_left {
-            &self.texture_views.0
-        } else {
-            &self.texture_views.1
-        }
-    }
-
-    pub fn other_texture_view(&self) -> &wgpu::TextureView {
-        if self.current_is_left {
-            &self.texture_views.1
-        } else {
-            &self.texture_views.0
-        }
-    }
-
-    pub fn swap_textures(&mut self) {
-        self.current_is_left = !self.current_is_left;
-    }
-
-    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
-        let needs_new = self
-            .readback_buffers
-            .0
-            .as_ref()
-            .is_none_or(|_| self.readback_buffer_size < size);
-
-        if needs_new {
-            let make_buffer = || {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("RenderSession Readback Buffer"),
-                    size,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                })
-            };
-
-            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
-            self.readback_buffer_size = size;
-        }
-    }
-
-    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
-        if self.current_readback_is_left {
-            self.readback_buffers
-                .0
-                .as_ref()
-                .expect("readback buffer should be initialised")
-        } else {
-            self.readback_buffers
-                .1
-                .as_ref()
-                .expect("readback buffer should be initialised")
-        }
-    }
-
-    pub(crate) fn swap_readback_buffers(&mut self) {
-        self.current_readback_is_left = !self.current_readback_is_left;
-    }
-}
-
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
@@ -1909,16 +1863,23 @@ async fn produce_frame(
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
+    let total_start = Instant::now();
+
+    let prepare_start = Instant::now();
     layers
         .prepare(constants, &uniforms, &segment_frames, cursor)
         .await?;
+    let prepare_time = prepare_start.elapsed();
 
+    let encoder_start = Instant::now();
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
+    let encoder_create_time = encoder_start.elapsed();
 
+    let render_start = Instant::now();
     layers.render(
         &constants.device,
         &constants.queue,
@@ -1926,15 +1887,60 @@ async fn produce_frame(
         session,
         &uniforms,
     );
+    let render_time = render_start.elapsed();
 
-    finish_encoder(
+    let finish_start = Instant::now();
+    let result = finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await
+    .await;
+    let finish_time = finish_start.elapsed();
+
+    let total_time = total_start.elapsed();
+
+    tracing::debug!(
+        output_width = uniforms.output_size.0,
+        output_height = uniforms.output_size.1,
+        prepare_us = prepare_time.as_micros() as u64,
+        encoder_create_us = encoder_create_time.as_micros() as u64,
+        render_pass_us = render_time.as_micros() as u64,
+        finish_encoder_us = finish_time.as_micros() as u64,
+        total_us = total_time.as_micros() as u64,
+        "[PERF:GPU] produce_frame timing breakdown"
+    );
+
+    // #region agent log
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+    {
+        let log_entry = serde_json::json!({
+            "location": "lib.rs:produce_frame",
+            "message": "GPU produce_frame timing",
+            "data": {
+                "output_width": uniforms.output_size.0,
+                "output_height": uniforms.output_size.1,
+                "prepare_us": prepare_time.as_micros() as u64,
+                "encoder_create_us": encoder_create_time.as_micros() as u64,
+                "render_pass_us": render_time.as_micros() as u64,
+                "finish_encoder_us": finish_time.as_micros() as u64,
+                "total_us": total_time.as_micros() as u64
+            },
+            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+            "sessionId": "debug-session",
+            "hypothesisId": "C"
+        });
+        writeln!(file, "{}", log_entry).ok();
+    }
+    // #endregion
+
+    result
 }
 
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {

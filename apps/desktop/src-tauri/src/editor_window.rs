@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +33,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
                 width: frame.width,
                 height: frame.height,
                 stride: frame.padded_bytes_per_row,
+                created_at: Instant::now(),
             });
         }),
     )
@@ -188,6 +189,7 @@ impl EditorInstances {
                             width: frame.width,
                             height: frame.height,
                             stride: frame.padded_bytes_per_row,
+                            created_at: Instant::now(),
                         });
                     }),
                 )

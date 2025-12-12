@@ -10,10 +10,21 @@ mod avassetreader;
 mod ffmpeg;
 mod frame_converter;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PixelFormat {
+    Rgba,
+    Nv12,
+    Yuv420p,
+}
+
+#[derive(Clone)]
 pub struct DecodedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
 }
 
 impl DecodedFrame {
@@ -22,6 +33,37 @@ impl DecodedFrame {
             data: Arc::new(data),
             width,
             height,
+            format: PixelFormat::Rgba,
+            y_stride: width * 4,
+            uv_stride: 0,
+        }
+    }
+
+    pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+        }
+    }
+
+    pub fn new_yuv420p(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Yuv420p,
+            y_stride,
+            uv_stride,
         }
     }
 
@@ -36,6 +78,61 @@ impl DecodedFrame {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    pub fn format(&self) -> PixelFormat {
+        self.format
+    }
+
+    pub fn y_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Nv12 | PixelFormat::Yuv420p => {
+                let y_size = (self.y_stride * self.height) as usize;
+                Some(&self.data[..y_size])
+            }
+            PixelFormat::Rgba => None,
+        }
+    }
+
+    pub fn uv_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Nv12 => {
+                let y_size = (self.y_stride * self.height) as usize;
+                Some(&self.data[y_size..])
+            }
+            PixelFormat::Yuv420p => None,
+            PixelFormat::Rgba => None,
+        }
+    }
+
+    pub fn u_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Yuv420p => {
+                let y_size = (self.y_stride * self.height) as usize;
+                let u_size = (self.uv_stride * self.height / 2) as usize;
+                Some(&self.data[y_size..y_size + u_size])
+            }
+            _ => None,
+        }
+    }
+
+    pub fn v_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Yuv420p => {
+                let y_size = (self.y_stride * self.height) as usize;
+                let u_size = (self.uv_stride * self.height / 2) as usize;
+                Some(&self.data[y_size + u_size..])
+            }
+            _ => None,
+        }
+    }
+
+    pub fn y_stride(&self) -> u32 {
+        self.y_stride
+    }
+
+    pub fn uv_stride(&self) -> u32 {
+        self.uv_stride
+    }
 }
 
 pub enum VideoDecoderMessage {
@@ -47,7 +144,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 500;
+pub const FRAME_CACHE_SIZE: usize = 750;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
@@ -55,13 +152,54 @@ pub struct AsyncVideoDecoderHandle {
     offset: f64,
 }
 
+trait MpscSenderLen {
+    fn len(&self) -> Option<usize>;
+}
+
+impl<T> MpscSenderLen for mpsc::Sender<T> {
+    fn len(&self) -> Option<usize> {
+        None
+    }
+}
+
 impl AsyncVideoDecoderHandle {
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let adjusted_time = self.get_time(time);
+
         self.sender
-            .send(VideoDecoderMessage::GetFrame(self.get_time(time), tx))
+            .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
             .unwrap();
-        rx.await.ok()
+
+        let start = std::time::Instant::now();
+        let result = rx.await;
+        let wait_ms = start.elapsed().as_millis();
+
+        // #region agent log
+        use std::io::Write;
+        let success = result.is_ok();
+        let was_cancelled = result.is_err();
+        if was_cancelled || wait_ms > 50 {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+            {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                writeln!(
+                    file,
+                    r#"{{"location":"decoder/mod.rs:get_frame_exit","message":"get_frame completed","data":{{"time":{},"wait_ms":{},"success":{},"cancelled":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"A"}}"#,
+                    time, wait_ms, success, was_cancelled, ts
+                )
+                .ok();
+            }
+        }
+        // #endregion
+
+        result.ok()
     }
 
     pub fn get_time(&self, time: f32) -> f32 {

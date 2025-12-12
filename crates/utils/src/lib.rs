@@ -89,9 +89,9 @@ pub fn ensure_unique_filename_with_attempts(
 
     loop {
         let numbered_filename = if extension.is_empty() {
-            format!("{} ({})", name_without_ext, counter)
+            format!("{name_without_ext} ({counter})")
         } else {
-            format!("{} ({}){}", name_without_ext, counter, &extension)
+            format!("{name_without_ext} ({counter}){extension}")
         };
 
         let test_path = parent_dir.join(&numbered_filename);

@@ -1,33 +1,47 @@
 use cap_project::XY;
 
 use crate::{
-    DecodedSegmentFrames,
+    DecodedSegmentFrames, PixelFormat,
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+    yuv_converter::YuvToRgbaConverter,
 };
 
 pub struct DisplayLayer {
-    frame_texture: wgpu::Texture,
-    frame_texture_view: wgpu::TextureView,
+    frame_textures: [wgpu::Texture; 2],
+    frame_texture_views: [wgpu::TextureView; 2],
+    current_texture: usize,
     uniforms_buffer: wgpu::Buffer,
     pipeline: CompositeVideoFramePipeline,
-    bind_group: Option<wgpu::BindGroup>,
+    bind_groups: [Option<wgpu::BindGroup>; 2],
+    last_frame_ptr: usize,
+    yuv_converter: YuvToRgbaConverter,
 }
 
 impl DisplayLayer {
     pub fn new(device: &wgpu::Device) -> Self {
-        let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
-        let frame_texture_view = frame_texture.create_view(&Default::default());
+        let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
+        let frame_texture_view_1 = frame_texture_1.create_view(&Default::default());
 
         let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
         let pipeline = CompositeVideoFramePipeline::new(device);
-        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
+        let bind_group_0 =
+            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_0));
+        let bind_group_1 =
+            Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view_1));
+
+        let yuv_converter = YuvToRgbaConverter::new(device);
 
         Self {
-            frame_texture_view,
-            frame_texture,
+            frame_textures: [frame_texture_0, frame_texture_1],
+            frame_texture_views: [frame_texture_view_0, frame_texture_view_1],
+            current_texture: 0,
             uniforms_buffer,
             pipeline,
-            bind_group,
+            bind_groups: [bind_group_0, bind_group_1],
+            last_frame_ptr: 0,
+            yuv_converter,
         }
     }
 
@@ -38,49 +52,168 @@ impl DisplayLayer {
         segment_frames: &DecodedSegmentFrames,
         frame_size: XY<u32>,
         uniforms: CompositeVideoFrameUniforms,
-    ) {
-        if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
-        {
-            self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
-                device,
-                frame_size.x,
-                frame_size.y,
-            );
-            self.frame_texture_view = self.frame_texture.create_view(&Default::default());
+    ) -> (bool, u32, u32) {
+        let frame_data = segment_frames.screen_frame.data();
+        let frame_ptr = frame_data.as_ptr() as usize;
+        let actual_width = segment_frames.screen_frame.width();
+        let actual_height = segment_frames.screen_frame.height();
+        let format = segment_frames.screen_frame.format();
 
-            self.bind_group = Some(self.pipeline.bind_group(
-                device,
-                &self.uniforms_buffer,
-                &self.frame_texture_view,
-            ));
+        let skipped = frame_ptr == self.last_frame_ptr;
+        if !skipped {
+            let next_texture = 1 - self.current_texture;
+
+            if self.frame_textures[next_texture].width() != frame_size.x
+                || self.frame_textures[next_texture].height() != frame_size.y
+            {
+                self.frame_textures[next_texture] =
+                    CompositeVideoFramePipeline::create_frame_texture(
+                        device,
+                        frame_size.x,
+                        frame_size.y,
+                    );
+                self.frame_texture_views[next_texture] =
+                    self.frame_textures[next_texture].create_view(&Default::default());
+
+                self.bind_groups[next_texture] = Some(self.pipeline.bind_group(
+                    device,
+                    &self.uniforms_buffer,
+                    &self.frame_texture_views[next_texture],
+                ));
+            }
+
+            match format {
+                PixelFormat::Rgba => {
+                    let src_bytes_per_row = frame_size.x * 4;
+
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.frame_textures[next_texture],
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        frame_data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(src_bytes_per_row),
+                            rows_per_image: Some(frame_size.y),
+                        },
+                        wgpu::Extent3d {
+                            width: frame_size.x,
+                            height: frame_size.y,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                PixelFormat::Nv12 => {
+                    let screen_frame = &segment_frames.screen_frame;
+                    if let (Some(y_data), Some(uv_data)) =
+                        (screen_frame.y_plane(), screen_frame.uv_plane())
+                    {
+                        self.yuv_converter.convert_nv12(
+                            device,
+                            queue,
+                            y_data,
+                            uv_data,
+                            frame_size.x,
+                            frame_size.y,
+                            screen_frame.y_stride(),
+                        );
+
+                        if let Some(output_texture) = self.yuv_converter.output_texture() {
+                            let mut encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("YUV Copy Encoder"),
+                                });
+
+                            encoder.copy_texture_to_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: output_texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &self.frame_textures[next_texture],
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::Extent3d {
+                                    width: frame_size.x,
+                                    height: frame_size.y,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+
+                            queue.submit(std::iter::once(encoder.finish()));
+                        }
+                    }
+                }
+                PixelFormat::Yuv420p => {
+                    let screen_frame = &segment_frames.screen_frame;
+                    if let (Some(y_data), Some(u_data), Some(v_data)) = (
+                        screen_frame.y_plane(),
+                        screen_frame.u_plane(),
+                        screen_frame.v_plane(),
+                    ) {
+                        self.yuv_converter.convert_yuv420p(
+                            device,
+                            queue,
+                            y_data,
+                            u_data,
+                            v_data,
+                            frame_size.x,
+                            frame_size.y,
+                            screen_frame.y_stride(),
+                            screen_frame.uv_stride(),
+                        );
+
+                        if let Some(output_texture) = self.yuv_converter.output_texture() {
+                            let mut encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("YUV Copy Encoder"),
+                                });
+
+                            encoder.copy_texture_to_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: output_texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &self.frame_textures[next_texture],
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::Extent3d {
+                                    width: frame_size.x,
+                                    height: frame_size.y,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+
+                            queue.submit(std::iter::once(encoder.finish()));
+                        }
+                    }
+                }
+            }
+
+            self.last_frame_ptr = frame_ptr;
+            self.current_texture = next_texture;
         }
 
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.frame_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            segment_frames.screen_frame.data(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame_size.x * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: frame_size.x,
-                height: frame_size.y,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        // Update existing uniform buffer in place; bind group remains valid.
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        (skipped, actual_width, actual_height)
     }
 
+    pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(bind_group) = &self.bind_group {
+        if let Some(bind_group) = &self.bind_groups[self.current_texture] {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..4, 0..1);

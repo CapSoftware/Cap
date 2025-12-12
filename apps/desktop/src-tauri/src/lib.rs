@@ -484,8 +484,7 @@ async fn set_camera_input(
                     Err(e) => {
                         if attempts >= 3 {
                             break Err(format!(
-                                "Failed to initialize camera after {} attempts: {}",
-                                attempts, e
+                                "Failed to initialize camera after {attempts} attempts: {e}"
                             ));
                         }
                         warn!(

@@ -30,7 +30,8 @@
 			"Bash(pnpm exec tsc:*)",
 			"Bash(pnpm biome check:*)",
 			"Bash(pnpm --dir apps/desktop exec tsc:*)",
-			"Bash(xxd:*)"
+			"Bash(xxd:*)",
+			"Bash(git checkout:*)"
 		],
 		"deny": [],
 		"ask": []

@@ -12,14 +12,16 @@ use cap_rendering::{
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
+use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    // pub ws_port: u16,
     pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
+    playback_active: watch::Sender<bool>,
+    playback_active_rx: watch::Receiver<bool>,
     pub state: Arc<Mutex<EditorState>>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
@@ -163,6 +165,7 @@ impl EditorInstance {
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
+        let (playback_active_tx, playback_active_rx) = watch::channel(false);
 
         let this = Arc::new(Self {
             project_path,
@@ -179,6 +182,8 @@ impl EditorInstance {
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
             meta: recording_meta,
+            playback_active: playback_active_tx,
+            playback_active_rx,
         });
 
         this.state.lock().await.preview_task =
@@ -235,6 +240,8 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
+        let _ = self.playback_active.send(true);
+
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -278,7 +285,7 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
-                        // ! This editor instance (self) gets dropped here
+                        let _ = this.playback_active.send(false);
                         return;
                     }
                 }
@@ -297,6 +304,8 @@ impl EditorInstance {
         trace!("Starting preview renderer task");
         tokio::spawn(async move {
             trace!("Preview renderer task running");
+            let mut prefetch_cancel_token: Option<CancellationToken> = None;
+
             loop {
                 trace!("Preview renderer: waiting for frame request");
                 preview_rx.changed().await.unwrap();
@@ -309,7 +318,35 @@ impl EditorInstance {
                         break;
                     };
 
+                    if let Some(token) = prefetch_cancel_token.take() {
+                        token.cancel();
+                    }
+
+                    if *self.playback_active_rx.borrow() {
+                        break;
+                    }
+
                     trace!("Preview renderer: processing frame {}", frame_number);
+
+                    // #region agent log
+                    use std::io::Write;
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                    {
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64;
+                        writeln!(
+                            file,
+                            r#"{{"location":"editor_instance.rs:preview_request","message":"preview renderer requesting frame","data":{{"frame_number":{},"fps":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
+                            frame_number, fps, ts
+                        )
+                        .ok();
+                    }
+                    // #endregion
 
                     let project = self.project_config.1.borrow().clone();
 
@@ -329,6 +366,69 @@ impl EditorInstance {
                         .iter()
                         .find(|v| v.index == segment.recording_clip);
                     let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
+
+                    let new_cancel_token = CancellationToken::new();
+                    prefetch_cancel_token = Some(new_cancel_token.clone());
+
+                    let playback_is_active = *self.playback_active_rx.borrow();
+                    if !playback_is_active {
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                        {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+                            writeln!(
+                                file,
+                                r#"{{"location":"editor_instance.rs:preview_prefetch","message":"preview spawning prefetch tasks","data":{{"frame_number":{},"prefetch_count":5}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
+                                frame_number, ts
+                            )
+                            .ok();
+                        }
+                        // #endregion
+
+                        let prefetch_frames_count = 5u32;
+                        let hide_camera = project.camera.hide;
+                        let playback_rx = self.playback_active_rx.clone();
+                        for offset in 1..=prefetch_frames_count {
+                            let prefetch_frame = frame_number + offset;
+                            if let Some((prefetch_segment_time, prefetch_segment)) =
+                                project.get_segment_time(prefetch_frame as f64 / fps as f64)
+                            {
+                                if let Some(prefetch_segment_media) = self
+                                    .segment_medias
+                                    .get(prefetch_segment.recording_clip as usize)
+                                {
+                                    let prefetch_clip_offsets = project
+                                        .clips
+                                        .iter()
+                                        .find(|v| v.index == prefetch_segment.recording_clip)
+                                        .map(|v| v.offsets)
+                                        .unwrap_or_default();
+                                    let decoders = prefetch_segment_media.decoders.clone();
+                                    let cancel_token = new_cancel_token.clone();
+                                    let playback_rx = playback_rx.clone();
+                                    tokio::spawn(async move {
+                                        if cancel_token.is_cancelled() || *playback_rx.borrow() {
+                                            return;
+                                        }
+                                        let _ = decoders
+                                            .get_frames(
+                                                prefetch_segment_time as f32,
+                                                !hide_camera,
+                                                prefetch_clip_offsets,
+                                            )
+                                            .await;
+                                    });
+                                }
+                            }
+                        }
+                    }
 
                     let get_frames_future = segment_medias.decoders.get_frames(
                         segment_time as f32,

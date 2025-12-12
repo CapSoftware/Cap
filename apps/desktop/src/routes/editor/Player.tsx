@@ -184,7 +184,6 @@ export function PlayerContent() {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			} else {
-				// Ensure we seek to the current playback time before starting playback
 				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
@@ -463,12 +462,60 @@ function PreviewCanvas() {
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
+	// #region agent log
+	let canvasRenderCount = 0;
+	let totalCanvasRenderTime = 0;
+	let maxCanvasRenderTime = 0;
+	let lastCanvasMetricsLog = performance.now();
+	// #endregion
+
 	createEffect(() => {
 		const frame = latestFrame();
 		if (!frame) return;
 		if (!canvasRef) return;
-		const ctx = canvasRef.getContext("2d");
-		ctx?.putImageData(frame.data, 0, 0);
+		const ctx = canvasRef.getContext("2d", { alpha: false });
+		if (!ctx) return;
+		// #region agent log
+		const renderStart = performance.now();
+		// #endregion
+		createImageBitmap(frame.data).then((bitmap) => {
+			ctx.drawImage(bitmap, 0, 0);
+			bitmap.close();
+			// #region agent log
+			const renderTime = performance.now() - renderStart;
+			canvasRenderCount++;
+			totalCanvasRenderTime += renderTime;
+			maxCanvasRenderTime = Math.max(maxCanvasRenderTime, renderTime);
+			if (
+				performance.now() - lastCanvasMetricsLog >= 2000 &&
+				canvasRenderCount > 0
+			) {
+				const avgTime = totalCanvasRenderTime / canvasRenderCount;
+				fetch(
+					"http://127.0.0.1:7242/ingest/966647b7-72f6-4ab7-b76e-6b773ac020d7",
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							location: "Player.tsx:canvas_render",
+							message: "canvas render metrics",
+							data: {
+								canvasRenderCount,
+								avgRenderTimeMs: avgTime.toFixed(2),
+								maxRenderTimeMs: maxCanvasRenderTime.toFixed(2),
+								frameWidth: frame.width,
+								frameHeight: frame.data.height,
+							},
+							timestamp: Date.now(),
+							sessionId: "debug-session",
+							hypothesisId: "E",
+						}),
+					},
+				).catch(() => {});
+				lastCanvasMetricsLog = performance.now();
+			}
+			// #endregion
+		});
 	});
 
 	return (

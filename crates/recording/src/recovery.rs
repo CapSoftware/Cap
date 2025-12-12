@@ -455,14 +455,12 @@ impl RecoveryManager {
                     }
                     Ok(false) => {
                         return Err(RecoveryError::UnplayableVideo(format!(
-                            "Display video has no decodable frames: {:?}",
-                            display_output
+                            "Display video has no decodable frames: {display_output:?}"
                         )));
                     }
                     Err(e) => {
                         return Err(RecoveryError::UnplayableVideo(format!(
-                            "Display video validation failed for {:?}: {}",
-                            display_output, e
+                            "Display video validation failed for {display_output:?}: {e}"
                         )));
                     }
                 }
@@ -521,7 +519,8 @@ impl RecoveryManager {
             .recoverable_segments
             .iter()
             .map(|seg| {
-                let segment_base = format!("content/segments/segment-{}", seg.index);
+                let segment_index = seg.index;
+                let segment_base = format!("content/segments/segment-{segment_index}");
                 let segment_dir = recording.project_path.join(&segment_base);
 
                 let display_path = segment_dir.join("display.mp4");
@@ -534,13 +533,13 @@ impl RecoveryManager {
 
                 MultipleSegment {
                     display: VideoMeta {
-                        path: RelativePathBuf::from(format!("{}/display.mp4", segment_base)),
+                        path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
                         start_time: None,
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
-                            path: RelativePathBuf::from(format!("{}/camera.mp4", segment_base)),
+                            path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
                             fps: 30,
                             start_time: None,
                         })
@@ -549,10 +548,7 @@ impl RecoveryManager {
                     },
                     mic: if mic_path.exists() {
                         Some(AudioMeta {
-                            path: RelativePathBuf::from(format!(
-                                "{}/audio-input.ogg",
-                                segment_base
-                            )),
+                            path: RelativePathBuf::from(format!("{segment_base}/audio-input.ogg")),
                             start_time: None,
                         })
                     } else {
@@ -560,20 +556,14 @@ impl RecoveryManager {
                     },
                     system_audio: if system_audio_path.exists() {
                         Some(AudioMeta {
-                            path: RelativePathBuf::from(format!(
-                                "{}/system_audio.ogg",
-                                segment_base
-                            )),
+                            path: RelativePathBuf::from(format!("{segment_base}/system_audio.ogg")),
                             start_time: None,
                         })
                     } else {
                         None
                     },
                     cursor: if cursor_path.exists() {
-                        Some(RelativePathBuf::from(format!(
-                            "{}/cursor.json",
-                            segment_base
-                        )))
+                        Some(RelativePathBuf::from(format!("{segment_base}/cursor.json")))
                     } else {
                         None
                     },
@@ -605,7 +595,7 @@ impl RecoveryManager {
             .iter()
             .enumerate()
             .filter_map(|(i, segment)| {
-                let segment_base = format!("content/segments/segment-{}", i);
+                let segment_base = format!("content/segments/segment-{i}");
                 let display_path = recording
                     .project_path
                     .join(&segment_base)

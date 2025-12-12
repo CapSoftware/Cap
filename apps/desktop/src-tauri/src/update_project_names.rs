@@ -17,7 +17,7 @@ const STORE_KEY: &str = "uuid_projects_migrated";
 pub fn migrate_if_needed(app: &AppHandle) -> Result<(), String> {
     let store = app
         .store("store")
-        .map_err(|e| format!("Failed to access store: {}", e))?;
+        .map_err(|e| format!("Failed to access store: {e}"))?;
 
     if store
         .get(STORE_KEY)
@@ -51,7 +51,7 @@ pub async fn migrate(app: &AppHandle) -> Result<(), String> {
     let recordings_dir = recordings_path(app);
     if !fs::try_exists(&recordings_dir)
         .await
-        .map_err(|e| format!("Failed to check recordings directory: {}", e))?
+        .map_err(|e| format!("Failed to check recordings directory: {e}"))?
     {
         return Ok(());
     }
@@ -154,12 +154,12 @@ async fn collect_uuid_projects(recordings_dir: &Path) -> Result<Vec<PathBuf>, St
     let mut uuid_projects = Vec::new();
     let mut entries = fs::read_dir(recordings_dir)
         .await
-        .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
+        .map_err(|e| format!("Failed to read recordings directory: {e}"))?;
 
     while let Some(entry) = entries
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        .map_err(|e| format!("Failed to read directory entry: {e}"))?
     {
         let path = entry.path();
         if !path.is_dir() {
@@ -197,7 +197,7 @@ async fn migrate_single_project(
         Ok(meta) => meta,
         Err(e) => {
             tracing::warn!("Failed to load metadata for {}: {}", filename, e);
-            return Err(format!("Failed to load metadata: {}", e));
+            return Err(format!("Failed to load metadata: {e}"));
         }
     };
 
@@ -260,7 +260,7 @@ async fn migrate_project_filename_async(
     let filename = if sanitized.ends_with(".cap") {
         sanitized
     } else {
-        format!("{}.cap", sanitized)
+        format!("{sanitized}.cap")
     };
 
     let parent_dir = project_path
@@ -268,13 +268,13 @@ async fn migrate_project_filename_async(
         .ok_or("Project path has no parent directory")?;
 
     let unique_filename = cap_utils::ensure_unique_filename(&filename, parent_dir)
-        .map_err(|e| format!("Failed to ensure unique filename: {}", e))?;
+        .map_err(|e| format!("Failed to ensure unique filename: {e}"))?;
 
     let final_path = parent_dir.join(&unique_filename);
 
     fs::rename(project_path, &final_path)
         .await
-        .map_err(|e| format!("Failed to rename project directory: {}", e))?;
+        .map_err(|e| format!("Failed to rename project directory: {e}"))?;
 
     Ok(final_path)
 }

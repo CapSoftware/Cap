@@ -230,7 +230,7 @@ pub async fn create_or_get_video(
     }
 
     if let Some(org_id) = organization_id {
-        s3_config_url.push_str(&format!("&orgId={}", org_id));
+        s3_config_url.push_str(&format!("&orgId={org_id}"));
     }
 
     let response = app
