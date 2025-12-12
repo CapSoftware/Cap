@@ -32,10 +32,11 @@ mod project_recordings;
 mod scene;
 mod spring_mass_damper;
 mod text;
+pub mod yuv_converter;
 mod zoom;
 
 pub use coord::*;
-pub use decoder::DecodedFrame;
+pub use decoder::{DecodedFrame, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
@@ -198,9 +199,33 @@ impl RecordingSegmentDecoders {
             )
         );
 
+        let camera_frame = camera.flatten();
+
+        // #region agent log
+        if needs_camera && camera_frame.is_none() {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+            {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                writeln!(
+                    file,
+                    r#"{{"location":"lib.rs:get_frames","message":"camera frame missing","data":{{"segment_time":{},"has_camera_decoder":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"O"}}"#,
+                    segment_time, self.camera.is_some(), ts
+                )
+                .ok();
+            }
+        }
+        // #endregion
+
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
-            camera_frame: camera.flatten(),
+            camera_frame,
             segment_time,
             recording_time: segment_time + self.segment_offset as f32,
         })
@@ -1518,6 +1543,7 @@ impl ProjectUniforms {
     }
 }
 
+#[derive(Clone)]
 pub struct DecodedSegmentFrames {
     pub screen_frame: DecodedFrame,
     pub camera_frame: Option<DecodedFrame>,
@@ -1553,39 +1579,11 @@ impl<'a> FrameRenderer<'a> {
             )
         });
 
-        // #region agent log
-        use std::io::Write;
-        let texture_update_start = std::time::Instant::now();
-        // #endregion
-
         session.update_texture_size(
             &self.constants.device,
             uniforms.output_size.0,
             uniforms.output_size.1,
         );
-
-        // #region agent log
-        let texture_update_time = texture_update_start.elapsed();
-        if texture_update_time.as_micros() > 100 {
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let _ = writeln!(
-                    f,
-                    r#"{{"hypothesisId":"E","location":"lib.rs:update_texture_size","message":"Texture size update took significant time","data":{{"time_us":{},"width":{},"height":{}}},"timestamp":{}}}"#,
-                    texture_update_time.as_micros(),
-                    uniforms.output_size.0,
-                    uniforms.output_size.1,
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                );
-            }
-        }
-        // #endregion
 
         produce_frame(
             self.constants,
@@ -1652,7 +1650,7 @@ impl RendererLayers {
         let blur_time = blur_start.elapsed();
 
         let display_start = Instant::now();
-        self.display.prepare(
+        let (display_skipped, frame_width, frame_height) = self.display.prepare(
             &constants.device,
             &constants.queue,
             segment_frames,
@@ -1720,33 +1718,6 @@ impl RendererLayers {
 
         let total_time = prepare_start.elapsed();
 
-        // #region agent log
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-        {
-            let _ = writeln!(
-                f,
-                r#"{{"hypothesisId":"PREPARE_BREAKDOWN","location":"lib.rs:prepare","message":"Layer prepare breakdown","data":{{"bg_us":{},"blur_us":{},"display_us":{},"cursor_us":{},"camera_us":{},"camera_only_us":{},"text_us":{},"captions_us":{},"total_us":{}}},"timestamp":{}}}"#,
-                bg_time.as_micros(),
-                blur_time.as_micros(),
-                display_time.as_micros(),
-                cursor_time.as_micros(),
-                camera_time.as_micros(),
-                camera_only_time.as_micros(),
-                text_time.as_micros(),
-                captions_time.as_micros(),
-                total_time.as_micros(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
-        }
-        // #endregion
-
         if total_time.as_millis() > 5 {
             tracing::debug!(
                 total_us = total_time.as_micros() as u64,
@@ -1761,6 +1732,36 @@ impl RendererLayers {
                 "[PERF:PREPARE] layer prepare breakdown"
             );
         }
+
+        // #region agent log
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+        {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let frame_bytes = frame_width * frame_height * 4;
+            writeln!(
+                file,
+                r#"{{"location":"lib.rs:prepare_breakdown","message":"layer prepare timing breakdown","data":{{"total_us":{},"display_us":{},"display_skipped":{},"frame_width":{},"frame_height":{},"frame_bytes":{},"camera_us":{},"bg_us":{},"cursor_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"F"}}"#,
+                total_time.as_micros() as u64,
+                display_time.as_micros() as u64,
+                display_skipped,
+                frame_width,
+                frame_height,
+                frame_bytes,
+                camera_time.as_micros() as u64,
+                bg_time.as_micros() as u64,
+                cursor_time.as_micros() as u64,
+                ts
+            )
+            .ok();
+        }
+        // #endregion
 
         Ok(())
     }
@@ -1901,29 +1902,6 @@ async fn produce_frame(
 
     let total_time = total_start.elapsed();
 
-    // #region agent log
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-    {
-        let _ = writeln!(
-            f,
-            r#"{{"hypothesisId":"GPU_BREAKDOWN","location":"lib.rs:produce_frame","message":"GPU render breakdown","data":{{"prepare_us":{},"encoder_create_us":{},"render_pass_us":{},"finish_encoder_us":{},"total_us":{}}},"timestamp":{}}}"#,
-            prepare_time.as_micros(),
-            encoder_create_time.as_micros(),
-            render_time.as_micros(),
-            finish_time.as_micros(),
-            total_time.as_micros(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
-    }
-    // #endregion
-
     tracing::debug!(
         output_width = uniforms.output_size.0,
         output_height = uniforms.output_size.1,
@@ -1934,6 +1912,33 @@ async fn produce_frame(
         total_us = total_time.as_micros() as u64,
         "[PERF:GPU] produce_frame timing breakdown"
     );
+
+    // #region agent log
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+    {
+        let log_entry = serde_json::json!({
+            "location": "lib.rs:produce_frame",
+            "message": "GPU produce_frame timing",
+            "data": {
+                "output_width": uniforms.output_size.0,
+                "output_height": uniforms.output_size.1,
+                "prepare_us": prepare_time.as_micros() as u64,
+                "encoder_create_us": encoder_create_time.as_micros() as u64,
+                "render_pass_us": render_time.as_micros() as u64,
+                "finish_encoder_us": finish_time.as_micros() as u64,
+                "total_us": total_time.as_micros() as u64
+            },
+            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+            "sessionId": "debug-session",
+            "hypothesisId": "C"
+        });
+        writeln!(file, "{}", log_entry).ok();
+    }
+    // #endregion
 
     result
 }

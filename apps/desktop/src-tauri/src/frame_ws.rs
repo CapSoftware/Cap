@@ -7,11 +7,7 @@ fn compress_frame_data(mut data: Vec<u8>, stride: u32, height: u32, width: u32) 
     data.extend_from_slice(&height.to_le_bytes());
     data.extend_from_slice(&width.to_le_bytes());
 
-    let data_len = data.len();
-    let mut result = Vec::with_capacity(data_len + 4);
-    result.extend_from_slice(&(data_len as u32).to_le_bytes());
-    result.extend_from_slice(&data);
-    result
+    lz4_flex::compress_prepend_size(&data)
 }
 
 #[derive(Clone)]
@@ -115,26 +111,14 @@ pub async fn create_watch_frame_ws(
 
                         let send_start = Instant::now();
                         let original_size = frame.data.len();
-                        let compress_start = Instant::now();
                         let packed = compress_frame_data(frame.data, frame.stride, frame.height, frame.width);
-                        let compress_time = compress_start.elapsed();
                         let compressed_size = packed.len();
 
-                        let ws_send_start = Instant::now();
                         if let Err(e) = socket.send(Message::Binary(packed)).await {
                             tracing::error!("Failed to send frame to socket: {:?}", e);
                             break;
                         }
-                        let ws_send_time = ws_send_start.elapsed();
                         let send_time = send_start.elapsed();
-
-                        // #region agent log
-                        use std::io::Write;
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
-                            let _ = writeln!(f, r#"{{"hypothesisId":"D","location":"frame_ws.rs:ws_send","message":"WebSocket frame sent","data":{{"frame_latency_us":{},"compress_time_us":{},"ws_send_time_us":{},"total_send_time_us":{},"original_bytes":{},"compressed_bytes":{}}},"timestamp":{}}}"#,
-                                latency_us, compress_time.as_micros(), ws_send_time.as_micros(), send_time.as_micros(), original_size, compressed_size, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-                        }
-                        // #endregion
 
                         tracing::debug!(
                             frame_latency_us = latency_us,
@@ -143,6 +127,27 @@ pub async fn create_watch_frame_ws(
                             compressed_size_bytes = compressed_size,
                             "[PERF:WS_WATCH] frame sent (compressed)"
                         );
+
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
+                            let log_entry = serde_json::json!({
+                                "location": "frame_ws.rs:ws_send",
+                                "message": "websocket frame sent",
+                                "data": {
+                                    "frame_latency_us": latency_us,
+                                    "send_time_us": send_time.as_micros() as u64,
+                                    "original_size_bytes": original_size,
+                                    "compressed_size_bytes": compressed_size,
+                                    "compression_ratio_pct": format!("{:.1}", (compressed_size as f64 / original_size as f64) * 100.0)
+                                },
+                                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                                "sessionId": "debug-session",
+                                "hypothesisId": "A"
+                            });
+                            writeln!(file, "{}", log_entry).ok();
+                        }
+                        // #endregion
                     }
                 }
             }
@@ -246,26 +251,14 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
 
                             let send_start = Instant::now();
                             let original_size = frame.data.len();
-                            let compress_start = Instant::now();
                             let packed = compress_frame_data(frame.data, frame.stride, frame.height, frame.width);
-                            let compress_time = compress_start.elapsed();
                             let compressed_size = packed.len();
 
-                            let ws_send_start = Instant::now();
                             if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);
                                 break;
                             }
-                            let ws_send_time = ws_send_start.elapsed();
                             let send_time = send_start.elapsed();
-
-                            // #region agent log
-                            use std::io::Write;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
-                                let _ = writeln!(f, r#"{{"hypothesisId":"WS_BROADCAST","location":"frame_ws.rs:broadcast_send","message":"WebSocket broadcast frame sent","data":{{"frame_latency_us":{},"compress_time_us":{},"ws_send_time_us":{},"total_send_time_us":{},"width":{},"height":{}}},"timestamp":{}}}"#,
-                                    latency_us, compress_time.as_micros(), ws_send_time.as_micros(), send_time.as_micros(), frame.width, frame.height, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
-                            }
-                            // #endregion
 
                             tracing::debug!(
                                 frame_latency_us = latency_us,

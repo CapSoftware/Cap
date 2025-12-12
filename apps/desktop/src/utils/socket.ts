@@ -176,6 +176,35 @@ export function createImageDataWS(
 			console.log(
 				`[PERF:FRONTEND_WS] periodic - frames: ${metrics.framesReceived}, compressed: ${compressedSize} bytes (${compressionRatio}%), decompressed: ${decompressed.length} bytes, avg decompress: ${avgDecompressTime.toFixed(2)}ms, avg parse: ${avgParseTime.toFixed(2)}ms, avg imageData: ${avgImageDataTime.toFixed(2)}ms, dimensions: ${width}x${height}`,
 			);
+			// #region agent log
+			fetch(
+				"http://127.0.0.1:7242/ingest/966647b7-72f6-4ab7-b76e-6b773ac020d7",
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						location: "socket.ts:ws_metrics",
+						message: "frontend WS metrics",
+						data: {
+							framesReceived: metrics.framesReceived,
+							avgDecompressMs: avgDecompressTime.toFixed(2),
+							avgParseMs: avgParseTime.toFixed(2),
+							avgImageDataMs: avgImageDataTime.toFixed(2),
+							maxDecompressMs: metrics.maxDecompressTimeMs.toFixed(2),
+							maxParseMs: metrics.maxParseTimeMs.toFixed(2),
+							compressedBytes: compressedSize,
+							decompressedBytes: decompressed.length,
+							compressionRatio,
+							width,
+							height,
+						},
+						timestamp: Date.now(),
+						sessionId: "debug-session",
+						hypothesisId: "B",
+					}),
+				},
+			).catch(() => {});
+			// #endregion
 			metrics.lastLogTime = now;
 		}
 

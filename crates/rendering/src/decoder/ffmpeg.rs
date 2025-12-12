@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-use crate::DecodedFrame;
+use crate::{DecodedFrame, PixelFormat};
 
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
 
@@ -19,6 +19,31 @@ struct ProcessedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
+}
+
+impl ProcessedFrame {
+    fn to_decoded_frame(&self) -> DecodedFrame {
+        match self.format {
+            PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
+            PixelFormat::Nv12 => DecodedFrame::new_nv12(
+                (*self.data).clone(),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
+                (*self.data).clone(),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
+        }
+    }
 }
 
 impl CachedFrame {
@@ -31,6 +56,9 @@ impl CachedFrame {
                     number: *number,
                     width: frame.width(),
                     height: frame.height(),
+                    format: PixelFormat::Rgba,
+                    y_stride: frame.width() * 4,
+                    uv_stride: 0,
                 };
 
                 *self = Self::Processed(data.clone());
@@ -100,6 +128,10 @@ impl FfmpegDecoder {
             while let Ok(r) = rx.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        if sender.is_closed() {
+                            continue;
+                        }
+
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
                         // sender.send(black_frame.clone()).ok();
                         // continue;
@@ -107,22 +139,14 @@ impl FfmpegDecoder {
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&mut converter);
 
-                            let _ = sender.send(DecodedFrame {
-                                data: data.data.clone(),
-                                width: data.width,
-                                height: data.height,
-                            });
+                            let _ = sender.send(data.to_decoded_frame());
                             *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
                             let last_sent_frame = last_sent_frame.clone();
                             Some(move |data: ProcessedFrame| {
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = sender.send(DecodedFrame {
-                                    data: data.data.clone(),
-                                    width: data.width,
-                                    height: data.height,
-                                });
+                                let _ = sender.send(data.to_decoded_frame());
                             })
                         };
 
@@ -257,6 +281,9 @@ impl FfmpegDecoder {
                                     data: Arc::new(black_frame_data),
                                     width: video_width,
                                     height: video_height,
+                                    format: PixelFormat::Rgba,
+                                    y_stride: video_width * 4,
+                                    uv_stride: 0,
                                 };
                                 (sender)(black_frame);
                             }

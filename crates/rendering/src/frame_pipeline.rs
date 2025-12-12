@@ -63,6 +63,30 @@ impl PendingReadback {
             "[PERF:GPU_BUFFER] pipelined readback wait completed"
         );
 
+        // #region agent log
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+        {
+            let log_entry = serde_json::json!({
+                "location": "frame_pipeline.rs:readback_wait",
+                "message": "GPU readback timing",
+                "data": {
+                    "poll_us": poll_time.as_micros() as u64,
+                    "data_copy_us": data_copy_time.as_micros() as u64,
+                    "total_pipeline_us": total_time.as_micros() as u64,
+                    "poll_count": poll_count
+                },
+                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                "sessionId": "debug-session",
+                "hypothesisId": "C"
+            });
+            writeln!(file, "{}", log_entry).ok();
+        }
+        // #endregion
+
         if poll_time.as_millis() > 10 {
             tracing::warn!(
                 poll_time_ms = poll_time.as_millis() as u64,
@@ -394,37 +418,14 @@ pub async fn finish_encoder(
         &session.textures.1
     };
 
-    let submit_start = Instant::now();
     session
         .pipelined_readback
         .submit_readback(device, queue, texture, uniforms, encoder)?;
-    let submit_time = submit_start.elapsed();
 
     let result = if let Some(pending) = previous_pending {
         let wait_start = Instant::now();
         let frame = pending.wait(device).await?;
         let wait_time = wait_start.elapsed();
-
-        // #region agent log
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-        {
-            let _ = writeln!(
-                f,
-                r#"{{"hypothesisId":"GPU_PIPELINE","location":"frame_pipeline.rs:finish_encoder","message":"Pipelined finish (waited for previous)","data":{{"submit_us":{},"wait_us":{},"total_us":{},"has_previous":true}},"timestamp":{}}}"#,
-                submit_time.as_micros(),
-                wait_time.as_micros(),
-                total_start.elapsed().as_micros(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
-        }
-        // #endregion
 
         tracing::debug!(
             wait_us = wait_time.as_micros() as u64,
@@ -455,28 +456,6 @@ pub async fn finish_encoder(
             prime_encoder,
         )?;
         let prime_time = prime_start.elapsed();
-
-        // #region agent log
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-        {
-            let _ = writeln!(
-                f,
-                r#"{{"hypothesisId":"GPU_PIPELINE","location":"frame_pipeline.rs:finish_encoder","message":"First frame (primed pipeline)","data":{{"submit_us":{},"wait_us":{},"prime_us":{},"total_us":{},"has_previous":false}},"timestamp":{}}}"#,
-                submit_time.as_micros(),
-                wait_time.as_micros(),
-                prime_time.as_micros(),
-                total_start.elapsed().as_micros(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
-        }
-        // #endregion
 
         tracing::debug!(
             wait_us = wait_time.as_micros() as u64,

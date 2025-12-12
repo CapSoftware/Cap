@@ -151,6 +151,7 @@ impl Renderer {
             };
 
             let mut dropped_in_batch = 0u32;
+            let queue_drain_start = Instant::now();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
                     RendererMessage::RenderFrame {
@@ -176,6 +177,9 @@ impl Renderer {
                         return;
                     }
                 }
+                if queue_drain_start.elapsed().as_millis() > 5 {
+                    break;
+                }
             }
 
             if dropped_in_batch > 0 {
@@ -185,47 +189,7 @@ impl Renderer {
                     total_dropped = frames_dropped,
                     "[PERF:EDITOR_RENDER] dropped frames to catch up"
                 );
-
-                // #region agent log
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                {
-                    let _ = writeln!(
-                        f,
-                        r#"{{"hypothesisId":"A","location":"editor.rs:frames_dropped","message":"Renderer dropped frames due to backpressure","data":{{"dropped_in_batch":{},"total_dropped":{},"rendering_frame":{}}},"timestamp":{}}}"#,
-                        dropped_in_batch,
-                        frames_dropped,
-                        current.frame_number,
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis()
-                    );
-                }
-                // #endregion
             }
-
-            // #region agent log
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let _ = writeln!(
-                    f,
-                    r#"{{"hypothesisId":"A","location":"editor.rs:render_start","message":"Starting GPU render","data":{{"frame_number":{}}},"timestamp":{}}}"#,
-                    current.frame_number,
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                );
-            }
-            // #endregion
 
             let render_start = Instant::now();
             let frame = frame_renderer
@@ -238,25 +202,6 @@ impl Renderer {
                 .await
                 .unwrap();
             let render_time = render_start.elapsed();
-
-            // #region agent log
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let _ = writeln!(
-                    f,
-                    r#"{{"hypothesisId":"A","location":"editor.rs:render_complete","message":"GPU render complete","data":{{"frame_number":{},"render_time_us":{}}},"timestamp":{}}}"#,
-                    current.frame_number,
-                    render_time.as_micros(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                );
-            }
-            // #endregion
 
             let callback_start = Instant::now();
             (self.frame_cb)(frame);
@@ -276,6 +221,26 @@ impl Renderer {
                 callback_time_us = callback_time_us,
                 "[PERF:EDITOR_RENDER] frame rendered"
             );
+
+            // #region agent log
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+            {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                writeln!(
+                    file,
+                    r#"{{"location":"editor.rs:frame_rendered","message":"editor render timing","data":{{"frame_number":{},"render_time_us":{},"callback_time_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
+                    current.frame_number, render_time_us, callback_time_us, ts
+                )
+                .ok();
+            }
+            // #endregion
 
             if last_metrics_log.elapsed().as_secs() >= 2 && frames_rendered > 0 {
                 let avg_render_time = total_render_time_us / frames_rendered;
@@ -309,7 +274,7 @@ impl RendererHandle {
         cursor: Arc<CursorEvents>,
         frame_number: u32,
     ) {
-        let (finished_tx, finished_rx) = oneshot::channel();
+        let (finished_tx, _finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
             segment_frames,
@@ -319,8 +284,6 @@ impl RendererHandle {
             frame_number,
         })
         .await;
-
-        let _ = finished_rx.await;
     }
 
     pub async fn stop(&self) {
