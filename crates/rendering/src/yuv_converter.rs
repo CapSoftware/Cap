@@ -9,6 +9,8 @@ pub struct YuvToRgbaConverter {
     uv_texture: Option<wgpu::Texture>,
     u_texture: Option<wgpu::Texture>,
     v_texture: Option<wgpu::Texture>,
+    output_texture: Option<wgpu::Texture>,
+    output_view: Option<wgpu::TextureView>,
     cached_width: u32,
     cached_height: u32,
     cached_format: Option<PixelFormat>,
@@ -154,6 +156,8 @@ impl YuvToRgbaConverter {
             uv_texture: None,
             u_texture: None,
             v_texture: None,
+            output_texture: None,
+            output_view: None,
             cached_width: 0,
             cached_height: 0,
             cached_format: None,
@@ -242,27 +246,50 @@ impl YuvToRgbaConverter {
             PixelFormat::Rgba => {}
         }
 
+        self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGBA Output Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        }));
+
+        self.output_view = Some(
+            self.output_texture
+                .as_ref()
+                .unwrap()
+                .create_view(&Default::default()),
+        );
+
         self.cached_width = width;
         self.cached_height = height;
         self.cached_format = Some(format);
     }
 
-    pub fn convert_nv12_to_texture(
+    pub fn convert_nv12(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
         y_data: &[u8],
         uv_data: &[u8],
         width: u32,
         height: u32,
         y_stride: u32,
-        output_texture: &wgpu::Texture,
-    ) {
+    ) -> &wgpu::TextureView {
         self.ensure_textures(device, width, height, PixelFormat::Nv12);
 
         let y_texture = self.y_texture.as_ref().unwrap();
         let uv_texture = self.uv_texture.as_ref().unwrap();
+        let output_texture = self.output_texture.as_ref().unwrap();
 
         if y_stride == width {
             queue.write_texture(
@@ -334,11 +361,6 @@ impl YuvToRgbaConverter {
             },
         );
 
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
-            ..Default::default()
-        });
-
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 Converter Bind Group"),
             layout: &self.nv12_bind_group_layout,
@@ -357,9 +379,15 @@ impl YuvToRgbaConverter {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
+                    resource: wgpu::BindingResource::TextureView(
+                        &output_texture.create_view(&Default::default()),
+                    ),
                 },
             ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 Conversion Encoder"),
         });
 
         {
@@ -371,13 +399,16 @@ impl YuvToRgbaConverter {
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        self.output_view.as_ref().unwrap()
     }
 
-    pub fn convert_yuv420p_to_texture(
+    pub fn convert_yuv420p(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
         y_data: &[u8],
         u_data: &[u8],
         v_data: &[u8],
@@ -385,13 +416,13 @@ impl YuvToRgbaConverter {
         height: u32,
         y_stride: u32,
         uv_stride: u32,
-        output_texture: &wgpu::Texture,
-    ) {
+    ) -> &wgpu::TextureView {
         self.ensure_textures(device, width, height, PixelFormat::Yuv420p);
 
         let y_texture = self.y_texture.as_ref().unwrap();
         let u_texture = self.u_texture.as_ref().unwrap();
         let v_texture = self.v_texture.as_ref().unwrap();
+        let output_texture = self.output_texture.as_ref().unwrap();
 
         if y_stride == width {
             queue.write_texture(
@@ -538,11 +569,6 @@ impl YuvToRgbaConverter {
             );
         }
 
-        let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
-            ..Default::default()
-        });
-
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("YUV420P Converter Bind Group"),
             layout: &self.yuv420p_bind_group_layout,
@@ -567,9 +593,15 @@ impl YuvToRgbaConverter {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&output_view),
+                    resource: wgpu::BindingResource::TextureView(
+                        &output_texture.create_view(&Default::default()),
+                    ),
                 },
             ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("YUV420P Conversion Encoder"),
         });
 
         {
@@ -581,5 +613,13 @@ impl YuvToRgbaConverter {
             compute_pass.set_bind_group(0, &bind_group, &[]);
             compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        self.output_view.as_ref().unwrap()
+    }
+
+    pub fn output_texture(&self) -> Option<&wgpu::Texture> {
+        self.output_texture.as_ref()
     }
 }

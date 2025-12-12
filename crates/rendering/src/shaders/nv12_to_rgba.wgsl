@@ -12,6 +12,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let y_raw = textureLoad(y_plane, coords, 0).r;
+
     let uv_coords = coords / 2;
     let uv_raw = textureLoad(uv_plane, uv_coords, 0).rg;
 
