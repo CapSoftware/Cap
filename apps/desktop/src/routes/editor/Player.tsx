@@ -1,6 +1,7 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { debounce } from "@solid-primitives/scheduled";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
@@ -462,6 +463,26 @@ function PreviewCanvas() {
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
+	const [debouncedBounds, setDebouncedBounds] = createSignal({
+		width: 0,
+		height: 0,
+	});
+
+	const updateDebouncedBounds = debounce(
+		(width: number, height: number) => setDebouncedBounds({ width, height }),
+		100,
+	);
+
+	createEffect(() => {
+		const width = containerBounds.width ?? 0;
+		const height = containerBounds.height ?? 0;
+		if (debouncedBounds().width === 0 && debouncedBounds().height === 0) {
+			setDebouncedBounds({ width, height });
+		} else {
+			updateDebouncedBounds(width, height);
+		}
+	});
+
 	const initCanvas = (canvas: HTMLCanvasElement) => {
 		if (canvasTransferred) return;
 		const controls = canvasControls();
@@ -489,9 +510,9 @@ function PreviewCanvas() {
 					const frameHeight = () => currentFrame().height;
 
 					const availableWidth = () =>
-						Math.max((containerBounds.width ?? 0) - padding * 2, 0);
+						Math.max(debouncedBounds().width - padding * 2, 0);
 					const availableHeight = () =>
-						Math.max((containerBounds.height ?? 0) - padding * 2, 0);
+						Math.max(debouncedBounds().height - padding * 2, 0);
 
 					const containerAspect = () => {
 						const width = availableWidth();
