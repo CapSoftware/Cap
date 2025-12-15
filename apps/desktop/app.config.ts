@@ -15,8 +15,11 @@ export default defineConfig({
 			port: 3001,
 			strictPort: true,
 			watch: {
-				// 2. tell vite to ignore watching `src-tauri`
 				ignored: ["**/src-tauri/**"],
+			},
+			headers: {
+				"Cross-Origin-Opener-Policy": "same-origin",
+				"Cross-Origin-Embedder-Policy": "require-corp",
 			},
 		},
 		// 3. to make use of `TAURI_DEBUG` and other env variables

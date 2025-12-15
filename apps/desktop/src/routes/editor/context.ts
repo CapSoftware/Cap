@@ -21,6 +21,7 @@ import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
 import {
+	type CanvasControls,
 	createImageDataWS,
 	createLazySignal,
 	type FrameData,
@@ -695,7 +696,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 	null!,
 );
 
-export type { FrameData } from "~/utils/socket";
+export type { CanvasControls, FrameData } from "~/utils/socket";
 
 function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 	if ("fps" in rawMeta) {
@@ -741,18 +742,22 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 	createContextProvider(() => {
 		const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
-		const [isConnected, setIsConnected] = createSignal(false);
+		const [_isConnected, setIsConnected] = createSignal(false);
 		const [isWorkerReady, setIsWorkerReady] = createSignal(false);
+		const [canvasControls, setCanvasControls] =
+			createSignal<CanvasControls | null>(null);
 
 		const [editorInstance] = createResource(async () => {
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
 
-			const [ws, _wsConnected, workerReady] = createImageDataWS(
+			const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
 				instance.framesSocketUrl,
 				setLatestFrame,
 			);
+
+			setCanvasControls(controls);
 
 			createEffect(() => {
 				setIsWorkerReady(workerReady());
@@ -789,6 +794,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			presets: createPresets(),
 			metaQuery,
 			isWorkerReady,
+			canvasControls,
 		};
 	}, null!);
 

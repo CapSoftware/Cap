@@ -13,28 +13,31 @@
   - Change: Removed all debug file writes from `playback.rs` and removed performance logging from `socket.ts` and `context.ts`
   - Impact: Eliminates file I/O overhead and reduces console noise
 
-- [ ] 3. **Cache project config between frames**
+- [x] 3. **Cache project config between frames**
   - Current: `self.project.borrow().clone()` called every frame at `playback.rs:523`
   - Change: Cache project config and only re-clone when it actually changes (use `watch::has_changed`)
   - Impact: Reduces allocation and cloning overhead per frame
 
-- [ ] 4. **Use WebGL for canvas rendering**
+- [x] 4. **Use WebGL for canvas rendering** - REJECTED
   - Current: Using 2D canvas context at `Player.tsx:478-484`
   - Change: GPU-accelerated image scaling and display instead of 2D canvas
   - Impact: Hardware-accelerated rendering with better scaling quality
+  - Result: **Not beneficial.** 2D canvas `drawImage(ImageBitmap)` is already GPU-accelerated in modern browsers. Explicit WebGL adds texture upload overhead (`texImage2D` every frame) that makes it slower than the optimized 2D path. WebGL would only help for custom shaders (YUV conversion, color correction, effects).
 
 ## Medium Effort
 
-- [ ] 5. **OffscreenCanvas in worker**
+- [x] 5. **OffscreenCanvas in worker**
   - Current: ImageBitmap created in worker, transferred to main thread, drawn on main thread canvas
   - Change: Move canvas rendering entirely to the worker using OffscreenCanvas
   - Impact: Eliminates main thread rendering jank entirely
+  - Done: Worker now receives OffscreenCanvas from main thread and draws frames directly using `putImageData()`. Main thread only receives frame metadata (width, height) for UI sizing.
 
-- [ ] 6. **WebSocket transfer overhead / SharedArrayBuffer**
+- [x] 6. **WebSocket transfer overhead / SharedArrayBuffer**
   - Current: Each frame transfers an ArrayBuffer to the worker via `postMessage`, incurring serialization overhead
   - Change: Use `SharedArrayBuffer` for zero-copy frame transfer between main thread and worker
   - Impact: Could reduce frame transfer time by 50-80% for large frames
   - Note: Requires COOP/COEP headers
+  - Done: Implemented ring buffer with 4 slots (8MB each), producer/consumer pattern using Atomics for synchronization. COOP/COEP headers added to Vite dev server. Automatic fallback to postMessage if SharedArrayBuffer unavailable.
 
 - [ ] 7. **Dynamic prefetch buffer sizing**
   - Current: Fixed `PREFETCH_BUFFER_SIZE = 180` frames at `playback.rs:31`

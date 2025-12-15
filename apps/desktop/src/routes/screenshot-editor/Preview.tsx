@@ -92,7 +92,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	createEffect(() => {
 		const frame = latestFrame();
-		if (frame && canvasRef) {
+		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
 				ctx.drawImage(frame.bitmap, 0, 0);

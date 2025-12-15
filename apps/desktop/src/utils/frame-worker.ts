@@ -1,12 +1,35 @@
 import * as lz4 from "lz4-wasm";
+import { type Consumer, createConsumer } from "./shared-frame-buffer";
 
 interface FrameMessage {
 	type: "frame";
 	buffer: ArrayBuffer;
 }
 
+interface InitCanvasMessage {
+	type: "init-canvas";
+	canvas: OffscreenCanvas;
+}
+
+interface ResizeMessage {
+	type: "resize";
+	width: number;
+	height: number;
+}
+
+interface InitSharedBufferMessage {
+	type: "init-shared-buffer";
+	buffer: SharedArrayBuffer;
+}
+
 interface ReadyMessage {
 	type: "ready";
+}
+
+interface FrameRenderedMessage {
+	type: "frame-rendered";
+	width: number;
+	height: number;
 }
 
 interface DecodedFrame {
@@ -21,8 +44,21 @@ interface ErrorMessage {
 	message: string;
 }
 
+export type { FrameRenderedMessage, DecodedFrame, ErrorMessage, ReadyMessage };
+
+type IncomingMessage =
+	| FrameMessage
+	| InitCanvasMessage
+	| ResizeMessage
+	| InitSharedBufferMessage;
+
 let wasmReady = false;
 let pendingFrames: ArrayBuffer[] = [];
+
+let offscreenCanvas: OffscreenCanvas | null = null;
+let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
+let lastImageData: ImageData | null = null;
+let pendingCanvasInit: OffscreenCanvas | null = null;
 
 let cachedPixelBuffer: Uint8ClampedArray | null = null;
 let cachedPixelBufferSize = 0;
@@ -31,6 +67,10 @@ let strideBufferSize = 0;
 let cachedImageData: ImageData | null = null;
 let cachedWidth = 0;
 let cachedHeight = 0;
+
+let consumer: Consumer | null = null;
+let useSharedBuffer = false;
+let pollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 function decompressLz4(compressedBuffer: ArrayBuffer): Uint8Array {
 	return lz4.decompress(new Uint8Array(compressedBuffer));
@@ -43,6 +83,11 @@ async function initWasm() {
 		wasmReady = true;
 		self.postMessage({ type: "ready" } satisfies ReadyMessage);
 
+		if (pendingCanvasInit) {
+			initCanvas(pendingCanvasInit);
+			pendingCanvasInit = null;
+		}
+
 		for (const buffer of pendingFrames) {
 			const result = await processFrame(buffer);
 			if (result.type === "decoded") {
@@ -52,6 +97,10 @@ async function initWasm() {
 			}
 		}
 		pendingFrames = [];
+
+		if (useSharedBuffer && consumer) {
+			pollSharedBuffer();
+		}
 	} catch (e) {
 		self.postMessage({
 			type: "error",
@@ -62,9 +111,23 @@ async function initWasm() {
 
 initWasm();
 
+function initCanvas(canvas: OffscreenCanvas) {
+	offscreenCanvas = canvas;
+	offscreenCtx = canvas.getContext("2d", {
+		alpha: false,
+		desynchronized: true,
+	});
+
+	if (lastImageData && offscreenCtx) {
+		offscreenCanvas.width = lastImageData.width;
+		offscreenCanvas.height = lastImageData.height;
+		offscreenCtx.putImageData(lastImageData, 0, 0);
+	}
+}
+
 async function processFrame(
 	buffer: ArrayBuffer,
-): Promise<DecodedFrame | ErrorMessage> {
+): Promise<FrameRenderedMessage | DecodedFrame | ErrorMessage> {
 	let decompressed: Uint8Array;
 	try {
 		decompressed = decompressLz4(buffer);
@@ -141,6 +204,22 @@ async function processFrame(
 	}
 	cachedImageData.data.set(pixels);
 
+	lastImageData = cachedImageData;
+
+	if (offscreenCanvas && offscreenCtx) {
+		if (offscreenCanvas.width !== width || offscreenCanvas.height !== height) {
+			offscreenCanvas.width = width;
+			offscreenCanvas.height = height;
+		}
+		offscreenCtx.putImageData(cachedImageData, 0, 0);
+
+		return {
+			type: "frame-rendered",
+			width,
+			height,
+		};
+	}
+
 	try {
 		const bitmap = await createImageBitmap(cachedImageData);
 		return {
@@ -157,7 +236,55 @@ async function processFrame(
 	}
 }
 
-self.onmessage = async (e: MessageEvent<FrameMessage>) => {
+async function pollSharedBuffer(): Promise<void> {
+	if (!consumer || !useSharedBuffer) return;
+
+	const buffer = consumer.read(50);
+	if (buffer) {
+		const result = await processFrame(buffer);
+		if (result.type === "decoded") {
+			self.postMessage(result, { transfer: [result.bitmap] });
+		} else {
+			self.postMessage(result);
+		}
+	}
+
+	if (!consumer.isShutdown()) {
+		pollTimeoutId = setTimeout(pollSharedBuffer, 0);
+	}
+}
+
+self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
+	if (e.data.type === "init-shared-buffer") {
+		consumer = createConsumer(e.data.buffer);
+		useSharedBuffer = true;
+
+		if (wasmReady) {
+			pollSharedBuffer();
+		}
+		return;
+	}
+
+	if (e.data.type === "init-canvas") {
+		if (!wasmReady) {
+			pendingCanvasInit = e.data.canvas;
+			return;
+		}
+		initCanvas(e.data.canvas);
+		return;
+	}
+
+	if (e.data.type === "resize") {
+		if (offscreenCanvas) {
+			offscreenCanvas.width = e.data.width;
+			offscreenCanvas.height = e.data.height;
+			if (lastImageData && offscreenCtx) {
+				offscreenCtx.putImageData(lastImageData, 0, 0);
+			}
+		}
+		return;
+	}
+
 	if (e.data.type === "frame") {
 		if (!wasmReady) {
 			pendingFrames.push(e.data.buffer);

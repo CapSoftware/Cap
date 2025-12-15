@@ -33,7 +33,8 @@
 			"Bash(xxd:*)",
 			"Bash(git checkout:*)",
 			"WebFetch(domain:www.npmjs.com)",
-			"Bash(pnpm install:*)"
+			"Bash(pnpm install:*)",
+			"Bash(pnpm --dir apps/desktop exec biome check:*)"
 		],
 		"deny": [],
 		"ask": []

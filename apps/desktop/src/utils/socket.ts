@@ -1,15 +1,39 @@
 import { createWS } from "@solid-primitives/websocket";
 import { createResource, createSignal } from "solid-js";
 import FrameWorker from "./frame-worker?worker";
+import {
+	createProducer,
+	createSharedFrameBuffer,
+	isSharedArrayBufferSupported,
+	type Producer,
+	type SharedFrameBufferConfig,
+} from "./shared-frame-buffer";
+
+const SAB_SUPPORTED = isSharedArrayBufferSupported();
+const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
+	slotCount: 4,
+	slotSize: 8 * 1024 * 1024,
+};
 
 export type FrameData = {
 	width: number;
 	height: number;
-	bitmap: ImageBitmap;
+	bitmap?: ImageBitmap;
+};
+
+export type CanvasControls = {
+	initCanvas: (canvas: OffscreenCanvas) => void;
+	resizeCanvas: (width: number, height: number) => void;
 };
 
 interface ReadyMessage {
 	type: "ready";
+}
+
+interface FrameRenderedMessage {
+	type: "frame-rendered";
+	width: number;
+	height: number;
 }
 
 interface DecodedFrame {
@@ -24,12 +48,21 @@ interface ErrorMessage {
 	message: string;
 }
 
-type WorkerMessage = ReadyMessage | DecodedFrame | ErrorMessage;
+type WorkerMessage =
+	| ReadyMessage
+	| FrameRenderedMessage
+	| DecodedFrame
+	| ErrorMessage;
 
 export function createImageDataWS(
 	url: string,
 	onmessage: (data: FrameData) => void,
-): [Omit<WebSocket, "onmessage">, () => boolean, () => boolean] {
+): [
+	Omit<WebSocket, "onmessage">,
+	() => boolean,
+	() => boolean,
+	CanvasControls,
+] {
 	const [isConnected, setIsConnected] = createSignal(false);
 	const [isWorkerReady, setIsWorkerReady] = createSignal(false);
 	const ws = createWS(url);
@@ -38,6 +71,25 @@ export function createImageDataWS(
 	let pendingFrame: ArrayBuffer | null = null;
 	let isProcessing = false;
 	let nextFrame: ArrayBuffer | null = null;
+
+	let producer: Producer | null = null;
+	if (SAB_SUPPORTED) {
+		const init = createSharedFrameBuffer(FRAME_BUFFER_CONFIG);
+		producer = createProducer(init);
+		worker.postMessage({
+			type: "init-shared-buffer",
+			buffer: init.buffer,
+		});
+	}
+
+	const canvasControls: CanvasControls = {
+		initCanvas: (canvas: OffscreenCanvas) => {
+			worker.postMessage({ type: "init-canvas", canvas }, [canvas]);
+		},
+		resizeCanvas: (width: number, height: number) => {
+			worker.postMessage({ type: "resize", width, height });
+		},
+	};
 
 	worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
 		if (e.data.type === "ready") {
@@ -52,8 +104,13 @@ export function createImageDataWS(
 			return;
 		}
 
-		const { bitmap, width, height } = e.data;
-		onmessage({ width, height, bitmap });
+		if (e.data.type === "decoded") {
+			const { bitmap, width, height } = e.data;
+			onmessage({ width, height, bitmap });
+		} else {
+			const { width, height } = e.data;
+			onmessage({ width, height });
+		}
 
 		isProcessing = false;
 		processNextFrame();
@@ -72,7 +129,15 @@ export function createImageDataWS(
 		}
 
 		isProcessing = true;
-		worker.postMessage({ type: "frame", buffer }, [buffer]);
+
+		if (producer) {
+			const written = producer.write(buffer);
+			if (!written) {
+				worker.postMessage({ type: "frame", buffer }, [buffer]);
+			}
+		} else {
+			worker.postMessage({ type: "frame", buffer }, [buffer]);
+		}
 	}
 
 	ws.addEventListener("open", () => {
@@ -81,6 +146,9 @@ export function createImageDataWS(
 
 	ws.addEventListener("close", () => {
 		setIsConnected(false);
+		if (producer) {
+			producer.signalShutdown();
+		}
 		worker.terminate();
 	});
 
@@ -100,7 +168,7 @@ export function createImageDataWS(
 		}
 	};
 
-	return [ws, isConnected, isWorkerReady];
+	return [ws, isConnected, isWorkerReady, canvasControls];
 }
 
 export function createLazySignal<T>() {

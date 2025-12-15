@@ -2,7 +2,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
@@ -454,79 +454,27 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame, editorState } = useEditorContext();
+	const { latestFrame, canvasControls } = useEditorContext();
 
-	let canvasRef: HTMLCanvasElement | undefined;
-	let ctx: CanvasRenderingContext2D | null = null;
-	let rafId: number | null = null;
-	let lastBitmap: ImageBitmap | null = null;
-	let currentFrameRef: {
-		bitmap: ImageBitmap;
-		width: number;
-		height: number;
-	} | null = null;
+	let canvasTransferred = false;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
-	const renderFrame = (frame: { bitmap: ImageBitmap }) => {
-		if (!canvasRef) return;
-		if (frame.bitmap === lastBitmap) return;
+	const initCanvas = (canvas: HTMLCanvasElement) => {
+		if (canvasTransferred) return;
+		const controls = canvasControls();
+		if (!controls) return;
 
-		if (!ctx) {
-			ctx = canvasRef.getContext("2d", {
-				alpha: false,
-				desynchronized: true,
-			});
-		}
-		if (ctx) {
-			ctx.drawImage(frame.bitmap, 0, 0);
-			if (lastBitmap && lastBitmap !== frame.bitmap) {
-				lastBitmap.close();
-			}
-			lastBitmap = frame.bitmap;
+		try {
+			const offscreen = canvas.transferControlToOffscreen();
+			controls.initCanvas(offscreen);
+			canvasTransferred = true;
+		} catch (e) {
+			console.error("[PreviewCanvas] Failed to transfer canvas:", e);
 		}
 	};
-
-	const renderLoop = () => {
-		if (currentFrameRef) {
-			renderFrame(currentFrameRef);
-		}
-
-		if (editorState.playing) {
-			rafId = requestAnimationFrame(renderLoop);
-		} else {
-			rafId = null;
-		}
-	};
-
-	createEffect(() => {
-		const frame = latestFrame();
-		if (!frame || !canvasRef) return;
-
-		currentFrameRef = frame;
-
-		if (editorState.playing) {
-			if (rafId === null) {
-				rafId = requestAnimationFrame(renderLoop);
-			}
-		} else {
-			renderFrame(frame);
-		}
-	});
-
-	onCleanup(() => {
-		if (rafId !== null) {
-			cancelAnimationFrame(rafId);
-		}
-		if (lastBitmap) {
-			lastBitmap.close();
-			lastBitmap = null;
-		}
-		currentFrameRef = null;
-		ctx = null;
-	});
 
 	return (
 		<div
@@ -590,7 +538,7 @@ function PreviewCanvas() {
 										"image-rendering": "auto",
 										...gridStyle,
 									}}
-									ref={canvasRef}
+									ref={initCanvas}
 									id="canvas"
 									width={frameWidth()}
 									height={frameHeight()}
