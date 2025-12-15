@@ -32,6 +32,12 @@ interface FrameRenderedMessage {
 	height: number;
 }
 
+interface FrameQueuedMessage {
+	type: "frame-queued";
+	width: number;
+	height: number;
+}
+
 interface DecodedFrame {
 	type: "decoded";
 	bitmap: ImageBitmap;
@@ -44,13 +50,25 @@ interface ErrorMessage {
 	message: string;
 }
 
-export type { FrameRenderedMessage, DecodedFrame, ErrorMessage, ReadyMessage };
+export type {
+	FrameRenderedMessage,
+	FrameQueuedMessage,
+	DecodedFrame,
+	ErrorMessage,
+	ReadyMessage,
+};
 
 type IncomingMessage =
 	| FrameMessage
 	| InitCanvasMessage
 	| ResizeMessage
 	| InitSharedBufferMessage;
+
+interface PendingFrame {
+	imageData: ImageData;
+	width: number;
+	height: number;
+}
 
 let wasmReady = false;
 let pendingFrames: ArrayBuffer[] = [];
@@ -60,8 +78,6 @@ let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
 let lastImageData: ImageData | null = null;
 let pendingCanvasInit: OffscreenCanvas | null = null;
 
-let cachedPixelBuffer: Uint8ClampedArray | null = null;
-let cachedPixelBufferSize = 0;
 let strideBuffer: Uint8ClampedArray | null = null;
 let strideBufferSize = 0;
 let cachedImageData: ImageData | null = null;
@@ -70,10 +86,53 @@ let cachedHeight = 0;
 
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
-let pollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+let pendingRenderFrame: PendingFrame | null = null;
+let _rafId: number | null = null;
+let rafRunning = false;
 
 function decompressLz4(compressedBuffer: ArrayBuffer): Uint8Array {
 	return lz4.decompress(new Uint8Array(compressedBuffer));
+}
+
+function renderLoop() {
+	_rafId = null;
+
+	if (!offscreenCanvas || !offscreenCtx) {
+		rafRunning = false;
+		return;
+	}
+
+	const frame = pendingRenderFrame;
+	if (frame) {
+		pendingRenderFrame = null;
+
+		if (
+			offscreenCanvas.width !== frame.width ||
+			offscreenCanvas.height !== frame.height
+		) {
+			offscreenCanvas.width = frame.width;
+			offscreenCanvas.height = frame.height;
+		}
+
+		offscreenCtx.putImageData(frame.imageData, 0, 0);
+
+		self.postMessage({
+			type: "frame-rendered",
+			width: frame.width,
+			height: frame.height,
+		} satisfies FrameRenderedMessage);
+	}
+
+	_rafId = requestAnimationFrame(renderLoop);
+}
+
+function startRenderLoop() {
+	if (rafRunning) return;
+	if (!offscreenCanvas || !offscreenCtx) return;
+
+	rafRunning = true;
+	_rafId = requestAnimationFrame(renderLoop);
 }
 
 async function initWasm() {
@@ -83,20 +142,22 @@ async function initWasm() {
 		wasmReady = true;
 		self.postMessage({ type: "ready" } satisfies ReadyMessage);
 
-		if (pendingCanvasInit) {
-			initCanvas(pendingCanvasInit);
-			pendingCanvasInit = null;
-		}
-
 		for (const buffer of pendingFrames) {
 			const result = await processFrame(buffer);
 			if (result.type === "decoded") {
 				self.postMessage(result, { transfer: [result.bitmap] });
-			} else {
+			} else if (result.type === "frame-queued") {
+				self.postMessage(result);
+			} else if (result.type === "error") {
 				self.postMessage(result);
 			}
 		}
 		pendingFrames = [];
+
+		if (pendingCanvasInit) {
+			initCanvas(pendingCanvasInit);
+			pendingCanvasInit = null;
+		}
 
 		if (useSharedBuffer && consumer) {
 			pollSharedBuffer();
@@ -122,12 +183,17 @@ function initCanvas(canvas: OffscreenCanvas) {
 		offscreenCanvas.width = lastImageData.width;
 		offscreenCanvas.height = lastImageData.height;
 		offscreenCtx.putImageData(lastImageData, 0, 0);
+	} else if (offscreenCtx) {
+		offscreenCtx.fillStyle = "#000000";
+		offscreenCtx.fillRect(0, 0, canvas.width, canvas.height);
 	}
+
+	startRenderLoop();
 }
 
-async function processFrame(
-	buffer: ArrayBuffer,
-): Promise<FrameRenderedMessage | DecodedFrame | ErrorMessage> {
+type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
+
+async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 	let decompressed: Uint8Array;
 	try {
 		decompressed = decompressLz4(buffer);
@@ -172,15 +238,14 @@ async function processFrame(
 		};
 	}
 
-	let pixels: Uint8ClampedArray;
+	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
+		cachedImageData = new ImageData(width, height);
+		cachedWidth = width;
+		cachedHeight = height;
+	}
 
 	if (strideBytes === expectedRowBytes) {
-		if (!cachedPixelBuffer || cachedPixelBufferSize < expectedLength) {
-			cachedPixelBuffer = new Uint8ClampedArray(expectedLength);
-			cachedPixelBufferSize = expectedLength;
-		}
-		cachedPixelBuffer.set(source.subarray(0, expectedLength));
-		pixels = cachedPixelBuffer.subarray(0, expectedLength);
+		cachedImageData.data.set(source.subarray(0, expectedLength));
 	} else {
 		if (!strideBuffer || strideBufferSize < expectedLength) {
 			strideBuffer = new Uint8ClampedArray(expectedLength);
@@ -194,30 +259,19 @@ async function processFrame(
 				destStart,
 			);
 		}
-		pixels = strideBuffer.subarray(0, expectedLength);
+		cachedImageData.data.set(strideBuffer.subarray(0, expectedLength));
 	}
-
-	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
-		cachedImageData = new ImageData(width, height);
-		cachedWidth = width;
-		cachedHeight = height;
-	}
-	cachedImageData.data.set(pixels);
 
 	lastImageData = cachedImageData;
 
 	if (offscreenCanvas && offscreenCtx) {
-		if (offscreenCanvas.width !== width || offscreenCanvas.height !== height) {
-			offscreenCanvas.width = width;
-			offscreenCanvas.height = height;
-		}
-		offscreenCtx.putImageData(cachedImageData, 0, 0);
-
-		return {
-			type: "frame-rendered",
+		pendingRenderFrame = {
+			imageData: cachedImageData,
 			width,
 			height,
 		};
+
+		return { type: "frame-queued", width, height };
 	}
 
 	try {
@@ -244,13 +298,15 @@ async function pollSharedBuffer(): Promise<void> {
 		const result = await processFrame(buffer);
 		if (result.type === "decoded") {
 			self.postMessage(result, { transfer: [result.bitmap] });
-		} else {
+		} else if (result.type === "frame-queued") {
+			self.postMessage(result);
+		} else if (result.type === "error") {
 			self.postMessage(result);
 		}
 	}
 
 	if (!consumer.isShutdown()) {
-		pollTimeoutId = setTimeout(pollSharedBuffer, 0);
+		setTimeout(pollSharedBuffer, 0);
 	}
 }
 
@@ -294,7 +350,9 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 		const result = await processFrame(e.data.buffer);
 		if (result.type === "decoded") {
 			self.postMessage(result, { transfer: [result.bitmap] });
-		} else {
+		} else if (result.type === "frame-queued") {
+			self.postMessage(result);
+		} else if (result.type === "error") {
 			self.postMessage(result);
 		}
 	}

@@ -24,6 +24,7 @@ export type FrameData = {
 export type CanvasControls = {
 	initCanvas: (canvas: OffscreenCanvas) => void;
 	resizeCanvas: (width: number, height: number) => void;
+	hasRenderedFrame: () => boolean;
 };
 
 interface ReadyMessage {
@@ -32,6 +33,12 @@ interface ReadyMessage {
 
 interface FrameRenderedMessage {
 	type: "frame-rendered";
+	width: number;
+	height: number;
+}
+
+interface FrameQueuedMessage {
+	type: "frame-queued";
 	width: number;
 	height: number;
 }
@@ -51,6 +58,7 @@ interface ErrorMessage {
 type WorkerMessage =
 	| ReadyMessage
 	| FrameRenderedMessage
+	| FrameQueuedMessage
 	| DecodedFrame
 	| ErrorMessage;
 
@@ -82,6 +90,8 @@ export function createImageDataWS(
 		});
 	}
 
+	const [hasRenderedFrame, setHasRenderedFrame] = createSignal(false);
+
 	const canvasControls: CanvasControls = {
 		initCanvas: (canvas: OffscreenCanvas) => {
 			worker.postMessage({ type: "init-canvas", canvas }, [canvas]);
@@ -89,6 +99,7 @@ export function createImageDataWS(
 		resizeCanvas: (width: number, height: number) => {
 			worker.postMessage({ type: "resize", width, height });
 		},
+		hasRenderedFrame,
 	};
 
 	worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
@@ -104,16 +115,27 @@ export function createImageDataWS(
 			return;
 		}
 
+		if (e.data.type === "frame-queued") {
+			const { width, height } = e.data;
+			onmessage({ width, height });
+			isProcessing = false;
+			processNextFrame();
+			return;
+		}
+
+		if (e.data.type === "frame-rendered") {
+			if (!hasRenderedFrame()) {
+				setHasRenderedFrame(true);
+			}
+			return;
+		}
+
 		if (e.data.type === "decoded") {
 			const { bitmap, width, height } = e.data;
 			onmessage({ width, height, bitmap });
-		} else {
-			const { width, height } = e.data;
-			onmessage({ width, height });
+			isProcessing = false;
+			processNextFrame();
 		}
-
-		isProcessing = false;
-		processNextFrame();
 	};
 
 	function processNextFrame() {
