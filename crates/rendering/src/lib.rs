@@ -201,27 +201,13 @@ impl RecordingSegmentDecoders {
 
         let camera_frame = camera.flatten();
 
-        // #region agent log
         if needs_camera && camera_frame.is_none() {
-            use std::io::Write;
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                writeln!(
-                    file,
-                    r#"{{"location":"lib.rs:get_frames","message":"camera frame missing","data":{{"segment_time":{},"has_camera_decoder":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"O"}}"#,
-                    segment_time, self.camera.is_some(), ts
-                )
-                .ok();
-            }
+            tracing::debug!(
+                segment_time,
+                has_camera_decoder = self.camera.is_some(),
+                "camera frame missing"
+            );
         }
-        // #endregion
 
         Some(DecodedSegmentFrames {
             screen_frame: screen?,

@@ -151,7 +151,9 @@ impl PipelinedGpuReadback {
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
+                if let Err(e) = tx.send(result) {
+                    tracing::error!("Failed to send map_async result: {:?}", e);
+                }
             });
 
         self.pending = Some(PendingReadback {

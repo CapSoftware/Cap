@@ -139,14 +139,23 @@ impl FfmpegDecoder {
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&mut converter);
 
-                            let _ = sender.send(data.to_decoded_frame());
+                            if sender.send(data.to_decoded_frame()).is_err() {
+                                log::warn!(
+                                    "Failed to send cached frame {requested_frame}: receiver dropped"
+                                );
+                            }
                             *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
                             let last_sent_frame = last_sent_frame.clone();
                             Some(move |data: ProcessedFrame| {
+                                let frame_number = data.number;
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = sender.send(data.to_decoded_frame());
+                                if sender.send(data.to_decoded_frame()).is_err() {
+                                    log::warn!(
+                                        "Failed to send decoded frame {frame_number}: receiver dropped"
+                                    );
+                                }
                             })
                         };
 

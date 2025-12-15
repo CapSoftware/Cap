@@ -65,6 +65,10 @@ interface ErrorMessage {
 	message: string;
 }
 
+interface RequestFrameMessage {
+	type: "request-frame";
+}
+
 export type {
 	FrameRenderedMessage,
 	FrameQueuedMessage,
@@ -72,6 +76,7 @@ export type {
 	DecodedFrame,
 	ErrorMessage,
 	ReadyMessage,
+	RequestFrameMessage,
 };
 
 type IncomingMessage =
@@ -99,6 +104,7 @@ type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
 
 let workerReady = false;
 let isInitializing = false;
+let initializationPromise: Promise<void> | null = null;
 
 type RenderMode = "webgpu" | "canvas2d";
 let renderMode: RenderMode = "canvas2d";
@@ -114,6 +120,10 @@ let strideBufferSize = 0;
 let cachedImageData: ImageData | null = null;
 let cachedWidth = 0;
 let cachedHeight = 0;
+
+let lastRawFrameData: Uint8ClampedArray | null = null;
+let lastRawFrameWidth = 0;
+let lastRawFrameHeight = 0;
 
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
@@ -197,7 +207,13 @@ function cleanup() {
 	pendingRenderFrame = null;
 	lastImageData = null;
 	cachedImageData = null;
+	cachedWidth = 0;
+	cachedHeight = 0;
 	strideBuffer = null;
+	strideBufferSize = 0;
+	lastRawFrameData = null;
+	lastRawFrameWidth = 0;
+	lastRawFrameHeight = 0;
 }
 
 function initWorker() {
@@ -216,11 +232,13 @@ function initWorker() {
 
 initWorker();
 
-async function initCanvas(canvas: OffscreenCanvas) {
-	if (isInitializing) return;
+async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
+	if (isInitializing) {
+		return initializationPromise ?? Promise.resolve();
+	}
 	isInitializing = true;
 
-	try {
+	const doInit = async () => {
 		offscreenCanvas = canvas;
 
 		if (await isWebGPUSupported()) {
@@ -254,19 +272,54 @@ async function initCanvas(canvas: OffscreenCanvas) {
 			} satisfies RendererModeMessage);
 		}
 
-		if (renderMode === "canvas2d" && lastImageData && offscreenCtx) {
+		let frameRendered = false;
+		if (
+			renderMode === "webgpu" &&
+			webgpuRenderer &&
+			lastRawFrameData &&
+			lastRawFrameWidth > 0 &&
+			lastRawFrameHeight > 0
+		) {
+			renderFrameWebGPU(
+				webgpuRenderer,
+				lastRawFrameData,
+				lastRawFrameWidth,
+				lastRawFrameHeight,
+			);
+			self.postMessage({
+				type: "frame-rendered",
+				width: lastRawFrameWidth,
+				height: lastRawFrameHeight,
+			} satisfies FrameRenderedMessage);
+			frameRendered = true;
+		} else if (renderMode === "canvas2d" && lastImageData && offscreenCtx) {
 			offscreenCanvas.width = lastImageData.width;
 			offscreenCanvas.height = lastImageData.height;
 			offscreenCtx.putImageData(lastImageData, 0, 0);
+			self.postMessage({
+				type: "frame-rendered",
+				width: lastImageData.width,
+				height: lastImageData.height,
+			} satisfies FrameRenderedMessage);
+			frameRendered = true;
 		} else if (renderMode === "canvas2d" && offscreenCtx) {
 			offscreenCtx.fillStyle = "#000000";
 			offscreenCtx.fillRect(0, 0, canvas.width, canvas.height);
 		}
 
 		startRenderLoop();
-	} finally {
+
+		if (!frameRendered) {
+			self.postMessage({ type: "request-frame" });
+		}
+	};
+
+	initializationPromise = doInit().finally(() => {
 		isInitializing = false;
-	}
+		initializationPromise = null;
+	});
+
+	return initializationPromise;
 }
 
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
@@ -338,6 +391,10 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 		};
 		return { type: "frame-queued", width, height };
 	}
+
+	lastRawFrameData = new Uint8ClampedArray(processedFrameData);
+	lastRawFrameWidth = width;
+	lastRawFrameHeight = height;
 
 	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
 		cachedImageData = new ImageData(width, height);
@@ -415,7 +472,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 			pendingCanvasInit = e.data.canvas;
 			return;
 		}
-		initCanvas(e.data.canvas);
+		await initCanvas(e.data.canvas);
 		return;
 	}
 
@@ -423,8 +480,21 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 		if (offscreenCanvas) {
 			offscreenCanvas.width = e.data.width;
 			offscreenCanvas.height = e.data.height;
-			if (lastImageData && offscreenCtx) {
-				offscreenCtx.putImageData(lastImageData, 0, 0);
+			if (offscreenCtx) {
+				if (
+					lastImageData &&
+					lastImageData.width === e.data.width &&
+					lastImageData.height === e.data.height
+				) {
+					offscreenCtx.putImageData(lastImageData, 0, 0);
+				} else {
+					lastImageData = null;
+					cachedImageData = null;
+					cachedWidth = 0;
+					cachedHeight = 0;
+					offscreenCtx.fillStyle = "#000000";
+					offscreenCtx.fillRect(0, 0, e.data.width, e.data.height);
+				}
 			}
 		}
 		return;

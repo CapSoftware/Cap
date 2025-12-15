@@ -752,9 +752,18 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
 
+			const requestFrame = () => {
+				events.renderFrameEvent.emit({
+					frame_number: 0,
+					fps: FPS,
+					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
+				});
+			};
+
 			const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
 				instance.framesSocketUrl,
 				setLatestFrame,
+				requestFrame,
 			);
 
 			setCanvasControls(controls);
@@ -765,11 +774,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 			ws.addEventListener("open", () => {
 				setIsConnected(true);
-				events.renderFrameEvent.emit({
-					frame_number: 0,
-					fps: FPS,
-					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
-				});
+				requestFrame();
 			});
 
 			ws.addEventListener("close", () => {

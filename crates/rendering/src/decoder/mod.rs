@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 use tokio::sync::oneshot;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -86,8 +87,11 @@ impl DecodedFrame {
     pub fn y_plane(&self) -> Option<&[u8]> {
         match self.format {
             PixelFormat::Nv12 | PixelFormat::Yuv420p => {
-                let y_size = (self.y_stride * self.height) as usize;
-                Some(&self.data[..y_size])
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                self.data.get(..y_size)
             }
             PixelFormat::Rgba => None,
         }
@@ -96,20 +100,29 @@ impl DecodedFrame {
     pub fn uv_plane(&self) -> Option<&[u8]> {
         match self.format {
             PixelFormat::Nv12 => {
-                let y_size = (self.y_stride * self.height) as usize;
-                Some(&self.data[y_size..])
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                self.data.get(y_size..)
             }
-            PixelFormat::Yuv420p => None,
-            PixelFormat::Rgba => None,
+            PixelFormat::Yuv420p | PixelFormat::Rgba => None,
         }
     }
 
     pub fn u_plane(&self) -> Option<&[u8]> {
         match self.format {
             PixelFormat::Yuv420p => {
-                let y_size = (self.y_stride * self.height) as usize;
-                let u_size = (self.uv_stride * self.height / 2) as usize;
-                Some(&self.data[y_size..y_size + u_size])
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_size = self
+                    .uv_stride
+                    .checked_mul(self.height / 2)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_end = y_size.checked_add(u_size)?;
+                self.data.get(y_size..u_end)
             }
             _ => None,
         }
@@ -118,9 +131,16 @@ impl DecodedFrame {
     pub fn v_plane(&self) -> Option<&[u8]> {
         match self.format {
             PixelFormat::Yuv420p => {
-                let y_size = (self.y_stride * self.height) as usize;
-                let u_size = (self.uv_stride * self.height / 2) as usize;
-                Some(&self.data[y_size + u_size..])
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_size = self
+                    .uv_stride
+                    .checked_mul(self.height / 2)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let v_start = y_size.checked_add(u_size)?;
+                self.data.get(v_start..)
             }
             _ => None,
         }
@@ -152,52 +172,42 @@ pub struct AsyncVideoDecoderHandle {
     offset: f64,
 }
 
-trait MpscSenderLen {
-    fn len(&self) -> Option<usize>;
-}
-
-impl<T> MpscSenderLen for mpsc::Sender<T> {
-    fn len(&self) -> Option<usize> {
-        None
-    }
-}
-
 impl AsyncVideoDecoderHandle {
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let adjusted_time = self.get_time(time);
 
-        self.sender
+        if self
+            .sender
             .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
-            .unwrap();
+            .is_err()
+        {
+            debug!("Decoder channel closed, receiver dropped");
+            return None;
+        }
 
         let start = std::time::Instant::now();
         let result = rx.await;
-        let wait_ms = start.elapsed().as_millis();
+        let wait_ms = start.elapsed().as_millis() as u64;
 
-        // #region agent log
-        use std::io::Write;
         let success = result.is_ok();
-        let was_cancelled = result.is_err();
-        if was_cancelled || wait_ms > 50 {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                writeln!(
-                    file,
-                    r#"{{"location":"decoder/mod.rs:get_frame_exit","message":"get_frame completed","data":{{"time":{},"wait_ms":{},"success":{},"cancelled":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"A"}}"#,
-                    time, wait_ms, success, was_cancelled, ts
-                )
-                .ok();
-            }
+        let cancelled = result.is_err();
+        if cancelled || wait_ms > 50 {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            debug!(
+                time = time,
+                wait_ms = wait_ms,
+                success = success,
+                cancelled = cancelled,
+                timestamp = timestamp,
+                session_id = "debug-session",
+                hypothesis_id = "A",
+                "get_frame completed"
+            );
         }
-        // #endregion
 
         result.ok()
     }

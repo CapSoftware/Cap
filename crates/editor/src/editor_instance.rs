@@ -193,7 +193,9 @@ impl EditorInstance {
 
         if let Some(task) = state.preview_task.take() {
             task.abort();
-            task.await.ok();
+            if let Err(e) = task.await {
+                tracing::error!(%e, "preview task join error or cancelled");
+            }
         }
 
         self.renderer.stop().await;
@@ -219,12 +221,8 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
-        let _ = self.playback_active.send(true);
-
         let (mut handle, prev) = {
-            let Ok(mut state) = self.state.try_lock() else {
-                return;
-            };
+            let mut state = self.state.lock().await;
 
             let start_frame_number = state.playhead_position;
 
@@ -245,6 +243,10 @@ impl EditorInstance {
                 }
             };
 
+            if let Err(e) = self.playback_active.send(true) {
+                tracing::warn!(%e, "failed to send playback_active=true");
+            }
+
             let prev = state.playback_task.replace(playback_handle.clone());
 
             (playback_handle, prev)
@@ -264,7 +266,9 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
-                        let _ = this.playback_active.send(false);
+                        if let Err(e) = this.playback_active.send(false) {
+                            tracing::warn!(%e, "failed to send playback_active=false");
+                        }
                         return;
                     }
                 }
@@ -350,13 +354,21 @@ impl EditorInstance {
                                         if cancel_token.is_cancelled() || *playback_rx.borrow() {
                                             return;
                                         }
-                                        let _ = decoders
+                                        if decoders
                                             .get_frames(
                                                 prefetch_segment_time as f32,
                                                 !hide_camera,
                                                 prefetch_clip_offsets,
                                             )
-                                            .await;
+                                            .await
+                                            .is_none()
+                                        {
+                                            tracing::warn!(
+                                                prefetch_segment_time,
+                                                hide_camera,
+                                                "prefetch get_frames returned None"
+                                            );
+                                        }
                                     });
                                 }
                             }

@@ -6,6 +6,8 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+use tracing::debug;
+
 use cidre::{
     arc::R,
     cv::{self, pixel_buffer::LockFlags},
@@ -293,7 +295,9 @@ impl AVAssetReaderDecoder {
                         if is_backward_within_tolerance {
                             if let Some(closest_frame) = cache.get(&c_min) {
                                 let data = closest_frame.data().clone();
-                                let _ = sender.send(data.to_decoded_frame());
+                                if let Err(err) = sender.send(data.to_decoded_frame()) {
+                                    debug!(?err, "frame receiver dropped before send");
+                                }
                                 *last_sent_frame.borrow_mut() = Some(data);
                                 continue;
                             }
@@ -302,14 +306,18 @@ impl AVAssetReaderDecoder {
 
                     let mut sender = if let Some(cached) = cache.get(&requested_frame) {
                         let data = cached.data().clone();
-                        let _ = sender.send(data.to_decoded_frame());
+                        if let Err(err) = sender.send(data.to_decoded_frame()) {
+                            debug!(?err, "frame receiver dropped before send");
+                        }
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
                         let last_sent_frame = last_sent_frame.clone();
                         Some(move |data: ProcessedFrame| {
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            let _ = sender.send(data.to_decoded_frame());
+                            if let Err(err) = sender.send(data.to_decoded_frame()) {
+                                debug!(?err, "frame receiver dropped before send");
+                            }
                         })
                     };
 

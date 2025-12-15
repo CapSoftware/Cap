@@ -121,43 +121,20 @@ impl CameraLayer {
                     if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                     {
-                        self.yuv_converter.convert_nv12(
-                            device,
-                            queue,
-                            y_data,
-                            uv_data,
-                            frame_size.x,
-                            frame_size.y,
-                            camera_frame.y_stride(),
-                        );
-
-                        if let Some(output_texture) = self.yuv_converter.output_texture() {
-                            let mut encoder =
-                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: Some("Camera YUV Copy Encoder"),
-                                });
-
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: output_texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &self.frame_textures[next_texture],
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-
-                            queue.submit(std::iter::once(encoder.finish()));
+                        if self
+                            .yuv_converter
+                            .convert_nv12(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                camera_frame.y_stride(),
+                            )
+                            .is_ok()
+                        {
+                            self.copy_from_yuv_output(device, queue, next_texture, frame_size);
                         }
                     }
                 }
@@ -167,45 +144,22 @@ impl CameraLayer {
                         camera_frame.u_plane(),
                         camera_frame.v_plane(),
                     ) {
-                        self.yuv_converter.convert_yuv420p(
-                            device,
-                            queue,
-                            y_data,
-                            u_data,
-                            v_data,
-                            frame_size.x,
-                            frame_size.y,
-                            camera_frame.y_stride(),
-                            camera_frame.uv_stride(),
-                        );
-
-                        if let Some(output_texture) = self.yuv_converter.output_texture() {
-                            let mut encoder =
-                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: Some("Camera YUV Copy Encoder"),
-                                });
-
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: output_texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &self.frame_textures[next_texture],
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-
-                            queue.submit(std::iter::once(encoder.finish()));
+                        if self
+                            .yuv_converter
+                            .convert_yuv420p(
+                                device,
+                                queue,
+                                y_data,
+                                u_data,
+                                v_data,
+                                frame_size.x,
+                                frame_size.y,
+                                camera_frame.y_stride(),
+                                camera_frame.uv_stride(),
+                            )
+                            .is_ok()
+                        {
+                            self.copy_from_yuv_output(device, queue, next_texture, frame_size);
                         }
                     }
                 }
@@ -216,6 +170,42 @@ impl CameraLayer {
         }
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+    }
+
+    fn copy_from_yuv_output(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        next_texture: usize,
+        frame_size: XY<u32>,
+    ) {
+        if let Some(output_texture) = self.yuv_converter.output_texture() {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Camera YUV Copy Encoder"),
+            });
+
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: output_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.frame_textures[next_texture],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: frame_size.x,
+                    height: frame_size.y,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            let _ = queue.submit(std::iter::once(encoder.finish()));
+        }
     }
 
     pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}

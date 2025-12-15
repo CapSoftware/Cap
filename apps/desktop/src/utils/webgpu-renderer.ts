@@ -184,9 +184,20 @@ export function renderFrameWebGPU(
 		return;
 	}
 
+	const requiredBytes = width * height * 4;
+	if (data.byteLength < requiredBytes) {
+		console.error(
+			`WebGPU renderFrame: buffer too small. Expected at least ${requiredBytes} bytes, got ${data.byteLength}`,
+		);
+		return;
+	}
+
+	const textureData =
+		data.byteLength > requiredBytes ? data.subarray(0, requiredBytes) : data;
+
 	device.queue.writeTexture(
 		{ texture: renderer.frameTexture },
-		data,
+		textureData,
 		{ bytesPerRow: width * 4, rowsPerImage: height },
 		{ width, height },
 	);

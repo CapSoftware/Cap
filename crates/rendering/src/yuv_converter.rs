@@ -1,5 +1,101 @@
 use crate::decoder::PixelFormat;
 
+#[derive(Debug, thiserror::Error)]
+pub enum YuvConversionError {
+    #[error(
+        "{plane} plane bounds exceeded at row {row}: start={start}, end={end}, data_len={data_len}"
+    )]
+    PlaneBoundsExceeded {
+        plane: &'static str,
+        row: usize,
+        start: usize,
+        end: usize,
+        data_len: usize,
+    },
+    #[error("{plane} plane size mismatch: expected {expected}, got {actual}")]
+    PlaneSizeMismatch {
+        plane: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+fn upload_plane_with_stride(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+    plane_name: &'static str,
+) -> Result<(), YuvConversionError> {
+    if stride == width {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    } else {
+        let expected_size = (width * height) as usize;
+        let mut packed = Vec::with_capacity(expected_size);
+        for row in 0..height as usize {
+            let start = row * stride as usize;
+            let end = start + width as usize;
+            if end > data.len() {
+                return Err(YuvConversionError::PlaneBoundsExceeded {
+                    plane: plane_name,
+                    row,
+                    start,
+                    end,
+                    data_len: data.len(),
+                });
+            }
+            packed.extend_from_slice(&data[start..end]);
+        }
+        if packed.len() != expected_size {
+            return Err(YuvConversionError::PlaneSizeMismatch {
+                plane: plane_name,
+                expected: expected_size,
+                actual: packed.len(),
+            });
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &packed,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    Ok(())
+}
+
 pub struct YuvToRgbaConverter {
     nv12_pipeline: wgpu::ComputePipeline,
     yuv420p_pipeline: wgpu::ComputePipeline,
@@ -10,6 +106,10 @@ pub struct YuvToRgbaConverter {
     u_texture: Option<wgpu::Texture>,
     v_texture: Option<wgpu::Texture>,
     output_texture: Option<wgpu::Texture>,
+    y_view: Option<wgpu::TextureView>,
+    uv_view: Option<wgpu::TextureView>,
+    u_view: Option<wgpu::TextureView>,
+    v_view: Option<wgpu::TextureView>,
     output_view: Option<wgpu::TextureView>,
     cached_width: u32,
     cached_height: u32,
@@ -157,6 +257,10 @@ impl YuvToRgbaConverter {
             u_texture: None,
             v_texture: None,
             output_texture: None,
+            y_view: None,
+            uv_view: None,
+            u_view: None,
+            v_view: None,
             output_view: None,
             cached_width: 0,
             cached_height: 0,
@@ -284,62 +388,14 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
         y_stride: u32,
-    ) -> &wgpu::TextureView {
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
         self.ensure_textures(device, width, height, PixelFormat::Nv12);
 
         let y_texture = self.y_texture.as_ref().unwrap();
         let uv_texture = self.uv_texture.as_ref().unwrap();
         let output_texture = self.output_texture.as_ref().unwrap();
 
-        if y_stride == width {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: y_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                y_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        } else {
-            let mut packed_y = Vec::with_capacity((width * height) as usize);
-            for row in 0..height as usize {
-                let start = row * y_stride as usize;
-                let end = start + width as usize;
-                if end <= y_data.len() {
-                    packed_y.extend_from_slice(&y_data[start..end]);
-                }
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: y_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &packed_y,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        upload_plane_with_stride(queue, y_texture, y_data, width, height, y_stride, "Y")?;
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -402,7 +458,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        self.output_view.as_ref().unwrap()
+        Ok(self.output_view.as_ref().unwrap())
     }
 
     pub fn convert_yuv420p(
@@ -416,7 +472,7 @@ impl YuvToRgbaConverter {
         height: u32,
         y_stride: u32,
         uv_stride: u32,
-    ) -> &wgpu::TextureView {
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
         self.ensure_textures(device, width, height, PixelFormat::Yuv420p);
 
         let y_texture = self.y_texture.as_ref().unwrap();
@@ -424,150 +480,29 @@ impl YuvToRgbaConverter {
         let v_texture = self.v_texture.as_ref().unwrap();
         let output_texture = self.output_texture.as_ref().unwrap();
 
-        if y_stride == width {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: y_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                y_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        } else {
-            let mut packed_y = Vec::with_capacity((width * height) as usize);
-            for row in 0..height as usize {
-                let start = row * y_stride as usize;
-                let end = start + width as usize;
-                if end <= y_data.len() {
-                    packed_y.extend_from_slice(&y_data[start..end]);
-                }
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: y_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &packed_y,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        upload_plane_with_stride(queue, y_texture, y_data, width, height, y_stride, "Y")?;
 
         let half_width = width / 2;
         let half_height = height / 2;
 
-        if uv_stride == half_width {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: u_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                u_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(half_width),
-                    rows_per_image: Some(half_height),
-                },
-                wgpu::Extent3d {
-                    width: half_width,
-                    height: half_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: v_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                v_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(half_width),
-                    rows_per_image: Some(half_height),
-                },
-                wgpu::Extent3d {
-                    width: half_width,
-                    height: half_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        } else {
-            let mut packed_u = Vec::with_capacity((half_width * half_height) as usize);
-            let mut packed_v = Vec::with_capacity((half_width * half_height) as usize);
-            for row in 0..half_height as usize {
-                let start = row * uv_stride as usize;
-                let end = start + half_width as usize;
-                if end <= u_data.len() {
-                    packed_u.extend_from_slice(&u_data[start..end]);
-                }
-                if end <= v_data.len() {
-                    packed_v.extend_from_slice(&v_data[start..end]);
-                }
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: u_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &packed_u,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(half_width),
-                    rows_per_image: Some(half_height),
-                },
-                wgpu::Extent3d {
-                    width: half_width,
-                    height: half_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: v_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &packed_v,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(half_width),
-                    rows_per_image: Some(half_height),
-                },
-                wgpu::Extent3d {
-                    width: half_width,
-                    height: half_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        upload_plane_with_stride(
+            queue,
+            u_texture,
+            u_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "U",
+        )?;
+        upload_plane_with_stride(
+            queue,
+            v_texture,
+            v_data,
+            half_width,
+            half_height,
+            uv_stride,
+            "V",
+        )?;
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("YUV420P Converter Bind Group"),
@@ -616,7 +551,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        self.output_view.as_ref().unwrap()
+        Ok(self.output_view.as_ref().unwrap())
     }
 
     pub fn output_texture(&self) -> Option<&wgpu::Texture> {

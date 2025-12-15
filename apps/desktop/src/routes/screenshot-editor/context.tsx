@@ -158,6 +158,13 @@ function createScreenshotEditorContext() {
 					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
 			};
+			img.onerror = (event) => {
+				console.error("Failed to load screenshot image:", {
+					path: instance.path,
+					src: img.src,
+					event,
+				});
+			};
 		}
 
 		const [_ws, _isConnected, _isWorkerReady] = createImageDataWS(

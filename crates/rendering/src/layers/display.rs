@@ -6,6 +6,41 @@ use crate::{
     yuv_converter::YuvToRgbaConverter,
 };
 
+fn copy_converted_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    src_texture: &wgpu::Texture,
+    dst_texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("YUV Copy Encoder"),
+    });
+
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: src_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: dst_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    queue.submit(std::iter::once(encoder.finish()));
+}
+
 pub struct DisplayLayer {
     frame_textures: [wgpu::Texture; 2],
     frame_texture_views: [wgpu::TextureView; 2],
@@ -13,7 +48,7 @@ pub struct DisplayLayer {
     uniforms_buffer: wgpu::Buffer,
     pipeline: CompositeVideoFramePipeline,
     bind_groups: [Option<wgpu::BindGroup>; 2],
-    last_frame_ptr: usize,
+    last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
 }
 
@@ -40,7 +75,7 @@ impl DisplayLayer {
             uniforms_buffer,
             pipeline,
             bind_groups: [bind_group_0, bind_group_1],
-            last_frame_ptr: 0,
+            last_recording_time: None,
             yuv_converter,
         }
     }
@@ -54,12 +89,15 @@ impl DisplayLayer {
         uniforms: CompositeVideoFrameUniforms,
     ) -> (bool, u32, u32) {
         let frame_data = segment_frames.screen_frame.data();
-        let frame_ptr = frame_data.as_ptr() as usize;
         let actual_width = segment_frames.screen_frame.width();
         let actual_height = segment_frames.screen_frame.height();
         let format = segment_frames.screen_frame.format();
+        let current_recording_time = segment_frames.recording_time;
 
-        let skipped = frame_ptr == self.last_frame_ptr;
+        let skipped = self
+            .last_recording_time
+            .is_some_and(|last| (last - current_recording_time).abs() < f32::EPSILON);
+
         if !skipped {
             let next_texture = 1 - self.current_texture;
 
@@ -111,43 +149,29 @@ impl DisplayLayer {
                     if let (Some(y_data), Some(uv_data)) =
                         (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
-                        self.yuv_converter.convert_nv12(
-                            device,
-                            queue,
-                            y_data,
-                            uv_data,
-                            frame_size.x,
-                            frame_size.y,
-                            screen_frame.y_stride(),
-                        );
-
-                        if let Some(output_texture) = self.yuv_converter.output_texture() {
-                            let mut encoder =
-                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: Some("YUV Copy Encoder"),
-                                });
-
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: output_texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &self.frame_textures[next_texture],
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-
-                            queue.submit(std::iter::once(encoder.finish()));
+                        if self
+                            .yuv_converter
+                            .convert_nv12(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                screen_frame.y_stride(),
+                            )
+                            .is_ok()
+                        {
+                            if let Some(output_texture) = self.yuv_converter.output_texture() {
+                                copy_converted_texture(
+                                    device,
+                                    queue,
+                                    output_texture,
+                                    &self.frame_textures[next_texture],
+                                    frame_size.x,
+                                    frame_size.y,
+                                );
+                            }
                         }
                     }
                 }
@@ -158,51 +182,37 @@ impl DisplayLayer {
                         screen_frame.u_plane(),
                         screen_frame.v_plane(),
                     ) {
-                        self.yuv_converter.convert_yuv420p(
-                            device,
-                            queue,
-                            y_data,
-                            u_data,
-                            v_data,
-                            frame_size.x,
-                            frame_size.y,
-                            screen_frame.y_stride(),
-                            screen_frame.uv_stride(),
-                        );
-
-                        if let Some(output_texture) = self.yuv_converter.output_texture() {
-                            let mut encoder =
-                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: Some("YUV Copy Encoder"),
-                                });
-
-                            encoder.copy_texture_to_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: output_texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &self.frame_textures[next_texture],
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                wgpu::Extent3d {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-
-                            queue.submit(std::iter::once(encoder.finish()));
+                        if self
+                            .yuv_converter
+                            .convert_yuv420p(
+                                device,
+                                queue,
+                                y_data,
+                                u_data,
+                                v_data,
+                                frame_size.x,
+                                frame_size.y,
+                                screen_frame.y_stride(),
+                                screen_frame.uv_stride(),
+                            )
+                            .is_ok()
+                        {
+                            if let Some(output_texture) = self.yuv_converter.output_texture() {
+                                copy_converted_texture(
+                                    device,
+                                    queue,
+                                    output_texture,
+                                    &self.frame_textures[next_texture],
+                                    frame_size.x,
+                                    frame_size.y,
+                                );
+                            }
                         }
                     }
                 }
             }
 
-            self.last_frame_ptr = frame_ptr;
+            self.last_recording_time = Some(current_recording_time);
             self.current_texture = next_texture;
         }
 

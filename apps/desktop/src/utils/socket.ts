@@ -18,7 +18,7 @@ const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
 export type FrameData = {
 	width: number;
 	height: number;
-	bitmap?: ImageBitmap;
+	bitmap?: ImageBitmap | null;
 };
 
 export type CanvasControls = {
@@ -55,16 +55,22 @@ interface ErrorMessage {
 	message: string;
 }
 
+interface RequestFrameMessage {
+	type: "request-frame";
+}
+
 type WorkerMessage =
 	| ReadyMessage
 	| FrameRenderedMessage
 	| FrameQueuedMessage
 	| DecodedFrame
-	| ErrorMessage;
+	| ErrorMessage
+	| RequestFrameMessage;
 
 export function createImageDataWS(
 	url: string,
 	onmessage: (data: FrameData) => void,
+	onRequestFrame?: () => void,
 ): [
 	Omit<WebSocket, "onmessage">,
 	() => boolean,
@@ -91,6 +97,26 @@ export function createImageDataWS(
 	}
 
 	const [hasRenderedFrame, setHasRenderedFrame] = createSignal(false);
+	let isCleanedUp = false;
+
+	function cleanup() {
+		if (isCleanedUp) return;
+		isCleanedUp = true;
+
+		if (producer) {
+			producer.signalShutdown();
+			producer = null;
+		}
+
+		worker.onmessage = null;
+		worker.terminate();
+
+		pendingFrame = null;
+		nextFrame = null;
+		isProcessing = false;
+
+		setIsConnected(false);
+	}
 
 	const canvasControls: CanvasControls = {
 		initCanvas: (canvas: OffscreenCanvas) => {
@@ -127,6 +153,11 @@ export function createImageDataWS(
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}
+			return;
+		}
+
+		if (e.data.type === "request-frame") {
+			onRequestFrame?.();
 			return;
 		}
 
@@ -167,15 +198,11 @@ export function createImageDataWS(
 	});
 
 	ws.addEventListener("close", () => {
-		setIsConnected(false);
-		if (producer) {
-			producer.signalShutdown();
-		}
-		worker.terminate();
+		cleanup();
 	});
 
 	ws.addEventListener("error", () => {
-		setIsConnected(false);
+		cleanup();
 	});
 
 	ws.binaryType = "arraybuffer";

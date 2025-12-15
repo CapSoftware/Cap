@@ -15,8 +15,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let y_raw = textureLoad(y_plane, coords, 0).r;
 
     let uv_coords = coords / 2;
-    let u_raw = textureLoad(u_plane, uv_coords, 0).r;
-    let v_raw = textureLoad(v_plane, uv_coords, 0).r;
+    let u_dims = textureDimensions(u_plane);
+    let v_dims = textureDimensions(v_plane);
+    let u_clamped = min(uv_coords, u_dims - vec2<u32>(1, 1));
+    let v_clamped = min(uv_coords, v_dims - vec2<u32>(1, 1));
+    let u_raw = textureLoad(u_plane, u_clamped, 0).r;
+    let v_raw = textureLoad(v_plane, v_clamped, 0).r;
 
     let y = (y_raw - 0.0625) * 1.164;
     let u = u_raw - 0.5;

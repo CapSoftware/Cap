@@ -2,6 +2,7 @@ use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Inst
 use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use cap_rendering::RenderedFrame;
 
@@ -10,18 +11,26 @@ use crate::{
     frame_ws::{WSFrame, create_watch_frame_ws},
 };
 
-fn strip_frame_padding(frame: RenderedFrame) -> (Vec<u8>, u32) {
-    let expected_stride = frame.width * 4;
+fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static str> {
+    let expected_stride = frame
+        .width
+        .checked_mul(4)
+        .ok_or("overflow computing expected_stride")?;
     if frame.padded_bytes_per_row == expected_stride {
-        (frame.data, expected_stride)
+        Ok((frame.data, expected_stride))
     } else {
-        let mut stripped = Vec::with_capacity((expected_stride * frame.height) as usize);
+        let capacity = expected_stride
+            .checked_mul(frame.height)
+            .ok_or("overflow computing buffer capacity")?;
+        let mut stripped = Vec::with_capacity(capacity as usize);
         for row in 0..frame.height {
-            let start = (row * frame.padded_bytes_per_row) as usize;
+            let start = row
+                .checked_mul(frame.padded_bytes_per_row)
+                .ok_or("overflow computing row start")? as usize;
             let end = start + expected_stride as usize;
             stripped.extend_from_slice(&frame.data[start..end]);
         }
-        (stripped, expected_stride)
+        Ok((stripped, expected_stride))
     }
 }
 
@@ -47,14 +56,17 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         Box::new(move |frame| {
             let width = frame.width;
             let height = frame.height;
-            let (data, stride) = strip_frame_padding(frame);
-            let _ = frame_tx.send(Some(WSFrame {
-                data,
-                width,
-                height,
-                stride,
-                created_at: Instant::now(),
-            }));
+            if let Ok((data, stride)) = strip_frame_padding(frame) {
+                if let Err(e) = frame_tx.send(Some(WSFrame {
+                    data,
+                    width,
+                    height,
+                    stride,
+                    created_at: Instant::now(),
+                })) {
+                    debug!("Frame receiver dropped during prewarm: {e}");
+                }
+            }
         }),
     )
     .await?;
@@ -206,14 +218,17 @@ impl EditorInstances {
                     Box::new(move |frame| {
                         let width = frame.width;
                         let height = frame.height;
-                        let (data, stride) = strip_frame_padding(frame);
-                        let _ = frame_tx.send(Some(WSFrame {
-                            data,
-                            width,
-                            height,
-                            stride,
-                            created_at: Instant::now(),
-                        }));
+                        if let Ok((data, stride)) = strip_frame_padding(frame) {
+                            if let Err(e) = frame_tx.send(Some(WSFrame {
+                                data,
+                                width,
+                                height,
+                                stride,
+                                created_at: Instant::now(),
+                            })) {
+                                debug!("Frame receiver dropped in get_or_create: {e}");
+                            }
+                        }
                     }),
                 )
                 .await?;

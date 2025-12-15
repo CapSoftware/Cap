@@ -39,6 +39,29 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
 
+	let previousBitmap: ImageBitmap | null = null;
+
+	createEffect(() => {
+		const frame = latestFrame();
+		const currentBitmap = frame?.bitmap ?? null;
+
+		if (previousBitmap && previousBitmap !== currentBitmap) {
+			previousBitmap.close();
+			previousBitmap = null;
+		}
+
+		if (currentBitmap) {
+			previousBitmap = currentBitmap;
+		}
+	});
+
+	onCleanup(() => {
+		if (previousBitmap) {
+			previousBitmap.close();
+			previousBitmap = null;
+		}
+	});
+
 	const zoomIn = () => {
 		props.setZoom(Math.min(3, props.zoom + 0.1));
 		setPan({ x: 0, y: 0 });
@@ -173,7 +196,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 								return {
 									width: 0,
 									height: 0,
-									bitmap: null as unknown as ImageBitmap,
+									bitmap: null,
 								};
 							return f;
 						};

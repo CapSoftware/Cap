@@ -10,8 +10,10 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use futures::stream::{FuturesUnordered, StreamExt};
+use lru::LruCache;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
+    num::NonZeroUsize,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -67,54 +69,34 @@ struct PrefetchedFrame {
 }
 
 struct FrameCache {
-    frames: HashMap<u32, (DecodedSegmentFrames, u32)>,
-    order: VecDeque<u32>,
-    capacity: usize,
+    cache: LruCache<u32, (Arc<DecodedSegmentFrames>, u32)>,
 }
 
 impl FrameCache {
     fn new(capacity: usize) -> Self {
         Self {
-            frames: HashMap::with_capacity(capacity),
-            order: VecDeque::with_capacity(capacity),
-            capacity,
+            cache: LruCache::new(NonZeroUsize::new(capacity).unwrap()),
         }
     }
 
-    fn get(&mut self, frame_number: u32) -> Option<(DecodedSegmentFrames, u32)> {
-        if let Some(data) = self.frames.get(&frame_number) {
-            if let Some(pos) = self.order.iter().position(|&f| f == frame_number) {
-                self.order.remove(pos);
-                self.order.push_back(frame_number);
-            }
-            Some(data.clone())
-        } else {
-            None
-        }
+    fn get(&mut self, frame_number: u32) -> Option<(Arc<DecodedSegmentFrames>, u32)> {
+        self.cache
+            .get(&frame_number)
+            .map(|(frames, idx)| (Arc::clone(frames), *idx))
     }
 
     fn insert(
         &mut self,
         frame_number: u32,
-        segment_frames: DecodedSegmentFrames,
+        segment_frames: Arc<DecodedSegmentFrames>,
         segment_index: u32,
     ) {
-        if self.frames.contains_key(&frame_number) {
-            if let Some(pos) = self.order.iter().position(|&f| f == frame_number) {
-                self.order.remove(pos);
-            }
-        } else if self.frames.len() >= self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.frames.remove(&oldest);
-            }
-        }
-        self.frames
-            .insert(frame_number, (segment_frames, segment_index));
-        self.order.push_back(frame_number);
+        self.cache
+            .put(frame_number, (segment_frames, segment_index));
     }
 
     fn len(&self) -> usize {
-        self.frames.len()
+        self.cache.len()
     }
 }
 
@@ -468,7 +450,10 @@ impl Playback {
 
                     if let Some(idx) = prefetched_idx {
                         let prefetched = prefetch_buffer.remove(idx).unwrap();
-                        Some((prefetched.segment_frames, prefetched.segment_index))
+                        Some((
+                            Arc::new(prefetched.segment_frames),
+                            prefetched.segment_index,
+                        ))
                     } else {
                         let is_in_flight = main_in_flight
                             .read()
@@ -504,14 +489,20 @@ impl Playback {
                             }
 
                             if let Some(prefetched) = found_frame {
-                                Some((prefetched.segment_frames, prefetched.segment_index))
+                                Some((
+                                    Arc::new(prefetched.segment_frames),
+                                    prefetched.segment_index,
+                                ))
                             } else {
                                 let prefetched_idx = prefetch_buffer
                                     .iter()
                                     .position(|p| p.frame_number == frame_number);
                                 if let Some(idx) = prefetched_idx {
                                     let prefetched = prefetch_buffer.remove(idx).unwrap();
-                                    Some((prefetched.segment_frames, prefetched.segment_index))
+                                    Some((
+                                        Arc::new(prefetched.segment_frames),
+                                        prefetched.segment_index,
+                                    ))
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
                                     _total_frames_skipped += 1;
@@ -530,7 +521,10 @@ impl Playback {
 
                                 if let Ok(Some(prefetched)) = wait_result {
                                     if prefetched.frame_number == frame_number {
-                                        Some((prefetched.segment_frames, prefetched.segment_index))
+                                        Some((
+                                            Arc::new(prefetched.segment_frames),
+                                            prefetched.segment_index,
+                                        ))
                                     } else {
                                         prefetch_buffer.push_back(prefetched);
                                         frame_number = frame_number.saturating_add(1);
@@ -593,7 +587,7 @@ impl Playback {
                                     },
                                 };
 
-                                data.map(|frames| (frames, segment.recording_clip))
+                                data.map(|frames| (Arc::new(frames), segment.recording_clip))
                             }
                         }
                     }
@@ -607,7 +601,11 @@ impl Playback {
                     };
 
                     if !was_cached {
-                        frame_cache.insert(frame_number, segment_frames.clone(), segment_index);
+                        frame_cache.insert(
+                            frame_number,
+                            Arc::clone(&segment_frames),
+                            segment_index,
+                        );
                     }
 
                     let uniforms = ProjectUniforms::new(
@@ -622,7 +620,7 @@ impl Playback {
 
                     self.renderer
                         .render_frame(
-                            segment_frames,
+                            Arc::unwrap_or_clone(segment_frames),
                             uniforms,
                             segment_media.cursor.clone(),
                             frame_number,

@@ -459,7 +459,7 @@ function PreviewCanvas() {
 
 	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
 
-	let canvasTransferred = false;
+	const canvasTransferredRef = { current: false };
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
@@ -486,14 +486,14 @@ function PreviewCanvas() {
 	});
 
 	const initCanvas = (canvas: HTMLCanvasElement) => {
-		if (canvasTransferred) return;
+		if (canvasTransferredRef.current) return;
 		const controls = canvasControls();
 		if (!controls) return;
 
 		try {
 			const offscreen = canvas.transferControlToOffscreen();
 			controls.initCanvas(offscreen);
-			canvasTransferred = true;
+			canvasTransferredRef.current = true;
 		} catch (e) {
 			console.error("[PreviewCanvas] Failed to transfer canvas:", e);
 		}
