@@ -1631,9 +1631,6 @@ impl RendererLayers {
         segment_frames: &DecodedSegmentFrames,
         cursor: &CursorEvents,
     ) -> Result<(), RenderingError> {
-        let prepare_start = Instant::now();
-
-        let bg_start = Instant::now();
         self.background
             .prepare(
                 constants,
@@ -1641,25 +1638,19 @@ impl RendererLayers {
                 Background::from(uniforms.project.background.source.clone()),
             )
             .await?;
-        let bg_time = bg_start.elapsed();
 
-        let blur_start = Instant::now();
         if uniforms.project.background.blur > 0.0 {
             self.background_blur.prepare(&constants.queue, uniforms);
         }
-        let blur_time = blur_start.elapsed();
 
-        let display_start = Instant::now();
-        let (display_skipped, frame_width, frame_height) = self.display.prepare(
+        self.display.prepare(
             &constants.device,
             &constants.queue,
             segment_frames,
             constants.options.screen_size,
             uniforms.display,
         );
-        let display_time = display_start.elapsed();
 
-        let cursor_start = Instant::now();
         self.cursor.prepare(
             segment_frames,
             uniforms.resolution_base,
@@ -1668,9 +1659,7 @@ impl RendererLayers {
             uniforms,
             constants,
         );
-        let cursor_time = cursor_start.elapsed();
 
-        let camera_start = Instant::now();
         self.camera.prepare(
             &constants.device,
             &constants.queue,
@@ -1682,9 +1671,7 @@ impl RendererLayers {
                 ))
             })(),
         );
-        let camera_time = camera_start.elapsed();
 
-        let camera_only_start = Instant::now();
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
@@ -1696,72 +1683,20 @@ impl RendererLayers {
                 ))
             })(),
         );
-        let camera_only_time = camera_only_start.elapsed();
 
-        let text_start = Instant::now();
         self.text.prepare(
             &constants.device,
             &constants.queue,
             uniforms.output_size,
             &uniforms.texts,
         );
-        let text_time = text_start.elapsed();
 
-        let captions_start = Instant::now();
         self.captions.prepare(
             uniforms,
             segment_frames,
             XY::new(uniforms.output_size.0, uniforms.output_size.1),
             constants,
         );
-        let captions_time = captions_start.elapsed();
-
-        let total_time = prepare_start.elapsed();
-
-        if total_time.as_millis() > 5 {
-            tracing::debug!(
-                total_us = total_time.as_micros() as u64,
-                bg_us = bg_time.as_micros() as u64,
-                blur_us = blur_time.as_micros() as u64,
-                display_us = display_time.as_micros() as u64,
-                cursor_us = cursor_time.as_micros() as u64,
-                camera_us = camera_time.as_micros() as u64,
-                camera_only_us = camera_only_time.as_micros() as u64,
-                text_us = text_time.as_micros() as u64,
-                captions_us = captions_time.as_micros() as u64,
-                "[PERF:PREPARE] layer prepare breakdown"
-            );
-        }
-
-        // #region agent log
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-        {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
-            let frame_bytes = frame_width * frame_height * 4;
-            writeln!(
-                file,
-                r#"{{"location":"lib.rs:prepare_breakdown","message":"layer prepare timing breakdown","data":{{"total_us":{},"display_us":{},"display_skipped":{},"frame_width":{},"frame_height":{},"frame_bytes":{},"camera_us":{},"bg_us":{},"cursor_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"F"}}"#,
-                total_time.as_micros() as u64,
-                display_time.as_micros() as u64,
-                display_skipped,
-                frame_width,
-                frame_height,
-                frame_bytes,
-                camera_time.as_micros() as u64,
-                bg_time.as_micros() as u64,
-                cursor_time.as_micros() as u64,
-                ts
-            )
-            .ok();
-        }
-        // #endregion
 
         Ok(())
     }
@@ -1863,23 +1798,16 @@ async fn produce_frame(
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
-    let total_start = Instant::now();
-
-    let prepare_start = Instant::now();
     layers
         .prepare(constants, &uniforms, &segment_frames, cursor)
         .await?;
-    let prepare_time = prepare_start.elapsed();
 
-    let encoder_start = Instant::now();
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
     );
-    let encoder_create_time = encoder_start.elapsed();
 
-    let render_start = Instant::now();
     layers.render(
         &constants.device,
         &constants.queue,
@@ -1887,60 +1815,15 @@ async fn produce_frame(
         session,
         &uniforms,
     );
-    let render_time = render_start.elapsed();
 
-    let finish_start = Instant::now();
-    let result = finish_encoder(
+    finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await;
-    let finish_time = finish_start.elapsed();
-
-    let total_time = total_start.elapsed();
-
-    tracing::debug!(
-        output_width = uniforms.output_size.0,
-        output_height = uniforms.output_size.1,
-        prepare_us = prepare_time.as_micros() as u64,
-        encoder_create_us = encoder_create_time.as_micros() as u64,
-        render_pass_us = render_time.as_micros() as u64,
-        finish_encoder_us = finish_time.as_micros() as u64,
-        total_us = total_time.as_micros() as u64,
-        "[PERF:GPU] produce_frame timing breakdown"
-    );
-
-    // #region agent log
-    use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-    {
-        let log_entry = serde_json::json!({
-            "location": "lib.rs:produce_frame",
-            "message": "GPU produce_frame timing",
-            "data": {
-                "output_width": uniforms.output_size.0,
-                "output_height": uniforms.output_size.1,
-                "prepare_us": prepare_time.as_micros() as u64,
-                "encoder_create_us": encoder_create_time.as_micros() as u64,
-                "render_pass_us": render_time.as_micros() as u64,
-                "finish_encoder_us": finish_time.as_micros() as u64,
-                "total_us": total_time.as_micros() as u64
-            },
-            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
-            "sessionId": "debug-session",
-            "hypothesisId": "C"
-        });
-        writeln!(file, "{}", log_entry).ok();
-    }
-    // #endregion
-
-    result
+    .await
 }
 
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {

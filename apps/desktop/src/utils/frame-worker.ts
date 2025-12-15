@@ -1,4 +1,3 @@
-import * as lz4 from "lz4-wasm";
 import { type Consumer, createConsumer } from "./shared-frame-buffer";
 
 interface FrameMessage {
@@ -70,8 +69,7 @@ interface PendingFrame {
 	height: number;
 }
 
-let wasmReady = false;
-let pendingFrames: ArrayBuffer[] = [];
+let workerReady = false;
 
 let offscreenCanvas: OffscreenCanvas | null = null;
 let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -90,10 +88,6 @@ let useSharedBuffer = false;
 let pendingRenderFrame: PendingFrame | null = null;
 let _rafId: number | null = null;
 let rafRunning = false;
-
-function decompressLz4(compressedBuffer: ArrayBuffer): Uint8Array {
-	return lz4.decompress(new Uint8Array(compressedBuffer));
-}
 
 function renderLoop() {
 	_rafId = null;
@@ -135,42 +129,21 @@ function startRenderLoop() {
 	_rafId = requestAnimationFrame(renderLoop);
 }
 
-async function initWasm() {
-	try {
-		const testData = new Uint8Array([4, 0, 0, 0, 0x40, 0x74, 0x65, 0x73, 0x74]);
-		lz4.decompress(testData);
-		wasmReady = true;
-		self.postMessage({ type: "ready" } satisfies ReadyMessage);
+function initWorker() {
+	workerReady = true;
+	self.postMessage({ type: "ready" } satisfies ReadyMessage);
 
-		for (const buffer of pendingFrames) {
-			const result = await processFrame(buffer);
-			if (result.type === "decoded") {
-				self.postMessage(result, { transfer: [result.bitmap] });
-			} else if (result.type === "frame-queued") {
-				self.postMessage(result);
-			} else if (result.type === "error") {
-				self.postMessage(result);
-			}
-		}
-		pendingFrames = [];
+	if (pendingCanvasInit) {
+		initCanvas(pendingCanvasInit);
+		pendingCanvasInit = null;
+	}
 
-		if (pendingCanvasInit) {
-			initCanvas(pendingCanvasInit);
-			pendingCanvasInit = null;
-		}
-
-		if (useSharedBuffer && consumer) {
-			pollSharedBuffer();
-		}
-	} catch (e) {
-		self.postMessage({
-			type: "error",
-			message: `Failed to initialize WASM LZ4: ${e}`,
-		} satisfies ErrorMessage);
+	if (useSharedBuffer && consumer) {
+		pollSharedBuffer();
 	}
 }
 
-initWasm();
+initWorker();
 
 function initCanvas(canvas: OffscreenCanvas) {
 	offscreenCanvas = canvas;
@@ -194,26 +167,20 @@ function initCanvas(canvas: OffscreenCanvas) {
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
 
 async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
-	let decompressed: Uint8Array;
-	try {
-		decompressed = decompressLz4(buffer);
-	} catch (e) {
-		return { type: "error", message: `Failed to decompress frame: ${e}` };
-	}
-
-	const clamped = new Uint8ClampedArray(decompressed);
-	if (clamped.length < 12) {
+	const data = new Uint8Array(buffer);
+	if (data.length < 12) {
 		return {
 			type: "error",
 			message: "Received frame too small to contain metadata",
 		};
 	}
 
-	const metadataOffset = clamped.length - 12;
-	const meta = new DataView(decompressed.buffer, metadataOffset, 12);
+	const metadataOffset = data.length - 12;
+	const meta = new DataView(buffer, metadataOffset, 12);
 	const strideBytes = meta.getUint32(0, true);
 	const height = meta.getUint32(4, true);
 	const width = meta.getUint32(8, true);
+	const frameData = new Uint8ClampedArray(buffer, 0, metadataOffset);
 
 	if (!width || !height) {
 		return {
@@ -222,7 +189,6 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 		};
 	}
 
-	const source = clamped.subarray(0, metadataOffset);
 	const expectedRowBytes = width * 4;
 	const expectedLength = expectedRowBytes * height;
 	const availableLength = strideBytes * height;
@@ -230,7 +196,7 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 	if (
 		strideBytes === 0 ||
 		strideBytes < expectedRowBytes ||
-		source.length < availableLength
+		frameData.length < availableLength
 	) {
 		return {
 			type: "error",
@@ -245,7 +211,7 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 	}
 
 	if (strideBytes === expectedRowBytes) {
-		cachedImageData.data.set(source.subarray(0, expectedLength));
+		cachedImageData.data.set(frameData.subarray(0, expectedLength));
 	} else {
 		if (!strideBuffer || strideBufferSize < expectedLength) {
 			strideBuffer = new Uint8ClampedArray(expectedLength);
@@ -255,7 +221,7 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 			const srcStart = row * strideBytes;
 			const destStart = row * expectedRowBytes;
 			strideBuffer.set(
-				source.subarray(srcStart, srcStart + expectedRowBytes),
+				frameData.subarray(srcStart, srcStart + expectedRowBytes),
 				destStart,
 			);
 		}
@@ -315,14 +281,14 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 		consumer = createConsumer(e.data.buffer);
 		useSharedBuffer = true;
 
-		if (wasmReady) {
+		if (workerReady) {
 			pollSharedBuffer();
 		}
 		return;
 	}
 
 	if (e.data.type === "init-canvas") {
-		if (!wasmReady) {
+		if (!workerReady) {
 			pendingCanvasInit = e.data.canvas;
 			return;
 		}
@@ -342,11 +308,6 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		if (!wasmReady) {
-			pendingFrames.push(e.data.buffer);
-			return;
-		}
-
 		const result = await processFrame(e.data.buffer);
 		if (result.type === "decoded") {
 			self.postMessage(result, { transfer: [result.bitmap] });

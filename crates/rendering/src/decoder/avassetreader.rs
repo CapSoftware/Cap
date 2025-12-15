@@ -4,7 +4,6 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc},
-    time::Instant,
 };
 
 use cidre::{
@@ -273,14 +272,6 @@ impl AVAssetReaderDecoder {
         let mut frames = this.inner.frames();
         let mut processor = ImageBufProcessor::new();
 
-        let mut _cache_hits = 0u64;
-        let mut _cache_misses = 0u64;
-        let mut _total_requests = 0u64;
-        let _total_decode_time_us = 0u64;
-        let mut _total_reset_count = 0u64;
-        let mut _total_reset_time_us = 0u64;
-        let last_metrics_log = Rc::new(RefCell::new(Instant::now()));
-
         while let Ok(r) = rx.recv() {
             match r {
                 VideoDecoderMessage::GetFrame(mut requested_time, mut sender) => {
@@ -288,8 +279,6 @@ impl AVAssetReaderDecoder {
                         continue;
                     }
 
-                    let request_start = Instant::now();
-                    _total_requests += 1;
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
                     const BACKWARD_SEEK_TOLERANCE: u32 = 120;
@@ -312,44 +301,15 @@ impl AVAssetReaderDecoder {
                     }
 
                     let mut sender = if let Some(cached) = cache.get(&requested_frame) {
-                        _cache_hits += 1;
                         let data = cached.data().clone();
-                        let total_time = request_start.elapsed();
-
-                        tracing::debug!(
-                            decoder = name,
-                            frame = requested_frame,
-                            cache_hit = true,
-                            total_time_us = total_time.as_micros() as u64,
-                            cache_size = cache.len(),
-                            "[PERF:DECODER] cache hit"
-                        );
-
                         let _ = sender.send(data.to_decoded_frame());
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
-                        _cache_misses += 1;
                         let last_sent_frame = last_sent_frame.clone();
-                        let request_start_clone = request_start;
-                        let last_metrics_log_clone = last_metrics_log.clone();
-                        let decoder_name = name;
                         Some(move |data: ProcessedFrame| {
-                            let total_time = request_start_clone.elapsed();
-                            tracing::debug!(
-                                decoder = decoder_name,
-                                frame = data.number,
-                                cache_hit = false,
-                                total_time_us = total_time.as_micros() as u64,
-                                "[PERF:DECODER] cache miss - frame decoded"
-                            );
                             *last_sent_frame.borrow_mut() = Some(data.clone());
                             let _ = sender.send(data.to_decoded_frame());
-
-                            let mut last_log = last_metrics_log_clone.borrow_mut();
-                            if last_log.elapsed().as_secs() >= 2 {
-                                *last_log = Instant::now();
-                            }
                         })
                     };
 
@@ -371,54 +331,10 @@ impl AVAssetReaderDecoder {
                         };
 
                     if needs_reset {
-                        let reset_start = Instant::now();
-                        _total_reset_count += 1;
-
                         this.reset(requested_time);
                         frames = this.inner.frames();
                         *last_sent_frame.borrow_mut() = None;
-
-                        let old_cache_size = cache.len();
-                        let retained = cache
-                            .keys()
-                            .filter(|&&f| f >= cache_min && f <= cache_max)
-                            .count();
                         cache.retain(|&f, _| f >= cache_min && f <= cache_max);
-                        let cleared = old_cache_size - retained;
-
-                        let reset_time = reset_start.elapsed();
-                        _total_reset_time_us += reset_time.as_micros() as u64;
-
-                        tracing::info!(
-                            decoder = name,
-                            requested_frame = requested_frame,
-                            requested_time = requested_time,
-                            reset_time_ms = reset_time.as_millis() as u64,
-                            cleared_cache_entries = cleared,
-                            retained_cache_entries = retained,
-                            total_resets = _total_reset_count,
-                            "[PERF:DECODER] decoder reset/seek"
-                        );
-
-                        // #region agent log
-                        use std::io::Write;
-                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                        {
-                            let ts = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            writeln!(
-                                file,
-                                r#"{{"location":"avassetreader.rs:decoder_reset","message":"decoder performed reset/seek","data":{{"decoder":"{}","requested_frame":{},"reset_time_ms":{},"cleared_cache":{},"retained_cache":{},"total_resets":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"D"}}"#,
-                                name, requested_frame, reset_time.as_millis() as u64, cleared, retained, _total_reset_count, ts
-                            )
-                            .ok();
-                        }
-                        // #endregion
                     }
 
                     last_active_frame = Some(requested_frame);
@@ -517,9 +433,6 @@ impl AVAssetReaderDecoder {
                         if let Some(last_sent_frame) = last_sent_frame {
                             (sender)(last_sent_frame);
                         } else {
-                            tracing::debug!(
-                                "No frames available for request {requested_frame}, sending black frame"
-                            );
                             let black_frame_data =
                                 vec![0u8; (video_width * video_height * 4) as usize];
                             let black_frame = ProcessedFrame {

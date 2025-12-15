@@ -19,7 +19,7 @@ use tokio::{
     sync::{mpsc as tokio_mpsc, watch},
     time::Instant,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{error, warn};
 
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
@@ -373,21 +373,7 @@ impl Playback {
 
             let mut total_frames_rendered = 0u64;
             let mut total_frames_skipped = 0u64;
-            let mut prefetch_hits = 0u64;
-            let mut prefetch_misses = 0u64;
-            let mut cache_hits = 0u64;
-            let mut total_render_time_us = 0u64;
-            let mut max_render_time_us = 0u64;
-            let mut last_metrics_log = Instant::now();
 
-            info!(
-                start_frame = self.start_frame_number,
-                fps = fps,
-                duration_secs = duration,
-                "[PERF:PLAYBACK] starting playback"
-            );
-
-            let warmup_start = Instant::now();
             let warmup_target_frames = 2usize;
             let warmup_after_first_timeout = Duration::from_millis(50);
             let mut first_frame_time: Option<Instant> = None;
@@ -424,15 +410,6 @@ impl Playback {
             prefetch_buffer
                 .make_contiguous()
                 .sort_by_key(|p| p.frame_number);
-
-            let warmup_time = warmup_start.elapsed();
-            let first_frame_ready = first_frame_time.is_some();
-            info!(
-                warmup_frames = prefetch_buffer.len(),
-                warmup_time_ms = warmup_time.as_millis() as u64,
-                first_frame_ready = first_frame_ready,
-                "[PERF:PLAYBACK] warmup complete (adaptive mode)"
-            );
 
             let start = Instant::now();
             let mut cached_project = self.project.borrow().clone();
@@ -479,12 +456,9 @@ impl Playback {
                     break;
                 }
 
-                let frame_fetch_start = Instant::now();
-                let mut was_prefetched = false;
                 let mut was_cached = false;
 
                 let segment_frames_opt = if let Some(cached) = frame_cache.get(frame_number) {
-                    cache_hits += 1;
                     was_cached = true;
                     Some(cached)
                 } else {
@@ -493,8 +467,6 @@ impl Playback {
                         .position(|p| p.frame_number == frame_number);
 
                     if let Some(idx) = prefetched_idx {
-                        prefetch_hits += 1;
-                        was_prefetched = true;
                         let prefetched = prefetch_buffer.remove(idx).unwrap();
                         Some((prefetched.segment_frames, prefetched.segment_index))
                     } else {
@@ -532,16 +504,12 @@ impl Playback {
                             }
 
                             if let Some(prefetched) = found_frame {
-                                prefetch_hits += 1;
-                                was_prefetched = true;
                                 Some((prefetched.segment_frames, prefetched.segment_index))
                             } else {
                                 let prefetched_idx = prefetch_buffer
                                     .iter()
                                     .position(|p| p.frame_number == frame_number);
                                 if let Some(idx) = prefetched_idx {
-                                    prefetch_hits += 1;
-                                    was_prefetched = true;
                                     let prefetched = prefetch_buffer.remove(idx).unwrap();
                                     Some((prefetched.segment_frames, prefetched.segment_index))
                                 } else {
@@ -551,8 +519,6 @@ impl Playback {
                                 }
                             }
                         } else {
-                            prefetch_misses += 1;
-
                             if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
                                 let _ = frame_request_tx.send(frame_number);
 
@@ -564,8 +530,6 @@ impl Playback {
 
                                 if let Ok(Some(prefetched)) = wait_result {
                                     if prefetched.frame_number == frame_number {
-                                        prefetch_hits += 1;
-                                        was_prefetched = true;
                                         Some((prefetched.segment_frames, prefetched.segment_index))
                                     } else {
                                         prefetch_buffer.push_back(prefetched);
@@ -635,8 +599,6 @@ impl Playback {
                     }
                 };
 
-                let frame_fetch_time = frame_fetch_start.elapsed();
-
                 if let Some((segment_frames, segment_index)) = segment_frames_opt {
                     let Some(segment_media) = self.segment_medias.get(segment_index as usize)
                     else {
@@ -648,7 +610,6 @@ impl Playback {
                         frame_cache.insert(frame_number, segment_frames.clone(), segment_index);
                     }
 
-                    let uniforms_start = Instant::now();
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
                         &cached_project,
@@ -658,9 +619,7 @@ impl Playback {
                         &segment_media.cursor,
                         &segment_frames,
                     );
-                    let uniforms_time = uniforms_start.elapsed();
 
-                    let render_start = Instant::now();
                     self.renderer
                         .render_frame(
                             segment_frames,
@@ -669,24 +628,8 @@ impl Playback {
                             frame_number,
                         )
                         .await;
-                    let render_time = render_start.elapsed();
 
                     total_frames_rendered += 1;
-                    let render_time_us = render_time.as_micros() as u64;
-                    total_render_time_us += render_time_us;
-                    max_render_time_us = max_render_time_us.max(render_time_us);
-
-                    debug!(
-                        frame = frame_number,
-                        cache_hit = was_cached,
-                        prefetch_hit = was_prefetched,
-                        prefetch_buffer_size = prefetch_buffer.len(),
-                        cache_size = frame_cache.len(),
-                        frame_fetch_us = frame_fetch_time.as_micros() as u64,
-                        uniforms_us = uniforms_time.as_micros() as u64,
-                        render_us = render_time_us,
-                        "[PERF:PLAYBACK] frame rendered"
-                    );
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
@@ -709,70 +652,12 @@ impl Playback {
                         frame_number += skipped;
                         total_frames_skipped += skipped as u64;
 
-                        info!(
-                            frames_behind = frames_behind,
-                            frames_skipped = skipped,
-                            current_frame = frame_number,
-                            total_skipped = total_frames_skipped,
-                            "[PERF:PLAYBACK] skipping frames to catch up"
-                        );
-
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
                     }
                 }
-
-                if last_metrics_log.elapsed().as_secs() >= 2 {
-                    let avg_render_time = if total_frames_rendered > 0 {
-                        total_render_time_us / total_frames_rendered
-                    } else {
-                        0
-                    };
-
-                    info!(
-                        total_rendered = total_frames_rendered,
-                        total_skipped = total_frames_skipped,
-                        prefetch_hit_rate = format!(
-                            "{:.1}%",
-                            (prefetch_hits as f64
-                                / (prefetch_hits + prefetch_misses).max(1) as f64)
-                                * 100.0
-                        ),
-                        avg_render_time_us = avg_render_time,
-                        max_render_time_us = max_render_time_us,
-                        prefetch_buffer_size = prefetch_buffer.len(),
-                        "[PERF:PLAYBACK] periodic metrics"
-                    );
-
-                    last_metrics_log = Instant::now();
-                }
             }
-
-            let total_elapsed = start.elapsed();
-            let avg_render_time = if total_frames_rendered > 0 {
-                total_render_time_us / total_frames_rendered
-            } else {
-                0
-            };
-
-            info!(
-                total_elapsed_ms = total_elapsed.as_millis() as u64,
-                total_rendered = total_frames_rendered,
-                total_skipped = total_frames_skipped,
-                prefetch_hit_rate = format!(
-                    "{:.1}%",
-                    (prefetch_hits as f64 / (prefetch_hits + prefetch_misses).max(1) as f64)
-                        * 100.0
-                ),
-                avg_render_time_us = avg_render_time,
-                max_render_time_us = max_render_time_us,
-                effective_fps = format!(
-                    "{:.1}",
-                    total_frames_rendered as f64 / total_elapsed.as_secs_f64()
-                ),
-                "[PERF:PLAYBACK] playback ended - final metrics"
-            );
 
             stop_tx.send(true).ok();
 

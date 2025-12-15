@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
@@ -10,12 +10,10 @@ pub struct PendingReadback {
     padded_bytes_per_row: u32,
     width: u32,
     height: u32,
-    submit_time: Instant,
 }
 
 impl PendingReadback {
     pub async fn wait(mut self, device: &wgpu::Device) -> Result<RenderedFrame, RenderingError> {
-        let poll_start = Instant::now();
         let mut poll_count = 0u32;
 
         loop {
@@ -44,55 +42,12 @@ impl PendingReadback {
             }
         }
 
-        let poll_time = poll_start.elapsed();
-        let total_time = self.submit_time.elapsed();
-
-        let data_copy_start = Instant::now();
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
         let data_vec = data.to_vec();
-        let data_copy_time = data_copy_start.elapsed();
 
         drop(data);
         self.buffer.unmap();
-
-        tracing::debug!(
-            poll_us = poll_time.as_micros() as u64,
-            data_copy_us = data_copy_time.as_micros() as u64,
-            total_pipeline_us = total_time.as_micros() as u64,
-            "[PERF:GPU_BUFFER] pipelined readback wait completed"
-        );
-
-        // #region agent log
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-        {
-            let log_entry = serde_json::json!({
-                "location": "frame_pipeline.rs:readback_wait",
-                "message": "GPU readback timing",
-                "data": {
-                    "poll_us": poll_time.as_micros() as u64,
-                    "data_copy_us": data_copy_time.as_micros() as u64,
-                    "total_pipeline_us": total_time.as_micros() as u64,
-                    "poll_count": poll_count
-                },
-                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
-                "sessionId": "debug-session",
-                "hypothesisId": "C"
-            });
-            writeln!(file, "{}", log_entry).ok();
-        }
-        // #endregion
-
-        if poll_time.as_millis() > 10 {
-            tracing::warn!(
-                poll_time_ms = poll_time.as_millis() as u64,
-                "[PERF:GPU_BUFFER] GPU poll took longer than 10ms - potential bottleneck"
-            );
-        }
 
         Ok(RenderedFrame {
             data: data_vec,
@@ -160,8 +115,6 @@ impl PipelinedGpuReadback {
         uniforms: &ProjectUniforms,
         mut render_encoder: wgpu::CommandEncoder,
     ) -> Result<(), RenderingError> {
-        let submit_start = Instant::now();
-
         let padded_bytes_per_row = padded_bytes_per_row(uniforms.output_size);
         let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
 
@@ -192,9 +145,7 @@ impl PipelinedGpuReadback {
             output_texture_size,
         );
 
-        let submit_time_start = Instant::now();
         queue.submit(std::iter::once(render_encoder.finish()));
-        let submit_time = submit_time_start.elapsed();
 
         let (tx, rx) = oneshot::channel();
         buffer
@@ -209,14 +160,7 @@ impl PipelinedGpuReadback {
             padded_bytes_per_row,
             width: uniforms.output_size.0,
             height: uniforms.output_size.1,
-            submit_time: submit_start,
         });
-
-        tracing::debug!(
-            buffer_size_bytes = output_buffer_size,
-            submit_us = submit_time.as_micros() as u64,
-            "[PERF:GPU_BUFFER] pipelined readback submitted"
-        );
 
         Ok(())
     }
@@ -395,10 +339,7 @@ pub async fn finish_encoder(
     uniforms: &ProjectUniforms,
     encoder: wgpu::CommandEncoder,
 ) -> Result<RenderedFrame, RenderingError> {
-    let total_start = Instant::now();
-
     let previous_pending = session.pipelined_readback.take_pending();
-    let _has_previous = previous_pending.is_some();
 
     let texture = if session.current_is_left {
         &session.textures.0
@@ -411,28 +352,14 @@ pub async fn finish_encoder(
         .submit_readback(device, queue, texture, uniforms, encoder)?;
 
     let result = if let Some(pending) = previous_pending {
-        let wait_start = Instant::now();
-        let frame = pending.wait(device).await?;
-        let wait_time = wait_start.elapsed();
-
-        tracing::debug!(
-            wait_us = wait_time.as_micros() as u64,
-            total_us = total_start.elapsed().as_micros() as u64,
-            "[PERF:GPU_BUFFER] pipelined finish_encoder (pipelined, waited for previous)"
-        );
-
-        frame
+        pending.wait(device).await?
     } else {
-        let wait_start = Instant::now();
-
         let pending = session
             .pipelined_readback
             .take_pending()
             .expect("just submitted a readback");
         let frame = pending.wait(device).await?;
-        let wait_time = wait_start.elapsed();
 
-        let prime_start = Instant::now();
         let prime_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Pipeline Priming Encoder"),
         });
@@ -443,14 +370,6 @@ pub async fn finish_encoder(
             uniforms,
             prime_encoder,
         )?;
-        let prime_time = prime_start.elapsed();
-
-        tracing::debug!(
-            wait_us = wait_time.as_micros() as u64,
-            prime_us = prime_time.as_micros() as u64,
-            total_us = total_start.elapsed().as_micros() as u64,
-            "[PERF:GPU_BUFFER] pipelined finish_encoder (first frame, primed pipeline)"
-        );
 
         frame
     };

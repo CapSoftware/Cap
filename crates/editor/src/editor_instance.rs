@@ -13,7 +13,7 @@ use cap_rendering::{
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::warn;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -40,13 +40,10 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
-        trace!("EditorInstance::new starting for {:?}", project_path);
-
         if !project_path.exists() {
             return Err(format!("Video path {} not found!", project_path.display()));
         }
 
-        trace!("Loading recording meta");
         let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path)
             .map_err(|e| format!("Failed to load recording meta: {e}"))?;
 
@@ -58,8 +55,6 @@ impl EditorInstance {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
         };
-
-        trace!("Recording has {} segments", segment_count);
 
         if segment_count == 0 {
             return Err(
@@ -133,30 +128,23 @@ impl EditorInstance {
 
                 if let Err(e) = project.write(&recording_meta.project_path) {
                     warn!("Failed to save auto-generated timeline: {}", e);
-                } else {
-                    trace!("Auto-generated timeline saved to project config");
                 }
             }
         }
 
-        trace!("Creating ProjectRecordingsMeta");
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
             meta,
         )?);
 
-        trace!("Creating segments with decoders");
         let segments = create_segments(&recording_meta, meta).await?;
-        trace!("Segments created successfully");
 
-        trace!("Creating render constants");
         let render_constants = Arc::new(
             RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
                 .map_err(|e| format!("Failed to create render constants: {e}"))?,
         );
 
-        trace!("Spawning renderer");
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
             frame_cb,
@@ -189,7 +177,6 @@ impl EditorInstance {
         this.state.lock().await.preview_task =
             Some(this.clone().spawn_preview_renderer(preview_rx));
 
-        trace!("EditorInstance::new completed successfully");
         Ok(this)
     }
 
@@ -198,25 +185,17 @@ impl EditorInstance {
     }
 
     pub async fn dispose(&self) {
-        trace!("Disposing EditorInstance");
-
         let mut state = self.state.lock().await;
 
-        // Stop playback
         if let Some(handle) = state.playback_task.take() {
-            trace!("Stopping playback");
             handle.stop();
         }
 
-        // Stop preview
         if let Some(task) = state.preview_task.take() {
-            trace!("Stopping preview");
             task.abort();
-            task.await.ok(); // Await the task to ensure it's fully stopped
+            task.await.ok();
         }
 
-        // Stop renderer
-        trace!("Stopping renderer");
         self.renderer.stop().await;
 
         // // Clear audio data
@@ -301,15 +280,11 @@ impl EditorInstance {
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
-        trace!("Starting preview renderer task");
         tokio::spawn(async move {
-            trace!("Preview renderer task running");
             let mut prefetch_cancel_token: Option<CancellationToken> = None;
 
             loop {
-                trace!("Preview renderer: waiting for frame request");
                 preview_rx.changed().await.unwrap();
-                trace!("Preview renderer: received change notification");
 
                 loop {
                     let Some((frame_number, fps, resolution_base)) =
@@ -325,28 +300,6 @@ impl EditorInstance {
                     if *self.playback_active_rx.borrow() {
                         break;
                     }
-
-                    trace!("Preview renderer: processing frame {}", frame_number);
-
-                    // #region agent log
-                    use std::io::Write;
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                    {
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                        writeln!(
-                            file,
-                            r#"{{"location":"editor_instance.rs:preview_request","message":"preview renderer requesting frame","data":{{"frame_number":{},"fps":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
-                            frame_number, fps, ts
-                        )
-                        .ok();
-                    }
-                    // #endregion
 
                     let project = self.project_config.1.borrow().clone();
 
@@ -372,26 +325,6 @@ impl EditorInstance {
 
                     let playback_is_active = *self.playback_active_rx.borrow();
                     if !playback_is_active {
-                        // #region agent log
-                        use std::io::Write;
-                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                        {
-                            let ts = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            writeln!(
-                                file,
-                                r#"{{"location":"editor_instance.rs:preview_prefetch","message":"preview spawning prefetch tasks","data":{{"frame_number":{},"prefetch_count":5}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
-                                frame_number, ts
-                            )
-                            .ok();
-                        }
-                        // #endregion
-
                         let prefetch_frames_count = 5u32;
                         let hide_camera = project.camera.hide;
                         let playback_rx = self.playback_active_rx.clone();
@@ -449,7 +382,6 @@ impl EditorInstance {
                             }
 
                             if let Some(segment_frames) = segment_frames_opt {
-                                trace!("Preview renderer: rendering frame {}", frame_number);
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
                                     &project,

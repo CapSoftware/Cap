@@ -7,7 +7,6 @@ use cap_rendering::{
     RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, info};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
@@ -88,17 +87,6 @@ impl Renderer {
 
         let mut pending_frame: Option<PendingFrame> = None;
 
-        let mut frames_rendered = 0u64;
-        let mut frames_dropped = 0u64;
-        let mut total_render_time_us = 0u64;
-        let mut total_callback_time_us = 0u64;
-        let mut max_render_time_us = 0u64;
-        let mut max_callback_time_us = 0u64;
-        let mut last_metrics_log = Instant::now();
-        let start_time = Instant::now();
-
-        info!("[PERF:EDITOR_RENDER] renderer loop started");
-
         loop {
             let frame_to_render = if let Some(pending) = pending_frame.take() {
                 Some(pending)
@@ -119,27 +107,6 @@ impl Renderer {
                     }),
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
-                        let elapsed = start_time.elapsed();
-                        let avg_render_time = if frames_rendered > 0 {
-                            total_render_time_us / frames_rendered
-                        } else {
-                            0
-                        };
-                        let avg_callback_time = if frames_rendered > 0 {
-                            total_callback_time_us / frames_rendered
-                        } else {
-                            0
-                        };
-                        info!(
-                            elapsed_ms = elapsed.as_millis() as u64,
-                            frames_rendered = frames_rendered,
-                            frames_dropped = frames_dropped,
-                            avg_render_time_us = avg_render_time,
-                            avg_callback_time_us = avg_callback_time,
-                            max_render_time_us = max_render_time_us,
-                            max_callback_time_us = max_callback_time_us,
-                            "[PERF:EDITOR_RENDER] renderer stopped - final metrics"
-                        );
                         return;
                     }
                     None => return,
@@ -150,7 +117,6 @@ impl Renderer {
                 continue;
             };
 
-            let mut dropped_in_batch = 0u32;
             let queue_drain_start = Instant::now();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
@@ -161,7 +127,6 @@ impl Renderer {
                         cursor,
                         frame_number,
                     } => {
-                        dropped_in_batch += 1;
                         let _ = current.finished.send(());
                         current = PendingFrame {
                             segment_frames,
@@ -182,16 +147,6 @@ impl Renderer {
                 }
             }
 
-            if dropped_in_batch > 0 {
-                frames_dropped += dropped_in_batch as u64;
-                debug!(
-                    dropped_frames = dropped_in_batch,
-                    total_dropped = frames_dropped,
-                    "[PERF:EDITOR_RENDER] dropped frames to catch up"
-                );
-            }
-
-            let render_start = Instant::now();
             let frame = frame_renderer
                 .render(
                     current.segment_frames,
@@ -201,61 +156,8 @@ impl Renderer {
                 )
                 .await
                 .unwrap();
-            let render_time = render_start.elapsed();
 
-            let callback_start = Instant::now();
             (self.frame_cb)(frame);
-            let callback_time = callback_start.elapsed();
-
-            frames_rendered += 1;
-            let render_time_us = render_time.as_micros() as u64;
-            let callback_time_us = callback_time.as_micros() as u64;
-            total_render_time_us += render_time_us;
-            total_callback_time_us += callback_time_us;
-            max_render_time_us = max_render_time_us.max(render_time_us);
-            max_callback_time_us = max_callback_time_us.max(callback_time_us);
-
-            debug!(
-                frame_number = current.frame_number,
-                render_time_us = render_time_us,
-                callback_time_us = callback_time_us,
-                "[PERF:EDITOR_RENDER] frame rendered"
-            );
-
-            // #region agent log
-            use std::io::Write;
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                writeln!(
-                    file,
-                    r#"{{"location":"editor.rs:frame_rendered","message":"editor render timing","data":{{"frame_number":{},"render_time_us":{},"callback_time_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"C"}}"#,
-                    current.frame_number, render_time_us, callback_time_us, ts
-                )
-                .ok();
-            }
-            // #endregion
-
-            if last_metrics_log.elapsed().as_secs() >= 2 && frames_rendered > 0 {
-                let avg_render_time = total_render_time_us / frames_rendered;
-                let avg_callback_time = total_callback_time_us / frames_rendered;
-                info!(
-                    frames_rendered = frames_rendered,
-                    frames_dropped = frames_dropped,
-                    avg_render_time_us = avg_render_time,
-                    avg_callback_time_us = avg_callback_time,
-                    max_render_time_us = max_render_time_us,
-                    max_callback_time_us = max_callback_time_us,
-                    "[PERF:EDITOR_RENDER] periodic metrics"
-                );
-                last_metrics_log = Instant::now();
-            }
 
             let _ = current.finished.send(());
         }
