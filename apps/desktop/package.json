@@ -56,7 +56,7 @@
 		"@types/react-tooltip": "^4.2.4",
 		"cva": "npm:class-variance-authority@^0.7.0",
 		"effect": "^3.18.4",
-		"lz4js": "^0.2.0",
+		"lz4-wasm": "^0.9.2",
 		"mp4box": "^0.5.2",
 		"posthog-js": "^1.215.3",
 		"solid-js": "^1.9.3",
@@ -77,11 +77,12 @@
 		"@tauri-apps/cli": ">=2.1.0",
 		"@total-typescript/ts-reset": "^0.6.1",
 		"@types/dom-webcodecs": "^0.1.11",
-		"@types/lz4js": "^0.2.1",
 		"@types/uuid": "^9.0.8",
 		"cross-env": "^7.0.3",
 		"typescript": "^5.8.3",
 		"vite": "^6.3.5",
+		"vite-plugin-top-level-await": "^1.4.4",
+		"vite-plugin-wasm": "^3.4.1",
 		"vite-tsconfig-paths": "^5.0.1",
 		"vitest": "~2.1.9"
 	}

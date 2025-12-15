@@ -459,26 +459,39 @@ function PreviewCanvas() {
 	let canvasRef: HTMLCanvasElement | undefined;
 	let ctx: CanvasRenderingContext2D | null = null;
 	let rafId: number | null = null;
-	let lastFrameData: ImageData | null = null;
+	let lastBitmap: ImageBitmap | null = null;
+	let currentFrameRef: {
+		bitmap: ImageBitmap;
+		width: number;
+		height: number;
+	} | null = null;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
-	const renderLoop = () => {
-		const frame = latestFrame();
+	const renderFrame = (frame: { bitmap: ImageBitmap }) => {
+		if (!canvasRef) return;
+		if (frame.bitmap === lastBitmap) return;
 
-		if (frame && canvasRef && frame.data !== lastFrameData) {
-			if (!ctx) {
-				ctx = canvasRef.getContext("2d", {
-					alpha: false,
-					desynchronized: true,
-				});
+		if (!ctx) {
+			ctx = canvasRef.getContext("2d", {
+				alpha: false,
+				desynchronized: true,
+			});
+		}
+		if (ctx) {
+			ctx.drawImage(frame.bitmap, 0, 0);
+			if (lastBitmap && lastBitmap !== frame.bitmap) {
+				lastBitmap.close();
 			}
-			if (ctx) {
-				ctx.putImageData(frame.data, 0, 0);
-				lastFrameData = frame.data;
-			}
+			lastBitmap = frame.bitmap;
+		}
+	};
+
+	const renderLoop = () => {
+		if (currentFrameRef) {
+			renderFrame(currentFrameRef);
 		}
 
 		if (editorState.playing) {
@@ -492,21 +505,14 @@ function PreviewCanvas() {
 		const frame = latestFrame();
 		if (!frame || !canvasRef) return;
 
+		currentFrameRef = frame;
+
 		if (editorState.playing) {
 			if (rafId === null) {
 				rafId = requestAnimationFrame(renderLoop);
 			}
 		} else {
-			if (!ctx) {
-				ctx = canvasRef.getContext("2d", {
-					alpha: false,
-					desynchronized: true,
-				});
-			}
-			if (ctx && frame.data !== lastFrameData) {
-				ctx.putImageData(frame.data, 0, 0);
-				lastFrameData = frame.data;
-			}
+			renderFrame(frame);
 		}
 	});
 
@@ -514,6 +520,11 @@ function PreviewCanvas() {
 		if (rafId !== null) {
 			cancelAnimationFrame(rafId);
 		}
+		if (lastBitmap) {
+			lastBitmap.close();
+			lastBitmap = null;
+		}
+		currentFrameRef = null;
 		ctx = null;
 	});
 
@@ -521,12 +532,13 @@ function PreviewCanvas() {
 		<div
 			ref={setCanvasContainerRef}
 			class="relative flex-1 justify-center items-center"
+			style={{ contain: "layout style" }}
 		>
 			<Show when={latestFrame()}>
 				{(currentFrame) => {
 					const padding = 4;
 					const frameWidth = () => currentFrame().width;
-					const frameHeight = () => currentFrame().data.height;
+					const frameHeight = () => currentFrame().height;
 
 					const availableWidth = () =>
 						Math.max((containerBounds.width ?? 0) - padding * 2, 0);
@@ -568,12 +580,14 @@ function PreviewCanvas() {
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
+									contain: "strict",
 								}}
 							>
 								<canvas
 									style={{
 										width: `${size().width}px`,
 										height: `${size().height}px`,
+										"image-rendering": "auto",
 										...gridStyle,
 									}}
 									ref={canvasRef}

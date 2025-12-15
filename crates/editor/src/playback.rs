@@ -194,10 +194,6 @@ impl Playback {
                         frames_decoded = 0;
                         prefetched_behind.clear();
 
-                        let in_flight_before =
-                            prefetch_in_flight.read().map(|g| g.len()).unwrap_or(0);
-                        let futures_before = in_flight.len();
-
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
                             in_flight_guard.clear();
                         }
@@ -205,30 +201,6 @@ impl Playback {
                         if is_backward_seek || seek_distance > MAX_PREFETCH_AHEAD / 2 {
                             in_flight = FuturesUnordered::new();
                         }
-
-                        let in_flight_after =
-                            prefetch_in_flight.read().map(|g| g.len()).unwrap_or(0);
-                        let futures_after = in_flight.len();
-
-                        // #region agent log
-                        use std::io::Write;
-                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                        {
-                            let ts = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            writeln!(
-                                file,
-                                r#"{{"location":"playback.rs:prefetch_seek","message":"prefetch task received seek","data":{{"old_frame":{},"new_frame":{},"is_backward":{},"seek_distance":{},"in_flight_before":{},"in_flight_after":{},"futures_before":{},"futures_after":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"B"}}"#,
-                                old_frame, requested, is_backward_seek, seek_distance, in_flight_before, in_flight_after, futures_before, futures_after, ts
-                            )
-                            .ok();
-                        }
-                        // #endregion
                     }
                 }
 
@@ -412,26 +384,6 @@ impl Playback {
                 "[PERF:PLAYBACK] starting playback"
             );
 
-            // #region agent log
-            use std::io::Write as _;
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-            {
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                writeln!(
-                    file,
-                    r#"{{"location":"playback.rs:start","message":"playback starting","data":{{"start_frame":{},"fps":{},"duration":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"E"}}"#,
-                    self.start_frame_number, fps, duration, ts
-                )
-                .ok();
-            }
-            // #endregion
-
             let warmup_start = Instant::now();
             let warmup_target_frames = 2usize;
             let warmup_after_first_timeout = Duration::from_millis(50);
@@ -599,27 +551,6 @@ impl Playback {
                             if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
                                 let _ = frame_request_tx.send(frame_number);
 
-                                // #region agent log
-                                use std::io::Write;
-                                if let Ok(mut file) =
-                                    std::fs::OpenOptions::new().create(true).append(true).open(
-                                        "/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log",
-                                    )
-                                {
-                                    let ts = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_millis()
-                                        as u64;
-                                    writeln!(
-                                        file,
-                                        r#"{{"location":"playback.rs:wait_for_prefetch","message":"waiting for prefetch to catch up","data":{{"frame":{},"total_rendered":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"H"}}"#,
-                                        frame_number, total_frames_rendered, ts
-                                    )
-                                    .ok();
-                                }
-                                // #endregion
-
                                 let wait_result = tokio::time::timeout(
                                     Duration::from_millis(100),
                                     prefetch_rx.recv(),
@@ -679,25 +610,6 @@ impl Playback {
                                         if let Ok(mut guard) = main_in_flight.write() {
                                             guard.remove(&frame_number);
                                         }
-                                        // #region agent log
-                                        use std::io::Write;
-                                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                                            .create(true)
-                                            .append(true)
-                                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                                        {
-                                            let ts = std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap()
-                                                .as_millis() as u64;
-                                            writeln!(
-                                                file,
-                                                r#"{{"location":"playback.rs:decoder_timeout","message":"direct decoder call timed out","data":{{"frame":{},"timeout_ms":100}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"M"}}"#,
-                                                frame_number, ts
-                                            )
-                                            .ok();
-                                        }
-                                        // #endregion
                                         frame_number = frame_number.saturating_add(1);
                                         total_frames_skipped += 1;
                                         continue;
@@ -719,28 +631,6 @@ impl Playback {
                 };
 
                 let frame_fetch_time = frame_fetch_start.elapsed();
-
-                // #region agent log
-                if frame_fetch_time.as_millis() > 200 {
-                    use std::io::Write;
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                    {
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                        writeln!(
-                            file,
-                            r#"{{"location":"playback.rs:long_frame_fetch","message":"frame fetch took >200ms","data":{{"frame":{},"fetch_ms":{},"was_cached":{},"was_prefetched":{},"prefetch_buffer_size":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"N"}}"#,
-                            frame_number, frame_fetch_time.as_millis(), was_cached, was_prefetched, prefetch_buffer.len(), ts
-                        )
-                        .ok();
-                    }
-                }
-                // #endregion
 
                 if let Some((segment_frames, segment_index)) = segment_frames_opt {
                     let Some(segment_media) = self.segment_medias.get(segment_index as usize)
@@ -792,34 +682,6 @@ impl Playback {
                         render_us = render_time_us,
                         "[PERF:PLAYBACK] frame rendered"
                     );
-
-                    // #region agent log
-                    use std::io::Write;
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                    {
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                        writeln!(
-                            file,
-                            r#"{{"location":"playback.rs:frame_rendered","message":"playback frame timing","data":{{"frame":{},"cache_hit":{},"prefetch_hit":{},"prefetch_buffer_size":{},"cache_size":{},"frame_fetch_us":{},"uniforms_us":{},"render_us":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"D"}}"#,
-                            frame_number,
-                            was_cached,
-                            was_prefetched,
-                            prefetch_buffer.len(),
-                            frame_cache.len(),
-                            frame_fetch_time.as_micros() as u64,
-                            uniforms_time.as_micros() as u64,
-                            render_time_us,
-                            ts
-                        )
-                        .ok();
-                    }
-                    // #endregion
                 }
 
                 event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
@@ -849,26 +711,6 @@ impl Playback {
                             total_skipped = total_frames_skipped,
                             "[PERF:PLAYBACK] skipping frames to catch up"
                         );
-
-                        // #region agent log
-                        use std::io::Write;
-                        if let Ok(mut file) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                        {
-                            let ts = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            writeln!(
-                                file,
-                                r#"{{"location":"playback.rs:frame_skip","message":"frames skipped to catch up","data":{{"frames_behind":{},"frames_skipped":{},"current_frame":{},"total_skipped":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"D"}}"#,
-                                frames_behind, skipped, frame_number, total_frames_skipped, ts
-                            )
-                            .ok();
-                        }
-                        // #endregion
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);

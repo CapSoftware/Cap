@@ -31,7 +31,9 @@
 			"Bash(pnpm biome check:*)",
 			"Bash(pnpm --dir apps/desktop exec tsc:*)",
 			"Bash(xxd:*)",
-			"Bash(git checkout:*)"
+			"Bash(git checkout:*)",
+			"WebFetch(domain:www.npmjs.com)",
+			"Bash(pnpm install:*)"
 		],
 		"deny": [],
 		"ask": []

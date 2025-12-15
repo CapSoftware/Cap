@@ -20,7 +20,11 @@ import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+	createImageDataWS,
+	createLazySignal,
+	type FrameData,
+} from "~/utils/socket";
 import {
 	commands,
 	events,
@@ -691,7 +695,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 	null!,
 );
 
-export type FrameData = { width: number; height: number; data: ImageData };
+export type { FrameData } from "~/utils/socket";
 
 function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 	if ("fps" in rawMeta) {
@@ -735,25 +739,26 @@ export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 	createContextProvider(() => {
-		const [latestFrame, setLatestFrame] = createLazySignal<{
-			width: number;
-			data: ImageData;
-		}>();
+		const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
 		const [isConnected, setIsConnected] = createSignal(false);
+		const [isWorkerReady, setIsWorkerReady] = createSignal(false);
 
 		const [editorInstance] = createResource(async () => {
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
 
-			const [ws, wsConnected] = createImageDataWS(
+			const [ws, _wsConnected, workerReady] = createImageDataWS(
 				instance.framesSocketUrl,
 				setLatestFrame,
 			);
 
+			createEffect(() => {
+				setIsWorkerReady(workerReady());
+			});
+
 			ws.addEventListener("open", () => {
-				console.log("[Editor] WebSocket open event - emitting initial frame");
 				setIsConnected(true);
 				events.renderFrameEvent.emit({
 					frame_number: 0,
@@ -783,6 +788,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			latestFrame,
 			presets: createPresets(),
 			metaQuery,
+			isWorkerReady,
 		};
 	}, null!);
 

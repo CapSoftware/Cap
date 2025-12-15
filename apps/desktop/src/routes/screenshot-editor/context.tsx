@@ -5,7 +5,11 @@ import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+	createImageDataWS,
+	createLazySignal,
+	type FrameData,
+} from "~/utils/socket";
 import {
 	type Annotation,
 	type AnnotationType,
@@ -126,10 +130,7 @@ function createScreenshotEditorContext() {
 		open: false,
 	});
 
-	const [latestFrame, setLatestFrame] = createLazySignal<{
-		width: number;
-		data: ImageData;
-	}>();
+	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -141,30 +142,25 @@ function createScreenshotEditorContext() {
 			}
 		}
 
-		// Load initial frame from disk in case WS fails or is slow
 		if (instance.path) {
 			const img = new Image();
 			img.crossOrigin = "anonymous";
 			img.src = convertFileSrc(instance.path);
-			img.onload = () => {
-				const canvas = document.createElement("canvas");
-				canvas.width = img.naturalWidth;
-				canvas.height = img.naturalHeight;
-				const ctx = canvas.getContext("2d");
-				if (ctx) {
-					ctx.drawImage(img, 0, 0);
-					const data = ctx.getImageData(
-						0,
-						0,
-						img.naturalWidth,
-						img.naturalHeight,
-					);
-					setLatestFrame({ width: img.naturalWidth, data });
+			img.onload = async () => {
+				try {
+					const bitmap = await createImageBitmap(img);
+					setLatestFrame({
+						width: img.naturalWidth,
+						height: img.naturalHeight,
+						bitmap,
+					});
+				} catch (e) {
+					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
 			};
 		}
 
-		const [_ws, _isConnected] = createImageDataWS(
+		const [_ws, _isConnected, _isWorkerReady] = createImageDataWS(
 			instance.framesSocketUrl,
 			setLatestFrame,
 		);
