@@ -88,12 +88,20 @@ export function createImageDataWS(
 
 	let producer: Producer | null = null;
 	if (SAB_SUPPORTED) {
-		const init = createSharedFrameBuffer(FRAME_BUFFER_CONFIG);
-		producer = createProducer(init);
-		worker.postMessage({
-			type: "init-shared-buffer",
-			buffer: init.buffer,
-		});
+		try {
+			const init = createSharedFrameBuffer(FRAME_BUFFER_CONFIG);
+			producer = createProducer(init);
+			worker.postMessage({
+				type: "init-shared-buffer",
+				buffer: init.buffer,
+			});
+		} catch (e) {
+			console.error(
+				"[socket] SharedArrayBuffer allocation failed, falling back to non-SAB mode:",
+				e instanceof Error ? e.message : e,
+			);
+			producer = null;
+		}
 	}
 
 	const [hasRenderedFrame, setHasRenderedFrame] = createSignal(false);

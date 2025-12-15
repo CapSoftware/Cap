@@ -282,7 +282,7 @@ impl Muxer for WindowsMuxer {
                                     let mut output = output.lock().unwrap();
 
                                     let _ = muxer
-                                        .write_sample(&output_sample, &mut *output)
+                                        .write_sample(&output_sample, &mut output)
                                         .map_err(|e| format!("WriteSample: {e}"));
 
                                     Ok(())

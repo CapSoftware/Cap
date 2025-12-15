@@ -575,9 +575,11 @@ async fn setup_camera(
                     if buffer_ready {
                         let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
 
+                        #[allow(clippy::arc_with_non_send_sync)]
+                        let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
                         let _ = native_recipient
                             .tell(NewNativeFrame(NativeCameraFrame {
-                                buffer: std::sync::Arc::new(std::sync::Mutex::new(buffer)),
+                                buffer,
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,

@@ -56,16 +56,16 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
         Box::new(move |frame| {
             let width = frame.width;
             let height = frame.height;
-            if let Ok((data, stride)) = strip_frame_padding(frame) {
-                if let Err(e) = frame_tx.send(Some(WSFrame {
+            if let Ok((data, stride)) = strip_frame_padding(frame)
+                && let Err(e) = frame_tx.send(Some(WSFrame {
                     data,
                     width,
                     height,
                     stride,
                     created_at: Instant::now(),
-                })) {
-                    debug!("Frame receiver dropped during prewarm: {e}");
-                }
+                }))
+            {
+                debug!("Frame receiver dropped during prewarm: {e}");
             }
         }),
     )
@@ -218,16 +218,16 @@ impl EditorInstances {
                     Box::new(move |frame| {
                         let width = frame.width;
                         let height = frame.height;
-                        if let Ok((data, stride)) = strip_frame_padding(frame) {
-                            if let Err(e) = frame_tx.send(Some(WSFrame {
+                        if let Ok((data, stride)) = strip_frame_padding(frame)
+                            && let Err(e) = frame_tx.send(Some(WSFrame {
                                 data,
                                 width,
                                 height,
                                 stride,
                                 created_at: Instant::now(),
-                            })) {
-                                debug!("Frame receiver dropped in get_or_create: {e}");
-                            }
+                            }))
+                        {
+                            debug!("Frame receiver dropped in get_or_create: {e}");
                         }
                     }),
                 )

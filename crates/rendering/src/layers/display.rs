@@ -95,7 +95,7 @@ impl DisplayLayer {
                 ));
             }
 
-            match format {
+            let frame_uploaded = match format {
                 PixelFormat::Rgba => {
                     let src_bytes_per_row = frame_size.x * 4;
 
@@ -118,6 +118,7 @@ impl DisplayLayer {
                             depth_or_array_layers: 1,
                         },
                     );
+                    true
                 }
                 PixelFormat::Nv12 => {
                     let screen_frame = &segment_frames.screen_frame;
@@ -143,6 +144,7 @@ impl DisplayLayer {
                                         height: frame_size.y,
                                         dst_texture_index: next_texture,
                                     });
+                                    true
                                 } else {
                                     tracing::debug!(
                                         width = frame_size.x,
@@ -150,6 +152,7 @@ impl DisplayLayer {
                                         y_stride,
                                         "NV12 conversion succeeded but output texture is None, skipping copy"
                                     );
+                                    false
                                 }
                             }
                             Err(e) => {
@@ -160,8 +163,11 @@ impl DisplayLayer {
                                     y_stride,
                                     "NV12 to RGBA conversion failed"
                                 );
+                                false
                             }
                         }
+                    } else {
+                        false
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -191,12 +197,17 @@ impl DisplayLayer {
                             height: frame_size.y,
                             dst_texture_index: next_texture,
                         });
+                        true
+                    } else {
+                        false
                     }
                 }
-            }
+            };
 
-            self.last_recording_time = Some(current_recording_time);
-            self.current_texture = next_texture;
+            if frame_uploaded {
+                self.last_recording_time = Some(current_recording_time);
+                self.current_texture = next_texture;
+            }
         }
 
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);

@@ -193,7 +193,9 @@ impl EditorInstance {
 
         if let Some(task) = state.preview_task.take() {
             task.abort();
-            let _ = task.await;
+            if let Err(e) = task.await {
+                tracing::warn!("preview task abort await failed: {e}");
+            }
         }
 
         self.renderer.stop().await;
