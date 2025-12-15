@@ -1,4 +1,11 @@
 import { type Consumer, createConsumer } from "./shared-frame-buffer";
+import {
+	disposeWebGPU,
+	initWebGPU,
+	isWebGPUSupported,
+	renderFrameWebGPU,
+	type WebGPURenderer,
+} from "./webgpu-renderer";
 
 interface FrameMessage {
 	type: "frame";
@@ -21,6 +28,10 @@ interface InitSharedBufferMessage {
 	buffer: SharedArrayBuffer;
 }
 
+interface CleanupMessage {
+	type: "cleanup";
+}
+
 interface ReadyMessage {
 	type: "ready";
 }
@@ -35,6 +46,11 @@ interface FrameQueuedMessage {
 	type: "frame-queued";
 	width: number;
 	height: number;
+}
+
+interface RendererModeMessage {
+	type: "renderer-mode";
+	mode: "webgpu" | "canvas2d";
 }
 
 interface DecodedFrame {
@@ -52,6 +68,7 @@ interface ErrorMessage {
 export type {
 	FrameRenderedMessage,
 	FrameQueuedMessage,
+	RendererModeMessage,
 	DecodedFrame,
 	ErrorMessage,
 	ReadyMessage,
@@ -61,15 +78,31 @@ type IncomingMessage =
 	| FrameMessage
 	| InitCanvasMessage
 	| ResizeMessage
-	| InitSharedBufferMessage;
+	| InitSharedBufferMessage
+	| CleanupMessage;
 
-interface PendingFrame {
+interface PendingFrameCanvas2D {
+	mode: "canvas2d";
 	imageData: ImageData;
 	width: number;
 	height: number;
 }
 
+interface PendingFrameWebGPU {
+	mode: "webgpu";
+	data: Uint8ClampedArray;
+	width: number;
+	height: number;
+}
+
+type PendingFrame = PendingFrameCanvas2D | PendingFrameWebGPU;
+
 let workerReady = false;
+let isInitializing = false;
+
+type RenderMode = "webgpu" | "canvas2d";
+let renderMode: RenderMode = "canvas2d";
+let webgpuRenderer: WebGPURenderer | null = null;
 
 let offscreenCanvas: OffscreenCanvas | null = null;
 let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -92,7 +125,12 @@ let rafRunning = false;
 function renderLoop() {
 	_rafId = null;
 
-	if (!offscreenCanvas || !offscreenCtx) {
+	const hasRenderer =
+		renderMode === "webgpu"
+			? webgpuRenderer !== null
+			: offscreenCanvas !== null && offscreenCtx !== null;
+
+	if (!hasRenderer) {
 		rafRunning = false;
 		return;
 	}
@@ -101,15 +139,18 @@ function renderLoop() {
 	if (frame) {
 		pendingRenderFrame = null;
 
-		if (
-			offscreenCanvas.width !== frame.width ||
-			offscreenCanvas.height !== frame.height
-		) {
-			offscreenCanvas.width = frame.width;
-			offscreenCanvas.height = frame.height;
+		if (frame.mode === "webgpu" && webgpuRenderer) {
+			renderFrameWebGPU(webgpuRenderer, frame.data, frame.width, frame.height);
+		} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
+			if (
+				offscreenCanvas.width !== frame.width ||
+				offscreenCanvas.height !== frame.height
+			) {
+				offscreenCanvas.width = frame.width;
+				offscreenCanvas.height = frame.height;
+			}
+			offscreenCtx.putImageData(frame.imageData, 0, 0);
 		}
-
-		offscreenCtx.putImageData(frame.imageData, 0, 0);
 
 		self.postMessage({
 			type: "frame-rendered",
@@ -123,10 +164,40 @@ function renderLoop() {
 
 function startRenderLoop() {
 	if (rafRunning) return;
-	if (!offscreenCanvas || !offscreenCtx) return;
+
+	const hasRenderer =
+		renderMode === "webgpu"
+			? webgpuRenderer !== null
+			: offscreenCanvas !== null && offscreenCtx !== null;
+
+	if (!hasRenderer) return;
 
 	rafRunning = true;
 	_rafId = requestAnimationFrame(renderLoop);
+}
+
+function stopRenderLoop() {
+	if (_rafId !== null) {
+		cancelAnimationFrame(_rafId);
+		_rafId = null;
+	}
+	rafRunning = false;
+}
+
+function cleanup() {
+	stopRenderLoop();
+	if (webgpuRenderer) {
+		disposeWebGPU(webgpuRenderer);
+		webgpuRenderer = null;
+	}
+	offscreenCanvas = null;
+	offscreenCtx = null;
+	consumer = null;
+	useSharedBuffer = false;
+	pendingRenderFrame = null;
+	lastImageData = null;
+	cachedImageData = null;
+	strideBuffer = null;
 }
 
 function initWorker() {
@@ -145,23 +216,57 @@ function initWorker() {
 
 initWorker();
 
-function initCanvas(canvas: OffscreenCanvas) {
-	offscreenCanvas = canvas;
-	offscreenCtx = canvas.getContext("2d", {
-		alpha: false,
-		desynchronized: true,
-	});
+async function initCanvas(canvas: OffscreenCanvas) {
+	if (isInitializing) return;
+	isInitializing = true;
 
-	if (lastImageData && offscreenCtx) {
-		offscreenCanvas.width = lastImageData.width;
-		offscreenCanvas.height = lastImageData.height;
-		offscreenCtx.putImageData(lastImageData, 0, 0);
-	} else if (offscreenCtx) {
-		offscreenCtx.fillStyle = "#000000";
-		offscreenCtx.fillRect(0, 0, canvas.width, canvas.height);
+	try {
+		offscreenCanvas = canvas;
+
+		if (await isWebGPUSupported()) {
+			try {
+				webgpuRenderer = await initWebGPU(canvas);
+				renderMode = "webgpu";
+				self.postMessage({
+					type: "renderer-mode",
+					mode: "webgpu",
+				} satisfies RendererModeMessage);
+			} catch {
+				renderMode = "canvas2d";
+				offscreenCtx = canvas.getContext("2d", {
+					alpha: false,
+					desynchronized: true,
+				});
+				self.postMessage({
+					type: "renderer-mode",
+					mode: "canvas2d",
+				} satisfies RendererModeMessage);
+			}
+		} else {
+			renderMode = "canvas2d";
+			offscreenCtx = canvas.getContext("2d", {
+				alpha: false,
+				desynchronized: true,
+			});
+			self.postMessage({
+				type: "renderer-mode",
+				mode: "canvas2d",
+			} satisfies RendererModeMessage);
+		}
+
+		if (renderMode === "canvas2d" && lastImageData && offscreenCtx) {
+			offscreenCanvas.width = lastImageData.width;
+			offscreenCanvas.height = lastImageData.height;
+			offscreenCtx.putImageData(lastImageData, 0, 0);
+		} else if (renderMode === "canvas2d" && offscreenCtx) {
+			offscreenCtx.fillStyle = "#000000";
+			offscreenCtx.fillRect(0, 0, canvas.width, canvas.height);
+		}
+
+		startRenderLoop();
+	} finally {
+		isInitializing = false;
 	}
-
-	startRenderLoop();
 }
 
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
@@ -204,14 +309,9 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 		};
 	}
 
-	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
-		cachedImageData = new ImageData(width, height);
-		cachedWidth = width;
-		cachedHeight = height;
-	}
-
+	let processedFrameData: Uint8ClampedArray;
 	if (strideBytes === expectedRowBytes) {
-		cachedImageData.data.set(frameData.subarray(0, expectedLength));
+		processedFrameData = frameData.subarray(0, expectedLength);
 	} else {
 		if (!strideBuffer || strideBufferSize < expectedLength) {
 			strideBuffer = new Uint8ClampedArray(expectedLength);
@@ -225,13 +325,31 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 				destStart,
 			);
 		}
-		cachedImageData.data.set(strideBuffer.subarray(0, expectedLength));
+		processedFrameData = strideBuffer.subarray(0, expectedLength);
 	}
 
+	if (renderMode === "webgpu" && webgpuRenderer) {
+		const frameDataCopy = new Uint8ClampedArray(processedFrameData);
+		pendingRenderFrame = {
+			mode: "webgpu",
+			data: frameDataCopy,
+			width,
+			height,
+		};
+		return { type: "frame-queued", width, height };
+	}
+
+	if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
+		cachedImageData = new ImageData(width, height);
+		cachedWidth = width;
+		cachedHeight = height;
+	}
+	cachedImageData.data.set(processedFrameData);
 	lastImageData = cachedImageData;
 
 	if (offscreenCanvas && offscreenCtx) {
 		pendingRenderFrame = {
+			mode: "canvas2d",
 			imageData: cachedImageData,
 			width,
 			height,
@@ -277,6 +395,11 @@ async function pollSharedBuffer(): Promise<void> {
 }
 
 self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
+	if (e.data.type === "cleanup") {
+		cleanup();
+		return;
+	}
+
 	if (e.data.type === "init-shared-buffer") {
 		consumer = createConsumer(e.data.buffer);
 		useSharedBuffer = true;

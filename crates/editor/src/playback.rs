@@ -19,7 +19,7 @@ use tokio::{
     sync::{mpsc as tokio_mpsc, watch},
     time::Instant,
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     audio::{AudioPlaybackBuffer, AudioSegment},
@@ -372,7 +372,7 @@ impl Playback {
             let aggressive_skip_threshold = 5u32;
 
             let mut total_frames_rendered = 0u64;
-            let mut total_frames_skipped = 0u64;
+            let mut _total_frames_skipped = 0u64;
 
             let warmup_target_frames = 2usize;
             let warmup_after_first_timeout = Duration::from_millis(50);
@@ -514,7 +514,7 @@ impl Playback {
                                     Some((prefetched.segment_frames, prefetched.segment_index))
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
-                                    total_frames_skipped += 1;
+                                    _total_frames_skipped += 1;
                                     continue;
                                 }
                             }
@@ -534,12 +534,12 @@ impl Playback {
                                     } else {
                                         prefetch_buffer.push_back(prefetched);
                                         frame_number = frame_number.saturating_add(1);
-                                        total_frames_skipped += 1;
+                                        _total_frames_skipped += 1;
                                         continue;
                                     }
                                 } else {
                                     frame_number = frame_number.saturating_add(1);
-                                    total_frames_skipped += 1;
+                                    _total_frames_skipped += 1;
                                     continue;
                                 }
                             } else {
@@ -580,7 +580,7 @@ impl Playback {
                                             guard.remove(&frame_number);
                                         }
                                         frame_number = frame_number.saturating_add(1);
-                                        total_frames_skipped += 1;
+                                        _total_frames_skipped += 1;
                                         continue;
                                     },
                                     data = segment_media
@@ -650,7 +650,7 @@ impl Playback {
                     let skipped = (frames_behind / 2).min(fps / 4);
                     if skipped > 0 {
                         frame_number += skipped;
-                        total_frames_skipped += skipped as u64;
+                        _total_frames_skipped += skipped as u64;
 
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
