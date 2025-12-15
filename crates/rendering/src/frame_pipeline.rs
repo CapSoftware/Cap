@@ -34,7 +34,7 @@ impl PendingReadback {
                         Err(e) => return Err(e.into()),
                     }
                     poll_count += 1;
-                    if poll_count % 10 == 0 {
+                    if poll_count % 3 == 0 {
                         tokio::task::yield_now().await;
                     }
                 }
@@ -158,7 +158,7 @@ impl PipelinedGpuReadback {
         queue: &wgpu::Queue,
         texture: &wgpu::Texture,
         uniforms: &ProjectUniforms,
-        render_encoder: wgpu::CommandEncoder,
+        mut render_encoder: wgpu::CommandEncoder,
     ) -> Result<(), RenderingError> {
         let submit_start = Instant::now();
 
@@ -168,22 +168,13 @@ impl PipelinedGpuReadback {
         self.ensure_size(device, output_buffer_size);
         let buffer = self.next_buffer();
 
-        let submit1_start = Instant::now();
-        queue.submit(std::iter::once(render_encoder.finish()));
-        let submit1_time = submit1_start.elapsed();
-
         let output_texture_size = wgpu::Extent3d {
             width: uniforms.output_size.0,
             height: uniforms.output_size.1,
             depth_or_array_layers: 1,
         };
 
-        let copy_encoder_start = Instant::now();
-        let mut copy_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Copy Encoder"),
-        });
-
-        copy_encoder.copy_texture_to_buffer(
+        render_encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
@@ -200,11 +191,10 @@ impl PipelinedGpuReadback {
             },
             output_texture_size,
         );
-        let copy_encoder_time = copy_encoder_start.elapsed();
 
-        let submit2_start = Instant::now();
-        queue.submit(std::iter::once(copy_encoder.finish()));
-        let submit2_time = submit2_start.elapsed();
+        let submit_time_start = Instant::now();
+        queue.submit(std::iter::once(render_encoder.finish()));
+        let submit_time = submit_time_start.elapsed();
 
         let (tx, rx) = oneshot::channel();
         buffer
@@ -224,9 +214,7 @@ impl PipelinedGpuReadback {
 
         tracing::debug!(
             buffer_size_bytes = output_buffer_size,
-            submit1_us = submit1_time.as_micros() as u64,
-            copy_encoder_us = copy_encoder_time.as_micros() as u64,
-            submit2_us = submit2_time.as_micros() as u64,
+            submit_us = submit_time.as_micros() as u64,
             "[PERF:GPU_BUFFER] pipelined readback submitted"
         );
 

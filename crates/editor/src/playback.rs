@@ -28,11 +28,11 @@ use crate::{
     segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 120;
-const PARALLEL_DECODE_TASKS: usize = 16;
-const MAX_PREFETCH_AHEAD: u32 = 150;
-const PREFETCH_BEHIND: u32 = 30;
-const FRAME_CACHE_SIZE: usize = 90;
+const PREFETCH_BUFFER_SIZE: usize = 180;
+const PARALLEL_DECODE_TASKS: usize = 20;
+const MAX_PREFETCH_AHEAD: u32 = 240;
+const PREFETCH_BEHIND: u32 = 60;
+const FRAME_CACHE_SIZE: usize = 150;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -394,8 +394,7 @@ impl Playback {
             let mut prefetch_buffer: VecDeque<PrefetchedFrame> =
                 VecDeque::with_capacity(PREFETCH_BUFFER_SIZE);
             let mut frame_cache = FrameCache::new(FRAME_CACHE_SIZE);
-            let base_max_frame_skip = 2u32;
-            let aggressive_skip_threshold = 15u32;
+            let aggressive_skip_threshold = 5u32;
 
             let mut total_frames_rendered = 0u64;
             let mut total_frames_skipped = 0u64;
@@ -434,8 +433,8 @@ impl Playback {
             // #endregion
 
             let warmup_start = Instant::now();
-            let warmup_target_frames = 8usize;
-            let warmup_after_first_timeout = Duration::from_millis(200);
+            let warmup_target_frames = 2usize;
+            let warmup_after_first_timeout = Duration::from_millis(50);
             let mut first_frame_time: Option<Instant> = None;
 
             while !*stop_rx.borrow() {
@@ -833,52 +832,48 @@ impl Playback {
 
                 if frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
-                    let max_frame_skip = if frames_behind > aggressive_skip_threshold {
-                        frames_behind.min(fps / 2)
-                    } else {
-                        base_max_frame_skip
-                    };
-                    let skipped = if frames_behind <= max_frame_skip {
-                        frame_number = expected_frame;
-                        frames_behind
-                    } else {
-                        frame_number += max_frame_skip;
-                        max_frame_skip
-                    };
 
-                    total_frames_skipped += skipped as u64;
-
-                    info!(
-                        frames_behind = frames_behind,
-                        frames_skipped = skipped,
-                        current_frame = frame_number,
-                        total_skipped = total_frames_skipped,
-                        "[PERF:PLAYBACK] skipping frames to catch up"
-                    );
-
-                    // #region agent log
-                    use std::io::Write;
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
-                    {
-                        let ts = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                        writeln!(
-                            file,
-                            r#"{{"location":"playback.rs:frame_skip","message":"frames skipped to catch up","data":{{"frames_behind":{},"frames_skipped":{},"current_frame":{},"total_skipped":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"D"}}"#,
-                            frames_behind, skipped, frame_number, total_frames_skipped, ts
-                        )
-                        .ok();
+                    if frames_behind <= aggressive_skip_threshold {
+                        continue;
                     }
-                    // #endregion
 
-                    prefetch_buffer.retain(|p| p.frame_number >= frame_number);
-                    let _ = frame_request_tx.send(frame_number);
-                    let _ = playback_position_tx.send(frame_number);
+                    let skipped = (frames_behind / 2).min(fps / 4);
+                    if skipped > 0 {
+                        frame_number += skipped;
+                        total_frames_skipped += skipped as u64;
+
+                        info!(
+                            frames_behind = frames_behind,
+                            frames_skipped = skipped,
+                            current_frame = frame_number,
+                            total_skipped = total_frames_skipped,
+                            "[PERF:PLAYBACK] skipping frames to catch up"
+                        );
+
+                        // #region agent log
+                        use std::io::Write;
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log")
+                        {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+                            writeln!(
+                                file,
+                                r#"{{"location":"playback.rs:frame_skip","message":"frames skipped to catch up","data":{{"frames_behind":{},"frames_skipped":{},"current_frame":{},"total_skipped":{}}},"timestamp":{},"sessionId":"debug-session","hypothesisId":"D"}}"#,
+                                frames_behind, skipped, frame_number, total_frames_skipped, ts
+                            )
+                            .ok();
+                        }
+                        // #endregion
+
+                        prefetch_buffer.retain(|p| p.frame_number >= frame_number);
+                        let _ = frame_request_tx.send(frame_number);
+                        let _ = playback_position_tx.send(frame_number);
+                    }
                 }
 
                 if last_metrics_log.elapsed().as_secs() >= 2 {

@@ -290,6 +290,23 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                                 total_lagged = frames_lagged,
                                 "[PERF:WS] frames lagged/dropped"
                             );
+                            // #region agent log
+                            use std::io::Write;
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/macbookuser/Documents/GitHub/cap/.cursor/debug.log") {
+                                let log_entry = serde_json::json!({
+                                    "location": "frame_ws.rs:frames_lagged",
+                                    "message": "broadcast frames dropped",
+                                    "data": {
+                                        "skipped": skipped,
+                                        "total_lagged": frames_lagged
+                                    },
+                                    "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+                                    "sessionId": "debug-session",
+                                    "hypothesisId": "P"
+                                });
+                                writeln!(file, "{}", log_entry).ok();
+                            }
+                            // #endregion
                             continue;
                         }
                     }

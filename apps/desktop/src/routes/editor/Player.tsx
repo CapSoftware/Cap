@@ -2,7 +2,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
-import { createEffect, createSignal, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
@@ -454,68 +454,67 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame } = useEditorContext();
+	const { latestFrame, editorState } = useEditorContext();
 
 	let canvasRef: HTMLCanvasElement | undefined;
+	let ctx: CanvasRenderingContext2D | null = null;
+	let rafId: number | null = null;
+	let lastFrameData: ImageData | null = null;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
-	// #region agent log
-	let canvasRenderCount = 0;
-	let totalCanvasRenderTime = 0;
-	let maxCanvasRenderTime = 0;
-	let lastCanvasMetricsLog = performance.now();
-	// #endregion
+	const renderLoop = () => {
+		const frame = latestFrame();
+
+		if (frame && canvasRef && frame.data !== lastFrameData) {
+			if (!ctx) {
+				ctx = canvasRef.getContext("2d", {
+					alpha: false,
+					desynchronized: true,
+				});
+			}
+			if (ctx) {
+				ctx.putImageData(frame.data, 0, 0);
+				lastFrameData = frame.data;
+			}
+		}
+
+		if (editorState.playing) {
+			rafId = requestAnimationFrame(renderLoop);
+		} else {
+			rafId = null;
+		}
+	};
 
 	createEffect(() => {
 		const frame = latestFrame();
-		if (!frame) return;
-		if (!canvasRef) return;
-		const ctx = canvasRef.getContext("2d", { alpha: false });
-		if (!ctx) return;
-		// #region agent log
-		const renderStart = performance.now();
-		// #endregion
-		createImageBitmap(frame.data).then((bitmap) => {
-			ctx.drawImage(bitmap, 0, 0);
-			bitmap.close();
-			// #region agent log
-			const renderTime = performance.now() - renderStart;
-			canvasRenderCount++;
-			totalCanvasRenderTime += renderTime;
-			maxCanvasRenderTime = Math.max(maxCanvasRenderTime, renderTime);
-			if (
-				performance.now() - lastCanvasMetricsLog >= 2000 &&
-				canvasRenderCount > 0
-			) {
-				const avgTime = totalCanvasRenderTime / canvasRenderCount;
-				fetch(
-					"http://127.0.0.1:7242/ingest/966647b7-72f6-4ab7-b76e-6b773ac020d7",
-					{
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							location: "Player.tsx:canvas_render",
-							message: "canvas render metrics",
-							data: {
-								canvasRenderCount,
-								avgRenderTimeMs: avgTime.toFixed(2),
-								maxRenderTimeMs: maxCanvasRenderTime.toFixed(2),
-								frameWidth: frame.width,
-								frameHeight: frame.data.height,
-							},
-							timestamp: Date.now(),
-							sessionId: "debug-session",
-							hypothesisId: "E",
-						}),
-					},
-				).catch(() => {});
-				lastCanvasMetricsLog = performance.now();
+		if (!frame || !canvasRef) return;
+
+		if (editorState.playing) {
+			if (rafId === null) {
+				rafId = requestAnimationFrame(renderLoop);
 			}
-			// #endregion
-		});
+		} else {
+			if (!ctx) {
+				ctx = canvasRef.getContext("2d", {
+					alpha: false,
+					desynchronized: true,
+				});
+			}
+			if (ctx && frame.data !== lastFrameData) {
+				ctx.putImageData(frame.data, 0, 0);
+				lastFrameData = frame.data;
+			}
+		}
+	});
+
+	onCleanup(() => {
+		if (rafId !== null) {
+			cancelAnimationFrame(rafId);
+		}
+		ctx = null;
 	});
 
 	return (

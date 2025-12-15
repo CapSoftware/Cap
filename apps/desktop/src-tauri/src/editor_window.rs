@@ -1,11 +1,11 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_frame_ws},
+    frame_ws::{WSFrame, create_watch_frame_ws},
 };
 
 pub struct EditorInstance {
@@ -21,20 +21,32 @@ type PendingReceiver = tokio::sync::watch::Receiver<Option<PendingResult>>;
 pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
-    let (frame_tx, _) = broadcast::channel(4);
+    let (frame_tx, frame_rx) = watch::channel(None);
 
-    let (ws_port, ws_shutdown_token) = create_frame_ws(frame_tx.clone()).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
     let inner = create_editor_instance_impl(
         &app,
         path,
         Box::new(move |frame| {
-            let _ = frame_tx.send(WSFrame {
-                data: frame.data,
+            let expected_stride = frame.width * 4;
+            let data = if frame.padded_bytes_per_row == expected_stride {
+                frame.data
+            } else {
+                let mut stripped = Vec::with_capacity((expected_stride * frame.height) as usize);
+                for row in 0..frame.height {
+                    let start = (row * frame.padded_bytes_per_row) as usize;
+                    let end = start + expected_stride as usize;
+                    stripped.extend_from_slice(&frame.data[start..end]);
+                }
+                stripped
+            };
+            let _ = frame_tx.send(Some(WSFrame {
+                data,
                 width: frame.width,
                 height: frame.height,
-                stride: frame.padded_bytes_per_row,
+                stride: expected_stride,
                 created_at: Instant::now(),
-            });
+            }));
         }),
     )
     .await?;
@@ -177,20 +189,20 @@ impl EditorInstances {
                     }
                 }
 
-                let (frame_tx, _) = broadcast::channel(4);
+                let (frame_tx, frame_rx) = watch::channel(None);
 
-                let (ws_port, ws_shutdown_token) = create_frame_ws(frame_tx.clone()).await;
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
                 let instance = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     Box::new(move |frame| {
-                        let _ = frame_tx.send(WSFrame {
+                        let _ = frame_tx.send(Some(WSFrame {
                             data: frame.data,
                             width: frame.width,
                             height: frame.height,
                             stride: frame.padded_bytes_per_row,
                             created_at: Instant::now(),
-                        });
+                        }));
                     }),
                 )
                 .await?;
