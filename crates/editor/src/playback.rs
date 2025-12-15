@@ -120,7 +120,7 @@ impl FrameCache {
 
 impl Playback {
     pub async fn start(
-        self,
+        mut self,
         fps: u32,
         resolution_base: XY<u32>,
     ) -> Result<PlaybackHandle, PlaybackStartError> {
@@ -152,7 +152,7 @@ impl Playback {
         let main_in_flight = in_flight_frames;
 
         let prefetch_stop_rx = stop_rx.clone();
-        let prefetch_project = self.project.clone();
+        let mut prefetch_project = self.project.clone();
         let prefetch_segment_medias = self.segment_medias.clone();
         let prefetch_duration = if let Some(timeline) = &self.project.borrow().timeline {
             timeline.duration()
@@ -174,9 +174,15 @@ impl Playback {
             const INITIAL_PARALLEL_TASKS: usize = 8;
             const RAMP_UP_AFTER_FRAMES: u32 = 5;
 
+            let mut cached_project = prefetch_project.borrow().clone();
+
             loop {
                 if *prefetch_stop_rx.borrow() {
                     break;
+                }
+
+                if prefetch_project.has_changed().unwrap_or(false) {
+                    cached_project = prefetch_project.borrow_and_update().clone();
                 }
 
                 if let Ok(true) = frame_request_rx.has_changed() {
@@ -235,13 +241,12 @@ impl Playback {
                         continue;
                     }
 
-                    let project = prefetch_project.borrow().clone();
-
-                    if let Some((segment_time, segment)) = project.get_segment_time(prefetch_time)
+                    if let Some((segment_time, segment)) =
+                        cached_project.get_segment_time(prefetch_time)
                         && let Some(segment_media) =
                             prefetch_segment_medias.get(segment.recording_clip as usize)
                     {
-                        let clip_offsets = project
+                        let clip_offsets = cached_project
                             .clips
                             .iter()
                             .find(|v| v.index == segment.recording_clip)
@@ -249,7 +254,7 @@ impl Playback {
                             .unwrap_or_default();
 
                         let decoders = segment_media.decoders.clone();
-                        let hide_camera = project.camera.hide;
+                        let hide_camera = cached_project.camera.hide;
                         let segment_index = segment.recording_clip;
 
                         if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
@@ -290,14 +295,12 @@ impl Playback {
                             continue;
                         }
 
-                        let project = prefetch_project.borrow().clone();
-
                         if let Some((segment_time, segment)) =
-                            project.get_segment_time(prefetch_time)
+                            cached_project.get_segment_time(prefetch_time)
                             && let Some(segment_media) =
                                 prefetch_segment_medias.get(segment.recording_clip as usize)
                         {
-                            let clip_offsets = project
+                            let clip_offsets = cached_project
                                 .clips
                                 .iter()
                                 .find(|v| v.index == segment.recording_clip)
@@ -305,7 +308,7 @@ impl Playback {
                                 .unwrap_or_default();
 
                             let decoders = segment_media.decoders.clone();
-                            let hide_camera = project.camera.hide;
+                            let hide_camera = cached_project.camera.hide;
                             let segment_index = segment.recording_clip;
 
                             if let Ok(mut in_flight_guard) = prefetch_in_flight.write() {
@@ -432,8 +435,12 @@ impl Playback {
             );
 
             let start = Instant::now();
+            let mut cached_project = self.project.borrow().clone();
 
             'playback: loop {
+                if self.project.has_changed().unwrap_or(false) {
+                    cached_project = self.project.borrow_and_update().clone();
+                }
                 while let Ok(prefetched) = prefetch_rx.try_recv() {
                     if prefetched.frame_number >= frame_number {
                         prefetch_buffer.push_back(prefetched);
@@ -471,8 +478,6 @@ impl Playback {
                 if playback_time >= duration {
                     break;
                 }
-
-                let project = self.project.borrow().clone();
 
                 let frame_fetch_start = Instant::now();
                 let mut was_prefetched = false;
@@ -575,7 +580,7 @@ impl Playback {
                                 }
                             } else {
                                 let Some((segment_time, segment)) =
-                                    project.get_segment_time(playback_time)
+                                    cached_project.get_segment_time(playback_time)
                                 else {
                                     break;
                                 };
@@ -587,7 +592,7 @@ impl Playback {
                                     continue;
                                 };
 
-                                let clip_offsets = project
+                                let clip_offsets = cached_project
                                     .clips
                                     .iter()
                                     .find(|v| v.index == segment.recording_clip)
@@ -616,7 +621,7 @@ impl Playback {
                                     },
                                     data = segment_media
                                         .decoders
-                                        .get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => {
+                                        .get_frames(segment_time as f32, !cached_project.camera.hide, clip_offsets) => {
                                         if let Ok(mut guard) = main_in_flight.write() {
                                             guard.remove(&frame_number);
                                         }
@@ -646,7 +651,7 @@ impl Playback {
                     let uniforms_start = Instant::now();
                     let uniforms = ProjectUniforms::new(
                         &self.render_constants,
-                        &project,
+                        &cached_project,
                         frame_number,
                         fps,
                         resolution_base,
