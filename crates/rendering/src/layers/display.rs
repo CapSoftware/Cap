@@ -1,5 +1,4 @@
 use cap_project::XY;
-use tracing;
 
 use crate::{
     DecodedSegmentFrames, PixelFormat,

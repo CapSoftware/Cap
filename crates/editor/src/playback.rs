@@ -509,86 +509,84 @@ impl Playback {
                                     continue;
                                 }
                             }
-                        } else {
-                            if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
-                                let _ = frame_request_tx.send(frame_number);
+                        } else if prefetch_buffer.is_empty() && total_frames_rendered < 15 {
+                            let _ = frame_request_tx.send(frame_number);
 
-                                let wait_result = tokio::time::timeout(
-                                    Duration::from_millis(100),
-                                    prefetch_rx.recv(),
-                                )
-                                .await;
+                            let wait_result = tokio::time::timeout(
+                                Duration::from_millis(100),
+                                prefetch_rx.recv(),
+                            )
+                            .await;
 
-                                if let Ok(Some(prefetched)) = wait_result {
-                                    if prefetched.frame_number == frame_number {
-                                        Some((
-                                            Arc::new(prefetched.segment_frames),
-                                            prefetched.segment_index,
-                                        ))
-                                    } else {
-                                        prefetch_buffer.push_back(prefetched);
-                                        frame_number = frame_number.saturating_add(1);
-                                        _total_frames_skipped += 1;
-                                        continue;
-                                    }
+                            if let Ok(Some(prefetched)) = wait_result {
+                                if prefetched.frame_number == frame_number {
+                                    Some((
+                                        Arc::new(prefetched.segment_frames),
+                                        prefetched.segment_index,
+                                    ))
                                 } else {
+                                    prefetch_buffer.push_back(prefetched);
                                     frame_number = frame_number.saturating_add(1);
                                     _total_frames_skipped += 1;
                                     continue;
                                 }
                             } else {
-                                let Some((segment_time, segment)) =
-                                    cached_project.get_segment_time(playback_time)
-                                else {
-                                    break;
-                                };
-
-                                let Some(segment_media) =
-                                    self.segment_medias.get(segment.recording_clip as usize)
-                                else {
-                                    frame_number = frame_number.saturating_add(1);
-                                    continue;
-                                };
-
-                                let clip_offsets = cached_project
-                                    .clips
-                                    .iter()
-                                    .find(|v| v.index == segment.recording_clip)
-                                    .map(|v| v.offsets)
-                                    .unwrap_or_default();
-
-                                if let Ok(mut guard) = main_in_flight.write() {
-                                    guard.insert(frame_number);
-                                }
-
-                                let max_wait = Duration::from_millis(150);
-                                let data = tokio::select! {
-                                    _ = stop_rx.changed() => {
-                                        if let Ok(mut guard) = main_in_flight.write() {
-                                            guard.remove(&frame_number);
-                                        }
-                                        break 'playback
-                                    },
-                                    _ = tokio::time::sleep(max_wait) => {
-                                        if let Ok(mut guard) = main_in_flight.write() {
-                                            guard.remove(&frame_number);
-                                        }
-                                        frame_number = frame_number.saturating_add(1);
-                                        _total_frames_skipped += 1;
-                                        continue;
-                                    },
-                                    data = segment_media
-                                        .decoders
-                                        .get_frames(segment_time as f32, !cached_project.camera.hide, clip_offsets) => {
-                                        if let Ok(mut guard) = main_in_flight.write() {
-                                            guard.remove(&frame_number);
-                                        }
-                                        data
-                                    },
-                                };
-
-                                data.map(|frames| (Arc::new(frames), segment.recording_clip))
+                                frame_number = frame_number.saturating_add(1);
+                                _total_frames_skipped += 1;
+                                continue;
                             }
+                        } else {
+                            let Some((segment_time, segment)) =
+                                cached_project.get_segment_time(playback_time)
+                            else {
+                                break;
+                            };
+
+                            let Some(segment_media) =
+                                self.segment_medias.get(segment.recording_clip as usize)
+                            else {
+                                frame_number = frame_number.saturating_add(1);
+                                continue;
+                            };
+
+                            let clip_offsets = cached_project
+                                .clips
+                                .iter()
+                                .find(|v| v.index == segment.recording_clip)
+                                .map(|v| v.offsets)
+                                .unwrap_or_default();
+
+                            if let Ok(mut guard) = main_in_flight.write() {
+                                guard.insert(frame_number);
+                            }
+
+                            let max_wait = Duration::from_millis(150);
+                            let data = tokio::select! {
+                                _ = stop_rx.changed() => {
+                                    if let Ok(mut guard) = main_in_flight.write() {
+                                        guard.remove(&frame_number);
+                                    }
+                                    break 'playback
+                                },
+                                _ = tokio::time::sleep(max_wait) => {
+                                    if let Ok(mut guard) = main_in_flight.write() {
+                                        guard.remove(&frame_number);
+                                    }
+                                    frame_number = frame_number.saturating_add(1);
+                                    _total_frames_skipped += 1;
+                                    continue;
+                                },
+                                data = segment_media
+                                    .decoders
+                                    .get_frames(segment_time as f32, !cached_project.camera.hide, clip_offsets) => {
+                                    if let Ok(mut guard) = main_in_flight.write() {
+                                        guard.remove(&frame_number);
+                                    }
+                                    data
+                                },
+                            };
+
+                            data.map(|frames| (Arc::new(frames), segment.recording_clip))
                         }
                     }
                 };

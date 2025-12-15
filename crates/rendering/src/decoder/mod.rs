@@ -18,7 +18,7 @@ pub enum PixelFormat {
     Yuv420p,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DecodedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
