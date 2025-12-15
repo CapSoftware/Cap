@@ -39,26 +39,27 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
 
-	let previousBitmap: ImageBitmap | null = null;
+	const [previousBitmap, setPreviousBitmap] = createSignal<ImageBitmap | null>(
+		null,
+	);
 
 	createEffect(() => {
 		const frame = latestFrame();
 		const currentBitmap = frame?.bitmap ?? null;
+		const prevBitmap = previousBitmap();
 
-		if (previousBitmap && previousBitmap !== currentBitmap) {
-			previousBitmap.close();
-			previousBitmap = null;
+		if (prevBitmap && prevBitmap !== currentBitmap) {
+			prevBitmap.close();
 		}
 
-		if (currentBitmap) {
-			previousBitmap = currentBitmap;
-		}
+		setPreviousBitmap(currentBitmap);
 	});
 
 	onCleanup(() => {
-		if (previousBitmap) {
-			previousBitmap.close();
-			previousBitmap = null;
+		const bitmap = previousBitmap();
+		if (bitmap) {
+			bitmap.close();
+			setPreviousBitmap(null);
 		}
 	});
 

@@ -204,7 +204,7 @@ impl CameraLayer {
                 },
             );
 
-            let _ = queue.submit(std::iter::once(encoder.finish()));
+            let _submission_index = queue.submit(std::iter::once(encoder.finish()));
         }
     }
 

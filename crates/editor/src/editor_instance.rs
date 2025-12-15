@@ -350,7 +350,7 @@ impl EditorInstance {
                                     let decoders = prefetch_segment_media.decoders.clone();
                                     let cancel_token = new_cancel_token.clone();
                                     let playback_rx = playback_rx.clone();
-                                    tokio::spawn(async move {
+                                    let _ = tokio::spawn(async move {
                                         if cancel_token.is_cancelled() || *playback_rx.borrow() {
                                             return;
                                         }

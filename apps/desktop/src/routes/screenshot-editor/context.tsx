@@ -3,7 +3,13 @@ import { trackStore } from "@solid-primitives/deep";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { createEffect, createResource, createSignal, on } from "solid-js";
+import {
+	createEffect,
+	createResource,
+	createSignal,
+	on,
+	onCleanup,
+} from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import {
 	createImageDataWS,
@@ -149,12 +155,16 @@ function createScreenshotEditorContext() {
 			img.onload = async () => {
 				try {
 					const bitmap = await createImageBitmap(img);
+					const existing = latestFrame();
+					if (existing?.bitmap) {
+						existing.bitmap.close();
+					}
 					setLatestFrame({
 						width: img.naturalWidth,
 						height: img.naturalHeight,
 						bitmap,
 					});
-				} catch (e) {
+				} catch (e: unknown) {
 					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
 			};
@@ -173,6 +183,21 @@ function createScreenshotEditorContext() {
 		);
 
 		return instance;
+	});
+
+	createEffect(
+		on(latestFrame, (current, previous) => {
+			if (previous?.bitmap && previous.bitmap !== current?.bitmap) {
+				previous.bitmap.close();
+			}
+		}),
+	);
+
+	onCleanup(() => {
+		const frame = latestFrame();
+		if (frame?.bitmap) {
+			frame.bitmap.close();
+		}
 	});
 
 	const saveConfig = debounce((config: ProjectConfiguration) => {

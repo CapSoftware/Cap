@@ -1,4 +1,5 @@
 use cap_project::XY;
+use tracing;
 
 use crate::{
     DecodedSegmentFrames, PixelFormat,
@@ -6,39 +7,10 @@ use crate::{
     yuv_converter::YuvToRgbaConverter,
 };
 
-fn copy_converted_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    src_texture: &wgpu::Texture,
-    dst_texture: &wgpu::Texture,
+struct PendingTextureCopy {
     width: u32,
     height: u32,
-) {
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("YUV Copy Encoder"),
-    });
-
-    encoder.copy_texture_to_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: src_texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyTextureInfo {
-            texture: dst_texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    queue.submit(std::iter::once(encoder.finish()));
+    dst_texture_index: usize,
 }
 
 pub struct DisplayLayer {
@@ -50,6 +22,7 @@ pub struct DisplayLayer {
     bind_groups: [Option<wgpu::BindGroup>; 2],
     last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
+    pending_copy: Option<PendingTextureCopy>,
 }
 
 impl DisplayLayer {
@@ -77,6 +50,7 @@ impl DisplayLayer {
             bind_groups: [bind_group_0, bind_group_1],
             last_recording_time: None,
             yuv_converter,
+            pending_copy: None,
         }
     }
 
@@ -88,6 +62,8 @@ impl DisplayLayer {
         frame_size: XY<u32>,
         uniforms: CompositeVideoFrameUniforms,
     ) -> (bool, u32, u32) {
+        self.pending_copy = None;
+
         let frame_data = segment_frames.screen_frame.data();
         let actual_width = segment_frames.screen_frame.width();
         let actual_height = segment_frames.screen_frame.height();
@@ -149,27 +125,41 @@ impl DisplayLayer {
                     if let (Some(y_data), Some(uv_data)) =
                         (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
-                        if self
-                            .yuv_converter
-                            .convert_nv12(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                screen_frame.y_stride(),
-                            )
-                            .is_ok()
-                        {
-                            if let Some(output_texture) = self.yuv_converter.output_texture() {
-                                copy_converted_texture(
-                                    device,
-                                    queue,
-                                    output_texture,
-                                    &self.frame_textures[next_texture],
-                                    frame_size.x,
-                                    frame_size.y,
+                        let y_stride = screen_frame.y_stride();
+                        let convert_result = self.yuv_converter.convert_nv12(
+                            device,
+                            queue,
+                            y_data,
+                            uv_data,
+                            frame_size.x,
+                            frame_size.y,
+                            y_stride,
+                        );
+
+                        match convert_result {
+                            Ok(_) => {
+                                if self.yuv_converter.output_texture().is_some() {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: frame_size.x,
+                                        height: frame_size.y,
+                                        dst_texture_index: next_texture,
+                                    });
+                                } else {
+                                    tracing::debug!(
+                                        width = frame_size.x,
+                                        height = frame_size.y,
+                                        y_stride,
+                                        "NV12 conversion succeeded but output texture is None, skipping copy"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    error = ?e,
+                                    width = frame_size.x,
+                                    height = frame_size.y,
+                                    y_stride,
+                                    "NV12 to RGBA conversion failed"
                                 );
                             }
                         }
@@ -196,17 +186,13 @@ impl DisplayLayer {
                                 screen_frame.uv_stride(),
                             )
                             .is_ok()
+                            && self.yuv_converter.output_texture().is_some()
                         {
-                            if let Some(output_texture) = self.yuv_converter.output_texture() {
-                                copy_converted_texture(
-                                    device,
-                                    queue,
-                                    output_texture,
-                                    &self.frame_textures[next_texture],
-                                    frame_size.x,
-                                    frame_size.y,
-                                );
-                            }
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                dst_texture_index: next_texture,
+                            });
                         }
                     }
                 }
@@ -220,7 +206,35 @@ impl DisplayLayer {
         (skipped, actual_width, actual_height)
     }
 
-    pub fn copy_to_texture(&mut self, _encoder: &mut wgpu::CommandEncoder) {}
+    pub fn copy_to_texture(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(pending) = self.pending_copy.take() else {
+            return;
+        };
+
+        let Some(src_texture) = self.yuv_converter.output_texture() else {
+            return;
+        };
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: src_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.frame_textures[pending.dst_texture_index],
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: pending.width,
+                height: pending.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
