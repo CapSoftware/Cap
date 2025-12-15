@@ -457,6 +457,8 @@ const gridStyle = {
 function PreviewCanvas() {
 	const { latestFrame, canvasControls } = useEditorContext();
 
+	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+
 	let canvasTransferred = false;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
@@ -557,7 +559,8 @@ function PreviewCanvas() {
 										width: `${size().width}px`,
 										height: `${size().height}px`,
 										"image-rendering": "auto",
-										...gridStyle,
+										"background-color": "#000000",
+										...(hasRenderedFrame() ? gridStyle : {}),
 									}}
 									ref={initCanvas}
 									id="canvas"
