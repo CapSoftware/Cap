@@ -15,7 +15,6 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
         cursor: Arc<CursorEvents>,
-        frame_number: u32,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -82,7 +81,6 @@ impl Renderer {
             uniforms: ProjectUniforms,
             finished: oneshot::Sender<()>,
             cursor: Arc<CursorEvents>,
-            frame_number: u32,
         }
 
         let mut pending_frame: Option<PendingFrame> = None;
@@ -97,13 +95,11 @@ impl Renderer {
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     }) => Some(PendingFrame {
                         segment_frames,
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     }),
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
@@ -125,7 +121,6 @@ impl Renderer {
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     } => {
                         let _ = current.finished.send(());
                         current = PendingFrame {
@@ -133,7 +128,6 @@ impl Renderer {
                             uniforms,
                             finished,
                             cursor,
-                            frame_number,
                         };
                     }
                     RendererMessage::Stop { finished } => {
@@ -174,7 +168,6 @@ impl RendererHandle {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: Arc<CursorEvents>,
-        frame_number: u32,
     ) {
         let (finished_tx, _finished_rx) = oneshot::channel();
 
@@ -183,7 +176,6 @@ impl RendererHandle {
             uniforms,
             finished: finished_tx,
             cursor,
-            frame_number,
         })
         .await;
     }

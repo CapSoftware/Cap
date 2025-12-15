@@ -336,41 +336,39 @@ impl EditorInstance {
                             let prefetch_frame = frame_number + offset;
                             if let Some((prefetch_segment_time, prefetch_segment)) =
                                 project.get_segment_time(prefetch_frame as f64 / fps as f64)
-                            {
-                                if let Some(prefetch_segment_media) = self
+                                && let Some(prefetch_segment_media) = self
                                     .segment_medias
                                     .get(prefetch_segment.recording_clip as usize)
-                                {
-                                    let prefetch_clip_offsets = project
-                                        .clips
-                                        .iter()
-                                        .find(|v| v.index == prefetch_segment.recording_clip)
-                                        .map(|v| v.offsets)
-                                        .unwrap_or_default();
-                                    let decoders = prefetch_segment_media.decoders.clone();
-                                    let cancel_token = new_cancel_token.clone();
-                                    let playback_rx = playback_rx.clone();
-                                    tokio::spawn(async move {
-                                        if cancel_token.is_cancelled() || *playback_rx.borrow() {
-                                            return;
-                                        }
-                                        if decoders
-                                            .get_frames(
-                                                prefetch_segment_time as f32,
-                                                !hide_camera,
-                                                prefetch_clip_offsets,
-                                            )
-                                            .await
-                                            .is_none()
-                                        {
-                                            tracing::warn!(
-                                                prefetch_segment_time,
-                                                hide_camera,
-                                                "prefetch get_frames returned None"
-                                            );
-                                        }
-                                    });
-                                }
+                            {
+                                let prefetch_clip_offsets = project
+                                    .clips
+                                    .iter()
+                                    .find(|v| v.index == prefetch_segment.recording_clip)
+                                    .map(|v| v.offsets)
+                                    .unwrap_or_default();
+                                let decoders = prefetch_segment_media.decoders.clone();
+                                let cancel_token = new_cancel_token.clone();
+                                let playback_rx = playback_rx.clone();
+                                tokio::spawn(async move {
+                                    if cancel_token.is_cancelled() || *playback_rx.borrow() {
+                                        return;
+                                    }
+                                    if decoders
+                                        .get_frames(
+                                            prefetch_segment_time as f32,
+                                            !hide_camera,
+                                            prefetch_clip_offsets,
+                                        )
+                                        .await
+                                        .is_none()
+                                    {
+                                        tracing::warn!(
+                                            prefetch_segment_time,
+                                            hide_camera,
+                                            "prefetch get_frames returned None"
+                                        );
+                                    }
+                                });
                             }
                         }
                     }
@@ -404,7 +402,7 @@ impl EditorInstance {
                                     &segment_frames,
                                 );
                                 self.renderer
-                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone(), frame_number)
+                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
                                     .await;
                             } else {
                                 warn!("Preview renderer: no frames returned for frame {}", frame_number);

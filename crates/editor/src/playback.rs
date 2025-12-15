@@ -94,10 +94,6 @@ impl FrameCache {
         self.cache
             .put(frame_number, (segment_frames, segment_index));
     }
-
-    fn len(&self) -> usize {
-        self.cache.len()
-    }
 }
 
 impl Playback {
@@ -621,7 +617,6 @@ impl Playback {
                             Arc::unwrap_or_clone(segment_frames),
                             uniforms,
                             segment_media.cursor.clone(),
-                            frame_number,
                         )
                         .await;
 
