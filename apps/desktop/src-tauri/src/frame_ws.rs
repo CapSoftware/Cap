@@ -15,6 +15,7 @@ pub struct WSFrame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    #[allow(dead_code)]
     pub created_at: Instant,
 }
 

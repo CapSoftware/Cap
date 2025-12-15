@@ -200,30 +200,7 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        let start = std::time::Instant::now();
-        let result = rx.await;
-        let wait_ms = start.elapsed().as_millis() as u64;
-
-        let success = result.is_ok();
-        let cancelled = result.is_err();
-        if cancelled || wait_ms > 50 {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-            debug!(
-                time = time,
-                wait_ms = wait_ms,
-                success = success,
-                cancelled = cancelled,
-                timestamp = timestamp,
-                session_id = "debug-session",
-                hypothesis_id = "A",
-                "get_frame completed"
-            );
-        }
-
-        result.ok()
+        rx.await.ok()
     }
 
     pub fn get_time(&self, time: f32) -> f32 {

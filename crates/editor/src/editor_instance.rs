@@ -193,9 +193,7 @@ impl EditorInstance {
 
         if let Some(task) = state.preview_task.take() {
             task.abort();
-            if let Err(e) = task.await {
-                tracing::error!(%e, "preview task join error or cancelled");
-            }
+            let _ = task.await;
         }
 
         self.renderer.stop().await;
@@ -210,8 +208,6 @@ impl EditorInstance {
         tokio::task::yield_now().await;
 
         drop(state);
-
-        println!("EditorInstance disposed");
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -437,14 +433,7 @@ impl EditorInstance {
 }
 
 impl Drop for EditorInstance {
-    fn drop(&mut self) {
-        // TODO: Ensure that *all* resources have been released by this point?
-        // For now the `dispose` method is adequate.
-        println!(
-            "*** Editor instance has been released: {:?} ***",
-            self.project_path
-        );
-    }
+    fn drop(&mut self) {}
 }
 
 type PreviewFrameInstruction = (u32, u32, XY<u32>);

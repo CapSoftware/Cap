@@ -2313,6 +2313,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            recording_settings::set_recording_mode,
             upload_logs,
             recording::start_recording,
             recording::stop_recording,

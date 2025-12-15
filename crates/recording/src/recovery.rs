@@ -82,19 +82,28 @@ impl RecoveryManager {
             };
 
             if let Some(studio_meta) = meta.studio_meta()
-                && matches!(
-                    studio_meta.status(),
-                    StudioRecordingStatus::InProgress
-                        | StudioRecordingStatus::NeedsRemux
-                        | StudioRecordingStatus::Failed { .. }
-                )
-                && let Some(incomplete_recording) = Self::analyze_incomplete(&path, &meta)
+                && Self::should_check_for_recovery(&studio_meta.status())
             {
-                incomplete.push(incomplete_recording);
+                match Self::analyze_incomplete(&path, &meta) {
+                    Some(incomplete_recording) => {
+                        incomplete.push(incomplete_recording);
+                    }
+                    None => {
+                        Self::mark_unrecoverable(&path, &meta);
+                    }
+                }
             }
         }
 
         incomplete
+    }
+
+    fn should_check_for_recovery(status: &StudioRecordingStatus) -> bool {
+        match status {
+            StudioRecordingStatus::InProgress | StudioRecordingStatus::NeedsRemux => true,
+            StudioRecordingStatus::Failed { error } => error != "No recoverable segments found",
+            StudioRecordingStatus::Complete => false,
+        }
     }
 
     fn analyze_incomplete(
@@ -727,5 +736,33 @@ impl RecoveryManager {
         }
 
         Ok(())
+    }
+
+    fn mark_unrecoverable(project_path: &Path, meta: &RecordingMeta) {
+        let mut updated_meta = meta.clone();
+
+        let status_updated = match &mut updated_meta.inner {
+            RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => {
+                inner.status = Some(StudioRecordingStatus::Failed {
+                    error: "No recoverable segments found".to_string(),
+                });
+                true
+            }
+            _ => false,
+        };
+
+        if status_updated {
+            if let Err(e) = updated_meta.save_for_project() {
+                warn!(
+                    "Failed to mark recording as unrecoverable at {:?}: {}",
+                    project_path, e
+                );
+            } else {
+                info!(
+                    "Marked recording as unrecoverable (no recoverable segments): {:?}",
+                    project_path
+                );
+            }
+        }
     }
 }

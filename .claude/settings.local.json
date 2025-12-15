@@ -38,7 +38,8 @@
 			"Bash(pnpm --dir apps/desktop exec biome format:*)",
 			"Bash(echo:*)",
 			"Bash(pnpm exec biome:*)",
-			"Bash(rustfmt:*)"
+			"Bash(rustfmt:*)",
+			"Bash(cargo tree:*)"
 		],
 		"deny": [],
 		"ask": []
