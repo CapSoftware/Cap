@@ -52,7 +52,7 @@ export type CurrentDialog =
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
-export const FPS = 60;
+export const FPS = 30;
 
 export const OUTPUT_SIZE = {
 	x: 1920,
