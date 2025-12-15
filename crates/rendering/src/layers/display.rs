@@ -170,29 +170,27 @@ impl DisplayLayer {
                         screen_frame.y_plane(),
                         screen_frame.u_plane(),
                         screen_frame.v_plane(),
-                    ) {
-                        if self
-                            .yuv_converter
-                            .convert_yuv420p(
-                                device,
-                                queue,
-                                y_data,
-                                u_data,
-                                v_data,
-                                frame_size.x,
-                                frame_size.y,
-                                screen_frame.y_stride(),
-                                screen_frame.uv_stride(),
-                            )
-                            .is_ok()
-                            && self.yuv_converter.output_texture().is_some()
-                        {
-                            self.pending_copy = Some(PendingTextureCopy {
-                                width: frame_size.x,
-                                height: frame_size.y,
-                                dst_texture_index: next_texture,
-                            });
-                        }
+                    ) && self
+                        .yuv_converter
+                        .convert_yuv420p(
+                            device,
+                            queue,
+                            y_data,
+                            u_data,
+                            v_data,
+                            frame_size.x,
+                            frame_size.y,
+                            screen_frame.y_stride(),
+                            screen_frame.uv_stride(),
+                        )
+                        .is_ok()
+                        && self.yuv_converter.output_texture().is_some()
+                    {
+                        self.pending_copy = Some(PendingTextureCopy {
+                            width: frame_size.x,
+                            height: frame_size.y,
+                            dst_texture_index: next_texture,
+                        });
                     }
                 }
             }

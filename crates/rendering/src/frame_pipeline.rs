@@ -32,7 +32,7 @@ impl PendingReadback {
                         Err(e) => return Err(e.into()),
                     }
                     poll_count += 1;
-                    if poll_count % 3 == 0 {
+                    if poll_count.is_multiple_of(3) {
                         tokio::task::yield_now().await;
                     }
                 }

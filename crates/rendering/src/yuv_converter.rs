@@ -106,10 +106,10 @@ pub struct YuvToRgbaConverter {
     u_texture: Option<wgpu::Texture>,
     v_texture: Option<wgpu::Texture>,
     output_texture: Option<wgpu::Texture>,
-    y_view: Option<wgpu::TextureView>,
-    uv_view: Option<wgpu::TextureView>,
-    u_view: Option<wgpu::TextureView>,
-    v_view: Option<wgpu::TextureView>,
+    _y_view: Option<wgpu::TextureView>,
+    _uv_view: Option<wgpu::TextureView>,
+    _u_view: Option<wgpu::TextureView>,
+    _v_view: Option<wgpu::TextureView>,
     output_view: Option<wgpu::TextureView>,
     cached_width: u32,
     cached_height: u32,
@@ -257,10 +257,10 @@ impl YuvToRgbaConverter {
             u_texture: None,
             v_texture: None,
             output_texture: None,
-            y_view: None,
-            uv_view: None,
-            u_view: None,
-            v_view: None,
+            _y_view: None,
+            _uv_view: None,
+            _u_view: None,
+            _v_view: None,
             output_view: None,
             cached_width: 0,
             cached_height: 0,
@@ -379,6 +379,7 @@ impl YuvToRgbaConverter {
         self.cached_format = Some(format);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn convert_nv12(
         &mut self,
         device: &wgpu::Device,
@@ -461,6 +462,7 @@ impl YuvToRgbaConverter {
         Ok(self.output_view.as_ref().unwrap())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn convert_yuv420p(
         &mut self,
         device: &wgpu::Device,

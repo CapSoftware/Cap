@@ -19,7 +19,6 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
-use tracing::error;
 
 mod composite_frame;
 mod coord;

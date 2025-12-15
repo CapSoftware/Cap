@@ -203,14 +203,12 @@ export function createProducer(init: SharedFrameBufferInit): Producer {
 				);
 
 				if (oldValue === observed) {
-					const successSlotMetaIdx =
-						(metadataOffset + observed * METADATA_ENTRY_SIZE) / 4;
 					Atomics.store(
 						metadataView,
-						successSlotMetaIdx + META_SLOT_STATE,
+						slotMetaIdx + META_SLOT_STATE,
 						SLOT_STATE.READY,
 					);
-					Atomics.notify(metadataView, successSlotMetaIdx + META_SLOT_STATE, 1);
+					Atomics.notify(metadataView, slotMetaIdx + META_SLOT_STATE, 1);
 					return true;
 				}
 

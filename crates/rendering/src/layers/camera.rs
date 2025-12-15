@@ -120,8 +120,7 @@ impl CameraLayer {
                 PixelFormat::Nv12 => {
                     if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
-                    {
-                        if self
+                        && self
                             .yuv_converter
                             .convert_nv12(
                                 device,
@@ -133,9 +132,8 @@ impl CameraLayer {
                                 camera_frame.y_stride(),
                             )
                             .is_ok()
-                        {
-                            self.copy_from_yuv_output(device, queue, next_texture, frame_size);
-                        }
+                    {
+                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
                     }
                 }
                 PixelFormat::Yuv420p => {
@@ -143,24 +141,22 @@ impl CameraLayer {
                         camera_frame.y_plane(),
                         camera_frame.u_plane(),
                         camera_frame.v_plane(),
-                    ) {
-                        if self
-                            .yuv_converter
-                            .convert_yuv420p(
-                                device,
-                                queue,
-                                y_data,
-                                u_data,
-                                v_data,
-                                frame_size.x,
-                                frame_size.y,
-                                camera_frame.y_stride(),
-                                camera_frame.uv_stride(),
-                            )
-                            .is_ok()
-                        {
-                            self.copy_from_yuv_output(device, queue, next_texture, frame_size);
-                        }
+                    ) && self
+                        .yuv_converter
+                        .convert_yuv420p(
+                            device,
+                            queue,
+                            y_data,
+                            u_data,
+                            v_data,
+                            frame_size.x,
+                            frame_size.y,
+                            camera_frame.y_stride(),
+                            camera_frame.uv_stride(),
+                        )
+                        .is_ok()
+                    {
+                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
                     }
                 }
             }

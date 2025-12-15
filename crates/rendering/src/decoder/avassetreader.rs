@@ -22,7 +22,7 @@ use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
-    number: u32,
+    _number: u32,
     data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
@@ -198,7 +198,7 @@ impl CachedFrame {
         let (data, format, y_stride, uv_stride) = processor.extract_raw(&mut image_buf);
 
         let frame = ProcessedFrame {
-            number,
+            _number: number,
             data: Arc::new(data),
             width,
             height,
@@ -244,7 +244,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn run(
-        name: &'static str,
+        _name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -272,11 +272,11 @@ impl AVAssetReaderDecoder {
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
         let mut frames = this.inner.frames();
-        let mut processor = ImageBufProcessor::new();
+        let processor = ImageBufProcessor::new();
 
         while let Ok(r) = rx.recv() {
             match r {
-                VideoDecoderMessage::GetFrame(mut requested_time, mut sender) => {
+                VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     if sender.is_closed() {
                         continue;
                     }
@@ -292,22 +292,22 @@ impl AVAssetReaderDecoder {
                     {
                         let is_backward_within_tolerance = requested_frame < c_min
                             && requested_frame + BACKWARD_SEEK_TOLERANCE >= c_min;
-                        if is_backward_within_tolerance {
-                            if let Some(closest_frame) = cache.get(&c_min) {
-                                let data = closest_frame.data().clone();
-                                if let Err(err) = sender.send(data.to_decoded_frame()) {
-                                    debug!(?err, "frame receiver dropped before send");
-                                }
-                                *last_sent_frame.borrow_mut() = Some(data);
-                                continue;
+                        if is_backward_within_tolerance
+                            && let Some(closest_frame) = cache.get(&c_min)
+                        {
+                            let data = closest_frame.data().clone();
+                            if sender.send(data.to_decoded_frame()).is_err() {
+                                debug!("frame receiver dropped before send");
                             }
+                            *last_sent_frame.borrow_mut() = Some(data);
+                            continue;
                         }
                     }
 
                     let mut sender = if let Some(cached) = cache.get(&requested_frame) {
                         let data = cached.data().clone();
-                        if let Err(err) = sender.send(data.to_decoded_frame()) {
-                            debug!(?err, "frame receiver dropped before send");
+                        if sender.send(data.to_decoded_frame()).is_err() {
+                            debug!("frame receiver dropped before send");
                         }
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
@@ -315,8 +315,8 @@ impl AVAssetReaderDecoder {
                         let last_sent_frame = last_sent_frame.clone();
                         Some(move |data: ProcessedFrame| {
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if let Err(err) = sender.send(data.to_decoded_frame()) {
-                                debug!(?err, "frame receiver dropped before send");
+                            if sender.send(data.to_decoded_frame()).is_err() {
+                                debug!("frame receiver dropped before send");
                             }
                         })
                     };
@@ -365,7 +365,7 @@ impl AVAssetReaderDecoder {
                         };
 
                         let cache_frame =
-                            CachedFrame::new(&mut processor, frame.retained(), current_frame);
+                            CachedFrame::new(&processor, frame.retained(), current_frame);
 
                         this.is_done = false;
 
@@ -444,7 +444,7 @@ impl AVAssetReaderDecoder {
                             let black_frame_data =
                                 vec![0u8; (video_width * video_height * 4) as usize];
                             let black_frame = ProcessedFrame {
-                                number: requested_frame,
+                                _number: requested_frame,
                                 data: Arc::new(black_frame_data),
                                 width: video_width,
                                 height: video_height,

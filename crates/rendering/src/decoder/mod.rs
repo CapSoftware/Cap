@@ -1,5 +1,6 @@
 use ::ffmpeg::Rational;
 use std::{
+    fmt,
     path::PathBuf,
     sync::{Arc, mpsc},
 };
@@ -18,7 +19,7 @@ pub enum PixelFormat {
     Yuv420p,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DecodedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
@@ -26,6 +27,19 @@ pub struct DecodedFrame {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+}
+
+impl fmt::Debug for DecodedFrame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DecodedFrame")
+            .field("data_len", &self.data.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("format", &self.format)
+            .field("y_stride", &self.y_stride)
+            .field("uv_stride", &self.uv_stride)
+            .finish()
+    }
 }
 
 impl DecodedFrame {
