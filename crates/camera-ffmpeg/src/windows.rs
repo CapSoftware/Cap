@@ -12,6 +12,8 @@ pub enum AsFFmpegError {
     Empty,
     #[error("MJPEG decode error: {0}")]
     MjpegDecodeError(String),
+    #[error("H264 decode error: {0}")]
+    H264DecodeError(String),
 }
 
 fn decode_mjpeg(bytes: &[u8]) -> Result<FFVideo, AsFFmpegError> {
@@ -34,6 +36,30 @@ fn decode_mjpeg(bytes: &[u8]) -> Result<FFVideo, AsFFmpegError> {
     decoder
         .receive_frame(&mut decoded_frame)
         .map_err(|e| AsFFmpegError::MjpegDecodeError(format!("Failed to receive frame: {e}")))?;
+
+    Ok(decoded_frame)
+}
+
+fn decode_h264(bytes: &[u8]) -> Result<FFVideo, AsFFmpegError> {
+    let codec = ffmpeg::codec::decoder::find(ffmpeg::codec::Id::H264)
+        .ok_or_else(|| AsFFmpegError::H264DecodeError("H264 codec not found".to_string()))?;
+
+    let decoder_context = ffmpeg::codec::context::Context::new_with_codec(codec);
+
+    let mut decoder = decoder_context
+        .decoder()
+        .video()
+        .map_err(|e| AsFFmpegError::H264DecodeError(format!("Failed to create decoder: {e}")))?;
+
+    let packet = Packet::copy(bytes);
+    decoder
+        .send_packet(&packet)
+        .map_err(|e| AsFFmpegError::H264DecodeError(format!("Failed to send packet: {e}")))?;
+
+    let mut decoded_frame = FFVideo::empty();
+    decoder
+        .receive_frame(&mut decoded_frame)
+        .map_err(|e| AsFFmpegError::H264DecodeError(format!("Failed to receive frame: {e}")))?;
 
     Ok(decoded_frame)
 }
@@ -232,6 +258,98 @@ impl CapturedFrameExt for CapturedFrame {
 
                 ff_frame
             }
+            PixelFormat::GRAY8 => {
+                let mut ff_frame = FFVideo::new(Pixel::GRAY8, width as u32, height as u32);
+
+                let stride = ff_frame.stride(0);
+
+                for y in 0..height {
+                    let row_width = width;
+                    let src_row = &bytes[y * row_width..];
+                    let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+                    dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
+                }
+
+                ff_frame
+            }
+            PixelFormat::GRAY16 => {
+                let mut ff_frame = FFVideo::new(Pixel::GRAY16LE, width as u32, height as u32);
+
+                let stride = ff_frame.stride(0);
+                let src_stride = width * 2;
+
+                for y in 0..height {
+                    let src_row = &bytes[y * src_stride..];
+                    let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+                    dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
+                }
+
+                ff_frame
+            }
+            PixelFormat::NV21 => {
+                let mut ff_frame = FFVideo::new(Pixel::NV12, width as u32, height as u32);
+
+                let stride = ff_frame.stride(0);
+                for y in 0..height {
+                    let src_row = &bytes[y * width..];
+                    let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+                    dest_row[0..width].copy_from_slice(&src_row[0..width]);
+                }
+
+                let stride = ff_frame.stride(1);
+                let src_uv = &bytes[width * height..];
+
+                for y in 0..height / 2 {
+                    let row_width = width;
+                    let src_row = &src_uv[y * row_width..];
+                    let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
+                    for x in 0..width / 2 {
+                        dest_row[x * 2] = src_row[x * 2 + 1];
+                        dest_row[x * 2 + 1] = src_row[x * 2];
+                    }
+                }
+
+                ff_frame
+            }
+            PixelFormat::RGB565 => {
+                let mut ff_frame = FFVideo::new(Pixel::RGB565LE, width as u32, height as u32);
+
+                let stride = ff_frame.stride(0);
+                let src_stride = width * 2;
+
+                for y in 0..height {
+                    let src_row = &bytes[(height - y - 1) * src_stride..];
+                    let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+                    dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
+                }
+
+                ff_frame
+            }
+            PixelFormat::P010 => {
+                let mut ff_frame = FFVideo::new(Pixel::P010LE, width as u32, height as u32);
+
+                let stride = ff_frame.stride(0);
+                let src_stride = width * 2;
+
+                for y in 0..height {
+                    let src_row = &bytes[y * src_stride..];
+                    let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
+                    dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
+                }
+
+                let stride = ff_frame.stride(1);
+                let uv_offset = width * height * 2;
+                let src_stride = width * 2;
+
+                for y in 0..height / 2 {
+                    let src_row = &bytes[uv_offset + y * src_stride..];
+                    let dest_row = &mut ff_frame.data_mut(1)[y * stride..];
+                    dest_row[0..src_stride].copy_from_slice(&src_row[0..src_stride]);
+                }
+
+                ff_frame
+            }
+            PixelFormat::H264 => decode_h264(&bytes)?,
         })
     }
 }

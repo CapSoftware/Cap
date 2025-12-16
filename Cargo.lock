@@ -1110,6 +1110,7 @@ dependencies = [
  "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
+ "tracing",
  "windows 0.60.0",
  "windows-core 0.60.1",
  "workspace-hack",

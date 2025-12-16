@@ -162,10 +162,10 @@ impl<'a> Iterator for FramesIter<'a> {
 pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> cv::PixelFormat {
     match pixel {
         avformat::Pixel::NV12 => cv::PixelFormat::_420V,
-        // this is intentional, it works and is faster /shrug
         avformat::Pixel::YUV420P => cv::PixelFormat::_420V,
         avformat::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
-        _ => todo!(),
+        avformat::Pixel::BGRA => cv::PixelFormat::_32_BGRA,
+        _ => cv::PixelFormat::_32_RGBA,
     }
 }
 
@@ -173,6 +173,7 @@ pub fn pixel_format_to_pixel(format: cv::PixelFormat) -> avformat::Pixel {
     match format {
         cv::PixelFormat::_420V => avformat::Pixel::NV12,
         cv::PixelFormat::_32_RGBA => avformat::Pixel::RGBA,
-        _ => todo!(),
+        cv::PixelFormat::_32_BGRA => avformat::Pixel::BGRA,
+        _ => avformat::Pixel::RGBA,
     }
 }
