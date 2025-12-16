@@ -69,6 +69,15 @@ impl DisplayLayer {
         let format = segment_frames.screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
 
+        tracing::trace!(
+            format = ?format,
+            actual_width,
+            actual_height,
+            frame_data_len = frame_data.len(),
+            recording_time = current_recording_time,
+            "DisplayLayer::prepare - frame info"
+        );
+
         let skipped = self
             .last_recording_time
             .is_some_and(|last| (last - current_recording_time).abs() < f32::EPSILON);
@@ -197,6 +206,7 @@ impl DisplayLayer {
                     {
                         let y_stride = screen_frame.y_stride();
                         let uv_stride = screen_frame.uv_stride();
+
                         let convert_result = self.yuv_converter.convert_nv12(
                             device,
                             queue,
@@ -208,6 +218,10 @@ impl DisplayLayer {
                             uv_stride,
                         );
 
+                        if let Err(e) = device.poll(wgpu::PollType::Wait) {
+                            tracing::warn!(error = ?e, "Failed to poll device after NV12 conversion");
+                        }
+
                         match convert_result {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
@@ -218,25 +232,10 @@ impl DisplayLayer {
                                     });
                                     true
                                 } else {
-                                    tracing::debug!(
-                                        width = frame_size.x,
-                                        height = frame_size.y,
-                                        y_stride,
-                                        "NV12 conversion succeeded but output texture is None, skipping copy"
-                                    );
                                     false
                                 }
                             }
-                            Err(e) => {
-                                tracing::debug!(
-                                    error = ?e,
-                                    width = frame_size.x,
-                                    height = frame_size.y,
-                                    y_stride,
-                                    "NV12 to RGBA conversion failed"
-                                );
-                                false
-                            }
+                            Err(_) => false,
                         }
                     } else {
                         false
@@ -244,13 +243,13 @@ impl DisplayLayer {
                 }
                 PixelFormat::Yuv420p => {
                     let screen_frame = &segment_frames.screen_frame;
-                    if let (Some(y_data), Some(u_data), Some(v_data)) = (
-                        screen_frame.y_plane(),
-                        screen_frame.u_plane(),
-                        screen_frame.v_plane(),
-                    ) && self
-                        .yuv_converter
-                        .convert_yuv420p(
+                    let y_plane = screen_frame.y_plane();
+                    let u_plane = screen_frame.u_plane();
+                    let v_plane = screen_frame.v_plane();
+
+                    if let (Some(y_data), Some(u_data), Some(v_data)) = (y_plane, u_plane, v_plane)
+                    {
+                        let convert_result = self.yuv_converter.convert_yuv420p(
                             device,
                             queue,
                             y_data,
@@ -260,16 +259,27 @@ impl DisplayLayer {
                             frame_size.y,
                             screen_frame.y_stride(),
                             screen_frame.uv_stride(),
-                        )
-                        .is_ok()
-                        && self.yuv_converter.output_texture().is_some()
-                    {
-                        self.pending_copy = Some(PendingTextureCopy {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            dst_texture_index: next_texture,
-                        });
-                        true
+                        );
+
+                        if let Err(e) = device.poll(wgpu::PollType::Wait) {
+                            tracing::warn!(error = ?e, "Failed to poll device after YUV420P conversion");
+                        }
+
+                        match convert_result {
+                            Ok(_) => {
+                                if self.yuv_converter.output_texture().is_some() {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: frame_size.x,
+                                        height: frame_size.y,
+                                        dst_texture_index: next_texture,
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            Err(_) => false,
+                        }
                     } else {
                         false
                     }
@@ -288,10 +298,12 @@ impl DisplayLayer {
 
     pub fn copy_to_texture(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(pending) = self.pending_copy.take() else {
+            tracing::trace!("copy_to_texture: no pending copy");
             return;
         };
 
         let Some(src_texture) = self.yuv_converter.output_texture() else {
+            tracing::warn!("copy_to_texture: no source texture from YUV converter");
             return;
         };
 
@@ -318,9 +330,18 @@ impl DisplayLayer {
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
+            tracing::trace!(
+                current_texture_index = self.current_texture,
+                "DisplayLayer::render - rendering with bind group"
+            );
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
+            pass.draw(0..3, 0..1);
+        } else {
+            tracing::warn!(
+                current_texture_index = self.current_texture,
+                "DisplayLayer::render - no bind group available"
+            );
         }
     }
 }

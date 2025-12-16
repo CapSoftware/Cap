@@ -1735,12 +1735,20 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        if uniforms.scene.should_render_screen() {
+        let should_render = uniforms.scene.should_render_screen();
+        tracing::trace!(
+            should_render_screen = should_render,
+            screen_opacity = uniforms.scene.screen_opacity,
+            screen_blur = uniforms.scene.screen_blur,
+            "RendererLayers::render - checking should_render_screen"
+        );
+
+        if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        if uniforms.scene.should_render_screen() {
+        if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
@@ -1860,7 +1868,7 @@ pub fn create_shader_render_pipeline(
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],

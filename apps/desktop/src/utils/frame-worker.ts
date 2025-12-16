@@ -241,7 +241,9 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 	const doInit = async () => {
 		offscreenCanvas = canvas;
 
-		if (await isWebGPUSupported()) {
+		const webgpuSupported = await isWebGPUSupported();
+
+		if (webgpuSupported) {
 			try {
 				webgpuRenderer = await initWebGPU(canvas);
 				renderMode = "webgpu";
@@ -249,7 +251,8 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 					type: "renderer-mode",
 					mode: "webgpu",
 				} satisfies RendererModeMessage);
-			} catch {
+			} catch (e) {
+				console.error("[frame-worker] WebGPU init failed:", e);
 				renderMode = "canvas2d";
 				offscreenCtx = canvas.getContext("2d", {
 					alpha: false,

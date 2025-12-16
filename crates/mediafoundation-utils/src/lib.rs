@@ -22,6 +22,7 @@ pub fn thread_init() {
 
 pub trait IMFMediaBufferExt {
     fn lock(&self) -> Result<IMFMediaBufferLock<'_>>;
+    fn lock_for_write(&self) -> Result<IMFMediaBufferLock<'_>>;
 }
 
 impl IMFMediaBufferExt for IMFMediaBuffer {
@@ -36,6 +37,20 @@ impl IMFMediaBufferExt for IMFMediaBuffer {
         Ok(IMFMediaBufferLock {
             source: self,
             bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr, size as usize) },
+        })
+    }
+
+    fn lock_for_write(&self) -> Result<IMFMediaBufferLock<'_>> {
+        let mut bytes_ptr = null_mut();
+        let mut max_length = 0;
+
+        unsafe {
+            self.Lock(&mut bytes_ptr, Some(&mut max_length), None)?;
+        }
+
+        Ok(IMFMediaBufferLock {
+            source: self,
+            bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr, max_length as usize) },
         })
     }
 }
