@@ -548,29 +548,35 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
     match format {
         Pixel::NV12 => {
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    frame.data(0).as_ptr().add(y * frame.stride(0)),
-                    dst.add(y * dst_stride),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        frame.width() as usize,
+                    );
+                }
             }
             let uv_offset = height * dst_stride;
             for y in 0..height / 2 {
-                ptr::copy_nonoverlapping(
-                    frame.data(1).as_ptr().add(y * frame.stride(1)),
-                    dst.add(uv_offset + y * dst_stride),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(1).as_ptr().add(y * frame.stride(1)),
+                        dst.add(uv_offset + y * dst_stride),
+                        frame.width() as usize,
+                    );
+                }
             }
         }
         Pixel::YUYV422 | Pixel::UYVY422 => {
             let row_bytes = frame.width() as usize * 2;
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    frame.data(0).as_ptr().add(y * frame.stride(0)),
-                    dst.add(y * dst_stride),
-                    row_bytes,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        row_bytes,
+                    );
+                }
             }
         }
         _ => {}
@@ -584,30 +590,36 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
     match format {
         Pixel::NV12 => {
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    src.add(y * src_stride),
-                    frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        frame.width() as usize,
+                    );
+                }
             }
             let uv_offset = height * src_stride;
             for y in 0..height / 2 {
-                ptr::copy_nonoverlapping(
-                    src.add(uv_offset + y * src_stride),
-                    frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
-                    frame.width() as usize,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(uv_offset + y * src_stride),
+                        frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
+                        frame.width() as usize,
+                    );
+                }
             }
         }
         Pixel::YUYV422 | Pixel::UYVY422 => {
             let bytes_per_pixel = 2;
             let row_bytes = frame.width() as usize * bytes_per_pixel;
             for y in 0..height {
-                ptr::copy_nonoverlapping(
-                    src.add(y * src_stride),
-                    frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
-                    row_bytes,
-                );
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        row_bytes,
+                    );
+                }
             }
         }
         _ => {}

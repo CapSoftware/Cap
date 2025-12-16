@@ -91,6 +91,7 @@ pub fn copy_rgba_plane(data: &[u8], stride: usize, width: usize, height: usize) 
     frame_buffer
 }
 
+#[cfg(target_os = "macos")]
 pub fn copy_bgra_to_rgba(data: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
     debug_assert!(stride >= width * 4, "stride too small for BGRA frame");
 
