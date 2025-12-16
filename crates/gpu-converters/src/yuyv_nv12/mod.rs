@@ -1,6 +1,6 @@
 use wgpu::{self, util::DeviceExt};
 
-use crate::{util::read_buffer_to_vec, yuyv};
+use crate::{ConvertError, GpuConverterError, util::read_buffer_to_vec, yuyv};
 
 pub struct YUYVToNV12 {
     device: wgpu::Device,
@@ -10,7 +10,7 @@ pub struct YUYVToNV12 {
 }
 
 impl YUYVToNV12 {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self, GpuConverterError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let adapter = instance
@@ -19,13 +19,11 @@ impl YUYVToNV12 {
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
-            .await
-            .unwrap();
+            .await?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
+            .await?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("YUYV to NV12 Converter"),
@@ -95,12 +93,12 @@ impl YUYVToNV12 {
             cache: None,
         });
 
-        Self {
+        Ok(Self {
             device,
             queue,
             pipeline,
             bind_group_layout,
-        }
+        })
     }
 
     pub fn convert(
@@ -108,9 +106,22 @@ impl YUYVToNV12 {
         yuyv_data: &[u8],
         width: u32,
         height: u32,
-    ) -> Result<(Vec<u8>, Vec<u8>), wgpu::PollError> {
+    ) -> Result<(Vec<u8>, Vec<u8>), ConvertError> {
+        if width % 2 != 0 {
+            return Err(ConvertError::OddWidth { width });
+        }
+
+        let expected_size = (width as usize) * (height as usize) * 2;
+        if yuyv_data.len() != expected_size {
+            return Err(ConvertError::BufferSizeMismatch {
+                expected: expected_size,
+                actual: yuyv_data.len(),
+            });
+        }
+
         let yuyv_texture =
-            yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height);
+            yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height)
+                .expect("YUYV input validation passed above");
 
         let y_plane_size = (width * height) as u64;
         let uv_plane_size = (width * height / 2) as u64;
@@ -210,8 +221,8 @@ impl YUYVToNV12 {
         self.queue.submit(std::iter::once(encoder.finish()));
 
         Ok((
-            read_buffer_to_vec(&y_read_buffer, &self.device)?,
-            read_buffer_to_vec(&uv_read_buffer, &self.device)?,
+            read_buffer_to_vec(&y_read_buffer, &self.device).map_err(ConvertError::Poll)?,
+            read_buffer_to_vec(&uv_read_buffer, &self.device).map_err(ConvertError::Poll)?,
         ))
     }
 }

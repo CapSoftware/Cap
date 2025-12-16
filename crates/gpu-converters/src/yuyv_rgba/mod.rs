@@ -1,4 +1,5 @@
 use crate::{
+    ConvertError, GpuConverterError,
     util::{copy_texture_to_buffer_command, read_buffer_to_vec},
     yuyv,
 };
@@ -11,7 +12,7 @@ pub struct YUYVToRGBA {
 }
 
 impl YUYVToRGBA {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self, GpuConverterError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let adapter = instance
@@ -20,13 +21,11 @@ impl YUYVToRGBA {
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
-            .await
-            .unwrap();
+            .await?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
+            .await?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("YUYV to RGBA Converter"),
@@ -76,12 +75,12 @@ impl YUYVToRGBA {
             cache: None,
         });
 
-        Self {
+        Ok(Self {
             device,
             queue,
             pipeline,
             bind_group_layout,
-        }
+        })
     }
 
     pub fn convert(
@@ -89,9 +88,22 @@ impl YUYVToRGBA {
         yuyv_data: &[u8],
         width: u32,
         height: u32,
-    ) -> Result<Vec<u8>, wgpu::PollError> {
+    ) -> Result<Vec<u8>, ConvertError> {
+        if width % 2 != 0 {
+            return Err(ConvertError::OddWidth { width });
+        }
+
+        let expected_size = (width as usize) * (height as usize) * 2;
+        if yuyv_data.len() != expected_size {
+            return Err(ConvertError::BufferSizeMismatch {
+                expected: expected_size,
+                actual: yuyv_data.len(),
+            });
+        }
+
         let yuyv_texture =
-            yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height);
+            yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height)
+                .expect("YUYV input validation passed above");
 
         let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("YUYV to RGBA Output Texture"),
@@ -148,6 +160,6 @@ impl YUYVToRGBA {
 
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        read_buffer_to_vec(&output_buffer, &self.device)
+        Ok(read_buffer_to_vec(&output_buffer, &self.device)?)
     }
 }

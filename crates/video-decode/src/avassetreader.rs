@@ -38,7 +38,7 @@ impl AVAssetReaderDecoder {
                 .map_err(|e| format!("video decoder / {e}"))?;
 
             (
-                pixel_to_pixel_format(decoder.format()),
+                pixel_to_pixel_format(decoder.format())?,
                 decoder.width(),
                 decoder.height(),
             )
@@ -159,13 +159,22 @@ impl<'a> Iterator for FramesIter<'a> {
     }
 }
 
-pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> cv::PixelFormat {
+pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> Result<cv::PixelFormat, String> {
     match pixel {
-        avformat::Pixel::NV12 => cv::PixelFormat::_420V,
-        avformat::Pixel::YUV420P => cv::PixelFormat::_420V,
-        avformat::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
-        avformat::Pixel::BGRA => cv::PixelFormat::_32_BGRA,
-        _ => cv::PixelFormat::_32_RGBA,
+        avformat::Pixel::NV12 => Ok(cv::PixelFormat::_420V),
+        avformat::Pixel::YUV420P => Ok(cv::PixelFormat::_420V),
+        avformat::Pixel::RGBA => Ok(cv::PixelFormat::_32_RGBA),
+        avformat::Pixel::BGRA => Ok(cv::PixelFormat::_32_BGRA),
+        other => {
+            tracing::error!(
+                pixel_format = ?other,
+                "Unhandled pixel format encountered - no mapping to cv::PixelFormat available"
+            );
+            Err(format!(
+                "Unsupported pixel format: {:?}. Supported formats: NV12, YUV420P, RGBA, BGRA",
+                other
+            ))
+        }
     }
 }
 
