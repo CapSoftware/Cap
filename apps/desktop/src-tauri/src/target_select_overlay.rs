@@ -138,7 +138,7 @@ fn should_skip_window(window: &Window, exclusions: &[WindowExclusion]) -> bool {
     let bundle_identifier = window.raw_handle().bundle_identifier();
 
     #[cfg(not(target_os = "macos"))]
-    let bundle_identifier = None::<&str>;
+    let bundle_identifier = None::<String>;
 
     exclusions.iter().any(|entry| {
         entry.matches(

@@ -39,7 +39,9 @@
 			"Bash(echo:*)",
 			"Bash(pnpm exec biome:*)",
 			"Bash(rustfmt:*)",
-			"Bash(cargo tree:*)"
+			"Bash(cargo tree:*)",
+			"WebFetch(domain:github.com)",
+			"WebFetch(domain:docs.rs)"
 		],
 		"deny": [],
 		"ask": []

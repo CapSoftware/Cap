@@ -1583,11 +1583,14 @@ dependencies = [
  "clap",
  "ffmpeg-hw-device",
  "ffmpeg-next",
+ "foreign-types 0.5.0",
  "futures",
  "futures-intrusive",
  "glyphon",
  "image 0.25.8",
  "log",
+ "metal 0.31.0",
+ "objc2 0.6.2",
  "pretty_assertions",
  "reactive_graph",
  "resvg",
@@ -1599,6 +1602,8 @@ dependencies = [
  "tokio",
  "tracing",
  "wgpu",
+ "wgpu-core",
+ "wgpu-hal",
  "workspace-hack",
 ]
 

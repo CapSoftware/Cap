@@ -1,4 +1,4 @@
-use ffmpeg::{frame, sys::AVHWDeviceType};
+use ffmpeg::{format, frame, sys::AVHWDeviceType};
 use log::debug;
 use std::{
     cell::RefCell,
@@ -46,19 +46,71 @@ impl ProcessedFrame {
     }
 }
 
+fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
+    let height = frame.height();
+
+    match frame.format() {
+        format::Pixel::YUV420P => {
+            let y_stride = frame.stride(0) as u32;
+            let u_stride = frame.stride(1) as u32;
+            let v_stride = frame.stride(2) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_height = height / 2;
+            let u_size = (u_stride * uv_height) as usize;
+            let v_size = (v_stride * uv_height) as usize;
+
+            let mut data = Vec::with_capacity(y_size + u_size + v_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..u_size]);
+            data.extend_from_slice(&frame.data(2)[..v_size]);
+
+            Some((data, PixelFormat::Yuv420p, y_stride, u_stride))
+        }
+        format::Pixel::NV12 => {
+            let y_stride = frame.stride(0) as u32;
+            let uv_stride = frame.stride(1) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_size = (uv_stride * (height / 2)) as usize;
+
+            let mut data = Vec::with_capacity(y_size + uv_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..uv_size]);
+
+            Some((data, PixelFormat::Nv12, y_stride, uv_stride))
+        }
+        _ => None,
+    }
+}
+
 impl CachedFrame {
     fn process(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
         match self {
             Self::Raw { frame, number } => {
-                let frame_buffer = converter.convert(frame);
-                let data = ProcessedFrame {
-                    data: Arc::new(frame_buffer),
-                    number: *number,
-                    width: frame.width(),
-                    height: frame.height(),
-                    format: PixelFormat::Rgba,
-                    y_stride: frame.width() * 4,
-                    uv_stride: 0,
+                let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
+                    extract_yuv_planes(frame)
+                {
+                    ProcessedFrame {
+                        data: Arc::new(yuv_data),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: pixel_format,
+                        y_stride,
+                        uv_stride,
+                    }
+                } else {
+                    let frame_buffer = converter.convert(frame);
+                    ProcessedFrame {
+                        data: Arc::new(frame_buffer),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: PixelFormat::Rgba,
+                        y_stride: frame.width() * 4,
+                        uv_stride: 0,
+                    }
                 };
 
                 *self = Self::Processed(data.clone());

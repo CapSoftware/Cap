@@ -130,6 +130,7 @@ impl CameraLayer {
                                 frame_size.x,
                                 frame_size.y,
                                 camera_frame.y_stride(),
+                                camera_frame.uv_stride(),
                             )
                             .is_ok()
                     {

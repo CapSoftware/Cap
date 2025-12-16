@@ -25,6 +25,8 @@ mod coord;
 mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
+#[cfg(target_os = "macos")]
+pub mod iosurface_texture;
 mod layers;
 mod mask;
 mod project_recordings;

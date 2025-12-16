@@ -122,10 +122,30 @@ impl DisplayLayer {
                 }
                 PixelFormat::Nv12 => {
                     let screen_frame = &segment_frames.screen_frame;
-                    if let (Some(y_data), Some(uv_data)) =
+
+                    #[cfg(target_os = "macos")]
+                    let iosurface_result = screen_frame.iosurface_backing().map(|image_buf| {
+                        self.yuv_converter
+                            .convert_nv12_from_iosurface(device, queue, image_buf)
+                    });
+
+                    #[cfg(target_os = "macos")]
+                    if let Some(Ok(_)) = iosurface_result {
+                        if self.yuv_converter.output_texture().is_some() {
+                            self.pending_copy = Some(PendingTextureCopy {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                dst_texture_index: next_texture,
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    } else if let (Some(y_data), Some(uv_data)) =
                         (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
                         let y_stride = screen_frame.y_stride();
+                        let uv_stride = screen_frame.uv_stride();
                         let convert_result = self.yuv_converter.convert_nv12(
                             device,
                             queue,
@@ -134,6 +154,58 @@ impl DisplayLayer {
                             frame_size.x,
                             frame_size.y,
                             y_stride,
+                            uv_stride,
+                        );
+
+                        match convert_result {
+                            Ok(_) => {
+                                if self.yuv_converter.output_texture().is_some() {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: frame_size.x,
+                                        height: frame_size.y,
+                                        dst_texture_index: next_texture,
+                                    });
+                                    true
+                                } else {
+                                    tracing::debug!(
+                                        width = frame_size.x,
+                                        height = frame_size.y,
+                                        y_stride,
+                                        "NV12 conversion succeeded but output texture is None, skipping copy"
+                                    );
+                                    false
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    error = ?e,
+                                    width = frame_size.x,
+                                    height = frame_size.y,
+                                    y_stride,
+                                    "NV12 to RGBA conversion failed"
+                                );
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    if let (Some(y_data), Some(uv_data)) =
+                        (screen_frame.y_plane(), screen_frame.uv_plane())
+                    {
+                        let y_stride = screen_frame.y_stride();
+                        let uv_stride = screen_frame.uv_stride();
+                        let convert_result = self.yuv_converter.convert_nv12(
+                            device,
+                            queue,
+                            y_data,
+                            uv_data,
+                            frame_size.x,
+                            frame_size.y,
+                            y_stride,
+                            uv_stride,
                         );
 
                         match convert_result {

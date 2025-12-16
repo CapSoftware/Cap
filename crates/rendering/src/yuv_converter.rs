@@ -1,23 +1,24 @@
 use crate::decoder::PixelFormat;
 
+#[cfg(target_os = "macos")]
+use crate::iosurface_texture::{
+    IOSurfaceTextureCache, IOSurfaceTextureError, import_metal_texture_to_wgpu,
+};
+
+#[cfg(target_os = "macos")]
+use cidre::cv;
+
 #[derive(Debug, thiserror::Error)]
 pub enum YuvConversionError {
-    #[error(
-        "{plane} plane bounds exceeded at row {row}: start={start}, end={end}, data_len={data_len}"
-    )]
-    PlaneBoundsExceeded {
-        plane: &'static str,
-        row: usize,
-        start: usize,
-        end: usize,
-        data_len: usize,
-    },
     #[error("{plane} plane size mismatch: expected {expected}, got {actual}")]
     PlaneSizeMismatch {
         plane: &'static str,
         expected: usize,
         actual: usize,
     },
+    #[cfg(target_os = "macos")]
+    #[error("IOSurface error: {0}")]
+    IOSurfaceError(#[from] IOSurfaceTextureError),
 }
 
 fn upload_plane_with_stride(
@@ -29,70 +30,34 @@ fn upload_plane_with_stride(
     stride: u32,
     plane_name: &'static str,
 ) -> Result<(), YuvConversionError> {
-    if stride == width {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-    } else {
-        let expected_size = (width * height) as usize;
-        let mut packed = Vec::with_capacity(expected_size);
-        for row in 0..height as usize {
-            let start = row * stride as usize;
-            let end = start + width as usize;
-            if end > data.len() {
-                return Err(YuvConversionError::PlaneBoundsExceeded {
-                    plane: plane_name,
-                    row,
-                    start,
-                    end,
-                    data_len: data.len(),
-                });
-            }
-            packed.extend_from_slice(&data[start..end]);
-        }
-        if packed.len() != expected_size {
-            return Err(YuvConversionError::PlaneSizeMismatch {
-                plane: plane_name,
-                expected: expected_size,
-                actual: packed.len(),
-            });
-        }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &packed,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+    let expected_data_size = (stride * height) as usize;
+    if data.len() < expected_data_size {
+        return Err(YuvConversionError::PlaneSizeMismatch {
+            plane: plane_name,
+            expected: expected_data_size,
+            actual: data.len(),
+        });
     }
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(stride),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
     Ok(())
 }
 
@@ -114,6 +79,8 @@ pub struct YuvToRgbaConverter {
     cached_width: u32,
     cached_height: u32,
     cached_format: Option<PixelFormat>,
+    #[cfg(target_os = "macos")]
+    iosurface_cache: Option<IOSurfaceTextureCache>,
 }
 
 impl YuvToRgbaConverter {
@@ -265,6 +232,8 @@ impl YuvToRgbaConverter {
             cached_width: 0,
             cached_height: 0,
             cached_format: None,
+            #[cfg(target_os = "macos")]
+            iosurface_cache: IOSurfaceTextureCache::new(),
         }
     }
 
@@ -389,6 +358,7 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
         y_stride: u32,
+        uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
         self.ensure_textures(device, width, height, PixelFormat::Nv12);
 
@@ -397,6 +367,16 @@ impl YuvToRgbaConverter {
         let output_texture = self.output_texture.as_ref().unwrap();
 
         upload_plane_with_stride(queue, y_texture, y_data, width, height, y_stride, "Y")?;
+
+        let half_height = height / 2;
+        let expected_uv_size = (uv_stride * half_height) as usize;
+        if uv_data.len() < expected_uv_size {
+            return Err(YuvConversionError::PlaneSizeMismatch {
+                plane: "UV",
+                expected: expected_uv_size,
+                actual: uv_data.len(),
+            });
+        }
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -408,12 +388,12 @@ impl YuvToRgbaConverter {
             uv_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(width),
-                rows_per_image: Some(height / 2),
+                bytes_per_row: Some(uv_stride),
+                rows_per_image: Some(half_height),
             },
             wgpu::Extent3d {
                 width: width / 2,
-                height: height / 2,
+                height: half_height,
                 depth_or_array_layers: 1,
             },
         );
@@ -450,6 +430,125 @@ impl YuvToRgbaConverter {
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("NV12 Conversion Pass"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.output_view.as_ref().unwrap())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn convert_nv12_from_iosurface(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image_buf: &cv::ImageBuf,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        let cache = self
+            .iosurface_cache
+            .as_ref()
+            .ok_or(IOSurfaceTextureError::NoMetalDevice)?;
+
+        let io_surface = image_buf
+            .io_surf()
+            .ok_or(IOSurfaceTextureError::NoIOSurface)?;
+
+        let width = image_buf.width() as u32;
+        let height = image_buf.height() as u32;
+
+        let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
+        let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
+
+        let y_wgpu_texture = import_metal_texture_to_wgpu(
+            device,
+            &y_metal_texture,
+            wgpu::TextureFormat::R8Unorm,
+            width,
+            height,
+            Some("IOSurface Y Plane"),
+        )?;
+
+        let uv_wgpu_texture = import_metal_texture_to_wgpu(
+            device,
+            &uv_metal_texture,
+            wgpu::TextureFormat::Rg8Unorm,
+            width / 2,
+            height / 2,
+            Some("IOSurface UV Plane"),
+        )?;
+
+        if self.cached_width != width
+            || self.cached_height != height
+            || self.cached_format != Some(PixelFormat::Nv12)
+        {
+            self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("RGBA Output Texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+
+            self.output_view = Some(
+                self.output_texture
+                    .as_ref()
+                    .unwrap()
+                    .create_view(&Default::default()),
+            );
+
+            self.cached_width = width;
+            self.cached_height = height;
+            self.cached_format = Some(PixelFormat::Nv12);
+        }
+
+        let output_texture = self.output_texture.as_ref().unwrap();
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("NV12 IOSurface Converter Bind Group"),
+            layout: &self.nv12_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &y_wgpu_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &uv_wgpu_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &output_texture.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 IOSurface Conversion Encoder"),
+        });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 IOSurface Conversion Pass"),
                 ..Default::default()
             });
             compute_pass.set_pipeline(&self.nv12_pipeline);

@@ -29,19 +29,33 @@ struct ProcessedFrame {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
+    image_buf: Option<R<cv::ImageBuf>>,
 }
 
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
         match self.format {
             PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
-            PixelFormat::Nv12 => DecodedFrame::new_nv12(
-                (*self.data).clone(),
-                self.width,
-                self.height,
-                self.y_stride,
-                self.uv_stride,
-            ),
+            PixelFormat::Nv12 => {
+                if let Some(image_buf) = &self.image_buf {
+                    DecodedFrame::new_nv12_with_iosurface(
+                        (*self.data).clone(),
+                        self.width,
+                        self.height,
+                        self.y_stride,
+                        self.uv_stride,
+                        image_buf.retained(),
+                    )
+                } else {
+                    DecodedFrame::new_nv12(
+                        (*self.data).clone(),
+                        self.width,
+                        self.height,
+                        self.y_stride,
+                        self.uv_stride,
+                    )
+                }
+            }
             PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
                 (*self.data).clone(),
                 self.width,
@@ -91,91 +105,72 @@ impl ImageBufProcessor {
                 (bytes, PixelFormat::Rgba, width as u32 * 4, 0)
             }
             format::Pixel::NV12 => {
-                let width = image_buf.width();
-                let height = image_buf.height();
                 let y_stride = image_buf.plane_bytes_per_row(0);
                 let uv_stride = image_buf.plane_bytes_per_row(1);
                 let y_height = image_buf.plane_height(0);
                 let uv_height = image_buf.plane_height(1);
 
+                let y_size = y_stride * y_height;
+                let uv_size = uv_stride * uv_height;
+
                 let y_slice = unsafe {
                     std::slice::from_raw_parts::<'static, _>(
                         image_buf.plane_base_address(0),
-                        y_stride * y_height,
+                        y_size,
                     )
                 };
 
                 let uv_slice = unsafe {
                     std::slice::from_raw_parts::<'static, _>(
                         image_buf.plane_base_address(1),
-                        uv_stride * uv_height,
+                        uv_size,
                     )
                 };
 
-                let mut data = Vec::with_capacity(width * height + width * height / 2);
-                for row in 0..y_height {
-                    let start = row * y_stride;
-                    let end = start + width;
-                    data.extend_from_slice(&y_slice[start..end]);
-                }
-                for row in 0..uv_height {
-                    let start = row * uv_stride;
-                    let end = start + width;
-                    data.extend_from_slice(&uv_slice[start..end]);
-                }
+                let mut data = Vec::with_capacity(y_size + uv_size);
+                data.extend_from_slice(y_slice);
+                data.extend_from_slice(uv_slice);
 
-                (data, PixelFormat::Nv12, width as u32, width as u32)
+                (data, PixelFormat::Nv12, y_stride as u32, uv_stride as u32)
             }
             format::Pixel::YUV420P => {
-                let width = image_buf.width();
-                let height = image_buf.height();
                 let y_stride = image_buf.plane_bytes_per_row(0);
                 let u_stride = image_buf.plane_bytes_per_row(1);
                 let v_stride = image_buf.plane_bytes_per_row(2);
                 let y_height = image_buf.plane_height(0);
                 let uv_height = image_buf.plane_height(1);
 
+                let y_size = y_stride * y_height;
+                let u_size = u_stride * uv_height;
+                let v_size = v_stride * uv_height;
+
                 let y_slice = unsafe {
                     std::slice::from_raw_parts::<'static, _>(
                         image_buf.plane_base_address(0),
-                        y_stride * y_height,
+                        y_size,
                     )
                 };
 
                 let u_slice = unsafe {
                     std::slice::from_raw_parts::<'static, _>(
                         image_buf.plane_base_address(1),
-                        u_stride * uv_height,
+                        u_size,
                     )
                 };
 
                 let v_slice = unsafe {
                     std::slice::from_raw_parts::<'static, _>(
                         image_buf.plane_base_address(2),
-                        v_stride * uv_height,
+                        v_size,
                     )
                 };
 
-                let half_width = width / 2;
-                let mut data = Vec::with_capacity(width * height + half_width * uv_height * 2);
+                let mut data = Vec::with_capacity(y_size + u_size + v_size);
+                data.extend_from_slice(y_slice);
+                data.extend_from_slice(u_slice);
+                data.extend_from_slice(v_slice);
 
-                for row in 0..y_height {
-                    let start = row * y_stride;
-                    let end = start + width;
-                    data.extend_from_slice(&y_slice[start..end]);
-                }
-                for row in 0..uv_height {
-                    let start = row * u_stride;
-                    let end = start + half_width;
-                    data.extend_from_slice(&u_slice[start..end]);
-                }
-                for row in 0..uv_height {
-                    let start = row * v_stride;
-                    let end = start + half_width;
-                    data.extend_from_slice(&v_slice[start..end]);
-                }
-
-                (data, PixelFormat::Yuv420p, width as u32, half_width as u32)
+                (data, PixelFormat::Yuv420p, y_stride as u32, u_stride as u32)
             }
             _ => {
                 let width = image_buf.width();
@@ -197,6 +192,8 @@ impl CachedFrame {
         let height = image_buf.height() as u32;
         let (data, format, y_stride, uv_stride) = processor.extract_raw(&mut image_buf);
 
+        let retain_iosurface = format == PixelFormat::Nv12 && image_buf.io_surf().is_some();
+
         let frame = ProcessedFrame {
             _number: number,
             data: Arc::new(data),
@@ -205,6 +202,11 @@ impl CachedFrame {
             format,
             y_stride,
             uv_stride,
+            image_buf: if retain_iosurface {
+                Some(image_buf)
+            } else {
+                None
+            },
         };
         Self(frame)
     }
@@ -451,6 +453,7 @@ impl AVAssetReaderDecoder {
                                 format: PixelFormat::Rgba,
                                 y_stride: video_width * 4,
                                 uv_stride: 0,
+                                image_buf: None,
                             };
                             (sender)(black_frame);
                         }
