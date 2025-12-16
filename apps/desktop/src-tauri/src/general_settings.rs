@@ -134,7 +134,7 @@ fn default_enable_native_camera_preview() -> bool {
 }
 
 fn default_enable_new_recording_flow() -> bool {
-    true
+    false
 }
 
 fn no(_: &bool) -> bool {
@@ -259,8 +259,12 @@ pub fn init(app: &AppHandle) {
     };
 
     if !store.recording_picker_preference_set {
-        store.enable_new_recording_flow = true;
+        store.enable_new_recording_flow = false;
         store.recording_picker_preference_set = true;
+    }
+
+    if store.enable_new_recording_flow {
+        store.enable_new_recording_flow = false;
     }
 
     if let Err(e) = store.save(app) {

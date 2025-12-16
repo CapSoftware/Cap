@@ -1,12 +1,11 @@
-import { Router, useCurrentMatches } from "@solidjs/router";
-import { FileRoutes } from "@solidjs/start/router";
+import { Route, Router, useCurrentMatches } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import { createEffect, onCleanup, onMount, Suspense } from "solid-js";
+import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -18,6 +17,35 @@ import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
+
+const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
+const MainPage = lazy(() => import("./routes/(window-chrome)/(main)"));
+const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
+const SetupPage = lazy(() => import("./routes/(window-chrome)/setup"));
+const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
+const SettingsGeneralPage = lazy(() => import("./routes/(window-chrome)/settings/general"));
+const SettingsRecordingsPage = lazy(() => import("./routes/(window-chrome)/settings/recordings"));
+const SettingsScreenshotsPage = lazy(() => import("./routes/(window-chrome)/settings/screenshots"));
+const SettingsHotkeysPage = lazy(() => import("./routes/(window-chrome)/settings/hotkeys"));
+const SettingsChangelogPage = lazy(() => import("./routes/(window-chrome)/settings/changelog"));
+const SettingsFeedbackPage = lazy(() => import("./routes/(window-chrome)/settings/feedback"));
+const SettingsExperimentalPage = lazy(() => import("./routes/(window-chrome)/settings/experimental"));
+const SettingsLicensePage = lazy(() => import("./routes/(window-chrome)/settings/license"));
+const SettingsIntegrationsPage = lazy(() => import("./routes/(window-chrome)/settings/integrations"));
+const SettingsS3ConfigPage = lazy(() => import("./routes/(window-chrome)/settings/integrations/s3-config"));
+const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
+const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
+const CameraPage = lazy(() => import("./routes/camera"));
+const CaptureAreaPage = lazy(() => import("./routes/capture-area"));
+const DebugPage = lazy(() => import("./routes/debug"));
+const EditorPage = lazy(() => import("./routes/editor"));
+const InProgressRecordingPage = lazy(() => import("./routes/in-progress-recording"));
+const ModeSelectPage = lazy(() => import("./routes/mode-select"));
+const NotificationsPage = lazy(() => import("./routes/notifications"));
+const RecordingsOverlayPage = lazy(() => import("./routes/recordings-overlay"));
+const ScreenshotEditorPage = lazy(() => import("./routes/screenshot-editor"));
+const TargetSelectOverlayPage = lazy(() => import("./routes/target-select-overlay"));
+const WindowCaptureOccluderPage = lazy(() => import("./routes/window-capture-occluder"));
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -35,6 +63,9 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
+	// #region agent log
+	fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.tsx:App',message:'App component rendering',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+	// #endregion
 	return (
 		<QueryClientProvider client={queryClient}>
 			<Suspense>
@@ -45,10 +76,16 @@ export default function App() {
 }
 
 function Inner() {
+	// #region agent log
+	fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.tsx:Inner',message:'Inner component rendering',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+	// #endregion
 	const currentWindow = getCurrentWebviewWindow();
 	createThemeListener(currentWindow);
 
 	onMount(() => {
+		// #region agent log
+		fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.tsx:Inner:onMount',message:'Inner onMount',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+		// #endregion
 		initAnonymousUser();
 	});
 
@@ -78,6 +115,9 @@ function Inner() {
 						const matches = useCurrentMatches();
 
 						onMount(() => {
+							// #region agent log
+							fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'App.tsx:Router:root:onMount',message:'Router root onMount',data:{pathname:location.pathname,matchCount:matches().length,autoShowFlags:matches().map(m=>m.route.info?.AUTO_SHOW_WINDOW)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,D'})}).catch(()=>{});
+							// #endregion
 							for (const match of matches()) {
 								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
 							}
@@ -98,7 +138,37 @@ function Inner() {
 						);
 					}}
 				>
-					<FileRoutes />
+					<Route path="/" component={WindowChromeLayout}>
+						<Route path="/" component={MainPage} />
+						<Route path="/new-main" component={NewMainPage} />
+						<Route path="/setup" component={SetupPage} />
+						<Route path="/settings" component={SettingsLayout}>
+							<Route path="/" component={SettingsGeneralPage} />
+							<Route path="/general" component={SettingsGeneralPage} />
+							<Route path="/recordings" component={SettingsRecordingsPage} />
+							<Route path="/screenshots" component={SettingsScreenshotsPage} />
+							<Route path="/hotkeys" component={SettingsHotkeysPage} />
+							<Route path="/changelog" component={SettingsChangelogPage} />
+							<Route path="/feedback" component={SettingsFeedbackPage} />
+							<Route path="/experimental" component={SettingsExperimentalPage} />
+							<Route path="/license" component={SettingsLicensePage} />
+							<Route path="/integrations" component={SettingsIntegrationsPage} />
+							<Route path="/integrations/s3-config" component={SettingsS3ConfigPage} />
+						</Route>
+						<Route path="/upgrade" component={UpgradePage} />
+						<Route path="/update" component={UpdatePage} />
+					</Route>
+					<Route path="/camera" component={CameraPage} />
+					<Route path="/capture-area" component={CaptureAreaPage} />
+					<Route path="/debug" component={DebugPage} />
+					<Route path="/editor" component={EditorPage} />
+					<Route path="/in-progress-recording" component={InProgressRecordingPage} />
+					<Route path="/mode-select" component={ModeSelectPage} />
+					<Route path="/notifications" component={NotificationsPage} />
+					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
+					<Route path="/screenshot-editor" component={ScreenshotEditorPage} />
+					<Route path="/target-select-overlay" component={TargetSelectOverlayPage} />
+					<Route path="/window-capture-occluder" component={WindowCaptureOccluderPage} />
 				</Router>
 			</CapErrorBoundary>
 		</>

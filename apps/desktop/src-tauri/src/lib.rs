@@ -2677,6 +2677,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 async move {
                     if !permissions.screen_recording.permitted()
                         || !permissions.accessibility.permitted()
+                        || !permissions.microphone.permitted()
+                        || !permissions.camera.permitted()
                         || GeneralSettingsStore::get(&app)
                             .ok()
                             .flatten()
