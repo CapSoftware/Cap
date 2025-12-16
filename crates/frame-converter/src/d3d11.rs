@@ -498,7 +498,7 @@ impl FrameConverter for D3D11Converter {
 fn pixel_to_dxgi(pixel: Pixel) -> Result<DXGI_FORMAT, ConvertError> {
     match pixel {
         Pixel::NV12 => Ok(DXGI_FORMAT_NV12),
-        Pixel::YUYV422 | Pixel::UYVY422 => Ok(DXGI_FORMAT_YUY2),
+        Pixel::YUYV422 => Ok(DXGI_FORMAT_YUY2),
         _ => Err(ConvertError::UnsupportedFormat(pixel, Pixel::NV12)),
     }
 }
@@ -567,7 +567,7 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
                 }
             }
         }
-        Pixel::YUYV422 | Pixel::UYVY422 => {
+        Pixel::YUYV422 => {
             let row_bytes = frame.width() as usize * 2;
             for y in 0..height {
                 unsafe {
@@ -609,7 +609,7 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
                 }
             }
         }
-        Pixel::YUYV422 | Pixel::UYVY422 => {
+        Pixel::YUYV422 => {
             let bytes_per_pixel = 2;
             let row_bytes = frame.width() as usize * bytes_per_pixel;
             for y in 0..height {
