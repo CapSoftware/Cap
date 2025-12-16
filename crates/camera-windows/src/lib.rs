@@ -229,7 +229,7 @@ pub enum FrameInner {
     DirectShow(IMediaSample),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PixelFormat {
     ARGB,
     RGB24,
