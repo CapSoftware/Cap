@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
@@ -14,7 +15,6 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
         cursor: Arc<CursorEvents>,
-        frame_number: u32,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -56,7 +56,7 @@ impl Renderer {
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, rx) = mpsc::channel(8);
 
         let this = Self {
             rx,
@@ -81,8 +81,6 @@ impl Renderer {
             uniforms: ProjectUniforms,
             finished: oneshot::Sender<()>,
             cursor: Arc<CursorEvents>,
-            #[allow(dead_code)]
-            frame_number: u32,
         }
 
         let mut pending_frame: Option<PendingFrame> = None;
@@ -97,13 +95,11 @@ impl Renderer {
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     }) => Some(PendingFrame {
                         segment_frames,
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     }),
                     Some(RendererMessage::Stop { finished }) => {
                         let _ = finished.send(());
@@ -117,6 +113,7 @@ impl Renderer {
                 continue;
             };
 
+            let queue_drain_start = Instant::now();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
                     RendererMessage::RenderFrame {
@@ -124,7 +121,6 @@ impl Renderer {
                         uniforms,
                         finished,
                         cursor,
-                        frame_number,
                     } => {
                         let _ = current.finished.send(());
                         current = PendingFrame {
@@ -132,7 +128,6 @@ impl Renderer {
                             uniforms,
                             finished,
                             cursor,
-                            frame_number,
                         };
                     }
                     RendererMessage::Stop { finished } => {
@@ -140,6 +135,9 @@ impl Renderer {
                         let _ = finished.send(());
                         return;
                     }
+                }
+                if queue_drain_start.elapsed().as_millis() > 5 {
+                    break;
                 }
             }
 
@@ -170,20 +168,16 @@ impl RendererHandle {
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
         cursor: Arc<CursorEvents>,
-        frame_number: u32,
     ) {
-        let (finished_tx, finished_rx) = oneshot::channel();
+        let (finished_tx, _finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
             segment_frames,
             uniforms,
             finished: finished_tx,
             cursor,
-            frame_number,
         })
         .await;
-
-        finished_rx.await.ok();
     }
 
     pub async fn stop(&self) {

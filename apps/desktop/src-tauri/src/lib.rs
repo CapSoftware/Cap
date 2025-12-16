@@ -484,8 +484,7 @@ async fn set_camera_input(
                     Err(e) => {
                         if attempts >= 3 {
                             break Err(format!(
-                                "Failed to initialize camera after {} attempts: {}",
-                                attempts, e
+                                "Failed to initialize camera after {attempts} attempts: {e}"
                             ));
                         }
                         warn!(
@@ -2314,6 +2313,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            recording_settings::set_recording_mode,
             upload_logs,
             recording::start_recording,
             recording::stop_recording,
@@ -3126,11 +3126,6 @@ async fn create_editor_instance_impl(
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            tracing::debug!(
-                frame = e.payload.frame_number,
-                fps = e.payload.fps,
-                "RenderFrameEvent received"
-            );
             preview_tx.send_modify(|v| {
                 *v = Some((
                     e.payload.frame_number,

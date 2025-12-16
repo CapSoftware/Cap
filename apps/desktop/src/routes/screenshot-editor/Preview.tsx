@@ -39,6 +39,30 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
 
+	const [previousBitmap, setPreviousBitmap] = createSignal<ImageBitmap | null>(
+		null,
+	);
+
+	createEffect(() => {
+		const frame = latestFrame();
+		const currentBitmap = frame?.bitmap ?? null;
+		const prevBitmap = previousBitmap();
+
+		if (prevBitmap && prevBitmap !== currentBitmap) {
+			prevBitmap.close();
+		}
+
+		setPreviousBitmap(currentBitmap);
+	});
+
+	onCleanup(() => {
+		const bitmap = previousBitmap();
+		if (bitmap) {
+			bitmap.close();
+			setPreviousBitmap(null);
+		}
+	});
+
 	const zoomIn = () => {
 		props.setZoom(Math.min(3, props.zoom + 0.1));
 		setPan({ x: 0, y: 0 });
@@ -92,10 +116,10 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	createEffect(() => {
 		const frame = latestFrame();
-		if (frame && canvasRef) {
+		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
-				ctx.putImageData(frame.data, 0, 0);
+				ctx.drawImage(frame.bitmap, 0, 0);
 				const crop = project.background.crop;
 				if (crop) {
 					const width = canvasRef.width;
@@ -172,13 +196,14 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 							if (!f)
 								return {
 									width: 0,
-									data: { width: 0, height: 0 } as ImageData,
+									height: 0,
+									bitmap: null,
 								};
 							return f;
 						};
 
 						const frameWidth = () => frame().width;
-						const frameHeight = () => frame().data.height;
+						const frameHeight = () => frame().height;
 
 						const imageRect = createMemo(() => {
 							const crop = project.background.crop;
@@ -403,10 +428,10 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 							if (
 								maskCanvasRef.width !== frameData.width ||
-								maskCanvasRef.height !== frameData.data.height
+								maskCanvasRef.height !== frameData.height
 							) {
 								maskCanvasRef.width = frameData.width;
-								maskCanvasRef.height = frameData.data.height;
+								maskCanvasRef.height = frameData.height;
 							}
 
 							ctx.clearRect(0, 0, maskCanvasRef.width, maskCanvasRef.height);

@@ -188,7 +188,7 @@ impl CapWindowId {
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
-            Self::ModeSelect => (900.0, 500.0),
+            Self::ModeSelect => (580.0, 340.0),
             _ => return None,
         })
     }
@@ -486,16 +486,15 @@ impl ShowCapWindow {
                 builder.build()?
             }
             Self::ModeSelect => {
-                // Hide main window when mode select window opens
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
 
                 let mut builder = self
                     .window_builder(app, "/mode-select")
-                    .inner_size(900.0, 500.0)
-                    .min_inner_size(900.0, 500.0)
-                    .resizable(true)
+                    .inner_size(580.0, 340.0)
+                    .min_inner_size(580.0, 340.0)
+                    .resizable(false)
                     .maximized(false)
                     .maximizable(false)
                     .center()

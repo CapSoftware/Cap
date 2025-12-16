@@ -139,8 +139,6 @@ fn run_synthetic_benchmark(
             let pipeline_latency = encode_start.elapsed() + conversion_duration;
             metrics.record_frame_encoded(encode_duration, pipeline_latency);
         }
-
-        frame_sequence += 1;
     }
 
     let drain_deadline = Instant::now() + Duration::from_secs(5);

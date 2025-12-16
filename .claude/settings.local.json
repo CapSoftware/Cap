@@ -30,7 +30,18 @@
 			"Bash(pnpm exec tsc:*)",
 			"Bash(pnpm biome check:*)",
 			"Bash(pnpm --dir apps/desktop exec tsc:*)",
-			"Bash(xxd:*)"
+			"Bash(xxd:*)",
+			"Bash(git checkout:*)",
+			"WebFetch(domain:www.npmjs.com)",
+			"Bash(pnpm install:*)",
+			"Bash(pnpm --dir apps/desktop exec biome check:*)",
+			"Bash(pnpm --dir apps/desktop exec biome format:*)",
+			"Bash(echo:*)",
+			"Bash(pnpm exec biome:*)",
+			"Bash(rustfmt:*)",
+			"Bash(cargo tree:*)",
+			"WebFetch(domain:github.com)",
+			"WebFetch(domain:docs.rs)"
 		],
 		"deny": [],
 		"ask": []

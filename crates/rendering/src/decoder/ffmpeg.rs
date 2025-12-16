@@ -1,4 +1,4 @@
-use ffmpeg::{frame, sys::AVHWDeviceType};
+use ffmpeg::{format, frame, sys::AVHWDeviceType};
 use log::debug;
 use std::{
     cell::RefCell,
@@ -9,7 +9,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-use crate::DecodedFrame;
+use crate::{DecodedFrame, PixelFormat};
 
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, frame_converter::FrameConverter, pts_to_frame};
 
@@ -19,18 +19,98 @@ struct ProcessedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
+}
+
+impl ProcessedFrame {
+    fn to_decoded_frame(&self) -> DecodedFrame {
+        match self.format {
+            PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
+            PixelFormat::Nv12 => DecodedFrame::new_nv12(
+                (*self.data).clone(),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
+                (*self.data).clone(),
+                self.width,
+                self.height,
+                self.y_stride,
+                self.uv_stride,
+            ),
+        }
+    }
+}
+
+fn extract_yuv_planes(frame: &frame::Video) -> Option<(Vec<u8>, PixelFormat, u32, u32)> {
+    let height = frame.height();
+
+    match frame.format() {
+        format::Pixel::YUV420P => {
+            let y_stride = frame.stride(0) as u32;
+            let u_stride = frame.stride(1) as u32;
+            let v_stride = frame.stride(2) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_height = height / 2;
+            let u_size = (u_stride * uv_height) as usize;
+            let v_size = (v_stride * uv_height) as usize;
+
+            let mut data = Vec::with_capacity(y_size + u_size + v_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..u_size]);
+            data.extend_from_slice(&frame.data(2)[..v_size]);
+
+            Some((data, PixelFormat::Yuv420p, y_stride, u_stride))
+        }
+        format::Pixel::NV12 => {
+            let y_stride = frame.stride(0) as u32;
+            let uv_stride = frame.stride(1) as u32;
+
+            let y_size = (y_stride * height) as usize;
+            let uv_size = (uv_stride * (height / 2)) as usize;
+
+            let mut data = Vec::with_capacity(y_size + uv_size);
+            data.extend_from_slice(&frame.data(0)[..y_size]);
+            data.extend_from_slice(&frame.data(1)[..uv_size]);
+
+            Some((data, PixelFormat::Nv12, y_stride, uv_stride))
+        }
+        _ => None,
+    }
 }
 
 impl CachedFrame {
     fn process(&mut self, converter: &mut FrameConverter) -> ProcessedFrame {
         match self {
             Self::Raw { frame, number } => {
-                let frame_buffer = converter.convert(frame);
-                let data = ProcessedFrame {
-                    data: Arc::new(frame_buffer),
-                    number: *number,
-                    width: frame.width(),
-                    height: frame.height(),
+                let data = if let Some((yuv_data, pixel_format, y_stride, uv_stride)) =
+                    extract_yuv_planes(frame)
+                {
+                    ProcessedFrame {
+                        data: Arc::new(yuv_data),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: pixel_format,
+                        y_stride,
+                        uv_stride,
+                    }
+                } else {
+                    let frame_buffer = converter.convert(frame);
+                    ProcessedFrame {
+                        data: Arc::new(frame_buffer),
+                        number: *number,
+                        width: frame.width(),
+                        height: frame.height(),
+                        format: PixelFormat::Rgba,
+                        y_stride: frame.width() * 4,
+                        uv_stride: 0,
+                    }
                 };
 
                 *self = Self::Processed(data.clone());
@@ -100,6 +180,10 @@ impl FfmpegDecoder {
             while let Ok(r) = rx.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        if sender.is_closed() {
+                            continue;
+                        }
+
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
                         // sender.send(black_frame.clone()).ok();
                         // continue;
@@ -107,22 +191,23 @@ impl FfmpegDecoder {
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&mut converter);
 
-                            let _ = sender.send(DecodedFrame {
-                                data: data.data.clone(),
-                                width: data.width,
-                                height: data.height,
-                            });
+                            if sender.send(data.to_decoded_frame()).is_err() {
+                                log::warn!(
+                                    "Failed to send cached frame {requested_frame}: receiver dropped"
+                                );
+                            }
                             *last_sent_frame.borrow_mut() = Some(data);
                             continue;
                         } else {
                             let last_sent_frame = last_sent_frame.clone();
                             Some(move |data: ProcessedFrame| {
+                                let frame_number = data.number;
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                let _ = sender.send(DecodedFrame {
-                                    data: data.data.clone(),
-                                    width: data.width,
-                                    height: data.height,
-                                });
+                                if sender.send(data.to_decoded_frame()).is_err() {
+                                    log::warn!(
+                                        "Failed to send decoded frame {frame_number}: receiver dropped"
+                                    );
+                                }
                             })
                         };
 
@@ -257,6 +342,9 @@ impl FfmpegDecoder {
                                     data: Arc::new(black_frame_data),
                                     width: video_width,
                                     height: video_height,
+                                    format: PixelFormat::Rgba,
+                                    y_stride: video_width * 4,
+                                    uv_stride: 0,
                                 };
                                 (sender)(black_frame);
                             }

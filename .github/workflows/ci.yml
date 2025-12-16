@@ -141,9 +141,7 @@ jobs:
         run: node scripts/setup.js
 
       - name: Run Clippy
-        uses: actions-rs-plus/clippy-check@v2
-        with:
-          args: --workspace --all-features --locked
+        run: cargo clippy --workspace --all-features --locked -- -D warnings
 
   lint-biome:
     name: Lint (Biome)
@@ -279,6 +277,4 @@ jobs:
 
       - name: Run Clippy
         if: ${{ matrix.settings.target == 'aarch64-apple-darwin' || matrix.settings.target == 'x86_64-pc-windows-msvc' }}
-        uses: actions-rs-plus/clippy-check@v2
-        with:
-          args: --workspace --all-features --locked
+        run: cargo clippy --workspace --all-features --locked -- -D warnings

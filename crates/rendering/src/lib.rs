@@ -7,7 +7,7 @@ use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use frame_pipeline::finish_encoder;
+use frame_pipeline::{RenderSession, finish_encoder};
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
@@ -19,23 +19,25 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
-use tracing::error;
 
 mod composite_frame;
 mod coord;
 mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
+#[cfg(target_os = "macos")]
+pub mod iosurface_texture;
 mod layers;
 mod mask;
 mod project_recordings;
 mod scene;
 mod spring_mass_damper;
 mod text;
+pub mod yuv_converter;
 mod zoom;
 
 pub use coord::*;
-pub use decoder::DecodedFrame;
+pub use decoder::{DecodedFrame, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
@@ -198,9 +200,19 @@ impl RecordingSegmentDecoders {
             )
         );
 
+        let camera_frame = camera.flatten();
+
+        if needs_camera && camera_frame.is_none() {
+            tracing::debug!(
+                segment_time,
+                has_camera_decoder = self.camera.is_some(),
+                "camera frame missing"
+            );
+        }
+
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
-            camera_frame: camera.flatten(),
+            camera_frame,
             segment_time,
             recording_time: segment_time + self.segment_offset as f32,
         })
@@ -1518,6 +1530,7 @@ impl ProjectUniforms {
     }
 }
 
+#[derive(Clone)]
 pub struct DecodedSegmentFrames {
     pub screen_frame: DecodedFrame,
     pub camera_frame: Option<DecodedFrame>,
@@ -1676,7 +1689,7 @@ impl RendererLayers {
     }
 
     pub fn render(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -1701,6 +1714,10 @@ impl RendererLayers {
                 })
             };
         }
+
+        self.display.copy_to_texture(encoder);
+        self.camera.copy_to_texture(encoder);
+        self.camera_only.copy_to_texture(encoder);
 
         {
             let mut pass = render_pass!(
@@ -1757,147 +1774,6 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.captions.render(&mut pass);
         }
-    }
-}
-
-pub struct RenderSession {
-    textures: (wgpu::Texture, wgpu::Texture),
-    texture_views: (wgpu::TextureView, wgpu::TextureView),
-    current_is_left: bool,
-    readback_buffers: (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
-    readback_buffer_size: u64,
-    current_readback_is_left: bool,
-}
-
-impl RenderSession {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let make_texture = || {
-            device.create_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-                label: Some("Intermediate Texture"),
-                view_formats: &[],
-            })
-        };
-
-        let textures = (make_texture(), make_texture());
-
-        Self {
-            current_is_left: true,
-            texture_views: (
-                textures.0.create_view(&Default::default()),
-                textures.1.create_view(&Default::default()),
-            ),
-            textures,
-            readback_buffers: (None, None),
-            readback_buffer_size: 0,
-            current_readback_is_left: true,
-        }
-    }
-
-    pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let make_texture = || {
-            device.create_texture(&wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC,
-                label: Some("Intermediate Texture"),
-                view_formats: &[],
-            })
-        };
-
-        self.textures = (make_texture(), make_texture());
-        self.texture_views = (
-            self.textures.0.create_view(&Default::default()),
-            self.textures.1.create_view(&Default::default()),
-        );
-    }
-
-    pub fn current_texture(&self) -> &wgpu::Texture {
-        if self.current_is_left {
-            &self.textures.0
-        } else {
-            &self.textures.1
-        }
-    }
-
-    pub fn current_texture_view(&self) -> &wgpu::TextureView {
-        if self.current_is_left {
-            &self.texture_views.0
-        } else {
-            &self.texture_views.1
-        }
-    }
-
-    pub fn other_texture_view(&self) -> &wgpu::TextureView {
-        if self.current_is_left {
-            &self.texture_views.1
-        } else {
-            &self.texture_views.0
-        }
-    }
-
-    pub fn swap_textures(&mut self) {
-        self.current_is_left = !self.current_is_left;
-    }
-
-    pub(crate) fn ensure_readback_buffers(&mut self, device: &wgpu::Device, size: u64) {
-        let needs_new = self
-            .readback_buffers
-            .0
-            .as_ref()
-            .is_none_or(|_| self.readback_buffer_size < size);
-
-        if needs_new {
-            let make_buffer = || {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("RenderSession Readback Buffer"),
-                    size,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                })
-            };
-
-            self.readback_buffers = (Some(make_buffer()), Some(make_buffer()));
-            self.readback_buffer_size = size;
-        }
-    }
-
-    pub(crate) fn current_readback_buffer(&self) -> &wgpu::Buffer {
-        if self.current_readback_is_left {
-            self.readback_buffers
-                .0
-                .as_ref()
-                .expect("readback buffer should be initialised")
-        } else {
-            self.readback_buffers
-                .1
-                .as_ref()
-                .expect("readback buffer should be initialised")
-        }
-    }
-
-    pub(crate) fn swap_readback_buffers(&mut self) {
-        self.current_readback_is_left = !self.current_readback_is_left;
     }
 }
 

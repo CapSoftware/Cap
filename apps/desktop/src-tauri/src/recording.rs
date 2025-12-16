@@ -31,6 +31,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::borrow::Cow;
+#[cfg(target_os = "macos")]
 use std::error::Error as StdError;
 use std::{
     any::Any,
@@ -47,6 +48,8 @@ use tauri_specta::Event;
 use tracing::*;
 
 use crate::camera::{CameraPreviewManager, CameraPreviewShape};
+#[cfg(target_os = "macos")]
+use crate::general_settings;
 use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
@@ -55,9 +58,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{
-        self, GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour,
-    },
+    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     thumbnails::*,

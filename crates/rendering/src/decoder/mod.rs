@@ -1,19 +1,69 @@
 use ::ffmpeg::Rational;
 use std::{
+    fmt,
     path::PathBuf,
     sync::{Arc, mpsc},
 };
 use tokio::sync::oneshot;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
 mod ffmpeg;
 mod frame_converter;
 
+#[cfg(target_os = "macos")]
+use cidre::{arc::R, cv};
+
+#[cfg(target_os = "macos")]
+pub struct SendableImageBuf(R<cv::ImageBuf>);
+
+#[cfg(target_os = "macos")]
+unsafe impl Send for SendableImageBuf {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for SendableImageBuf {}
+
+#[cfg(target_os = "macos")]
+impl SendableImageBuf {
+    pub fn new(image_buf: R<cv::ImageBuf>) -> Self {
+        Self(image_buf)
+    }
+
+    pub fn inner(&self) -> &cv::ImageBuf {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PixelFormat {
+    Rgba,
+    Nv12,
+    Yuv420p,
+}
+
+#[derive(Clone)]
 pub struct DecodedFrame {
     data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
+    format: PixelFormat,
+    y_stride: u32,
+    uv_stride: u32,
+    #[cfg(target_os = "macos")]
+    iosurface_backing: Option<Arc<SendableImageBuf>>,
+}
+
+impl fmt::Debug for DecodedFrame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DecodedFrame")
+            .field("data_len", &self.data.len())
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("format", &self.format)
+            .field("y_stride", &self.y_stride)
+            .field("uv_stride", &self.uv_stride)
+            .finish()
+    }
 }
 
 impl DecodedFrame {
@@ -22,7 +72,69 @@ impl DecodedFrame {
             data: Arc::new(data),
             width,
             height,
+            format: PixelFormat::Rgba,
+            y_stride: width * 4,
+            uv_stride: 0,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
         }
+    }
+
+    pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
+        }
+    }
+
+    pub fn new_yuv420p(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Yuv420p,
+            y_stride,
+            uv_stride,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new_nv12_with_iosurface(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        image_buf: R<cv::ImageBuf>,
+    ) -> Self {
+        Self {
+            data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn iosurface_backing(&self) -> Option<&cv::ImageBuf> {
+        self.iosurface_backing.as_ref().map(|b| b.inner())
     }
 
     pub fn data(&self) -> &[u8] {
@@ -36,6 +148,80 @@ impl DecodedFrame {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    pub fn format(&self) -> PixelFormat {
+        self.format
+    }
+
+    pub fn y_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Nv12 | PixelFormat::Yuv420p => {
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                self.data.get(..y_size)
+            }
+            PixelFormat::Rgba => None,
+        }
+    }
+
+    pub fn uv_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Nv12 => {
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                self.data.get(y_size..)
+            }
+            PixelFormat::Yuv420p | PixelFormat::Rgba => None,
+        }
+    }
+
+    pub fn u_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Yuv420p => {
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_size = self
+                    .uv_stride
+                    .checked_mul(self.height / 2)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_end = y_size.checked_add(u_size)?;
+                self.data.get(y_size..u_end)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn v_plane(&self) -> Option<&[u8]> {
+        match self.format {
+            PixelFormat::Yuv420p => {
+                let y_size = self
+                    .y_stride
+                    .checked_mul(self.height)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let u_size = self
+                    .uv_stride
+                    .checked_mul(self.height / 2)
+                    .and_then(|v| usize::try_from(v).ok())?;
+                let v_start = y_size.checked_add(u_size)?;
+                self.data.get(v_start..)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn y_stride(&self) -> u32 {
+        self.y_stride
+    }
+
+    pub fn uv_stride(&self) -> u32 {
+        self.uv_stride
+    }
 }
 
 pub enum VideoDecoderMessage {
@@ -47,7 +233,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 500;
+pub const FRAME_CACHE_SIZE: usize = 750;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
@@ -58,9 +244,17 @@ pub struct AsyncVideoDecoderHandle {
 impl AsyncVideoDecoderHandle {
     pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(VideoDecoderMessage::GetFrame(self.get_time(time), tx))
-            .unwrap();
+        let adjusted_time = self.get_time(time);
+
+        if self
+            .sender
+            .send(VideoDecoderMessage::GetFrame(adjusted_time, tx))
+            .is_err()
+        {
+            debug!("Decoder channel closed, receiver dropped");
+            return None;
+        }
+
         rx.await.ok()
     }
 

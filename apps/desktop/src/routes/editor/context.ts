@@ -20,7 +20,12 @@ import { createStore, produce, reconcile, unwrap } from "solid-js/store";
 
 import { createPresets } from "~/utils/createPresets";
 import { createCustomDomainQuery } from "~/utils/queries";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+	type CanvasControls,
+	createImageDataWS,
+	createLazySignal,
+	type FrameData,
+} from "~/utils/socket";
 import {
 	commands,
 	events,
@@ -691,7 +696,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 	null!,
 );
 
-export type FrameData = { width: number; height: number; data: ImageData };
+export type { CanvasControls, FrameData } from "~/utils/socket";
 
 function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 	if ("fps" in rawMeta) {
@@ -735,31 +740,41 @@ export type TransformedMeta = ReturnType<typeof transformMeta>;
 
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 	createContextProvider(() => {
-		const [latestFrame, setLatestFrame] = createLazySignal<{
-			width: number;
-			data: ImageData;
-		}>();
+		const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
-		const [isConnected, setIsConnected] = createSignal(false);
+		const [_isConnected, setIsConnected] = createSignal(false);
+		const [isWorkerReady, setIsWorkerReady] = createSignal(false);
+		const [canvasControls, setCanvasControls] =
+			createSignal<CanvasControls | null>(null);
 
 		const [editorInstance] = createResource(async () => {
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
 
-			const [ws, wsConnected] = createImageDataWS(
-				instance.framesSocketUrl,
-				setLatestFrame,
-			);
-
-			ws.addEventListener("open", () => {
-				console.log("[Editor] WebSocket open event - emitting initial frame");
-				setIsConnected(true);
+			const requestFrame = () => {
 				events.renderFrameEvent.emit({
 					frame_number: 0,
 					fps: FPS,
 					resolution_base: getPreviewResolution(DEFAULT_PREVIEW_QUALITY),
 				});
+			};
+
+			const [ws, _wsConnected, workerReady, controls] = createImageDataWS(
+				instance.framesSocketUrl,
+				setLatestFrame,
+				requestFrame,
+			);
+
+			setCanvasControls(controls);
+
+			createEffect(() => {
+				setIsWorkerReady(workerReady());
+			});
+
+			ws.addEventListener("open", () => {
+				setIsConnected(true);
+				requestFrame();
 			});
 
 			ws.addEventListener("close", () => {
@@ -783,6 +798,8 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			latestFrame,
 			presets: createPresets(),
 			metaQuery,
+			isWorkerReady,
+			canvasControls,
 		};
 	}, null!);
 

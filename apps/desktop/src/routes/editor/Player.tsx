@@ -1,6 +1,7 @@
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
+import { debounce } from "@solid-primitives/scheduled";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
@@ -184,7 +185,6 @@ export function PlayerContent() {
 				await commands.stopPlayback();
 				setEditorState("playing", false);
 			} else {
-				// Ensure we seek to the current playback time before starting playback
 				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
 				await commands.startPlayback(FPS, previewResolutionBase());
 				setEditorState("playing", true);
@@ -455,37 +455,66 @@ const gridStyle = {
 };
 
 function PreviewCanvas() {
-	const { latestFrame } = useEditorContext();
+	const { latestFrame, canvasControls } = useEditorContext();
 
-	let canvasRef: HTMLCanvasElement | undefined;
+	const hasRenderedFrame = () => canvasControls()?.hasRenderedFrame() ?? false;
+
+	const canvasTransferredRef = { current: false };
 
 	const [canvasContainerRef, setCanvasContainerRef] =
 		createSignal<HTMLDivElement>();
 	const containerBounds = createElementBounds(canvasContainerRef);
 
-	createEffect(() => {
-		const frame = latestFrame();
-		if (!frame) return;
-		if (!canvasRef) return;
-		const ctx = canvasRef.getContext("2d");
-		ctx?.putImageData(frame.data, 0, 0);
+	const [debouncedBounds, setDebouncedBounds] = createSignal({
+		width: 0,
+		height: 0,
 	});
+
+	const updateDebouncedBounds = debounce(
+		(width: number, height: number) => setDebouncedBounds({ width, height }),
+		100,
+	);
+
+	createEffect(() => {
+		const width = containerBounds.width ?? 0;
+		const height = containerBounds.height ?? 0;
+		if (debouncedBounds().width === 0 && debouncedBounds().height === 0) {
+			setDebouncedBounds({ width, height });
+		} else {
+			updateDebouncedBounds(width, height);
+		}
+	});
+
+	const initCanvas = (canvas: HTMLCanvasElement) => {
+		if (canvasTransferredRef.current) return;
+		const controls = canvasControls();
+		if (!controls) return;
+
+		try {
+			const offscreen = canvas.transferControlToOffscreen();
+			controls.initCanvas(offscreen);
+			canvasTransferredRef.current = true;
+		} catch (e) {
+			console.error("[PreviewCanvas] Failed to transfer canvas:", e);
+		}
+	};
 
 	return (
 		<div
 			ref={setCanvasContainerRef}
 			class="relative flex-1 justify-center items-center"
+			style={{ contain: "layout style" }}
 		>
 			<Show when={latestFrame()}>
 				{(currentFrame) => {
 					const padding = 4;
 					const frameWidth = () => currentFrame().width;
-					const frameHeight = () => currentFrame().data.height;
+					const frameHeight = () => currentFrame().height;
 
 					const availableWidth = () =>
-						Math.max((containerBounds.width ?? 0) - padding * 2, 0);
+						Math.max(debouncedBounds().width - padding * 2, 0);
 					const availableHeight = () =>
-						Math.max((containerBounds.height ?? 0) - padding * 2, 0);
+						Math.max(debouncedBounds().height - padding * 2, 0);
 
 					const containerAspect = () => {
 						const width = availableWidth();
@@ -522,15 +551,18 @@ function PreviewCanvas() {
 								style={{
 									width: `${size().width}px`,
 									height: `${size().height}px`,
+									contain: "strict",
 								}}
 							>
 								<canvas
 									style={{
 										width: `${size().width}px`,
 										height: `${size().height}px`,
-										...gridStyle,
+										"image-rendering": "auto",
+										"background-color": "#000000",
+										...(hasRenderedFrame() ? gridStyle : {}),
 									}}
-									ref={canvasRef}
+									ref={initCanvas}
 									id="canvas"
 									width={frameWidth()}
 									height={frameHeight()}

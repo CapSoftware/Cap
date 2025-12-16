@@ -15,6 +15,7 @@ use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
 use std::str::FromStr;
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
     Manager, Runtime, Window,
@@ -157,7 +158,7 @@ impl ScreenshotEditorInstances {
                                             .map(|e| e.path())
                                     })
                                     .ok_or_else(|| {
-                                        format!("No PNG file found in directory: {:?}", path)
+                                        format!("No PNG file found in directory: {path:?}")
                                     })?
                             }
                         } else {
@@ -353,6 +354,7 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    created_at: Instant::now(),
                                 }));
                             }
                             Err(e) => {
@@ -463,15 +465,12 @@ pub async fn update_screenshot_config(
     if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
         let path = parent.to_path_buf();
         if let Err(e) = config.write(&path) {
-            eprintln!("Failed to save screenshot config: {}", e);
+            eprintln!("Failed to save screenshot config: {e}");
         } else {
-            println!("Saved screenshot config to {:?}", path);
+            println!("Saved screenshot config to {path:?}");
         }
     } else {
-        println!(
-            "Not saving config: parent {:?} is not a .cap directory",
-            parent
-        );
+        println!("Not saving config: parent {parent:?} is not a .cap directory");
     }
     Ok(())
 }
