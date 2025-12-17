@@ -448,7 +448,7 @@ function Dialogs() {
 										if (time < elapsed + segDuration) {
 											return {
 												index: seg.recordingSegment ?? 0,
-												localTime: seg.start + (time - elapsed) * seg.timescale,
+												localTime: seg.start / seg.timescale + (time - elapsed),
 											};
 										}
 										elapsed += segDuration;

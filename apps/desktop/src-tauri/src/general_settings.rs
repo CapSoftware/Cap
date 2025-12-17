@@ -263,10 +263,6 @@ pub fn init(app: &AppHandle) {
         store.recording_picker_preference_set = true;
     }
 
-    if store.enable_new_recording_flow {
-        store.enable_new_recording_flow = false;
-    }
-
     if let Err(e) = store.save(app) {
         error!("Failed to save general settings: {}", e);
     }

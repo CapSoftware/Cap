@@ -88,20 +88,6 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-	// #region agent log
-	fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			location: "App.tsx:App",
-			message: "App component rendering",
-			data: { pathname: location.pathname },
-			timestamp: Date.now(),
-			sessionId: "debug-session",
-			hypothesisId: "C",
-		}),
-	}).catch(() => {});
-	// #endregion
 	return (
 		<QueryClientProvider client={queryClient}>
 			<Suspense>
@@ -112,38 +98,10 @@ export default function App() {
 }
 
 function Inner() {
-	// #region agent log
-	fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({
-			location: "App.tsx:Inner",
-			message: "Inner component rendering",
-			data: { pathname: location.pathname },
-			timestamp: Date.now(),
-			sessionId: "debug-session",
-			hypothesisId: "C",
-		}),
-	}).catch(() => {});
-	// #endregion
 	const currentWindow = getCurrentWebviewWindow();
 	createThemeListener(currentWindow);
 
 	onMount(() => {
-		// #region agent log
-		fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				location: "App.tsx:Inner:onMount",
-				message: "Inner onMount",
-				data: { pathname: location.pathname },
-				timestamp: Date.now(),
-				sessionId: "debug-session",
-				hypothesisId: "C",
-			}),
-		}).catch(() => {});
-		// #endregion
 		initAnonymousUser();
 	});
 
@@ -173,29 +131,6 @@ function Inner() {
 						const matches = useCurrentMatches();
 
 						onMount(() => {
-							// #region agent log
-							fetch(
-								"http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23",
-								{
-									method: "POST",
-									headers: { "Content-Type": "application/json" },
-									body: JSON.stringify({
-										location: "App.tsx:Router:root:onMount",
-										message: "Router root onMount",
-										data: {
-											pathname: location.pathname,
-											matchCount: matches().length,
-											autoShowFlags: matches().map(
-												(m) => m.route.info?.AUTO_SHOW_WINDOW,
-											),
-										},
-										timestamp: Date.now(),
-										sessionId: "debug-session",
-										hypothesisId: "C,D",
-									}),
-								},
-							).catch(() => {});
-							// #endregion
 							for (const match of matches()) {
 								if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
 							}

@@ -12,6 +12,7 @@ import {
 	batch,
 	createEffect,
 	createResource,
+	createRoot,
 	createSignal,
 	on,
 	onCleanup,
@@ -748,6 +749,12 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 		const [canvasControls, setCanvasControls] =
 			createSignal<CanvasControls | null>(null);
 
+		let disposeWorkerReadyEffect: (() => void) | undefined;
+
+		onCleanup(() => {
+			disposeWorkerReadyEffect?.();
+		});
+
 		const [editorInstance] = createResource(async () => {
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
@@ -773,8 +780,11 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 			setCanvasControls(controls);
 
-			createEffect(() => {
-				setIsWorkerReady(workerReady());
+			disposeWorkerReadyEffect = createRoot((dispose) => {
+				createEffect(() => {
+					setIsWorkerReady(workerReady());
+				});
+				return dispose;
 			});
 
 			ws.addEventListener("open", () => {
