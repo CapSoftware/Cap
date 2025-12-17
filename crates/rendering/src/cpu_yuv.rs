@@ -508,6 +508,7 @@ pub fn nv12_to_rgba_simd(
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[allow(clippy::too_many_arguments)]
 pub fn nv12_to_rgba_simd_with_progress(
     y_data: &[u8],
     uv_data: &[u8],
