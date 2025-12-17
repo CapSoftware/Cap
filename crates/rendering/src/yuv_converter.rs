@@ -1,5 +1,4 @@
 use crate::cpu_yuv;
-use crate::decoder::PixelFormat;
 
 #[cfg(target_os = "macos")]
 use crate::iosurface_texture::{
@@ -77,24 +76,25 @@ fn upload_plane_with_stride(
     Ok(())
 }
 
+const MAX_TEXTURE_WIDTH: u32 = 3840;
+const MAX_TEXTURE_HEIGHT: u32 = 2160;
+
 pub struct YuvToRgbaConverter {
     nv12_pipeline: wgpu::ComputePipeline,
     yuv420p_pipeline: wgpu::ComputePipeline,
     nv12_bind_group_layout: wgpu::BindGroupLayout,
     yuv420p_bind_group_layout: wgpu::BindGroupLayout,
-    y_texture: Option<wgpu::Texture>,
-    uv_texture: Option<wgpu::Texture>,
-    u_texture: Option<wgpu::Texture>,
-    v_texture: Option<wgpu::Texture>,
-    output_texture: Option<wgpu::Texture>,
-    _y_view: Option<wgpu::TextureView>,
-    _uv_view: Option<wgpu::TextureView>,
-    _u_view: Option<wgpu::TextureView>,
-    _v_view: Option<wgpu::TextureView>,
-    output_view: Option<wgpu::TextureView>,
-    cached_width: u32,
-    cached_height: u32,
-    cached_format: Option<PixelFormat>,
+    y_texture: wgpu::Texture,
+    y_view: wgpu::TextureView,
+    uv_texture: wgpu::Texture,
+    uv_view: wgpu::TextureView,
+    u_texture: wgpu::Texture,
+    u_view: wgpu::TextureView,
+    v_texture: wgpu::Texture,
+    v_view: wgpu::TextureView,
+    output_textures: [wgpu::Texture; 2],
+    output_views: [wgpu::TextureView; 2],
+    current_output: usize,
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
     #[cfg(target_os = "windows")]
@@ -236,24 +236,111 @@ impl YuvToRgbaConverter {
             cache: None,
         });
 
+        let y_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Y Plane Texture (Pre-allocated)"),
+            size: wgpu::Extent3d {
+                width: MAX_TEXTURE_WIDTH,
+                height: MAX_TEXTURE_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let y_view = y_texture.create_view(&Default::default());
+
+        let uv_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("UV Plane Texture (Pre-allocated)"),
+            size: wgpu::Extent3d {
+                width: MAX_TEXTURE_WIDTH / 2,
+                height: MAX_TEXTURE_HEIGHT / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let uv_view = uv_texture.create_view(&Default::default());
+
+        let u_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("U Plane Texture (Pre-allocated)"),
+            size: wgpu::Extent3d {
+                width: MAX_TEXTURE_WIDTH / 2,
+                height: MAX_TEXTURE_HEIGHT / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let u_view = u_texture.create_view(&Default::default());
+
+        let v_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("V Plane Texture (Pre-allocated)"),
+            size: wgpu::Extent3d {
+                width: MAX_TEXTURE_WIDTH / 2,
+                height: MAX_TEXTURE_HEIGHT / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let v_view = v_texture.create_view(&Default::default());
+
+        let create_output_texture = |label: &str| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: MAX_TEXTURE_WIDTH,
+                    height: MAX_TEXTURE_HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+
+        let output_texture_0 = create_output_texture("RGBA Output Texture 0 (Pre-allocated)");
+        let output_texture_1 = create_output_texture("RGBA Output Texture 1 (Pre-allocated)");
+        let output_view_0 = output_texture_0.create_view(&Default::default());
+        let output_view_1 = output_texture_1.create_view(&Default::default());
+
         Self {
             nv12_pipeline,
             yuv420p_pipeline,
             nv12_bind_group_layout,
             yuv420p_bind_group_layout,
-            y_texture: None,
-            uv_texture: None,
-            u_texture: None,
-            v_texture: None,
-            output_texture: None,
-            _y_view: None,
-            _uv_view: None,
-            _u_view: None,
-            _v_view: None,
-            output_view: None,
-            cached_width: 0,
-            cached_height: 0,
-            cached_format: None,
+            y_texture,
+            y_view,
+            uv_texture,
+            uv_view,
+            u_texture,
+            u_view,
+            v_texture,
+            v_view,
+            output_textures: [output_texture_0, output_texture_1],
+            output_views: [output_view_0, output_view_1],
+            current_output: 0,
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
             #[cfg(target_os = "windows")]
@@ -265,115 +352,16 @@ impl YuvToRgbaConverter {
         }
     }
 
-    fn ensure_textures(
-        &mut self,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        format: PixelFormat,
-    ) {
-        if self.cached_width == width
-            && self.cached_height == height
-            && self.cached_format == Some(format)
-        {
-            return;
-        }
+    fn swap_output_buffer(&mut self) {
+        self.current_output = 1 - self.current_output;
+    }
 
-        self.y_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Y Plane Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        }));
+    fn current_output_texture(&self) -> &wgpu::Texture {
+        &self.output_textures[self.current_output]
+    }
 
-        match format {
-            PixelFormat::Nv12 => {
-                self.uv_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("UV Plane Texture"),
-                    size: wgpu::Extent3d {
-                        width: width / 2,
-                        height: height / 2,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rg8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                }));
-                self.u_texture = None;
-                self.v_texture = None;
-            }
-            PixelFormat::Yuv420p => {
-                self.u_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("U Plane Texture"),
-                    size: wgpu::Extent3d {
-                        width: width / 2,
-                        height: height / 2,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                }));
-                self.v_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("V Plane Texture"),
-                    size: wgpu::Extent3d {
-                        width: width / 2,
-                        height: height / 2,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                }));
-                self.uv_texture = None;
-            }
-            PixelFormat::Rgba => {}
-        }
-
-        self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("RGBA Output Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        }));
-
-        self.output_view = Some(
-            self.output_texture
-                .as_ref()
-                .unwrap()
-                .create_view(&Default::default()),
-        );
-
-        self.cached_width = width;
-        self.cached_height = height;
-        self.cached_format = Some(format);
+    fn current_output_view(&self) -> &wgpu::TextureView {
+        &self.output_views[self.current_output]
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -388,13 +376,9 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        self.ensure_textures(device, width, height, PixelFormat::Nv12);
+        self.swap_output_buffer();
 
-        let y_texture = self.y_texture.as_ref().unwrap();
-        let uv_texture = self.uv_texture.as_ref().unwrap();
-        let output_texture = self.output_texture.as_ref().unwrap();
-
-        upload_plane_with_stride(queue, y_texture, y_data, width, height, y_stride, "Y")?;
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
         let half_height = height / 2;
         let expected_uv_size = (uv_stride * half_height) as usize;
@@ -408,7 +392,7 @@ impl YuvToRgbaConverter {
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: uv_texture,
+                texture: &self.uv_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -432,21 +416,15 @@ impl YuvToRgbaConverter {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &y_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.y_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &uv_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.uv_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &output_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
                 },
             ],
         });
@@ -467,7 +445,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[cfg(target_os = "macos")]
@@ -477,6 +455,8 @@ impl YuvToRgbaConverter {
         queue: &wgpu::Queue,
         image_buf: &cv::ImageBuf,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        self.swap_output_buffer();
+
         let cache = self
             .iosurface_cache
             .as_ref()
@@ -510,40 +490,8 @@ impl YuvToRgbaConverter {
             Some("IOSurface UV Plane"),
         )?;
 
-        if self.cached_width != width
-            || self.cached_height != height
-            || self.cached_format != Some(PixelFormat::Nv12)
-        {
-            self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("RGBA Output Texture"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            }));
-
-            self.output_view = Some(
-                self.output_texture
-                    .as_ref()
-                    .unwrap()
-                    .create_view(&Default::default()),
-            );
-
-            self.cached_width = width;
-            self.cached_height = height;
-            self.cached_format = Some(PixelFormat::Nv12);
-        }
-
-        let output_texture = self.output_texture.as_ref().unwrap();
+        let y_view = y_wgpu_texture.create_view(&Default::default());
+        let uv_view = uv_wgpu_texture.create_view(&Default::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 IOSurface Converter Bind Group"),
@@ -551,21 +499,15 @@ impl YuvToRgbaConverter {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &y_wgpu_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&y_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &uv_wgpu_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &output_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
                 },
             ],
         });
@@ -586,7 +528,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -602,21 +544,16 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        self.ensure_textures(device, width, height, PixelFormat::Yuv420p);
+        self.swap_output_buffer();
 
-        let y_texture = self.y_texture.as_ref().unwrap();
-        let u_texture = self.u_texture.as_ref().unwrap();
-        let v_texture = self.v_texture.as_ref().unwrap();
-        let output_texture = self.output_texture.as_ref().unwrap();
-
-        upload_plane_with_stride(queue, y_texture, y_data, width, height, y_stride, "Y")?;
+        upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
 
         let half_width = width / 2;
         let half_height = height / 2;
 
         upload_plane_with_stride(
             queue,
-            u_texture,
+            &self.u_texture,
             u_data,
             half_width,
             half_height,
@@ -625,7 +562,7 @@ impl YuvToRgbaConverter {
         )?;
         upload_plane_with_stride(
             queue,
-            v_texture,
+            &self.v_texture,
             v_data,
             half_width,
             half_height,
@@ -639,27 +576,19 @@ impl YuvToRgbaConverter {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &y_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.y_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &u_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.u_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &v_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.v_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        &output_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
                 },
             ],
         });
@@ -680,7 +609,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[cfg(target_os = "windows")]
@@ -763,18 +692,22 @@ impl YuvToRgbaConverter {
             d3d11_context.Unmap(staging_texture, 0);
         }
 
-        self.ensure_textures(wgpu_device, width, height, PixelFormat::Nv12);
+        self.swap_output_buffer();
 
-        let y_texture = self.y_texture.as_ref().unwrap();
-        let uv_texture = self.uv_texture.as_ref().unwrap();
-        let output_texture = self.output_texture.as_ref().unwrap();
-
-        upload_plane_with_stride(queue, y_texture, &y_data_vec, width, height, y_stride, "Y")?;
+        upload_plane_with_stride(
+            queue,
+            &self.y_texture,
+            &y_data_vec,
+            width,
+            height,
+            y_stride,
+            "Y",
+        )?;
 
         let half_height = height / 2;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: uv_texture,
+                texture: &self.uv_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -798,21 +731,15 @@ impl YuvToRgbaConverter {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &y_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.y_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &uv_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&self.uv_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &output_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
                 },
             ],
         });
@@ -833,7 +760,7 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[cfg(target_os = "windows")]
@@ -847,6 +774,8 @@ impl YuvToRgbaConverter {
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
         use crate::d3d_texture::import_d3d11_texture_to_wgpu;
+
+        self.swap_output_buffer();
 
         let y_wgpu_texture = import_d3d11_texture_to_wgpu(
             device,
@@ -866,40 +795,8 @@ impl YuvToRgbaConverter {
             Some("D3D11 UV Plane Zero-Copy"),
         )?;
 
-        if self.cached_width != width
-            || self.cached_height != height
-            || self.cached_format != Some(PixelFormat::Nv12)
-        {
-            self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("RGBA Output Texture"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            }));
-
-            self.output_view = Some(
-                self.output_texture
-                    .as_ref()
-                    .unwrap()
-                    .create_view(&Default::default()),
-            );
-
-            self.cached_width = width;
-            self.cached_height = height;
-            self.cached_format = Some(PixelFormat::Nv12);
-        }
-
-        let output_texture = self.output_texture.as_ref().unwrap();
+        let y_view = y_wgpu_texture.create_view(&Default::default());
+        let uv_view = uv_wgpu_texture.create_view(&Default::default());
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
@@ -907,21 +804,15 @@ impl YuvToRgbaConverter {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &y_wgpu_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&y_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &uv_wgpu_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &output_texture.create_view(&Default::default()),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
                 },
             ],
         });
@@ -942,13 +833,13 @@ impl YuvToRgbaConverter {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn convert_nv12_cpu(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         y_data: &[u8],
         uv_data: &[u8],
@@ -957,7 +848,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        self.ensure_output_texture_only(device, width, height);
+        self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];
 
@@ -971,11 +862,9 @@ impl YuvToRgbaConverter {
             &mut rgba_data,
         );
 
-        let output_texture = self.output_texture.as_ref().unwrap();
-
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: output_texture,
+                texture: self.current_output_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -993,13 +882,13 @@ impl YuvToRgbaConverter {
             },
         );
 
-        Ok(self.output_view.as_ref().unwrap())
+        Ok(self.current_output_view())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn convert_yuv420p_cpu(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         queue: &wgpu::Queue,
         y_data: &[u8],
         u_data: &[u8],
@@ -1009,7 +898,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        self.ensure_output_texture_only(device, width, height);
+        self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];
 
@@ -1024,11 +913,9 @@ impl YuvToRgbaConverter {
             &mut rgba_data,
         );
 
-        let output_texture = self.output_texture.as_ref().unwrap();
-
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: output_texture,
+                texture: self.current_output_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -1046,43 +933,10 @@ impl YuvToRgbaConverter {
             },
         );
 
-        Ok(self.output_view.as_ref().unwrap())
-    }
-
-    fn ensure_output_texture_only(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        if self.cached_width == width && self.cached_height == height {
-            return;
-        }
-
-        self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("RGBA Output Texture (CPU)"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        }));
-
-        self.output_view = Some(
-            self.output_texture
-                .as_ref()
-                .unwrap()
-                .create_view(&Default::default()),
-        );
-
-        self.cached_width = width;
-        self.cached_height = height;
+        Ok(self.current_output_view())
     }
 
     pub fn output_texture(&self) -> Option<&wgpu::Texture> {
-        self.output_texture.as_ref()
+        Some(self.current_output_texture())
     }
 }

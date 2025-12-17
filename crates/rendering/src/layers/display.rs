@@ -344,10 +344,6 @@ impl DisplayLayer {
                                 )
                             };
 
-                            if let Err(e) = device.poll(wgpu::PollType::Wait) {
-                                tracing::warn!(error = ?e, "Failed to poll device after NV12 conversion");
-                            }
-
                             match convert_result {
                                 Ok(_) => {
                                     tracing::debug!("NV12 conversion succeeded");
@@ -409,10 +405,6 @@ impl DisplayLayer {
                             )
                         };
 
-                        if let Err(e) = device.poll(wgpu::PollType::Wait) {
-                            tracing::warn!(error = ?e, "Failed to poll device after NV12 conversion");
-                        }
-
                         match convert_result {
                             Ok(_) => {
                                 if self.yuv_converter.output_texture().is_some() {
@@ -465,10 +457,6 @@ impl DisplayLayer {
                                 screen_frame.uv_stride(),
                             )
                         };
-
-                        if let Err(e) = device.poll(wgpu::PollType::Wait) {
-                            tracing::warn!(error = ?e, "Failed to poll device after YUV420P conversion");
-                        }
 
                         match convert_result {
                             Ok(_) => {
