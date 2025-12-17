@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
+pub const CURRENT_MANIFEST_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentManifest {
+    #[serde(default = "default_manifest_version")]
+    pub version: u32,
     pub fragments: Vec<FragmentInfo>,
     #[serde(
         with = "duration_serde",
@@ -11,6 +15,10 @@ pub struct FragmentManifest {
     )]
     pub total_duration: Option<Duration>,
     pub is_complete: bool,
+}
+
+fn default_manifest_version() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +33,8 @@ pub struct FragmentInfo {
     )]
     pub duration: Option<Duration>,
     pub is_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_size: Option<u64>,
 }
 
 impl FragmentManifest {

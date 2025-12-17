@@ -1,4 +1,4 @@
-use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
+use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation, screen_capture};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
 use serde::Serialize;
@@ -24,6 +24,7 @@ pub struct SegmentInfo {
     pub path: PathBuf,
     pub index: u32,
     pub duration: Duration,
+    pub file_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -32,10 +33,15 @@ struct FragmentEntry {
     index: u32,
     duration: f64,
     is_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size: Option<u64>,
 }
+
+const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Manifest {
+    version: u32,
     fragments: Vec<FragmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -52,6 +58,39 @@ struct PauseTracker {
     flag: Arc<AtomicBool>,
     paused_at: Option<Duration>,
     offset: Duration,
+}
+
+struct FrameDropTracker {
+    count: u32,
+    last_warning: std::time::Instant,
+}
+
+impl FrameDropTracker {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            last_warning: std::time::Instant::now(),
+        }
+    }
+
+    fn record_drop(&mut self) {
+        self.count += 1;
+        if self.count >= 30 && self.last_warning.elapsed() > Duration::from_secs(5) {
+            warn!(
+                "Dropped {} screen frames due to encoder backpressure",
+                self.count
+            );
+            self.count = 0;
+            self.last_warning = std::time::Instant::now();
+        }
+    }
+
+    fn reset(&mut self) {
+        if self.count > 0 {
+            trace!("Frame drop count at segment boundary: {}", self.count);
+        }
+        self.count = 0;
+    }
 }
 
 impl PauseTracker {
@@ -115,6 +154,7 @@ pub struct WindowsSegmentedMuxer {
     encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 
     pause: PauseTracker,
+    frame_drops: FrameDropTracker,
 }
 
 pub struct WindowsSegmentedMuxerConfig {
@@ -162,35 +202,38 @@ impl Muxer for WindowsSegmentedMuxer {
             output_size: config.output_size,
             encoder_preferences: config.encoder_preferences,
             pause: PauseTracker::new(pause_flag),
+            frame_drops: FrameDropTracker::new(),
         })
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.current_state {
-            let _ = state.video_tx.send(None);
+        if let Some(state) = &self.current_state
+            && let Err(e) = state.video_tx.send(None)
+        {
+            trace!("Screen encoder channel already closed during stop: {e}");
         }
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(segment_start) = self.segment_start_time {
-            let final_duration = timestamp.saturating_sub(segment_start);
-
-            self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
-                index: self.current_index,
-                duration: final_duration,
-            });
-        }
+        let segment_path = self.current_segment_path();
+        let segment_start = self.segment_start_time;
 
         if let Some(mut state) = self.current_state.take() {
-            let _ = state.video_tx.send(None);
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Screen encoder channel already closed during finish: {e}");
+            }
 
             if let Some(handle) = state.encoder_handle.take() {
                 let timeout = Duration::from_secs(5);
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        let _ = handle.join();
+                        if let Err(panic_payload) = handle.join() {
+                            warn!(
+                                "Screen encoder thread panicked during finish: {:?}",
+                                panic_payload
+                            );
+                        }
                         break;
                     }
                     if start.elapsed() > timeout {
@@ -209,6 +252,20 @@ impl Muxer for WindowsSegmentedMuxer {
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
             output.write_trailer()?;
+
+            fragmentation::sync_file(&segment_path);
+
+            if let Some(start) = segment_start {
+                let final_duration = timestamp.saturating_sub(start);
+                let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                self.completed_segments.push(SegmentInfo {
+                    path: segment_path,
+                    index: self.current_index,
+                    duration: final_duration,
+                    file_size,
+                });
+            }
         }
 
         self.finalize_manifest();
@@ -225,6 +282,7 @@ impl WindowsSegmentedMuxer {
 
     fn write_manifest(&self) {
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -238,6 +296,7 @@ impl WindowsSegmentedMuxer {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: None,
@@ -245,16 +304,19 @@ impl WindowsSegmentedMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn finalize_manifest(&self) {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -268,6 +330,7 @@ impl WindowsSegmentedMuxer {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),
@@ -275,10 +338,12 @@ impl WindowsSegmentedMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write final manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn create_segment(&mut self) -> anyhow::Result<()> {
@@ -500,16 +565,24 @@ impl WindowsSegmentedMuxer {
     fn rotate_segment(&mut self, timestamp: Duration) -> anyhow::Result<()> {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
+        let completed_segment_path = self.current_segment_path();
 
         if let Some(mut state) = self.current_state.take() {
-            let _ = state.video_tx.send(None);
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Screen encoder channel already closed during rotation: {e}");
+            }
 
             if let Some(handle) = state.encoder_handle.take() {
                 let timeout = Duration::from_secs(5);
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        let _ = handle.join();
+                        if let Err(panic_payload) = handle.join() {
+                            warn!(
+                                "Screen encoder thread panicked during rotation: {:?}",
+                                panic_payload
+                            );
+                        }
                         break;
                     }
                     if start.elapsed() > timeout {
@@ -529,18 +602,28 @@ impl WindowsSegmentedMuxer {
                 .map_err(|_| anyhow!("Failed to lock output"))?;
             output.write_trailer()?;
 
+            fragmentation::sync_file(&completed_segment_path);
+
+            let file_size = std::fs::metadata(&completed_segment_path)
+                .ok()
+                .map(|m| m.len());
+
             self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
+                path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
+                file_size,
             });
+
+            self.write_manifest();
         }
 
+        self.frame_drops.reset();
         self.current_index += 1;
         self.segment_start_time = Some(timestamp);
 
         self.create_segment()?;
-        self.write_manifest();
+        self.write_in_progress_manifest();
 
         info!(
             "Rotated to segment {} at {:?}",
@@ -548,6 +631,53 @@ impl WindowsSegmentedMuxer {
         );
 
         Ok(())
+    }
+
+    fn write_in_progress_manifest(&self) {
+        let mut fragments: Vec<FragmentEntry> = self
+            .completed_segments
+            .iter()
+            .map(|s| FragmentEntry {
+                path: s
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                index: s.index,
+                duration: s.duration.as_secs_f64(),
+                is_complete: true,
+                file_size: s.file_size,
+            })
+            .collect();
+
+        fragments.push(FragmentEntry {
+            path: self
+                .current_segment_path()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            index: self.current_index,
+            duration: 0.0,
+            is_complete: false,
+            file_size: None,
+        });
+
+        let manifest = Manifest {
+            version: MANIFEST_VERSION,
+            fragments,
+            total_duration: None,
+            is_complete: false,
+        };
+
+        let manifest_path = self.base_path.join("manifest.json");
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write in-progress manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 }
 
@@ -566,6 +696,7 @@ impl VideoMuxer for WindowsSegmentedMuxer {
         if self.current_state.is_none() {
             self.segment_start_time = Some(adjusted_timestamp);
             self.create_segment()?;
+            self.write_in_progress_manifest();
         }
 
         if self.segment_start_time.is_none() {
@@ -586,7 +717,7 @@ impl VideoMuxer for WindowsSegmentedMuxer {
         {
             match e {
                 std::sync::mpsc::TrySendError::Full(_) => {
-                    trace!("Screen encoder channel full, dropping frame");
+                    self.frame_drops.record_drop();
                 }
                 std::sync::mpsc::TrySendError::Disconnected(_) => {
                     trace!("Screen encoder channel disconnected");
