@@ -641,6 +641,7 @@ impl YuvToRgbaConverter {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(clippy::too_many_arguments)]
     pub fn convert_nv12_from_d3d11_texture(
         &mut self,
         wgpu_device: &wgpu::Device,

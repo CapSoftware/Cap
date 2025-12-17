@@ -200,21 +200,17 @@ mod windows_impl {
         ))
     }
 
+    #[derive(Default)]
     pub struct D3D11WgpuInterop {
-        cached_width: u32,
-        cached_height: u32,
-        y_wgpu_texture: Option<wgpu::Texture>,
-        uv_wgpu_texture: Option<wgpu::Texture>,
+        _cached_width: u32,
+        _cached_height: u32,
+        _y_wgpu_texture: Option<wgpu::Texture>,
+        _uv_wgpu_texture: Option<wgpu::Texture>,
     }
 
     impl D3D11WgpuInterop {
         pub fn new() -> Self {
-            Self {
-                cached_width: 0,
-                cached_height: 0,
-                y_wgpu_texture: None,
-                uv_wgpu_texture: None,
-            }
+            Self::default()
         }
 
         #[allow(unused_variables)]

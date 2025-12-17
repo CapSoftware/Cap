@@ -579,18 +579,17 @@ impl VideoMuxer for WindowsSegmentedMuxer {
             self.rotate_segment(adjusted_timestamp)?;
         }
 
-        if let Some(state) = &self.current_state {
-            if let Err(e) = state
+        if let Some(state) = &self.current_state
+            && let Err(e) = state
                 .video_tx
                 .try_send(Some((frame.frame, adjusted_timestamp)))
-            {
-                match e {
-                    std::sync::mpsc::TrySendError::Full(_) => {
-                        trace!("Screen encoder channel full, dropping frame");
-                    }
-                    std::sync::mpsc::TrySendError::Disconnected(_) => {
-                        trace!("Screen encoder channel disconnected");
-                    }
+        {
+            match e {
+                std::sync::mpsc::TrySendError::Full(_) => {
+                    trace!("Screen encoder channel full, dropping frame");
+                }
+                std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    trace!("Screen encoder channel disconnected");
                 }
             }
         }

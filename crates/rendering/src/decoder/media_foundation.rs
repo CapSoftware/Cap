@@ -12,10 +12,10 @@ use super::{DecodedFrame, FRAME_CACHE_SIZE, VideoDecoderMessage};
 #[derive(Clone)]
 struct CachedFrame {
     number: u32,
-    texture: ID3D11Texture2D,
-    shared_handle: Option<HANDLE>,
-    y_handle: Option<HANDLE>,
-    uv_handle: Option<HANDLE>,
+    _texture: ID3D11Texture2D,
+    _shared_handle: Option<HANDLE>,
+    _y_handle: Option<HANDLE>,
+    _uv_handle: Option<HANDLE>,
     nv12_data: Option<Arc<cap_video_decode::NV12Data>>,
     width: u32,
     height: u32,
@@ -154,10 +154,10 @@ impl MFDecoder {
 
                                     let cached = CachedFrame {
                                         number: frame_number,
-                                        texture: mf_frame.texture,
-                                        shared_handle: mf_frame.shared_handle,
-                                        y_handle: mf_frame.y_handle,
-                                        uv_handle: mf_frame.uv_handle,
+                                        _texture: mf_frame.texture,
+                                        _shared_handle: mf_frame.shared_handle,
+                                        _y_handle: mf_frame.y_handle,
+                                        _uv_handle: mf_frame.uv_handle,
                                         nv12_data,
                                         width: mf_frame.width,
                                         height: mf_frame.height,
@@ -190,15 +190,14 @@ impl MFDecoder {
                                                 .or_else(|| cache.get(&frame_number))
                                         };
 
-                                        if let Some(frame) = frame_to_send {
-                                            if let Some(s) = sender.take() {
-                                                if s.send(frame.to_decoded_frame()).is_err() {
-                                                    warn!(
-                                                        "Failed to send frame {}: receiver dropped",
-                                                        frame.number
-                                                    );
-                                                }
-                                            }
+                                        if let Some(frame) = frame_to_send
+                                            && let Some(s) = sender.take()
+                                            && s.send(frame.to_decoded_frame()).is_err()
+                                        {
+                                            warn!(
+                                                "Failed to send frame {}: receiver dropped",
+                                                frame.number
+                                            );
                                         }
                                         break;
                                     }
