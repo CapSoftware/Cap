@@ -462,6 +462,16 @@ function Dialogs() {
 									),
 								);
 
+								createEffect(
+									on(
+										() => currentSegment().index,
+										() => {
+											setVideoLoaded(false);
+										},
+										{ defer: true },
+									),
+								);
+
 								createEffect(() => {
 									if (videoRef && videoLoaded()) {
 										videoRef.currentTime = currentSegment().localTime;

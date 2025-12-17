@@ -40,7 +40,10 @@ import {
 	type TimelineConfiguration,
 	type XY,
 } from "~/utils/tauri";
-import { preloadCropVideoMetadata } from "./cropVideoPreloader";
+import {
+	cleanup as cleanupCropVideoPreloader,
+	preloadCropVideoMetadata,
+} from "./cropVideoPreloader";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
@@ -753,6 +756,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 		onCleanup(() => {
 			disposeWorkerReadyEffect?.();
+			cleanupCropVideoPreloader();
 		});
 
 		const [editorInstance] = createResource(async () => {
