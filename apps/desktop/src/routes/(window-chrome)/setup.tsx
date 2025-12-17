@@ -95,18 +95,60 @@ export default function () {
 
 	const handleContinue = () => {
 		// #region agent log
-		fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'setup.tsx:handleContinue',message:'handleContinue called',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+		fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				location: "setup.tsx:handleContinue",
+				message: "handleContinue called",
+				data: {},
+				timestamp: Date.now(),
+				sessionId: "debug-session",
+				hypothesisId: "A",
+			}),
+		}).catch(() => {});
 		// #endregion
-		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
-			// #region agent log
-			fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'setup.tsx:handleContinue:then',message:'showWindow resolved, closing setup',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B'})}).catch(()=>{});
-			// #endregion
-			getCurrentWindow().close();
-		}).catch((err) => {
-			// #region agent log
-			fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'setup.tsx:handleContinue:catch',message:'showWindow failed',data:{error:String(err)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-			// #endregion
-		});
+		commands
+			.showWindow({ Main: { init_target_mode: null } })
+			.then(() => {
+				// #region agent log
+				fetch(
+					"http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23",
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							location: "setup.tsx:handleContinue:then",
+							message: "showWindow resolved, closing setup",
+							data: {},
+							timestamp: Date.now(),
+							sessionId: "debug-session",
+							hypothesisId: "A,B",
+						}),
+					},
+				).catch(() => {});
+				// #endregion
+				getCurrentWindow().close();
+			})
+			.catch((err) => {
+				// #region agent log
+				fetch(
+					"http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23",
+					{
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							location: "setup.tsx:handleContinue:catch",
+							message: "showWindow failed",
+							data: { error: String(err) },
+							timestamp: Date.now(),
+							sessionId: "debug-session",
+							hypothesisId: "A",
+						}),
+					},
+				).catch(() => {});
+				// #endregion
+			});
 	};
 
 	return (

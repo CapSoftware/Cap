@@ -39,6 +39,7 @@ import {
 	type TimelineConfiguration,
 	type XY,
 } from "~/utils/tauri";
+import { preloadCropVideoMetadata } from "./cropVideoPreloader";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
@@ -751,6 +752,10 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
+
+			preloadCropVideoMetadata(
+				`${instance.path}/content/segments/segment-0/display.mp4`,
+			);
 
 			const requestFrame = () => {
 				events.renderFrameEvent.emit({

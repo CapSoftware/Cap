@@ -17,12 +17,34 @@ export default function (props: RouteSectionProps) {
 	let unlistenResize: UnlistenFn | undefined;
 
 	// #region agent log
-	fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'(window-chrome).tsx:render',message:'WindowChrome component rendering',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+	fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			location: "(window-chrome).tsx:render",
+			message: "WindowChrome component rendering",
+			data: { pathname: location.pathname },
+			timestamp: Date.now(),
+			sessionId: "debug-session",
+			hypothesisId: "C",
+		}),
+	}).catch(() => {});
 	// #endregion
 
 	onMount(async () => {
 		// #region agent log
-		fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'(window-chrome).tsx:onMount',message:'WindowChrome onMount',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+		fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				location: "(window-chrome).tsx:onMount",
+				message: "WindowChrome onMount",
+				data: { pathname: location.pathname },
+				timestamp: Date.now(),
+				sessionId: "debug-session",
+				hypothesisId: "C",
+			}),
+		}).catch(() => {});
 		// #endregion
 		console.log("window chrome mounted");
 		unlistenResize = await initializeTitlebar();
@@ -94,11 +116,33 @@ function Header() {
 
 function Inner(props: ParentProps) {
 	// #region agent log
-	fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'(window-chrome).tsx:Inner:render',message:'Inner component rendering',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+	fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			location: "(window-chrome).tsx:Inner:render",
+			message: "Inner component rendering",
+			data: { pathname: location.pathname },
+			timestamp: Date.now(),
+			sessionId: "debug-session",
+			hypothesisId: "C",
+		}),
+	}).catch(() => {});
 	// #endregion
 	onMount(() => {
 		// #region agent log
-		fetch('http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'(window-chrome).tsx:Inner:onMount',message:'Inner onMount, about to show window',data:{pathname:location.pathname},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B,C'})}).catch(()=>{});
+		fetch("http://127.0.0.1:7243/ingest/1cff95e2-fcb2-4b1f-a666-2aa2ac4f0e23", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				location: "(window-chrome).tsx:Inner:onMount",
+				message: "Inner onMount, about to show window",
+				data: { pathname: location.pathname },
+				timestamp: Date.now(),
+				sessionId: "debug-session",
+				hypothesisId: "B,C",
+			}),
+		}).catch(() => {});
 		// #endregion
 		if (location.pathname !== "/") getCurrentWindow().show();
 	});
