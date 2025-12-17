@@ -1,6 +1,9 @@
 use wgpu::{self, util::DeviceExt};
 
-use crate::util::{copy_texture_to_buffer_command, read_buffer_to_vec};
+use crate::{
+    GpuConverterError,
+    util::{copy_texture_to_buffer_command, read_buffer_to_vec},
+};
 
 pub struct BGRAToRGBA {
     device: wgpu::Device,
@@ -10,7 +13,7 @@ pub struct BGRAToRGBA {
 }
 
 impl BGRAToRGBA {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self, GpuConverterError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let adapter = instance
@@ -19,13 +22,11 @@ impl BGRAToRGBA {
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
-            .await
-            .unwrap();
+            .await?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
+            .await?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("BGRA to RGBA Converter"),
@@ -75,12 +76,12 @@ impl BGRAToRGBA {
             cache: None,
         });
 
-        Self {
+        Ok(Self {
             device,
             queue,
             pipeline,
             bind_group_layout,
-        }
+        })
     }
 
     pub fn convert(
@@ -162,7 +163,7 @@ impl BGRAToRGBA {
         let output_buffer =
             copy_texture_to_buffer_command(&self.device, &output_texture, &mut encoder);
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let _submission = self.queue.submit(std::iter::once(encoder.finish()));
 
         read_buffer_to_vec(&output_buffer, &self.device)
     }

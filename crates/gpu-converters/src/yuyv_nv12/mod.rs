@@ -121,10 +121,12 @@ impl YUYVToNV12 {
 
         let yuyv_texture =
             yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height)
-                .expect("YUYV input validation passed above");
+                .map_err(ConvertError::TextureCreation)?;
 
-        let y_plane_size = (width * height) as u64;
-        let uv_plane_size = (width * height / 2) as u64;
+        let width_u64 = u64::from(width);
+        let height_u64 = u64::from(height);
+        let y_plane_size = width_u64 * height_u64;
+        let uv_plane_size = (width_u64 * height_u64) / 2;
 
         let y_write_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("YUYV to NV12 Y Plane Buffer"),
@@ -218,7 +220,7 @@ impl YUYVToNV12 {
             uv_write_buffer.size(),
         );
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let _submission = self.queue.submit(std::iter::once(encoder.finish()));
 
         Ok((
             read_buffer_to_vec(&y_read_buffer, &self.device).map_err(ConvertError::Poll)?,

@@ -173,12 +173,6 @@ impl H264Decoder {
     }
 }
 
-impl Default for H264Decoder {
-    fn default() -> Self {
-        Self::new().expect("Failed to create H264Decoder")
-    }
-}
-
 thread_local! {
     static H264_DECODER: RefCell<Option<H264Decoder>> = const { RefCell::new(None) };
 }

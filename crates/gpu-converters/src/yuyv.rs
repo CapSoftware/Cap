@@ -18,7 +18,12 @@ pub fn create_input_texture(
             "YUYV texture width must be even (got {width}), as YUYV encodes pairs of pixels"
         ));
     }
-    let expected_len = (width as usize) * (height as usize) * 2;
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|v| v.checked_mul(2))
+        .ok_or_else(|| {
+            format!("YUYV texture dimensions overflow: {width}x{height} is too large")
+        })?;
     let actual_len = data.len();
     if actual_len != expected_len {
         return Err(format!(

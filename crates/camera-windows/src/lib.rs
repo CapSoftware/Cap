@@ -14,7 +14,8 @@ use windows_core::GUID;
 
 const MF_VIDEO_FORMAT_L8: GUID = GUID::from_u128(0x00000050_0000_0010_8000_00aa00389b71);
 const MF_VIDEO_FORMAT_L16: GUID = GUID::from_u128(0x00000051_0000_0010_8000_00aa00389b71);
-const MF_VIDEO_FORMAT_NV21: GUID = GUID::from_u128(0x3132564e_0000_0010_8000_00aa00389b71);
+// FOURCCMap GUID for 'NV21' - identical for both DirectShow MEDIASUBTYPE and Media Foundation
+const MEDIASUBTYPE_NV21: GUID = GUID::from_u128(0x3132564e_0000_0010_8000_00aa00389b71);
 const MF_VIDEO_FORMAT_RGB565: GUID = GUID::from_u128(0x00000017_0000_0010_8000_00aa00389b71);
 const MF_VIDEO_FORMAT_P010: GUID = GUID::from_u128(0x30313050_0000_0010_8000_00aa00389b71);
 
@@ -478,7 +479,7 @@ impl MFPixelFormat {
                 t if t == MFVideoFormat_YV12 => PixelFormat::YV12,
                 t if t == MF_VIDEO_FORMAT_L8 => PixelFormat::GRAY8,
                 t if t == MF_VIDEO_FORMAT_L16 => PixelFormat::GRAY16,
-                t if t == MF_VIDEO_FORMAT_NV21 => PixelFormat::NV21,
+                t if t == MEDIASUBTYPE_NV21 => PixelFormat::NV21,
                 t if t == MF_VIDEO_FORMAT_RGB565 => PixelFormat::RGB565,
                 t if t == MF_VIDEO_FORMAT_P010 => PixelFormat::P010,
                 t if t == MFVideoFormat_H264 => PixelFormat::H264,
@@ -531,7 +532,7 @@ impl DSPixelFormat {
                 t if t == MEDIASUBTYPE_MJPG => PixelFormat::MJPEG,
                 t if t == MEDIASUBTYPE_YV12 => PixelFormat::YV12,
                 t if t == MEDIASUBTYPE_Y800 || t == MEDIASUBTYPE_RGB8 => PixelFormat::GRAY8,
-                t if t == MF_VIDEO_FORMAT_NV21 => PixelFormat::NV21,
+                t if t == MEDIASUBTYPE_NV21 => PixelFormat::NV21,
                 t if t == MEDIASUBTYPE_RGB565 => PixelFormat::RGB565,
                 _ => return None,
             })

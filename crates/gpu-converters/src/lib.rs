@@ -23,43 +23,16 @@ pub enum GpuConverterError {
     RequestDeviceFailed(#[from] wgpu::RequestDeviceError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConvertError {
+    #[error("YUYV format requires even width, got {width}")]
     OddWidth { width: u32 },
+    #[error("buffer size mismatch: expected {expected} bytes, got {actual}")]
     BufferSizeMismatch { expected: usize, actual: usize },
-    Poll(wgpu::PollError),
-}
-
-impl std::fmt::Display for ConvertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OddWidth { width } => {
-                write!(f, "YUYV format requires even width, got {width}")
-            }
-            Self::BufferSizeMismatch { expected, actual } => {
-                write!(
-                    f,
-                    "buffer size mismatch: expected {expected} bytes, got {actual}"
-                )
-            }
-            Self::Poll(e) => write!(f, "GPU poll error: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ConvertError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Poll(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<wgpu::PollError> for ConvertError {
-    fn from(e: wgpu::PollError) -> Self {
-        Self::Poll(e)
-    }
+    #[error("failed to create input texture: {0}")]
+    TextureCreation(String),
+    #[error("GPU poll error: {0}")]
+    Poll(#[from] wgpu::PollError),
 }
 
 pub struct NV12Input<'a> {

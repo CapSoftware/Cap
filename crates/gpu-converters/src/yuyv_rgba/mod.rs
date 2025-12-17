@@ -103,7 +103,7 @@ impl YUYVToRGBA {
 
         let yuyv_texture =
             yuyv::create_input_texture(&self.device, &self.queue, yuyv_data, width, height)
-                .expect("YUYV input validation passed above");
+                .map_err(ConvertError::TextureCreation)?;
 
         let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("YUYV to RGBA Output Texture"),

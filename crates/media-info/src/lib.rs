@@ -216,7 +216,6 @@ pub enum RawVideoFormat {
     Rgba,
     Rgb565,
     P010,
-    H264,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -245,7 +244,6 @@ impl VideoInfo {
                 RawVideoFormat::Rgba => Pixel::RGBA,
                 RawVideoFormat::Rgb565 => Pixel::RGB565LE,
                 RawVideoFormat::P010 => Pixel::P010LE,
-                RawVideoFormat::H264 => Pixel::YUV420P,
             },
             width,
             height,
