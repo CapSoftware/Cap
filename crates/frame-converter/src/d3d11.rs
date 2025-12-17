@@ -113,15 +113,15 @@ pub struct D3D11Converter {
 fn get_gpu_info(device: &ID3D11Device) -> Result<GpuInfo, ConvertError> {
     unsafe {
         let dxgi_device: IDXGIDevice = device.cast().map_err(|e| {
-            ConvertError::HardwareUnavailable(format!("Failed to get DXGI device: {:?}", e))
+            ConvertError::HardwareUnavailable(format!("Failed to get DXGI device: {e:?}"))
         })?;
 
         let adapter: IDXGIAdapter = dxgi_device.GetAdapter().map_err(|e| {
-            ConvertError::HardwareUnavailable(format!("Failed to get adapter: {:?}", e))
+            ConvertError::HardwareUnavailable(format!("Failed to get adapter: {e:?}"))
         })?;
 
         let desc = adapter.GetDesc().map_err(|e| {
-            ConvertError::HardwareUnavailable(format!("Failed to get adapter description: {:?}", e))
+            ConvertError::HardwareUnavailable(format!("Failed to get adapter description: {e:?}"))
         })?;
 
         let description = String::from_utf16_lossy(
@@ -165,8 +165,7 @@ impl D3D11Converter {
             )
             .map_err(|e| {
                 ConvertError::HardwareUnavailable(format!(
-                    "D3D11CreateDevice failed (no hardware GPU available?): {:?}",
-                    e
+                    "D3D11CreateDevice failed (no hardware GPU available?): {e:?}"
                 ))
             })?;
 
@@ -193,13 +192,12 @@ impl D3D11Converter {
 
         let video_device: ID3D11VideoDevice = device.cast().map_err(|e| {
             ConvertError::HardwareUnavailable(format!(
-                "GPU does not support D3D11 Video API (ID3D11VideoDevice): {:?}",
-                e
+                "GPU does not support D3D11 Video API (ID3D11VideoDevice): {e:?}"
             ))
         })?;
 
         let video_context: ID3D11VideoContext = context.cast().map_err(|e| {
-            ConvertError::HardwareUnavailable(format!("Failed to get ID3D11VideoContext: {:?}", e))
+            ConvertError::HardwareUnavailable(format!("Failed to get ID3D11VideoContext: {e:?}"))
         })?;
 
         let content_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
@@ -225,8 +223,8 @@ impl D3D11Converter {
                 .CreateVideoProcessorEnumerator(&content_desc)
                 .map_err(|e| {
                     ConvertError::HardwareUnavailable(format!(
-                        "CreateVideoProcessorEnumerator failed (format {:?}->{:?} not supported by GPU?): {:?}",
-                        config.input_format, config.output_format, e
+                        "CreateVideoProcessorEnumerator failed (format {:?}->{:?} not supported by GPU?): {e:?}",
+                        config.input_format, config.output_format
                     ))
                 })?
         };
@@ -235,10 +233,7 @@ impl D3D11Converter {
             video_device
                 .CreateVideoProcessor(&enumerator, 0)
                 .map_err(|e| {
-                    ConvertError::HardwareUnavailable(format!(
-                        "CreateVideoProcessor failed: {:?}",
-                        e
-                    ))
+                    ConvertError::HardwareUnavailable(format!("CreateVideoProcessor failed: {e:?}"))
                 })?
         };
 
@@ -351,9 +346,7 @@ impl FrameConverter for D3D11Converter {
                     0,
                     Some(&mut mapped),
                 )
-                .map_err(|e| {
-                    ConvertError::ConversionFailed(format!("Map input failed: {:?}", e))
-                })?;
+                .map_err(|e| ConvertError::ConversionFailed(format!("Map input failed: {e:?}")))?;
 
             copy_frame_to_mapped(&input, mapped.pData as *mut u8, mapped.RowPitch as usize);
 
@@ -385,7 +378,7 @@ impl FrameConverter for D3D11Converter {
                     Some(&mut input_view),
                 )
                 .map_err(|e| {
-                    ConvertError::ConversionFailed(format!("CreateInputView failed: {:?}", e))
+                    ConvertError::ConversionFailed(format!("CreateInputView failed: {e:?}"))
                 })?;
             let input_view = input_view.ok_or_else(|| {
                 ConvertError::ConversionFailed("CreateInputView returned null".to_string())
@@ -411,7 +404,7 @@ impl FrameConverter for D3D11Converter {
                     Some(&mut output_view),
                 )
                 .map_err(|e| {
-                    ConvertError::ConversionFailed(format!("CreateOutputView failed: {:?}", e))
+                    ConvertError::ConversionFailed(format!("CreateOutputView failed: {e:?}"))
                 })?;
             let output_view = output_view.ok_or_else(|| {
                 ConvertError::ConversionFailed("CreateOutputView returned null".to_string())
@@ -435,7 +428,7 @@ impl FrameConverter for D3D11Converter {
                 .video_context
                 .VideoProcessorBlt(&resources.processor, &output_view, 0, &[stream])
                 .map_err(|e| {
-                    ConvertError::ConversionFailed(format!("VideoProcessorBlt failed: {:?}", e))
+                    ConvertError::ConversionFailed(format!("VideoProcessorBlt failed: {e:?}"))
                 })?;
 
             if !self.verified_gpu_usage.swap(true, Ordering::Relaxed) {
@@ -459,9 +452,7 @@ impl FrameConverter for D3D11Converter {
                     0,
                     Some(&mut mapped),
                 )
-                .map_err(|e| {
-                    ConvertError::ConversionFailed(format!("Map output failed: {:?}", e))
-                })?;
+                .map_err(|e| ConvertError::ConversionFailed(format!("Map output failed: {e:?}")))?;
 
             let mut output =
                 frame::Video::new(self.output_format, self.output_width, self.output_height);
@@ -533,7 +524,7 @@ fn create_texture(
         device
             .CreateTexture2D(&desc, None, Some(&mut texture))
             .map_err(|e| {
-                ConvertError::HardwareUnavailable(format!("CreateTexture2D failed: {:?}", e))
+                ConvertError::HardwareUnavailable(format!("CreateTexture2D failed: {e:?}"))
             })?;
         texture.ok_or_else(|| {
             ConvertError::HardwareUnavailable("CreateTexture2D returned null".to_string())

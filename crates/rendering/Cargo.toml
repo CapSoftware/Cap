@@ -18,6 +18,7 @@ tokio.workspace = true
 ffmpeg.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
+rayon = "1.10"
 image = "0.25.2"
 log = "0.4"
 serde = { workspace = true }

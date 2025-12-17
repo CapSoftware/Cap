@@ -210,6 +210,7 @@ impl DecodedFrame {
     }
 
     #[cfg(target_os = "macos")]
+    #[allow(clippy::redundant_closure)]
     pub fn iosurface_backing(&self) -> Option<&cv::ImageBuf> {
         self.iosurface_backing.as_ref().map(|b| b.inner())
     }
@@ -274,6 +275,7 @@ impl DecodedFrame {
     }
 
     #[cfg(target_os = "windows")]
+    #[allow(clippy::redundant_closure)]
     pub fn d3d11_texture_backing(&self) -> Option<&ID3D11Texture2D> {
         self.d3d11_texture_backing.as_ref().map(|b| b.inner())
     }

@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 ffmpeg.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
+num_cpus = "1.16"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
