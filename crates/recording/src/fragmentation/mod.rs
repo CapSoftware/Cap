@@ -65,12 +65,18 @@ impl FragmentManager {
             .join(format!("fragment_{:03}.m4a", self.current_index))
     }
 
-    pub fn rotate(&mut self, duration: Option<Duration>, is_complete: bool) -> PathBuf {
+    pub fn rotate(
+        &mut self,
+        duration: Option<Duration>,
+        is_complete: bool,
+        file_size: Option<u64>,
+    ) -> PathBuf {
         self.fragments.push(FragmentInfo {
             path: self.current_fragment_path(),
             index: self.current_index,
             duration,
             is_complete,
+            file_size,
         });
 
         self.current_index += 1;
@@ -89,17 +95,19 @@ impl FragmentManager {
         &self.fragments
     }
 
-    pub fn mark_current_complete(&mut self, duration: Option<Duration>) {
+    pub fn mark_current_complete(&mut self, duration: Option<Duration>, file_size: Option<u64>) {
         self.fragments.push(FragmentInfo {
             path: self.current_fragment_path(),
             index: self.current_index,
             duration,
             is_complete: true,
+            file_size,
         });
     }
 
     pub fn write_manifest(&self) -> std::io::Result<()> {
         let manifest = FragmentManifest {
+            version: CURRENT_MANIFEST_VERSION,
             fragments: self.fragments.clone(),
             total_duration: self.total_duration(),
             is_complete: false,
@@ -111,6 +119,7 @@ impl FragmentManager {
 
     pub fn finalize_manifest(&self) -> std::io::Result<()> {
         let manifest = FragmentManifest {
+            version: CURRENT_MANIFEST_VERSION,
             fragments: self.fragments.clone(),
             total_duration: self.total_duration(),
             is_complete: true,

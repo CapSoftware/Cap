@@ -58,6 +58,7 @@ pub struct SegmentInfo {
     pub path: PathBuf,
     pub index: u32,
     pub duration: Duration,
+    pub file_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -66,10 +67,15 @@ struct FragmentEntry {
     index: u32,
     duration: f64,
     is_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size: Option<u64>,
 }
+
+const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Manifest {
+    version: u32,
     fragments: Vec<FragmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -191,10 +197,15 @@ impl SegmentedAudioEncoder {
 
             sync_file(&completed_segment_path);
 
+            let file_size = std::fs::metadata(&completed_segment_path)
+                .ok()
+                .map(|m| m.len());
+
             self.completed_segments.push(SegmentInfo {
                 path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
+                file_size,
             });
 
             self.write_manifest();
@@ -218,6 +229,7 @@ impl SegmentedAudioEncoder {
 
     fn write_manifest(&self) {
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -231,6 +243,7 @@ impl SegmentedAudioEncoder {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: None,
@@ -260,6 +273,7 @@ impl SegmentedAudioEncoder {
                 index: s.index,
                 duration: s.duration.as_secs_f64(),
                 is_complete: true,
+                file_size: s.file_size,
             })
             .collect();
 
@@ -273,9 +287,11 @@ impl SegmentedAudioEncoder {
             index: self.current_index,
             duration: 0.0,
             is_complete: false,
+            file_size: None,
         });
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments,
             total_duration: None,
             is_complete: false,
@@ -291,21 +307,12 @@ impl SegmentedAudioEncoder {
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
+        let segment_path = self.current_segment_path();
+        let segment_start = self.segment_start_time;
+        let last_timestamp = self.last_frame_timestamp;
+
         if let Some(mut encoder) = self.current_encoder.take() {
             if encoder.has_frames {
-                if let Some(segment_start) = self.segment_start_time {
-                    let final_duration = self
-                        .last_frame_timestamp
-                        .unwrap_or(segment_start)
-                        .saturating_sub(segment_start);
-
-                    self.completed_segments.push(SegmentInfo {
-                        path: self.current_segment_path(),
-                        index: self.current_index,
-                        duration: final_duration,
-                    });
-                }
-
                 let flush_result = encoder.encoder.flush(&mut encoder.output);
                 let trailer_result = encoder.output.write_trailer();
 
@@ -315,9 +322,23 @@ impl SegmentedAudioEncoder {
                 if let Err(e) = &trailer_result {
                     tracing::warn!("Audio write_trailer warning: {e}");
                 }
+
+                sync_file(&segment_path);
+
+                if let Some(start) = segment_start {
+                    let final_duration = last_timestamp.unwrap_or(start).saturating_sub(start);
+                    let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                    self.completed_segments.push(SegmentInfo {
+                        path: segment_path,
+                        index: self.current_index,
+                        duration: final_duration,
+                        file_size,
+                    });
+                }
             } else {
                 let _ = encoder.output.write_trailer();
-                let _ = std::fs::remove_file(self.current_segment_path());
+                let _ = std::fs::remove_file(segment_path);
             }
         }
 
@@ -327,18 +348,11 @@ impl SegmentedAudioEncoder {
     }
 
     pub fn finish_with_timestamp(&mut self, timestamp: Duration) -> Result<(), FinishError> {
+        let segment_path = self.current_segment_path();
+        let segment_start = self.segment_start_time;
+
         if let Some(mut encoder) = self.current_encoder.take() {
             if encoder.has_frames {
-                if let Some(segment_start) = self.segment_start_time {
-                    let final_duration = timestamp.saturating_sub(segment_start);
-
-                    self.completed_segments.push(SegmentInfo {
-                        path: self.current_segment_path(),
-                        index: self.current_index,
-                        duration: final_duration,
-                    });
-                }
-
                 let flush_result = encoder.encoder.flush(&mut encoder.output);
                 let trailer_result = encoder.output.write_trailer();
 
@@ -348,9 +362,23 @@ impl SegmentedAudioEncoder {
                 if let Err(e) = &trailer_result {
                     tracing::warn!("Audio write_trailer warning: {e}");
                 }
+
+                sync_file(&segment_path);
+
+                if let Some(start) = segment_start {
+                    let final_duration = timestamp.saturating_sub(start);
+                    let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                    self.completed_segments.push(SegmentInfo {
+                        path: segment_path,
+                        index: self.current_index,
+                        duration: final_duration,
+                        file_size,
+                    });
+                }
             } else {
                 let _ = encoder.output.write_trailer();
-                let _ = std::fs::remove_file(self.current_segment_path());
+                let _ = std::fs::remove_file(segment_path);
             }
         }
 
@@ -363,6 +391,7 @@ impl SegmentedAudioEncoder {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -376,6 +405,7 @@ impl SegmentedAudioEncoder {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),

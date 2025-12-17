@@ -21,6 +21,7 @@ struct SegmentInfo {
     path: PathBuf,
     index: u32,
     duration: Duration,
+    file_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -29,10 +30,15 @@ struct FragmentEntry {
     index: u32,
     duration: f64,
     is_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size: Option<u64>,
 }
+
+const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Manifest {
+    version: u32,
     fragments: Vec<FragmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -163,15 +169,8 @@ impl Muxer for WindowsSegmentedCameraMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        if let Some(segment_start) = self.segment_start_time {
-            let final_duration = timestamp.saturating_sub(segment_start);
-
-            self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
-                index: self.current_index,
-                duration: final_duration,
-            });
-        }
+        let segment_path = self.current_segment_path();
+        let segment_start = self.segment_start_time;
 
         if let Some(mut state) = self.current_state.take() {
             let _ = state.video_tx.send(None);
@@ -201,7 +200,19 @@ impl Muxer for WindowsSegmentedCameraMuxer {
                 .map_err(|_| anyhow!("Failed to lock output"))?;
             output.write_trailer()?;
 
-            fragmentation::sync_file(&self.current_segment_path());
+            fragmentation::sync_file(&segment_path);
+
+            if let Some(start) = segment_start {
+                let final_duration = timestamp.saturating_sub(start);
+                let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                self.completed_segments.push(SegmentInfo {
+                    path: segment_path,
+                    index: self.current_index,
+                    duration: final_duration,
+                    file_size,
+                });
+            }
         }
 
         self.finalize_manifest();
@@ -218,6 +229,7 @@ impl WindowsSegmentedCameraMuxer {
 
     fn write_manifest(&self) {
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -231,6 +243,7 @@ impl WindowsSegmentedCameraMuxer {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: None,
@@ -250,6 +263,7 @@ impl WindowsSegmentedCameraMuxer {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -263,6 +277,7 @@ impl WindowsSegmentedCameraMuxer {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),
@@ -482,10 +497,15 @@ impl WindowsSegmentedCameraMuxer {
 
             fragmentation::sync_file(&completed_segment_path);
 
+            let file_size = std::fs::metadata(&completed_segment_path)
+                .ok()
+                .map(|m| m.len());
+
             self.completed_segments.push(SegmentInfo {
                 path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
+                file_size,
             });
 
             self.write_manifest();
@@ -519,6 +539,7 @@ impl WindowsSegmentedCameraMuxer {
                 index: s.index,
                 duration: s.duration.as_secs_f64(),
                 is_complete: true,
+                file_size: s.file_size,
             })
             .collect();
 
@@ -532,9 +553,11 @@ impl WindowsSegmentedCameraMuxer {
             index: self.current_index,
             duration: 0.0,
             is_complete: false,
+            file_size: None,
         });
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments,
             total_duration: None,
             is_complete: false,

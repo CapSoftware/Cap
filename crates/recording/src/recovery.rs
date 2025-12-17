@@ -201,6 +201,8 @@ impl RecoveryManager {
     }
 
     fn find_complete_fragments(dir: &Path) -> Vec<PathBuf> {
+        use crate::fragmentation::CURRENT_MANIFEST_VERSION;
+
         let manifest_path = dir.join("manifest.json");
 
         if manifest_path.exists()
@@ -208,6 +210,21 @@ impl RecoveryManager {
             && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&content)
             && let Some(fragments) = manifest.get("fragments").and_then(|f| f.as_array())
         {
+            let manifest_version = manifest
+                .get("version")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u32;
+            if manifest_version > CURRENT_MANIFEST_VERSION {
+                warn!(
+                    "Manifest version {} is newer than supported {}",
+                    manifest_version, CURRENT_MANIFEST_VERSION
+                );
+            }
+
+            let expected_file_size = |f: &serde_json::Value| -> Option<u64> {
+                f.get("file_size").and_then(|s| s.as_u64())
+            };
+
             let result: Vec<PathBuf> = fragments
                 .iter()
                 .filter(|f| {
@@ -215,9 +232,46 @@ impl RecoveryManager {
                         .and_then(|c| c.as_bool())
                         .unwrap_or(false)
                 })
-                .filter_map(|f| f.get("path").and_then(|p| p.as_str()))
-                .map(|p| dir.join(p))
-                .filter(|p| p.exists())
+                .filter_map(|f| {
+                    let path_str = f.get("path").and_then(|p| p.as_str())?;
+                    let path = dir.join(path_str);
+                    if !path.exists() {
+                        return None;
+                    }
+
+                    if let Some(expected_size) = expected_file_size(f) {
+                        if let Ok(metadata) = std::fs::metadata(&path) {
+                            if metadata.len() != expected_size {
+                                warn!(
+                                    "Fragment {} size mismatch: expected {}, got {}",
+                                    path.display(),
+                                    expected_size,
+                                    metadata.len()
+                                );
+                                return None;
+                            }
+                        }
+                    }
+
+                    if Self::is_video_file(&path) {
+                        match probe_video_can_decode(&path) {
+                            Ok(true) => Some(path),
+                            Ok(false) => {
+                                warn!("Fragment {} has no decodable frames", path.display());
+                                None
+                            }
+                            Err(e) => {
+                                warn!("Fragment {} validation failed: {}", path.display(), e);
+                                None
+                            }
+                        }
+                    } else if probe_media_valid(&path) {
+                        Some(path)
+                    } else {
+                        warn!("Fragment {} is not valid media", path.display());
+                        None
+                    }
+                })
                 .collect();
 
             if !result.is_empty() {
@@ -226,6 +280,12 @@ impl RecoveryManager {
         }
 
         Self::probe_fragments_in_dir(dir)
+    }
+
+    fn is_video_file(path: &Path) -> bool {
+        path.extension()
+            .map(|e| e.eq_ignore_ascii_case("mp4"))
+            .unwrap_or(false)
     }
 
     fn probe_fragments_in_dir(dir: &Path) -> Vec<PathBuf> {
@@ -237,11 +297,26 @@ impl RecoveryManager {
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| {
-                p.extension()
-                    .map(|e| e == "mp4" || e == "m4a" || e == "ogg")
-                    .unwrap_or(false)
+                let ext = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase());
+                match ext.as_deref() {
+                    Some("mp4") => match probe_video_can_decode(p) {
+                        Ok(true) => true,
+                        Ok(false) => {
+                            debug!("Skipping {} - no decodable frames", p.display());
+                            false
+                        }
+                        Err(e) => {
+                            debug!("Skipping {} - validation failed: {}", p.display(), e);
+                            false
+                        }
+                    },
+                    Some("m4a") | Some("ogg") => probe_media_valid(p),
+                    _ => false,
+                }
             })
-            .filter(|p| probe_media_valid(p))
             .collect();
 
         fragments.sort();
@@ -249,7 +324,23 @@ impl RecoveryManager {
     }
 
     fn probe_single_file(path: &Path) -> Option<PathBuf> {
-        if path.exists() && probe_media_valid(path) {
+        if !path.exists() {
+            return None;
+        }
+
+        if Self::is_video_file(path) {
+            match probe_video_can_decode(path) {
+                Ok(true) => Some(path.to_path_buf()),
+                Ok(false) => {
+                    debug!("Single file {} has no decodable frames", path.display());
+                    None
+                }
+                Err(e) => {
+                    debug!("Single file {} validation failed: {}", path.display(), e);
+                    None
+                }
+            }
+        } else if probe_media_valid(path) {
             Some(path.to_path_buf())
         } else {
             None

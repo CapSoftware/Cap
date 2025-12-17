@@ -54,6 +54,7 @@ pub struct SegmentInfo {
     pub path: PathBuf,
     pub index: u32,
     pub duration: Duration,
+    pub file_size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -62,10 +63,15 @@ struct FragmentEntry {
     index: u32,
     duration: f64,
     is_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_size: Option<u64>,
 }
+
+const MANIFEST_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Manifest {
+    version: u32,
     fragments: Vec<FragmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -147,10 +153,15 @@ impl SegmentedMP4Encoder {
 
             sync_file(&completed_segment_path);
 
+            let file_size = std::fs::metadata(&completed_segment_path)
+                .ok()
+                .map(|m| m.len());
+
             self.completed_segments.push(SegmentInfo {
                 path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
+                file_size,
             });
 
             self.write_manifest();
@@ -182,6 +193,7 @@ impl SegmentedMP4Encoder {
 
     fn write_manifest(&self) {
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -195,6 +207,7 @@ impl SegmentedMP4Encoder {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: None,
@@ -224,6 +237,7 @@ impl SegmentedMP4Encoder {
                 index: s.index,
                 duration: s.duration.as_secs_f64(),
                 is_complete: true,
+                file_size: s.file_size,
             })
             .collect();
 
@@ -237,9 +251,11 @@ impl SegmentedMP4Encoder {
             index: self.current_index,
             duration: 0.0,
             is_complete: false,
+            file_size: None,
         });
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments,
             total_duration: None,
             is_complete: false,
@@ -267,20 +283,25 @@ impl SegmentedMP4Encoder {
     }
 
     pub fn finish(&mut self, timestamp: Option<Duration>) -> Result<(), FinishError> {
-        if let Some(segment_start) = self.segment_start_time {
-            let final_duration = timestamp
-                .unwrap_or(segment_start)
-                .saturating_sub(segment_start);
-
-            self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
-                index: self.current_index,
-                duration: final_duration,
-            });
-        }
+        let segment_path = self.current_segment_path();
+        let segment_start = self.segment_start_time;
 
         if let Some(mut encoder) = self.current_encoder.take() {
             encoder.finish(timestamp)?;
+
+            sync_file(&segment_path);
+
+            if let Some(start) = segment_start {
+                let final_duration = timestamp.unwrap_or(start).saturating_sub(start);
+                let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                self.completed_segments.push(SegmentInfo {
+                    path: segment_path,
+                    index: self.current_index,
+                    duration: final_duration,
+                    file_size,
+                });
+            }
         }
 
         self.finalize_manifest();
@@ -292,6 +313,7 @@ impl SegmentedMP4Encoder {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
 
         let manifest = Manifest {
+            version: MANIFEST_VERSION,
             fragments: self
                 .completed_segments
                 .iter()
@@ -305,6 +327,7 @@ impl SegmentedMP4Encoder {
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
                     is_complete: true,
+                    file_size: s.file_size,
                 })
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),
