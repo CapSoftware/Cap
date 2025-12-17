@@ -57,6 +57,42 @@ struct PauseTracker {
     offset: Duration,
 }
 
+struct FrameDropTracker {
+    count: u32,
+    last_warning: std::time::Instant,
+}
+
+impl FrameDropTracker {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            last_warning: std::time::Instant::now(),
+        }
+    }
+
+    fn record_drop(&mut self) {
+        self.count += 1;
+        if self.count >= 30 && self.last_warning.elapsed() > Duration::from_secs(5) {
+            warn!(
+                "Dropped {} camera frames due to encoder backpressure",
+                self.count
+            );
+            self.count = 0;
+            self.last_warning = std::time::Instant::now();
+        }
+    }
+
+    fn reset(&mut self) {
+        if self.count > 0 {
+            trace!(
+                "Camera frame drop count at segment boundary: {}",
+                self.count
+            );
+        }
+        self.count = 0;
+    }
+}
+
 impl PauseTracker {
     fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
@@ -113,6 +149,7 @@ pub struct WindowsSegmentedCameraMuxer {
     output_height: Option<u32>,
 
     pause: PauseTracker,
+    frame_drops: FrameDropTracker,
 }
 
 pub struct WindowsSegmentedCameraMuxerConfig {
@@ -159,12 +196,15 @@ impl Muxer for WindowsSegmentedCameraMuxer {
             video_config,
             output_height: config.output_height,
             pause: PauseTracker::new(pause_flag),
+            frame_drops: FrameDropTracker::new(),
         })
     }
 
     fn stop(&mut self) {
         if let Some(state) = &self.current_state {
-            let _ = state.video_tx.send(None);
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Camera encoder channel already closed during stop: {e}");
+            }
         }
     }
 
@@ -173,14 +213,21 @@ impl Muxer for WindowsSegmentedCameraMuxer {
         let segment_start = self.segment_start_time;
 
         if let Some(mut state) = self.current_state.take() {
-            let _ = state.video_tx.send(None);
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Camera encoder channel already closed during finish: {e}");
+            }
 
             if let Some(handle) = state.encoder_handle.take() {
                 let timeout = Duration::from_secs(5);
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        let _ = handle.join();
+                        if let Err(panic_payload) = handle.join() {
+                            warn!(
+                                "Camera encoder thread panicked during finish: {:?}",
+                                panic_payload
+                            );
+                        }
                         break;
                     }
                     if start.elapsed() > timeout {
@@ -463,7 +510,9 @@ impl WindowsSegmentedCameraMuxer {
         let completed_segment_path = self.current_segment_path();
 
         if let Some(mut state) = self.current_state.take() {
-            let _ = state.video_tx.send(None);
+            if let Err(e) = state.video_tx.send(None) {
+                trace!("Camera encoder channel already closed during rotation: {e}");
+            }
 
             if let Some(handle) = state.encoder_handle.take() {
                 let timeout = Duration::from_secs(5);
@@ -511,6 +560,7 @@ impl WindowsSegmentedCameraMuxer {
             self.write_manifest();
         }
 
+        self.frame_drops.reset();
         self.current_index += 1;
         self.segment_start_time = Some(timestamp);
 
@@ -607,7 +657,7 @@ impl VideoMuxer for WindowsSegmentedCameraMuxer {
         {
             match e {
                 std::sync::mpsc::TrySendError::Full(_) => {
-                    trace!("Camera encoder channel full, dropping frame");
+                    self.frame_drops.record_drop();
                 }
                 std::sync::mpsc::TrySendError::Disconnected(_) => {
                     trace!("Camera encoder channel disconnected");

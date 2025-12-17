@@ -192,8 +192,12 @@ impl SegmentedAudioEncoder {
         let completed_segment_path = self.current_segment_path();
 
         if let Some(mut encoder) = self.current_encoder.take() {
-            let _ = encoder.encoder.flush(&mut encoder.output);
-            let _ = encoder.output.write_trailer();
+            if let Err(e) = encoder.encoder.flush(&mut encoder.output) {
+                tracing::warn!("Audio encoder flush warning during rotation: {e}");
+            }
+            if let Err(e) = encoder.output.write_trailer() {
+                tracing::warn!("Audio write_trailer warning during rotation: {e}");
+            }
 
             sync_file(&completed_segment_path);
 
@@ -337,8 +341,15 @@ impl SegmentedAudioEncoder {
                     });
                 }
             } else {
-                let _ = encoder.output.write_trailer();
-                let _ = std::fs::remove_file(segment_path);
+                if let Err(e) = encoder.output.write_trailer() {
+                    tracing::trace!("Audio write_trailer on empty segment: {e}");
+                }
+                if let Err(e) = std::fs::remove_file(&segment_path) {
+                    tracing::trace!(
+                        "Failed to remove empty audio segment {}: {e}",
+                        segment_path.display()
+                    );
+                }
             }
         }
 
@@ -377,8 +388,15 @@ impl SegmentedAudioEncoder {
                     });
                 }
             } else {
-                let _ = encoder.output.write_trailer();
-                let _ = std::fs::remove_file(segment_path);
+                if let Err(e) = encoder.output.write_trailer() {
+                    tracing::trace!("Audio write_trailer on empty segment: {e}");
+                }
+                if let Err(e) = std::fs::remove_file(&segment_path) {
+                    tracing::trace!(
+                        "Failed to remove empty audio segment {}: {e}",
+                        segment_path.display()
+                    );
+                }
             }
         }
 

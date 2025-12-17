@@ -228,7 +228,9 @@ impl Message<Cancel> for Actor {
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         if let Some(ActorState::Recording { pipeline, .. }) = self.state.take() {
-            let _ = pipeline.stop().await;
+            if let Err(e) = pipeline.stop().await {
+                warn!("Pipeline stop error during cancel: {e:#}");
+            }
 
             self.notify_completion_ok();
         }

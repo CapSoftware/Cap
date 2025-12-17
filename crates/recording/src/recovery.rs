@@ -406,7 +406,9 @@ impl RecoveryManager {
                     std::fs::rename(source, &display_output)?;
                     let display_dir = segment_dir.join("display");
                     if display_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&display_dir);
+                        if let Err(e) = std::fs::remove_dir_all(&display_dir) {
+                            debug!("Failed to clean up display dir {:?}: {e}", display_dir);
+                        }
                     }
                 }
             } else if segment.display_fragments.len() > 1 {
@@ -419,11 +421,15 @@ impl RecoveryManager {
                     .map_err(RecoveryError::VideoConcat)?;
 
                 for fragment in &segment.display_fragments {
-                    let _ = std::fs::remove_file(fragment);
+                    if let Err(e) = std::fs::remove_file(fragment) {
+                        debug!("Failed to remove display fragment {:?}: {e}", fragment);
+                    }
                 }
                 let display_dir = segment_dir.join("display");
                 if display_dir.exists() {
-                    let _ = std::fs::remove_dir_all(&display_dir);
+                    if let Err(e) = std::fs::remove_dir_all(&display_dir) {
+                        debug!("Failed to clean up display dir {:?}: {e}", display_dir);
+                    }
                 }
             }
 
@@ -436,7 +442,9 @@ impl RecoveryManager {
                         std::fs::rename(source, &camera_output)?;
                         let camera_dir = segment_dir.join("camera");
                         if camera_dir.exists() {
-                            let _ = std::fs::remove_dir_all(&camera_dir);
+                            if let Err(e) = std::fs::remove_dir_all(&camera_dir) {
+                                debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
+                            }
                         }
                     }
                 } else if camera_frags.len() > 1 {
@@ -449,11 +457,15 @@ impl RecoveryManager {
                         .map_err(RecoveryError::VideoConcat)?;
 
                     for fragment in camera_frags {
-                        let _ = std::fs::remove_file(fragment);
+                        if let Err(e) = std::fs::remove_file(fragment) {
+                            debug!("Failed to remove camera fragment {:?}: {e}", fragment);
+                        }
                     }
                     let camera_dir = segment_dir.join("camera");
                     if camera_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&camera_dir);
+                        if let Err(e) = std::fs::remove_dir_all(&camera_dir) {
+                            debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
+                        }
                     }
                 }
             }
@@ -471,11 +483,15 @@ impl RecoveryManager {
                             info!("Transcoding single mic fragment to {:?}", mic_output);
                             concatenate_audio_to_ogg(mic_frags, &mic_output)
                                 .map_err(RecoveryError::AudioConcat)?;
-                            let _ = std::fs::remove_file(source);
+                            if let Err(e) = std::fs::remove_file(source) {
+                                debug!("Failed to remove mic source {:?}: {e}", source);
+                            }
                         }
                         let mic_dir = segment_dir.join("audio-input");
                         if mic_dir.exists() {
-                            let _ = std::fs::remove_dir_all(&mic_dir);
+                            if let Err(e) = std::fs::remove_dir_all(&mic_dir) {
+                                debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
+                            }
                         }
                     }
                 } else if mic_frags.len() > 1 {
@@ -488,11 +504,15 @@ impl RecoveryManager {
                         .map_err(RecoveryError::AudioConcat)?;
 
                     for fragment in mic_frags {
-                        let _ = std::fs::remove_file(fragment);
+                        if let Err(e) = std::fs::remove_file(fragment) {
+                            debug!("Failed to remove mic fragment {:?}: {e}", fragment);
+                        }
                     }
                     let mic_dir = segment_dir.join("audio-input");
                     if mic_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&mic_dir);
+                        if let Err(e) = std::fs::remove_dir_all(&mic_dir) {
+                            debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
+                        }
                     }
                 }
             }
@@ -513,11 +533,15 @@ impl RecoveryManager {
                             );
                             concatenate_audio_to_ogg(system_frags, &system_output)
                                 .map_err(RecoveryError::AudioConcat)?;
-                            let _ = std::fs::remove_file(source);
+                            if let Err(e) = std::fs::remove_file(source) {
+                                debug!("Failed to remove system audio source {:?}: {e}", source);
+                            }
                         }
                         let system_dir = segment_dir.join("system_audio");
                         if system_dir.exists() {
-                            let _ = std::fs::remove_dir_all(&system_dir);
+                            if let Err(e) = std::fs::remove_dir_all(&system_dir) {
+                                debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
+                            }
                         }
                     }
                 } else if system_frags.len() > 1 {
@@ -530,11 +554,15 @@ impl RecoveryManager {
                         .map_err(RecoveryError::AudioConcat)?;
 
                     for fragment in system_frags {
-                        let _ = std::fs::remove_file(fragment);
+                        if let Err(e) = std::fs::remove_file(fragment) {
+                            debug!("Failed to remove system audio fragment {:?}: {e}", fragment);
+                        }
                     }
                     let system_dir = segment_dir.join("system_audio");
                     if system_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&system_dir);
+                        if let Err(e) = std::fs::remove_dir_all(&system_dir) {
+                            debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
+                        }
                     }
                 }
             }
@@ -578,14 +606,24 @@ impl RecoveryManager {
                             "Camera video has no decodable frames, removing: {:?}",
                             camera_output
                         );
-                        let _ = std::fs::remove_file(&camera_output);
+                        if let Err(e) = std::fs::remove_file(&camera_output) {
+                            debug!(
+                                "Failed to remove invalid camera video {:?}: {e}",
+                                camera_output
+                            );
+                        }
                     }
                     Err(e) => {
                         warn!(
                             "Camera video validation failed for {:?}: {}, removing",
                             camera_output, e
                         );
-                        let _ = std::fs::remove_file(&camera_output);
+                        if let Err(remove_err) = std::fs::remove_file(&camera_output) {
+                            debug!(
+                                "Failed to remove invalid camera video {:?}: {remove_err}",
+                                camera_output
+                            );
+                        }
                     }
                 }
             }

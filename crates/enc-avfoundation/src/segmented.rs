@@ -149,7 +149,9 @@ impl SegmentedMP4Encoder {
         let completed_segment_path = self.current_segment_path();
 
         if let Some(mut encoder) = self.current_encoder.take() {
-            let _ = encoder.finish(Some(timestamp));
+            if let Err(e) = encoder.finish(Some(timestamp)) {
+                tracing::warn!("Failed to finish encoder during rotation: {e}");
+            }
 
             sync_file(&completed_segment_path);
 
