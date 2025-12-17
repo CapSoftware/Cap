@@ -7,6 +7,7 @@ license = "MIT"
 [dependencies]
 ffmpeg = { workspace = true }
 thiserror.workspace = true
+tracing.workspace = true
 cap-camera = { path = "../camera" }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
