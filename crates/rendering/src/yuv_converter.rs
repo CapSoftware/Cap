@@ -82,25 +82,55 @@ fn upload_plane_with_stride(
     Ok(())
 }
 
-const MAX_TEXTURE_WIDTH: u32 = 3840;
-const MAX_TEXTURE_HEIGHT: u32 = 2160;
+const MAX_TEXTURE_WIDTH: u32 = 7680;
+const MAX_TEXTURE_HEIGHT: u32 = 4320;
 
-fn validate_dimensions(width: u32, height: u32) -> Result<(), YuvConversionError> {
-    if width > MAX_TEXTURE_WIDTH {
+const INITIAL_TEXTURE_WIDTH: u32 = 1920;
+const INITIAL_TEXTURE_HEIGHT: u32 = 1080;
+
+const TEXTURE_SIZE_PADDING: u32 = 64;
+
+fn align_dimension(dim: u32) -> u32 {
+    dim.div_ceil(TEXTURE_SIZE_PADDING) * TEXTURE_SIZE_PADDING
+}
+
+fn validate_dimensions(
+    width: u32,
+    height: u32,
+    gpu_max_texture_size: u32,
+) -> Result<(u32, u32, bool), YuvConversionError> {
+    let effective_max_width = MAX_TEXTURE_WIDTH.min(gpu_max_texture_size);
+    let effective_max_height = MAX_TEXTURE_HEIGHT.min(gpu_max_texture_size);
+
+    if width <= effective_max_width && height <= effective_max_height {
+        return Ok((width, height, false));
+    }
+
+    let scale_x = effective_max_width as f32 / width as f32;
+    let scale_y = effective_max_height as f32 / height as f32;
+    let scale = scale_x.min(scale_y).min(1.0);
+
+    if scale < 0.1 {
         return Err(YuvConversionError::DimensionExceedsLimit {
-            dimension: "width",
-            value: width,
-            max: MAX_TEXTURE_WIDTH,
+            dimension: "resolution",
+            value: width.max(height),
+            max: effective_max_width.max(effective_max_height),
         });
     }
-    if height > MAX_TEXTURE_HEIGHT {
-        return Err(YuvConversionError::DimensionExceedsLimit {
-            dimension: "height",
-            value: height,
-            max: MAX_TEXTURE_HEIGHT,
-        });
-    }
-    Ok(())
+
+    let new_width = ((width as f32 * scale) as u32).max(2) & !1;
+    let new_height = ((height as f32 * scale) as u32).max(2) & !1;
+
+    tracing::warn!(
+        original_width = width,
+        original_height = height,
+        scaled_width = new_width,
+        scaled_height = new_height,
+        gpu_max = gpu_max_texture_size,
+        "Video dimensions exceed GPU limits, downscaling enabled"
+    );
+
+    Ok((new_width, new_height, true))
 }
 
 pub struct YuvToRgbaConverter {
@@ -119,6 +149,9 @@ pub struct YuvToRgbaConverter {
     output_textures: [wgpu::Texture; 2],
     output_views: [wgpu::TextureView; 2],
     current_output: usize,
+    allocated_width: u32,
+    allocated_height: u32,
+    gpu_max_texture_size: u32,
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
     #[cfg(target_os = "windows")]
@@ -131,6 +164,13 @@ pub struct YuvToRgbaConverter {
 
 impl YuvToRgbaConverter {
     pub fn new(device: &wgpu::Device) -> Self {
+        let gpu_max_texture_size = device.limits().max_texture_dimension_2d;
+
+        tracing::info!(
+            gpu_max_texture_size = gpu_max_texture_size,
+            "Initializing YUV converter with GPU texture limit"
+        );
+
         let nv12_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("NV12 to RGBA Converter"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
@@ -260,94 +300,15 @@ impl YuvToRgbaConverter {
             cache: None,
         });
 
-        let y_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Y Plane Texture (Pre-allocated)"),
-            size: wgpu::Extent3d {
-                width: MAX_TEXTURE_WIDTH,
-                height: MAX_TEXTURE_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let y_view = y_texture.create_view(&Default::default());
+        let initial_width = INITIAL_TEXTURE_WIDTH;
+        let initial_height = INITIAL_TEXTURE_HEIGHT;
 
-        let uv_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("UV Plane Texture (Pre-allocated)"),
-            size: wgpu::Extent3d {
-                width: MAX_TEXTURE_WIDTH / 2,
-                height: MAX_TEXTURE_HEIGHT / 2,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let uv_view = uv_texture.create_view(&Default::default());
-
-        let u_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("U Plane Texture (Pre-allocated)"),
-            size: wgpu::Extent3d {
-                width: MAX_TEXTURE_WIDTH / 2,
-                height: MAX_TEXTURE_HEIGHT / 2,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let u_view = u_texture.create_view(&Default::default());
-
-        let v_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("V Plane Texture (Pre-allocated)"),
-            size: wgpu::Extent3d {
-                width: MAX_TEXTURE_WIDTH / 2,
-                height: MAX_TEXTURE_HEIGHT / 2,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let v_view = v_texture.create_view(&Default::default());
-
-        let create_output_texture = |label: &str| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: MAX_TEXTURE_WIDTH,
-                    height: MAX_TEXTURE_HEIGHT,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            })
-        };
-
-        let output_texture_0 = create_output_texture("RGBA Output Texture 0 (Pre-allocated)");
-        let output_texture_1 = create_output_texture("RGBA Output Texture 1 (Pre-allocated)");
-        let output_view_0 = output_texture_0.create_view(&Default::default());
-        let output_view_1 = output_texture_1.create_view(&Default::default());
+        let (y_texture, y_view) = Self::create_y_texture(device, initial_width, initial_height);
+        let (uv_texture, uv_view) = Self::create_uv_texture(device, initial_width, initial_height);
+        let (u_texture, u_view) = Self::create_u_texture(device, initial_width, initial_height);
+        let (v_texture, v_view) = Self::create_v_texture(device, initial_width, initial_height);
+        let (output_textures, output_views) =
+            Self::create_output_textures(device, initial_width, initial_height);
 
         Self {
             nv12_pipeline,
@@ -362,9 +323,12 @@ impl YuvToRgbaConverter {
             u_view,
             v_texture,
             v_view,
-            output_textures: [output_texture_0, output_texture_1],
-            output_views: [output_view_0, output_view_1],
+            output_textures,
+            output_views,
             current_output: 0,
+            allocated_width: initial_width,
+            allocated_height: initial_height,
+            gpu_max_texture_size,
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
             #[cfg(target_os = "windows")]
@@ -374,6 +338,175 @@ impl YuvToRgbaConverter {
             #[cfg(target_os = "windows")]
             d3d11_staging_height: 0,
         }
+    }
+
+    fn create_y_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Y Plane Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+
+    fn create_uv_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("UV Plane Texture"),
+            size: wgpu::Extent3d {
+                width: width / 2,
+                height: height / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+
+    fn create_u_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("U Plane Texture"),
+            size: wgpu::Extent3d {
+                width: width / 2,
+                height: height / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+
+    fn create_v_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("V Plane Texture"),
+            size: wgpu::Extent3d {
+                width: width / 2,
+                height: height / 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+
+    fn create_output_textures(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> ([wgpu::Texture; 2], [wgpu::TextureView; 2]) {
+        let create_one = |label: &str| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+
+        let texture_0 = create_one("RGBA Output Texture 0");
+        let texture_1 = create_one("RGBA Output Texture 1");
+        let view_0 = texture_0.create_view(&Default::default());
+        let view_1 = texture_1.create_view(&Default::default());
+
+        ([texture_0, texture_1], [view_0, view_1])
+    }
+
+    fn ensure_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let required_width = align_dimension(width);
+        let required_height = align_dimension(height);
+
+        if required_width <= self.allocated_width && required_height <= self.allocated_height {
+            return;
+        }
+
+        let new_width = required_width.max(self.allocated_width);
+        let new_height = required_height.max(self.allocated_height);
+
+        tracing::info!(
+            old_width = self.allocated_width,
+            old_height = self.allocated_height,
+            new_width = new_width,
+            new_height = new_height,
+            "Reallocating YUV converter textures for larger video"
+        );
+
+        let (y_texture, y_view) = Self::create_y_texture(device, new_width, new_height);
+        let (uv_texture, uv_view) = Self::create_uv_texture(device, new_width, new_height);
+        let (u_texture, u_view) = Self::create_u_texture(device, new_width, new_height);
+        let (v_texture, v_view) = Self::create_v_texture(device, new_width, new_height);
+        let (output_textures, output_views) =
+            Self::create_output_textures(device, new_width, new_height);
+
+        self.y_texture = y_texture;
+        self.y_view = y_view;
+        self.uv_texture = uv_texture;
+        self.uv_view = uv_view;
+        self.u_texture = u_texture;
+        self.u_view = u_view;
+        self.v_texture = v_texture;
+        self.v_view = v_view;
+        self.output_textures = output_textures;
+        self.output_views = output_views;
+        self.allocated_width = new_width;
+        self.allocated_height = new_height;
+    }
+
+    pub fn gpu_max_texture_size(&self) -> u32 {
+        self.gpu_max_texture_size
     }
 
     fn swap_output_buffer(&mut self) {
@@ -400,7 +533,9 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
@@ -480,8 +615,6 @@ impl YuvToRgbaConverter {
         queue: &wgpu::Queue,
         image_buf: &cv::ImageBuf,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        self.swap_output_buffer();
-
         let cache = self
             .iosurface_cache
             .as_ref()
@@ -494,7 +627,10 @@ impl YuvToRgbaConverter {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
 
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
+        self.swap_output_buffer();
 
         let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
         let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
@@ -571,7 +707,9 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
@@ -652,7 +790,9 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(wgpu_device, effective_width, effective_height);
 
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 
@@ -806,7 +946,9 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
 
         use crate::d3d_texture::import_d3d11_texture_to_wgpu;
 
@@ -874,7 +1016,7 @@ impl YuvToRgbaConverter {
     #[allow(clippy::too_many_arguments)]
     pub fn convert_nv12_cpu(
         &mut self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         y_data: &[u8],
         uv_data: &[u8],
@@ -883,7 +1025,9 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];
@@ -924,7 +1068,7 @@ impl YuvToRgbaConverter {
     #[allow(clippy::too_many_arguments)]
     pub fn convert_yuv420p_cpu(
         &mut self,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         y_data: &[u8],
         u_data: &[u8],
@@ -934,7 +1078,9 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        validate_dimensions(width, height)?;
+        let (effective_width, effective_height, _downscaled) =
+            validate_dimensions(width, height, self.gpu_max_texture_size)?;
+        self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];
