@@ -1062,34 +1062,34 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        if !self.zero_copy_failed {
-            if let (Some(y_h), Some(uv_h)) = (y_handle, uv_handle) {
-                match self.convert_nv12_from_d3d11_shared_handles(
-                    wgpu_device,
-                    queue,
-                    y_h,
-                    uv_h,
-                    width,
-                    height,
-                ) {
-                    Ok(_) => {
-                        tracing::trace!(
-                            width = width,
-                            height = height,
-                            path = "zero-copy",
-                            "NV12 conversion completed via zero-copy"
-                        );
-                        return Ok(self.current_output_view());
-                    }
-                    Err(e) => {
-                        tracing::info!(
-                            error = %e,
-                            width = width,
-                            height = height,
-                            "Zero-copy path failed, falling back to staging copy for this and future frames"
-                        );
-                        self.zero_copy_failed = true;
-                    }
+        if !self.zero_copy_failed
+            && let (Some(y_h), Some(uv_h)) = (y_handle, uv_handle)
+        {
+            match self.convert_nv12_from_d3d11_shared_handles(
+                wgpu_device,
+                queue,
+                y_h,
+                uv_h,
+                width,
+                height,
+            ) {
+                Ok(_) => {
+                    tracing::trace!(
+                        width = width,
+                        height = height,
+                        path = "zero-copy",
+                        "NV12 conversion completed via zero-copy"
+                    );
+                    return Ok(self.current_output_view());
+                }
+                Err(e) => {
+                    tracing::info!(
+                        error = %e,
+                        width = width,
+                        height = height,
+                        "Zero-copy path failed, falling back to staging copy for this and future frames"
+                    );
+                    self.zero_copy_failed = true;
                 }
             }
         }

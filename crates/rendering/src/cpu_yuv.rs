@@ -159,7 +159,9 @@ impl SimdLevel {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 const PARALLEL_THRESHOLD_PIXELS: usize = 1920 * 1080;
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 const MIN_ROWS_PER_THREAD: usize = 16;
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
@@ -178,6 +180,7 @@ pub fn nv12_to_rgba_simd(
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 pub fn nv12_to_rgba_simd_with_progress(
     y_data: &[u8],
     uv_data: &[u8],
@@ -251,6 +254,8 @@ pub fn nv12_to_rgba_simd_with_progress(
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 fn nv12_convert_sequential(
     y_data: &[u8],
     uv_data: &[u8],
@@ -263,10 +268,10 @@ fn nv12_convert_sequential(
     progress: Option<Arc<ConversionProgress>>,
 ) {
     for row in 0..height {
-        if let Some(ref p) = progress {
-            if p.is_cancelled() {
-                return;
-            }
+        if let Some(ref p) = progress
+            && p.is_cancelled()
+        {
+            return;
         }
 
         nv12_convert_row(
@@ -279,6 +284,8 @@ fn nv12_convert_sequential(
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 fn nv12_convert_parallel(
     y_data: &[u8],
     uv_data: &[u8],
@@ -304,10 +311,10 @@ fn nv12_convert_parallel(
             let band_height = band_output.len() / row_bytes;
 
             for local_row in 0..band_height {
-                if let Some(ref p) = progress {
-                    if p.is_cancelled() {
-                        return;
-                    }
+                if let Some(ref p) = progress
+                    && p.is_cancelled()
+                {
+                    return;
                 }
 
                 let global_row = start_row + local_row;
@@ -334,6 +341,8 @@ fn nv12_convert_parallel(
         });
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 fn nv12_convert_row(
     y_data: &[u8],
     uv_data: &[u8],
@@ -349,6 +358,7 @@ fn nv12_convert_row(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn nv12_convert_row_into(
     y_data: &[u8],
@@ -366,21 +376,8 @@ fn nv12_convert_row_into(
     let out_row_start = dst_row * width * 4;
 
     match simd_level {
-        SimdLevel::Avx2 => {
-            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-            unsafe {
-                nv12_convert_row_avx2(
-                    y_data,
-                    uv_data,
-                    width,
-                    y_row_start,
-                    uv_row_start,
-                    out_row_start,
-                    output,
-                );
-            }
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-            nv12_convert_row_scalar(
+        SimdLevel::Avx2 => unsafe {
+            nv12_convert_row_avx2(
                 y_data,
                 uv_data,
                 width,
@@ -389,22 +386,9 @@ fn nv12_convert_row_into(
                 out_row_start,
                 output,
             );
-        }
-        SimdLevel::Sse2 => {
-            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-            unsafe {
-                nv12_convert_row_sse2(
-                    y_data,
-                    uv_data,
-                    width,
-                    y_row_start,
-                    uv_row_start,
-                    out_row_start,
-                    output,
-                );
-            }
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-            nv12_convert_row_scalar(
+        },
+        SimdLevel::Sse2 => unsafe {
+            nv12_convert_row_sse2(
                 y_data,
                 uv_data,
                 width,
@@ -413,7 +397,7 @@ fn nv12_convert_row_into(
                 out_row_start,
                 output,
             );
-        }
+        },
         SimdLevel::Scalar => {
             nv12_convert_row_scalar(
                 y_data,
@@ -474,6 +458,7 @@ unsafe fn nv12_convert_row_sse2(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 fn nv12_convert_row_scalar(
     y_data: &[u8],
     uv_data: &[u8],
@@ -634,6 +619,7 @@ pub fn yuv420p_to_rgba_simd_with_progress(
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_sequential(
     y_data: &[u8],
@@ -648,10 +634,10 @@ fn yuv420p_convert_sequential(
     progress: Option<Arc<ConversionProgress>>,
 ) {
     for row in 0..height {
-        if let Some(ref p) = progress {
-            if p.is_cancelled() {
-                return;
-            }
+        if let Some(ref p) = progress
+            && p.is_cancelled()
+        {
+            return;
         }
 
         yuv420p_convert_row(
@@ -664,6 +650,7 @@ fn yuv420p_convert_sequential(
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_parallel(
     y_data: &[u8],
@@ -691,10 +678,10 @@ fn yuv420p_convert_parallel(
             let band_height = band_output.len() / row_bytes;
 
             for local_row in 0..band_height {
-                if let Some(ref p) = progress {
-                    if p.is_cancelled() {
-                        return;
-                    }
+                if let Some(ref p) = progress
+                    && p.is_cancelled()
+                {
+                    return;
                 }
 
                 let global_row = start_row + local_row;
@@ -722,6 +709,7 @@ fn yuv420p_convert_parallel(
         });
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_row(
     y_data: &[u8],
@@ -739,6 +727,7 @@ fn yuv420p_convert_row(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_row_into(
     y_data: &[u8],
@@ -757,22 +746,8 @@ fn yuv420p_convert_row_into(
     let out_row_start = dst_row * width * 4;
 
     match simd_level {
-        SimdLevel::Avx2 => {
-            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-            unsafe {
-                yuv420p_convert_row_avx2(
-                    y_data,
-                    u_data,
-                    v_data,
-                    width,
-                    y_row_start,
-                    uv_row_start,
-                    out_row_start,
-                    output,
-                );
-            }
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-            yuv420p_convert_row_scalar(
+        SimdLevel::Avx2 => unsafe {
+            yuv420p_convert_row_avx2(
                 y_data,
                 u_data,
                 v_data,
@@ -782,23 +757,9 @@ fn yuv420p_convert_row_into(
                 out_row_start,
                 output,
             );
-        }
-        SimdLevel::Sse2 => {
-            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-            unsafe {
-                yuv420p_convert_row_sse2(
-                    y_data,
-                    u_data,
-                    v_data,
-                    width,
-                    y_row_start,
-                    uv_row_start,
-                    out_row_start,
-                    output,
-                );
-            }
-            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-            yuv420p_convert_row_scalar(
+        },
+        SimdLevel::Sse2 => unsafe {
+            yuv420p_convert_row_sse2(
                 y_data,
                 u_data,
                 v_data,
@@ -808,7 +769,7 @@ fn yuv420p_convert_row_into(
                 out_row_start,
                 output,
             );
-        }
+        },
         SimdLevel::Scalar => {
             yuv420p_convert_row_scalar(
                 y_data,
@@ -876,6 +837,7 @@ unsafe fn yuv420p_convert_row_sse2(
     );
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 fn yuv420p_convert_row_scalar(
     y_data: &[u8],
