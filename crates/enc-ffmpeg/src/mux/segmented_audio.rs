@@ -21,23 +21,22 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
 
     if let Some(parent) = path.parent()
         && let Ok(dir) = std::fs::File::open(parent)
+        && let Err(e) = dir.sync_all()
     {
-        if let Err(e) = dir.sync_all() {
-            tracing::warn!(
-                "Directory fsync failed after rename for {}: {e}",
-                parent.display()
-            );
-        }
+        tracing::warn!(
+            "Directory fsync failed after rename for {}: {e}",
+            parent.display()
+        );
     }
 
     Ok(())
 }
 
 fn sync_file(path: &Path) {
-    if let Ok(file) = std::fs::File::open(path) {
-        if let Err(e) = file.sync_all() {
-            tracing::warn!("File fsync failed for {}: {e}", path.display());
-        }
+    if let Ok(file) = std::fs::File::open(path)
+        && let Err(e) = file.sync_all()
+    {
+        tracing::warn!("File fsync failed for {}: {e}", path.display());
     }
 }
 
