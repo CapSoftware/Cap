@@ -1,7 +1,38 @@
 mod manifest;
 pub use manifest::*;
 
-use std::{path::PathBuf, time::Duration};
+use serde::Serialize;
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+pub fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    let temp_path = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    let mut file = std::fs::File::create(&temp_path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+
+    std::fs::rename(&temp_path, path)?;
+
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
+    Ok(())
+}
+
+pub fn sync_file(path: &Path) {
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.sync_all();
+    }
+}
 
 pub struct FragmentManager {
     base_path: PathBuf,
@@ -75,9 +106,7 @@ impl FragmentManager {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let json = serde_json::to_string_pretty(&manifest)?;
-        std::fs::write(manifest_path, json)?;
-        Ok(())
+        atomic_write_json(&manifest_path, &manifest)
     }
 
     pub fn finalize_manifest(&self) -> std::io::Result<()> {
@@ -88,9 +117,7 @@ impl FragmentManager {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let json = serde_json::to_string_pretty(&manifest)?;
-        std::fs::write(manifest_path, json)?;
-        Ok(())
+        atomic_write_json(&manifest_path, &manifest)
     }
 
     fn total_duration(&self) -> Option<Duration> {

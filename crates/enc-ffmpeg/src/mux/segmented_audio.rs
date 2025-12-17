@@ -2,7 +2,37 @@ use crate::audio::aac::{AACEncoder, AACEncoderError};
 use cap_media_info::AudioInfo;
 use ffmpeg::{format, frame};
 use serde::Serialize;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
+    let temp_path = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+    let mut file = std::fs::File::create(&temp_path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+
+    std::fs::rename(&temp_path, path)?;
+
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
+    Ok(())
+}
+
+fn sync_file(path: &Path) {
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.sync_all();
+    }
+}
 
 pub struct SegmentedAudioEncoder {
     base_path: PathBuf,
@@ -81,7 +111,7 @@ impl SegmentedAudioEncoder {
         let segment_path = base_path.join("fragment_000.m4a");
         let encoder = Self::create_segment_encoder(segment_path, audio_config)?;
 
-        Ok(Self {
+        let instance = Self {
             base_path,
             audio_config,
             current_encoder: Some(encoder),
@@ -90,7 +120,11 @@ impl SegmentedAudioEncoder {
             segment_start_time: None,
             last_frame_timestamp: None,
             completed_segments: Vec::new(),
-        })
+        };
+
+        instance.write_in_progress_manifest();
+
+        Ok(instance)
     }
 
     fn create_segment_encoder(
@@ -149,16 +183,21 @@ impl SegmentedAudioEncoder {
     fn rotate_segment(&mut self, timestamp: Duration) -> Result<(), QueueFrameError> {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
+        let completed_segment_path = self.current_segment_path();
 
         if let Some(mut encoder) = self.current_encoder.take() {
             let _ = encoder.encoder.flush(&mut encoder.output);
             let _ = encoder.output.write_trailer();
 
+            sync_file(&completed_segment_path);
+
             self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
+                path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
             });
+
+            self.write_manifest();
         }
 
         self.current_index += 1;
@@ -167,7 +206,7 @@ impl SegmentedAudioEncoder {
         let new_path = self.current_segment_path();
         self.current_encoder = Some(Self::create_segment_encoder(new_path, self.audio_config)?);
 
-        self.write_manifest();
+        self.write_in_progress_manifest();
 
         Ok(())
     }
@@ -199,10 +238,56 @@ impl SegmentedAudioEncoder {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
+            tracing::warn!(
+                "Failed to write manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
+    }
+
+    fn write_in_progress_manifest(&self) {
+        let mut fragments: Vec<FragmentEntry> = self
+            .completed_segments
+            .iter()
+            .map(|s| FragmentEntry {
+                path: s
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                index: s.index,
+                duration: s.duration.as_secs_f64(),
+                is_complete: true,
+            })
+            .collect();
+
+        fragments.push(FragmentEntry {
+            path: self
+                .current_segment_path()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            index: self.current_index,
+            duration: 0.0,
+            is_complete: false,
+        });
+
+        let manifest = Manifest {
+            fragments,
+            total_duration: None,
+            is_complete: false,
+        };
+
+        let manifest_path = self.base_path.join("manifest.json");
+        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
+            tracing::warn!(
+                "Failed to write in-progress manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     pub fn finish(&mut self) -> Result<(), FinishError> {
@@ -298,10 +383,12 @@ impl SegmentedAudioEncoder {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = atomic_write_json(&manifest_path, &manifest) {
+            tracing::warn!(
+                "Failed to write final manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     pub fn completed_segments(&self) -> &[SegmentInfo] {

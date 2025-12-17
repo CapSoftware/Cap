@@ -1,4 +1,4 @@
-use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, screen_capture};
+use crate::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, fragmentation, screen_capture};
 use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
 use serde::Serialize;
@@ -209,6 +209,8 @@ impl Muxer for WindowsSegmentedMuxer {
                 .lock()
                 .map_err(|_| anyhow!("Failed to lock output"))?;
             output.write_trailer()?;
+
+            fragmentation::sync_file(&self.current_segment_path());
         }
 
         self.finalize_manifest();
@@ -245,10 +247,12 @@ impl WindowsSegmentedMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn finalize_manifest(&self) {
@@ -275,10 +279,12 @@ impl WindowsSegmentedMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write final manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn create_segment(&mut self) -> anyhow::Result<()> {
@@ -500,6 +506,7 @@ impl WindowsSegmentedMuxer {
     fn rotate_segment(&mut self, timestamp: Duration) -> anyhow::Result<()> {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
+        let completed_segment_path = self.current_segment_path();
 
         if let Some(mut state) = self.current_state.take() {
             let _ = state.video_tx.send(None);
@@ -529,18 +536,22 @@ impl WindowsSegmentedMuxer {
                 .map_err(|_| anyhow!("Failed to lock output"))?;
             output.write_trailer()?;
 
+            fragmentation::sync_file(&completed_segment_path);
+
             self.completed_segments.push(SegmentInfo {
-                path: self.current_segment_path(),
+                path: completed_segment_path,
                 index: self.current_index,
                 duration: segment_duration,
             });
+
+            self.write_manifest();
         }
 
         self.current_index += 1;
         self.segment_start_time = Some(timestamp);
 
         self.create_segment()?;
-        self.write_manifest();
+        self.write_in_progress_manifest();
 
         info!(
             "Rotated to segment {} at {:?}",
@@ -548,6 +559,50 @@ impl WindowsSegmentedMuxer {
         );
 
         Ok(())
+    }
+
+    fn write_in_progress_manifest(&self) {
+        let mut fragments: Vec<FragmentEntry> = self
+            .completed_segments
+            .iter()
+            .map(|s| FragmentEntry {
+                path: s
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                index: s.index,
+                duration: s.duration.as_secs_f64(),
+                is_complete: true,
+            })
+            .collect();
+
+        fragments.push(FragmentEntry {
+            path: self
+                .current_segment_path()
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            index: self.current_index,
+            duration: 0.0,
+            is_complete: false,
+        });
+
+        let manifest = Manifest {
+            fragments,
+            total_duration: None,
+            is_complete: false,
+        };
+
+        let manifest_path = self.base_path.join("manifest.json");
+        if let Err(e) = fragmentation::atomic_write_json(&manifest_path, &manifest) {
+            warn!(
+                "Failed to write in-progress manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 }
 
@@ -566,6 +621,7 @@ impl VideoMuxer for WindowsSegmentedMuxer {
         if self.current_state.is_none() {
             self.segment_start_time = Some(adjusted_timestamp);
             self.create_segment()?;
+            self.write_in_progress_manifest();
         }
 
         if self.segment_start_time.is_none() {
