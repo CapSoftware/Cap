@@ -103,10 +103,9 @@ fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
 
                 if let Ok(config_count) =
                     unsafe { video_device.GetVideoDecoderConfigCount(&desc_4k) }
+                    && config_count > 0
                 {
-                    if config_count > 0 {
-                        supports_hw = true;
-                    }
+                    supports_hw = true;
                 }
             }
         }
