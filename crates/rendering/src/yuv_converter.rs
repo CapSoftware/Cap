@@ -160,6 +160,8 @@ pub struct YuvToRgbaConverter {
     d3d11_staging_width: u32,
     #[cfg(target_os = "windows")]
     d3d11_staging_height: u32,
+    #[cfg(target_os = "windows")]
+    zero_copy_failed: bool,
 }
 
 impl YuvToRgbaConverter {
@@ -337,6 +339,8 @@ impl YuvToRgbaConverter {
             d3d11_staging_width: 0,
             #[cfg(target_os = "windows")]
             d3d11_staging_height: 0,
+            #[cfg(target_os = "windows")]
+            zero_copy_failed: false,
         }
     }
 
@@ -954,63 +958,167 @@ impl YuvToRgbaConverter {
 
         self.swap_output_buffer();
 
-        let y_wgpu_texture = import_d3d11_texture_to_wgpu(
+        let y_import_result = import_d3d11_texture_to_wgpu(
             device,
             y_handle,
             wgpu::TextureFormat::R8Unorm,
             width,
             height,
             Some("D3D11 Y Plane Zero-Copy"),
-        )?;
+        );
 
-        let uv_wgpu_texture = import_d3d11_texture_to_wgpu(
+        let uv_import_result = import_d3d11_texture_to_wgpu(
             device,
             uv_handle,
             wgpu::TextureFormat::Rg8Unorm,
             width / 2,
             height / 2,
             Some("D3D11 UV Plane Zero-Copy"),
-        )?;
+        );
 
-        let y_view = y_wgpu_texture.create_view(&Default::default());
-        let uv_view = uv_wgpu_texture.create_view(&Default::default());
+        match (y_import_result, uv_import_result) {
+            (Ok(y_wgpu_texture), Ok(uv_wgpu_texture)) => {
+                tracing::debug!(
+                    width = width,
+                    height = height,
+                    "Zero-copy D3D11 texture import succeeded"
+                );
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
-            layout: &self.nv12_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&y_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&uv_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(self.current_output_view()),
-                },
-            ],
-        });
+                let y_view = y_wgpu_texture.create_view(&Default::default());
+                let uv_view = uv_wgpu_texture.create_view(&Default::default());
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("NV12 D3D11 Zero-Copy Conversion Encoder"),
-        });
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
+                    layout: &self.nv12_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&y_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&uv_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                self.current_output_view(),
+                            ),
+                        },
+                    ],
+                });
 
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
-                ..Default::default()
-            });
-            compute_pass.set_pipeline(&self.nv12_pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("NV12 D3D11 Zero-Copy Conversion Encoder"),
+                });
+
+                {
+                    let mut compute_pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
+                            ..Default::default()
+                        });
+                    compute_pass.set_pipeline(&self.nv12_pipeline);
+                    compute_pass.set_bind_group(0, &bind_group, &[]);
+                    compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+                }
+
+                queue.submit(std::iter::once(encoder.finish()));
+
+                Ok(self.current_output_view())
+            }
+            (Err(y_err), _) => {
+                tracing::debug!(
+                    error = %y_err,
+                    width = width,
+                    height = height,
+                    "Zero-copy D3D11 Y texture import failed, returning error"
+                );
+                Err(y_err.into())
+            }
+            (_, Err(uv_err)) => {
+                tracing::debug!(
+                    error = %uv_err,
+                    width = width,
+                    height = height,
+                    "Zero-copy D3D11 UV texture import failed, returning error"
+                );
+                Err(uv_err.into())
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_nv12_with_fallback(
+        &mut self,
+        wgpu_device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        d3d11_device: &ID3D11Device,
+        d3d11_context: &ID3D11DeviceContext,
+        nv12_texture: &ID3D11Texture2D,
+        y_handle: Option<windows::Win32::Foundation::HANDLE>,
+        uv_handle: Option<windows::Win32::Foundation::HANDLE>,
+        width: u32,
+        height: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        if !self.zero_copy_failed {
+            if let (Some(y_h), Some(uv_h)) = (y_handle, uv_handle) {
+                match self.convert_nv12_from_d3d11_shared_handles(
+                    wgpu_device,
+                    queue,
+                    y_h,
+                    uv_h,
+                    width,
+                    height,
+                ) {
+                    Ok(_) => {
+                        tracing::trace!(
+                            width = width,
+                            height = height,
+                            path = "zero-copy",
+                            "NV12 conversion completed via zero-copy"
+                        );
+                        return Ok(self.current_output_view());
+                    }
+                    Err(e) => {
+                        tracing::info!(
+                            error = %e,
+                            width = width,
+                            height = height,
+                            "Zero-copy path failed, falling back to staging copy for this and future frames"
+                        );
+                        self.zero_copy_failed = true;
+                    }
+                }
+            }
         }
 
-        queue.submit(std::iter::once(encoder.finish()));
+        tracing::trace!(
+            width = width,
+            height = height,
+            path = "staging",
+            "Using staging copy path for NV12 conversion"
+        );
+        self.convert_nv12_from_d3d11_texture(
+            wgpu_device,
+            queue,
+            d3d11_device,
+            d3d11_context,
+            nv12_texture,
+            width,
+            height,
+        )
+    }
 
-        Ok(self.current_output_view())
+    #[cfg(target_os = "windows")]
+    pub fn is_using_zero_copy(&self) -> bool {
+        !self.zero_copy_failed
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn reset_zero_copy_state(&mut self) {
+        self.zero_copy_failed = false;
     }
 
     #[allow(clippy::too_many_arguments)]

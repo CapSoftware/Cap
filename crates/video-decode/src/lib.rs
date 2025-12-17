@@ -8,4 +8,7 @@ pub mod media_foundation;
 pub use avassetreader::AVAssetReaderDecoder;
 pub use ffmpeg::FFmpegDecoder;
 #[cfg(target_os = "windows")]
-pub use media_foundation::{MFDecodedFrame, MediaFoundationDecoder, NV12Data};
+pub use media_foundation::{
+    MFDecodedFrame, MFDecoderCapabilities, MediaFoundationDecoder, NV12Data,
+    get_mf_decoder_capabilities,
+};

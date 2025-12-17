@@ -1,16 +1,19 @@
 use std::path::Path;
-use tracing::info;
+use std::sync::OnceLock;
+use tracing::{info, warn};
 use windows::{
     Win32::{
         Foundation::{HANDLE, HMODULE},
         Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+            Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL},
             Direct3D11::{
                 D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                D3D11_DECODER_PROFILE_H264_VLD_NOFGT, D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
                 D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
-                ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_DECODER_DESC,
+                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                ID3D11VideoDevice,
             },
             Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
         },
@@ -27,6 +30,114 @@ use windows::{
     },
     core::{Interface, PCWSTR},
 };
+
+#[derive(Debug, Clone)]
+pub struct MFDecoderCapabilities {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub supports_h264: bool,
+    pub supports_hevc: bool,
+    pub feature_level: D3D_FEATURE_LEVEL,
+}
+
+impl Default for MFDecoderCapabilities {
+    fn default() -> Self {
+        Self {
+            max_width: 4096,
+            max_height: 4096,
+            supports_h264: true,
+            supports_hevc: false,
+            feature_level: windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0,
+        }
+    }
+}
+
+static MF_CAPABILITIES: OnceLock<MFDecoderCapabilities> = OnceLock::new();
+
+fn query_mf_decoder_capabilities(device: &ID3D11Device) -> MFDecoderCapabilities {
+    let result: Result<MFDecoderCapabilities, String> = (|| {
+        let video_device: ID3D11VideoDevice = device
+            .cast()
+            .map_err(|e| format!("Failed to get ID3D11VideoDevice: {e:?}"))?;
+
+        let feature_level = unsafe { device.GetFeatureLevel() };
+
+        let mut max_width = 4096u32;
+        let mut max_height = 4096u32;
+        let mut supports_h264 = false;
+        let mut supports_hevc = false;
+
+        let test_resolutions = [(8192, 8192), (7680, 4320), (5120, 2880), (4096, 4096)];
+
+        for &(test_w, test_h) in &test_resolutions {
+            let h264_desc = D3D11_VIDEO_DECODER_DESC {
+                Guid: D3D11_DECODER_PROFILE_H264_VLD_NOFGT,
+                SampleWidth: test_w,
+                SampleHeight: test_h,
+                OutputFormat: DXGI_FORMAT_NV12,
+            };
+
+            if let Ok(config_count) = unsafe { video_device.GetVideoDecoderConfigCount(&h264_desc) }
+            {
+                if config_count > 0 {
+                    supports_h264 = true;
+                    max_width = max_width.max(test_w);
+                    max_height = max_height.max(test_h);
+                    break;
+                }
+            }
+        }
+
+        for &(test_w, test_h) in &test_resolutions {
+            let hevc_desc = D3D11_VIDEO_DECODER_DESC {
+                Guid: D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
+                SampleWidth: test_w,
+                SampleHeight: test_h,
+                OutputFormat: DXGI_FORMAT_NV12,
+            };
+
+            if let Ok(config_count) = unsafe { video_device.GetVideoDecoderConfigCount(&hevc_desc) }
+            {
+                if config_count > 0 {
+                    supports_hevc = true;
+                    max_width = max_width.max(test_w);
+                    max_height = max_height.max(test_h);
+                    break;
+                }
+            }
+        }
+
+        Ok(MFDecoderCapabilities {
+            max_width,
+            max_height,
+            supports_h264,
+            supports_hevc,
+            feature_level,
+        })
+    })();
+
+    match result {
+        Ok(caps) => {
+            info!(
+                max_width = caps.max_width,
+                max_height = caps.max_height,
+                supports_h264 = caps.supports_h264,
+                supports_hevc = caps.supports_hevc,
+                feature_level = ?caps.feature_level,
+                "MediaFoundation decoder capabilities detected"
+            );
+            caps
+        }
+        Err(e) => {
+            warn!("Failed to query MediaFoundation decoder capabilities: {e}, using defaults");
+            MFDecoderCapabilities::default()
+        }
+    }
+}
+
+pub fn get_mf_decoder_capabilities() -> Option<&'static MFDecoderCapabilities> {
+    MF_CAPABILITIES.get()
+}
 
 pub struct MFDecodedFrame {
     pub texture: ID3D11Texture2D,
@@ -46,6 +157,142 @@ pub struct NV12Data {
     pub uv_stride: u32,
 }
 
+struct TexturePool {
+    output_texture: Option<ID3D11Texture2D>,
+    y_texture: Option<ID3D11Texture2D>,
+    uv_texture: Option<ID3D11Texture2D>,
+    width: u32,
+    height: u32,
+}
+
+impl TexturePool {
+    fn new() -> Self {
+        Self {
+            output_texture: None,
+            y_texture: None,
+            uv_texture: None,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn get_or_create_output_texture(
+        &mut self,
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+    ) -> Result<&ID3D11Texture2D, String> {
+        if self.width != width || self.height != height || self.output_texture.is_none() {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+
+            let texture = unsafe {
+                let mut tex: Option<ID3D11Texture2D> = None;
+                device
+                    .CreateTexture2D(&desc, None, Some(&mut tex))
+                    .map_err(|e| format!("CreateTexture2D failed: {e:?}"))?;
+                tex.ok_or("CreateTexture2D returned null")?
+            };
+
+            self.output_texture = Some(texture);
+            self.width = width;
+            self.height = height;
+            self.y_texture = None;
+            self.uv_texture = None;
+        }
+
+        self.output_texture
+            .as_ref()
+            .ok_or_else(|| "Output texture not initialized".to_string())
+    }
+
+    fn get_or_create_yuv_textures(
+        &mut self,
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+    ) -> Result<(&ID3D11Texture2D, &ID3D11Texture2D), String> {
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM,
+        };
+
+        if self.width != width || self.height != height || self.y_texture.is_none() {
+            let y_desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+
+            let y_texture = unsafe {
+                let mut tex: Option<ID3D11Texture2D> = None;
+                device
+                    .CreateTexture2D(&y_desc, None, Some(&mut tex))
+                    .map_err(|e| format!("CreateTexture2D Y failed: {e:?}"))?;
+                tex.ok_or("CreateTexture2D Y returned null")?
+            };
+
+            let uv_desc = D3D11_TEXTURE2D_DESC {
+                Width: width / 2,
+                Height: height / 2,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+
+            let uv_texture = unsafe {
+                let mut tex: Option<ID3D11Texture2D> = None;
+                device
+                    .CreateTexture2D(&uv_desc, None, Some(&mut tex))
+                    .map_err(|e| format!("CreateTexture2D UV failed: {e:?}"))?;
+                tex.ok_or("CreateTexture2D UV returned null")?
+            };
+
+            self.y_texture = Some(y_texture);
+            self.uv_texture = Some(uv_texture);
+            self.width = width;
+            self.height = height;
+        }
+
+        Ok((
+            self.y_texture.as_ref().ok_or("Y texture not initialized")?,
+            self.uv_texture
+                .as_ref()
+                .ok_or("UV texture not initialized")?,
+        ))
+    }
+}
+
 pub struct MediaFoundationDecoder {
     source_reader: IMFSourceReader,
     d3d11_device: ID3D11Device,
@@ -58,6 +305,8 @@ pub struct MediaFoundationDecoder {
     staging_texture: Option<ID3D11Texture2D>,
     staging_width: u32,
     staging_height: u32,
+    texture_pool: TexturePool,
+    capabilities: MFDecoderCapabilities,
 }
 
 struct MFInitGuard;
@@ -98,9 +347,26 @@ impl MediaFoundationDecoder {
         let (width, height, frame_rate_num, frame_rate_den) =
             unsafe { get_video_info(&source_reader)? };
 
+        let capabilities = MF_CAPABILITIES
+            .get_or_init(|| query_mf_decoder_capabilities(&d3d11_device))
+            .clone();
+
+        if width > capabilities.max_width || height > capabilities.max_height {
+            warn!(
+                video_width = width,
+                video_height = height,
+                max_width = capabilities.max_width,
+                max_height = capabilities.max_height,
+                "Video dimensions exceed detected hardware decoder limits"
+            );
+        }
+
         info!(
-            "MediaFoundation decoder initialized: {}x{} @ {}/{}fps",
-            width, height, frame_rate_num, frame_rate_den
+            width = width,
+            height = height,
+            frame_rate = format!("{}/{}", frame_rate_num, frame_rate_den),
+            max_hw_resolution = format!("{}x{}", capabilities.max_width, capabilities.max_height),
+            "MediaFoundation decoder initialized"
         );
 
         std::mem::forget(guard);
@@ -117,6 +383,8 @@ impl MediaFoundationDecoder {
             staging_texture: None,
             staging_width: 0,
             staging_height: 0,
+            texture_pool: TexturePool::new(),
+            capabilities,
         })
     }
 
@@ -134,6 +402,10 @@ impl MediaFoundationDecoder {
 
     pub fn d3d11_device(&self) -> &ID3D11Device {
         &self.d3d11_device
+    }
+
+    pub fn capabilities(&self) -> &MFDecoderCapabilities {
+        &self.capabilities
     }
 
     pub fn read_texture_to_cpu(
@@ -280,38 +552,76 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("GetSubresourceIndex failed: {e:?}"))?
         };
 
-        let (output_texture, shared_handle) = unsafe {
-            copy_texture_subresource(
-                &self.d3d11_device,
-                &self.d3d11_context,
+        let output_texture = self
+            .texture_pool
+            .get_or_create_output_texture(&self.d3d11_device, self.width, self.height)?
+            .clone();
+
+        unsafe {
+            self.d3d11_context.CopySubresourceRegion(
+                &output_texture,
+                0,
+                0,
+                0,
+                0,
                 &texture,
                 subresource_index,
-                self.width,
-                self.height,
-            )?
-        };
+                None,
+            );
+        }
 
-        let yuv_planes = unsafe {
-            create_yuv_plane_textures(
+        let shared_handle = None;
+
+        let (y_texture, y_handle, uv_texture, uv_handle) = {
+            let (y_tex, uv_tex) = self.texture_pool.get_or_create_yuv_textures(
                 &self.d3d11_device,
-                &self.d3d11_context,
-                &output_texture,
                 self.width,
                 self.height,
-            )
-            .ok()
-        };
+            )?;
 
-        let (y_texture, y_handle, uv_texture, uv_handle) = yuv_planes
-            .map(|p| {
-                (
-                    Some(p.y_texture),
-                    p.y_handle,
-                    Some(p.uv_texture),
-                    p.uv_handle,
-                )
-            })
-            .unwrap_or((None, None, None, None));
+            let y_texture = y_tex.clone();
+            let uv_texture = uv_tex.clone();
+
+            unsafe {
+                self.d3d11_context.CopySubresourceRegion(
+                    &y_texture,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &output_texture,
+                    0,
+                    Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
+                        left: 0,
+                        top: 0,
+                        front: 0,
+                        right: self.width,
+                        bottom: self.height,
+                        back: 1,
+                    }),
+                );
+
+                self.d3d11_context.CopySubresourceRegion(
+                    &uv_texture,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &output_texture,
+                    1,
+                    Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
+                        left: 0,
+                        top: 0,
+                        front: 0,
+                        right: self.width / 2,
+                        bottom: self.height / 2,
+                        back: 1,
+                    }),
+                );
+            }
+
+            (Some(y_texture), None, Some(uv_texture), None)
+        };
 
         Ok(Some(MFDecodedFrame {
             texture: output_texture,
@@ -511,156 +821,6 @@ unsafe fn get_video_info(source_reader: &IMFSourceReader) -> Result<(u32, u32, u
     let frame_rate_den = frame_rate as u32;
 
     Ok((width, height, frame_rate_num, frame_rate_den.max(1)))
-}
-
-struct YuvPlaneTextures {
-    y_texture: ID3D11Texture2D,
-    y_handle: Option<HANDLE>,
-    uv_texture: ID3D11Texture2D,
-    uv_handle: Option<HANDLE>,
-}
-
-unsafe fn create_yuv_plane_textures(
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    nv12_texture: &ID3D11Texture2D,
-    width: u32,
-    height: u32,
-) -> Result<YuvPlaneTextures, String> {
-    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8_UNORM, DXGI_FORMAT_R8G8_UNORM};
-
-    let y_desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_R8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-
-    let mut y_texture: Option<ID3D11Texture2D> = None;
-    unsafe {
-        device
-            .CreateTexture2D(&y_desc, None, Some(&mut y_texture))
-            .map_err(|e| format!("CreateTexture2D Y failed: {e:?}"))?;
-    }
-    let y_texture = y_texture.ok_or("CreateTexture2D Y returned null")?;
-
-    let uv_desc = D3D11_TEXTURE2D_DESC {
-        Width: width / 2,
-        Height: height / 2,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_R8G8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-
-    let mut uv_texture: Option<ID3D11Texture2D> = None;
-    unsafe {
-        device
-            .CreateTexture2D(&uv_desc, None, Some(&mut uv_texture))
-            .map_err(|e| format!("CreateTexture2D UV failed: {e:?}"))?;
-    }
-    let uv_texture = uv_texture.ok_or("CreateTexture2D UV returned null")?;
-
-    unsafe {
-        context.CopySubresourceRegion(
-            &y_texture,
-            0,
-            0,
-            0,
-            0,
-            nv12_texture,
-            0,
-            Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
-                left: 0,
-                top: 0,
-                front: 0,
-                right: width,
-                bottom: height,
-                back: 1,
-            }),
-        );
-
-        context.CopySubresourceRegion(
-            &uv_texture,
-            0,
-            0,
-            0,
-            0,
-            nv12_texture,
-            1,
-            Some(&windows::Win32::Graphics::Direct3D11::D3D11_BOX {
-                left: 0,
-                top: 0,
-                front: 0,
-                right: width / 2,
-                bottom: height / 2,
-                back: 1,
-            }),
-        );
-    }
-
-    Ok(YuvPlaneTextures {
-        y_texture,
-        y_handle: None,
-        uv_texture,
-        uv_handle: None,
-    })
-}
-
-unsafe fn copy_texture_subresource(
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    source: &ID3D11Texture2D,
-    subresource_index: u32,
-    width: u32,
-    height: u32,
-) -> Result<(ID3D11Texture2D, Option<HANDLE>), String> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_NV12,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-
-    let mut output_texture: Option<ID3D11Texture2D> = None;
-    unsafe {
-        device
-            .CreateTexture2D(&desc, None, Some(&mut output_texture))
-            .map_err(|e| format!("CreateTexture2D failed: {e:?}"))?;
-    }
-
-    let output_texture = output_texture.ok_or("CreateTexture2D returned null")?;
-
-    unsafe {
-        context.CopySubresourceRegion(&output_texture, 0, 0, 0, 0, source, subresource_index, None);
-    }
-
-    Ok((output_texture, None))
 }
 
 unsafe impl Send for MediaFoundationDecoder {}
