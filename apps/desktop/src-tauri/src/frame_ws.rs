@@ -1,5 +1,13 @@
+use std::time::Instant;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
+
+fn pack_frame_data(mut data: Vec<u8>, stride: u32, height: u32, width: u32) -> Vec<u8> {
+    data.extend_from_slice(&stride.to_le_bytes());
+    data.extend_from_slice(&height.to_le_bytes());
+    data.extend_from_slice(&width.to_le_bytes());
+    data
+}
 
 #[derive(Clone)]
 pub struct WSFrame {
@@ -7,6 +15,8 @@ pub struct WSFrame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    #[allow(dead_code)]
+    pub created_at: Instant,
 }
 
 pub async fn create_watch_frame_ws(
@@ -36,16 +46,12 @@ pub async fn create_watch_frame_ws(
         tracing::info!("Socket connection established");
         let now = std::time::Instant::now();
 
-        // Send the current frame immediately upon connection (if one exists)
-        // This ensures the client doesn't wait for the next config change to see the image
         {
             let frame_opt = camera_rx.borrow().clone();
-            if let Some(mut frame) = frame_opt {
-                frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                frame.data.extend_from_slice(&frame.width.to_le_bytes());
+            if let Some(frame) = frame_opt {
+                let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
 
-                if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
                     return;
                 }
@@ -75,12 +81,10 @@ pub async fn create_watch_frame_ws(
                          break;
                     }
                     let frame_opt = camera_rx.borrow().clone();
-                    if let Some(mut frame) = frame_opt {
-                        frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                        frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                        frame.data.extend_from_slice(&frame.width.to_le_bytes());
+                    if let Some(frame) = frame_opt {
+                        let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
 
-                        if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                        if let Err(e) = socket.send(Message::Binary(packed)).await {
                             tracing::error!("Failed to send frame to socket: {:?}", e);
                             break;
                         }
@@ -162,12 +166,10 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                 },
                 incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
-                        Ok(mut frame) => {
-                            frame.data.extend_from_slice(&frame.stride.to_le_bytes());
-                            frame.data.extend_from_slice(&frame.height.to_le_bytes());
-                            frame.data.extend_from_slice(&frame.width.to_le_bytes());
+                        Ok(frame) => {
+                            let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
 
-                            if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                            if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);
                                 break;
                             }
@@ -178,8 +180,7 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                             );
                             break;
                         }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            tracing::warn!("Missed {skipped} frames on websocket receiver");
+                        Err(broadcast::error::RecvError::Lagged(_skipped)) => {
                             continue;
                         }
                     }

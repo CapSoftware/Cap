@@ -350,7 +350,7 @@ fn capture_bitmap_with(
         return Err(unsupported_error());
     }
 
-    let mut info = BITMAPINFO {
+    let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,

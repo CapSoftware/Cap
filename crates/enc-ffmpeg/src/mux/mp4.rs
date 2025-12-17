@@ -81,7 +81,7 @@ impl MP4File {
     }
 
     pub fn video_format() -> RawVideoFormat {
-        RawVideoFormat::YUYV420
+        RawVideoFormat::Yuv420p
     }
 
     pub fn queue_video_frame(

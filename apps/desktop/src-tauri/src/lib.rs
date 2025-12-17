@@ -484,8 +484,7 @@ async fn set_camera_input(
                     Err(e) => {
                         if attempts >= 3 {
                             break Err(format!(
-                                "Failed to initialize camera after {} attempts: {}",
-                                attempts, e
+                                "Failed to initialize camera after {attempts} attempts: {e}"
                             ));
                         }
                         warn!(
@@ -810,7 +809,7 @@ pub struct RecordingInfo {
 enum CurrentRecordingTarget {
     Window {
         id: WindowId,
-        bounds: LogicalBounds,
+        bounds: Option<LogicalBounds>,
     },
     Screen {
         id: DisplayId,
@@ -842,33 +841,55 @@ struct CurrentRecording {
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
+    tracing::debug!("get_current_recording called");
     let state = state.read().await;
 
     let (mode, capture_target, status) = match &state.recording_state {
-        RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
-        RecordingState::Active(inner) => (
-            inner.mode(),
-            inner.capture_target(),
-            RecordingStatus::Recording,
-        ),
+        RecordingState::None => {
+            tracing::debug!("get_current_recording: state is None");
+            return Ok(JsonValue::new(&None));
+        }
+        RecordingState::Pending { mode, target } => {
+            tracing::debug!("get_current_recording: state is Pending");
+            (*mode, target, RecordingStatus::Pending)
+        }
+        RecordingState::Active(inner) => {
+            tracing::debug!("get_current_recording: state is Active");
+            (
+                inner.mode(),
+                inner.capture_target(),
+                RecordingStatus::Recording,
+            )
+        }
     };
 
     let target = match capture_target {
-        ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: id.clone() },
-        ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-            id: id.clone(),
-            bounds: scap_targets::Window::from_id(id)
-                .ok_or(())?
-                .display_relative_logical_bounds()
-                .ok_or(())?,
-        },
-        ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-            screen: screen.clone(),
-            bounds: *bounds,
-        },
+        ScreenCaptureTarget::Display { id } => {
+            tracing::debug!("get_current_recording: target is Display");
+            CurrentRecordingTarget::Screen { id: id.clone() }
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let bounds =
+                scap_targets::Window::from_id(id).and_then(|w| w.display_relative_logical_bounds());
+            tracing::debug!(
+                "get_current_recording: target is Window, bounds={:?}",
+                bounds
+            );
+            CurrentRecordingTarget::Window {
+                id: id.clone(),
+                bounds,
+            }
+        }
+        ScreenCaptureTarget::Area { screen, bounds } => {
+            tracing::debug!("get_current_recording: target is Area");
+            CurrentRecordingTarget::Area {
+                screen: screen.clone(),
+                bounds: *bounds,
+            }
+        }
     };
 
+    tracing::debug!("get_current_recording: returning Some(CurrentRecording)");
     Ok(JsonValue::new(&Some(CurrentRecording {
         target,
         mode,
@@ -2314,6 +2335,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            recording_settings::set_recording_mode,
             upload_logs,
             recording::start_recording,
             recording::stop_recording,
@@ -3126,11 +3148,6 @@ async fn create_editor_instance_impl(
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            tracing::debug!(
-                frame = e.payload.frame_number,
-                fps = e.payload.fps,
-                "RenderFrameEvent received"
-            );
             preview_tx.send_modify(|v| {
                 *v = Some((
                     e.payload.frame_number,

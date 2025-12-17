@@ -1,6 +1,8 @@
 use crate::{
     RequestOpenRecordingPicker, RequestStartRecording, recording,
-    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    tray,
+    windows::ShowCapWindow,
 };
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
@@ -52,12 +54,11 @@ pub enum HotkeyAction {
     StartInstantRecording,
     StopRecording,
     RestartRecording,
-    // TakeScreenshot,
+    CycleRecordingMode,
     OpenRecordingPicker,
     OpenRecordingPickerDisplay,
     OpenRecordingPickerWindow,
     OpenRecordingPickerArea,
-    // Needed for deserialization of deprecated actions
     #[serde(other)]
     Other,
 }
@@ -150,6 +151,26 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::RestartRecording => recording::restart_recording(app.clone(), app.state())
             .await
             .map(|_| ()),
+        HotkeyAction::CycleRecordingMode => {
+            let current = RecordingSettingsStore::get(&app)
+                .ok()
+                .flatten()
+                .and_then(|s| s.mode)
+                .unwrap_or_default();
+
+            let next = match current {
+                cap_recording::RecordingMode::Studio => cap_recording::RecordingMode::Instant,
+                cap_recording::RecordingMode::Instant => cap_recording::RecordingMode::Screenshot,
+                cap_recording::RecordingMode::Screenshot => cap_recording::RecordingMode::Studio,
+            };
+
+            RecordingSettingsStore::set_mode(&app, next)
+                .map_err(|e| format!("Failed to cycle mode: {e}"))?;
+
+            tray::update_tray_icon_for_mode(&app, next);
+
+            Ok(())
+        }
         HotkeyAction::OpenRecordingPicker => {
             let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
             Ok(())

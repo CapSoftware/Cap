@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+thiserror.workspace = true
 wgpu.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 

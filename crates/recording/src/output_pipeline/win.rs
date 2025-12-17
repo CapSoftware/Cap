@@ -282,7 +282,7 @@ impl Muxer for WindowsMuxer {
                                     let mut output = output.lock().unwrap();
 
                                     let _ = muxer
-                                        .write_sample(&output_sample, &mut *output)
+                                        .write_sample(&output_sample, &mut output)
                                         .map_err(|e| format!("WriteSample: {e}"));
 
                                     Ok(())
@@ -721,7 +721,23 @@ impl AudioMuxer for WindowsCameraMuxer {
     }
 }
 
-fn upload_mf_buffer_to_texture(
+fn convert_uyvy_to_yuyv(src: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let total_bytes = (width * height * 2) as usize;
+    let mut dst = vec![0u8; total_bytes];
+
+    for i in (0..src.len().min(total_bytes)).step_by(4) {
+        if i + 3 < src.len() && i + 3 < total_bytes {
+            dst[i] = src[i + 1];
+            dst[i + 1] = src[i];
+            dst[i + 2] = src[i + 3];
+            dst[i + 3] = src[i + 2];
+        }
+    }
+
+    dst
+}
+
+pub fn upload_mf_buffer_to_texture(
     device: &ID3D11Device,
     frame: &NativeCameraFrame,
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {
@@ -744,7 +760,19 @@ fn upload_mf_buffer_to_texture(
         .lock()
         .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?;
     let lock = buffer_guard.lock()?;
-    let data = &*lock;
+    let original_data = &*lock;
+
+    let converted_buffer: Option<Vec<u8>>;
+    let data: &[u8] = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
+        converted_buffer = Some(convert_uyvy_to_yuyv(
+            original_data,
+            frame.width,
+            frame.height,
+        ));
+        converted_buffer.as_ref().unwrap()
+    } else {
+        original_data
+    };
 
     let row_pitch = frame.width * bytes_per_pixel;
 

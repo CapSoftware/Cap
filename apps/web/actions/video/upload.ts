@@ -31,39 +31,23 @@ async function getVideoUploadPresignedUrl({
 	resolution,
 	videoCodec,
 	audioCodec,
+	bucketId,
+	userId,
 }: {
 	fileKey: string;
 	duration?: string;
 	resolution?: string;
 	videoCodec?: string;
 	audioCodec?: string;
+	bucketId: string | undefined;
+	userId: string;
 }) {
-	const user = await getCurrentUser();
-
-	if (!user) {
-		throw new Error("Unauthorized");
-	}
-
 	try {
-		const [customBucket] = await db()
-			.select()
-			.from(s3Buckets)
-			.where(eq(s3Buckets.ownerId, user.id));
+		const bucketIdOption = Option.fromNullable(bucketId).pipe(
+			Option.map((id) => S3Bucket.S3BucketId.make(id)),
+		);
 
-		const s3Config = customBucket
-			? {
-					endpoint: customBucket.endpoint || undefined,
-					region: customBucket.region,
-					accessKeyId: customBucket.accessKeyId,
-					secretAccessKey: customBucket.secretAccessKey,
-				}
-			: null;
-
-		if (
-			!customBucket ||
-			!s3Config ||
-			customBucket.bucketName !== serverEnv().CAP_AWS_BUCKET
-		) {
+		if (Option.isNone(bucketIdOption)) {
 			const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
 			if (distributionId) {
 				const cloudfront = new CloudFrontClient({
@@ -108,7 +92,7 @@ async function getVideoUploadPresignedUrl({
 
 		const Fields = {
 			"Content-Type": contentType,
-			"x-amz-meta-userid": user.id,
+			"x-amz-meta-userid": userId,
 			"x-amz-meta-duration": duration ?? "",
 			"x-amz-meta-resolution": resolution ?? "",
 			"x-amz-meta-videocodec": videoCodec ?? "",
@@ -116,9 +100,7 @@ async function getVideoUploadPresignedUrl({
 		};
 
 		const presignedPostData = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(customBucket?.id),
-			);
+			const [bucket] = yield* S3Buckets.getBucketAccess(bucketIdOption);
 
 			return yield* bucket.getPresignedPostUrl(fileKey, {
 				Fields,
@@ -193,6 +175,8 @@ export async function createVideoAndGetUploadUrl({
 					resolution,
 					videoCodec,
 					audioCodec,
+					bucketId: existingVideo.bucket ?? customBucket?.id,
+					userId: user.id,
 				});
 
 				return {
@@ -234,6 +218,8 @@ export async function createVideoAndGetUploadUrl({
 			resolution,
 			videoCodec,
 			audioCodec,
+			bucketId: customBucket?.id,
+			userId: user.id,
 		});
 
 		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {

@@ -1,5 +1,7 @@
 import capUIPlugin from "@cap/ui-solid/vite";
 import { defineConfig } from "@solidjs/start/config";
+import topLevelAwait from "vite-plugin-top-level-await";
+import wasm from "vite-plugin-wasm";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
@@ -13,8 +15,11 @@ export default defineConfig({
 			port: 3001,
 			strictPort: true,
 			watch: {
-				// 2. tell vite to ignore watching `src-tauri`
 				ignored: ["**/src-tauri/**"],
+			},
+			headers: {
+				"Cross-Origin-Opener-Policy": "same-origin",
+				"Cross-Origin-Embedder-Policy": "require-corp",
 			},
 		},
 		// 3. to make use of `TAURI_DEBUG` and other env variables
@@ -22,9 +27,10 @@ export default defineConfig({
 		envPrefix: ["VITE_", "TAURI_"],
 		assetsInclude: ["**/*.riv"],
 		plugins: [
+			wasm(),
+			topLevelAwait(),
 			capUIPlugin,
 			tsconfigPaths({
-				// If this isn't set Vinxi hangs on startup
 				root: ".",
 			}),
 		],

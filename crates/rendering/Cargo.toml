@@ -36,6 +36,24 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true
+metal = "0.31"
+objc2 = "0.6"
+wgpu-hal = { workspace = true, features = ["metal"] }
+wgpu-core.workspace = true
+foreign-types = "0.5"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu-hal = { workspace = true, features = ["dx12"] }
+wgpu-core.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

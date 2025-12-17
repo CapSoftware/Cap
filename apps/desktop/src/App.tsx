@@ -22,7 +22,6 @@ import titlebar from "./utils/titlebar-state";
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
-			experimental_prefetchInRender: true,
 			refetchOnWindowFocus: false,
 			refetchOnReconnect: false,
 		},

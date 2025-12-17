@@ -15,6 +15,7 @@ use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
 use std::str::FromStr;
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
     Manager, Runtime, Window,
@@ -157,7 +158,7 @@ impl ScreenshotEditorInstances {
                                             .map(|e| e.path())
                                     })
                                     .ok_or_else(|| {
-                                        format!("No PNG file found in directory: {:?}", path)
+                                        format!("No PNG file found in directory: {path:?}")
                                     })?
                             }
                         } else {
@@ -231,13 +232,14 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                let (instance, adapter, device, queue) =
+                let (instance, adapter, device, queue, is_software_adapter) =
                     if let Some(shared) = gpu_context::get_shared_gpu().await {
                         (
                             shared.instance.clone(),
                             shared.adapter.clone(),
                             shared.device.clone(),
                             shared.queue.clone(),
+                            shared.is_software_adapter,
                         )
                     } else {
                         let instance =
@@ -261,7 +263,7 @@ impl ScreenshotEditorInstances {
                             })
                             .await
                             .map_err(|e| e.to_string())?;
-                        (instance, adapter, Arc::new(device), Arc::new(queue))
+                        (instance, adapter, Arc::new(device), Arc::new(queue), false)
                     };
 
                 let options = cap_rendering::RenderOptions {
@@ -284,6 +286,7 @@ impl ScreenshotEditorInstances {
                     meta: studio_meta,
                     recording_meta: recording_meta.clone(),
                     background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                    is_software_adapter,
                 };
 
                 let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
@@ -303,7 +306,11 @@ impl ScreenshotEditorInstances {
 
                 tokio::spawn(async move {
                     let mut frame_renderer = FrameRenderer::new(&constants);
-                    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+                    let mut layers = RendererLayers::new_with_options(
+                        &constants.device,
+                        &constants.queue,
+                        constants.is_software_adapter,
+                    );
                     let shutdown_token = render_shutdown_token;
 
                     // Initial render
@@ -353,6 +360,7 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    created_at: Instant::now(),
                                 }));
                             }
                             Err(e) => {
@@ -463,15 +471,12 @@ pub async fn update_screenshot_config(
     if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
         let path = parent.to_path_buf();
         if let Err(e) = config.write(&path) {
-            eprintln!("Failed to save screenshot config: {}", e);
+            eprintln!("Failed to save screenshot config: {e}");
         } else {
-            println!("Saved screenshot config to {:?}", path);
+            println!("Saved screenshot config to {path:?}");
         }
     } else {
-        println!(
-            "Not saving config: parent {:?} is not a .cap directory",
-            parent
-        );
+        println!("Not saving config: parent {parent:?} is not a .cap directory");
     }
     Ok(())
 }

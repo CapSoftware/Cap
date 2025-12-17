@@ -507,7 +507,7 @@ async fn setup_camera(
                 .try_send();
 
             if callback_num.is_multiple_of(30) {
-                tracing::debug!(
+                tracing::trace!(
                     "Camera callback: sent frame {} to actor, result={:?}",
                     callback_num,
                     send_result.is_ok()
@@ -564,7 +564,7 @@ async fn setup_camera(
                 let data_len = bytes.len();
                 if let Ok(buffer) = unsafe { MFCreateMemoryBuffer(data_len as u32) } {
                     let buffer_ready = {
-                        if let Ok(mut lock) = buffer.lock() {
+                        if let Ok(mut lock) = buffer.lock_for_write() {
                             lock.copy_from_slice(&bytes);
                             true
                         } else {
@@ -575,9 +575,11 @@ async fn setup_camera(
                     if buffer_ready {
                         let _ = unsafe { buffer.SetCurrentLength(data_len as u32) };
 
+                        #[allow(clippy::arc_with_non_send_sync)]
+                        let buffer = std::sync::Arc::new(std::sync::Mutex::new(buffer));
                         let _ = native_recipient
                             .tell(NewNativeFrame(NativeCameraFrame {
-                                buffer: std::sync::Arc::new(std::sync::Mutex::new(buffer)),
+                                buffer,
                                 pixel_format: frame.native().pixel_format,
                                 width: frame.native().width as u32,
                                 height: frame.native().height as u32,
@@ -613,7 +615,7 @@ async fn setup_camera(
                 .try_send();
 
             if callback_num.is_multiple_of(30) {
-                tracing::debug!(
+                tracing::trace!(
                     "Camera callback: sent frame {} to actor, result={:?}",
                     callback_num,
                     send_result.is_ok()
@@ -790,7 +792,7 @@ impl Message<NewFrame> for CameraFeed {
         let frame_num = CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if frame_num.is_multiple_of(30) {
-            debug!(
+            trace!(
                 "CameraFeed: received frame {}, broadcasting to {} senders",
                 frame_num,
                 self.senders.len()
@@ -844,7 +846,7 @@ impl Message<NewNativeFrame> for CameraFeed {
             NATIVE_CAMERA_FRAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if frame_num.is_multiple_of(30) {
-            debug!(
+            trace!(
                 "CameraFeed: received native frame {}, broadcasting to {} native senders",
                 frame_num,
                 self.native_senders.len()
