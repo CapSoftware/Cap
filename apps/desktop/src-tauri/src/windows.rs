@@ -796,6 +796,7 @@ impl ShowCapWindow {
                         show_result
                     );
                     let _ = window.set_focus();
+                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 }
 
                 window

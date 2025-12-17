@@ -44,6 +44,7 @@ pub fn nv12_to_rgba(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn yuv420p_to_rgba(
     y_data: &[u8],
     u_data: &[u8],
@@ -230,6 +231,7 @@ pub fn nv12_to_rgba_simd(
 }
 
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
 pub fn yuv420p_to_rgba_simd(
     y_data: &[u8],
     u_data: &[u8],
@@ -357,6 +359,7 @@ pub fn yuv420p_to_rgba_simd(
 }
 
 #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[allow(clippy::too_many_arguments)]
 pub fn yuv420p_to_rgba_simd(
     y_data: &[u8],
     u_data: &[u8],

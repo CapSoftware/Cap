@@ -1,5 +1,3 @@
-#![cfg(target_os = "windows")]
-
 use std::path::Path;
 use tracing::info;
 use windows::{
@@ -10,14 +8,11 @@ use windows::{
             Direct3D11::{
                 D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
+                ID3D11DeviceContext, ID3D11Texture2D,
             },
-            Dxgi::{
-                Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
-                DXGI_SHARED_RESOURCE_READ, IDXGIResource1,
-            },
+            Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
         },
         Media::MediaFoundation::{
             IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFSample, IMFSourceReader,
@@ -65,6 +60,17 @@ pub struct MediaFoundationDecoder {
     staging_height: u32,
 }
 
+struct MFInitGuard;
+
+impl Drop for MFInitGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = MFShutdown();
+            CoUninitialize();
+        }
+    }
+}
+
 impl MediaFoundationDecoder {
     pub fn new(path: impl AsRef<Path>) -> Result<Self, String> {
         unsafe { Self::new_inner(path.as_ref()) }
@@ -80,6 +86,8 @@ impl MediaFoundationDecoder {
                 .map_err(|e| format!("Failed to start Media Foundation: {e:?}"))?;
         }
 
+        let guard = MFInitGuard;
+
         let (d3d11_device, d3d11_context) = unsafe { create_d3d11_device()? };
         let device_manager = unsafe { create_dxgi_device_manager(&d3d11_device)? };
 
@@ -94,6 +102,8 @@ impl MediaFoundationDecoder {
             "MediaFoundation decoder initialized: {}x{} @ {}/{}fps",
             width, height, frame_rate_num, frame_rate_den
         );
+
+        std::mem::forget(guard);
 
         Ok(Self {
             source_reader,
@@ -324,8 +334,9 @@ impl MediaFoundationDecoder {
         unsafe {
             let prop_ptr = prop.as_mut_ptr();
             let inner_ptr = std::ptr::addr_of_mut!((*prop_ptr).Anonymous.Anonymous);
-            std::ptr::addr_of_mut!((*inner_ptr).vt).write(windows::Win32::System::Variant::VT_I8);
-            std::ptr::addr_of_mut!((*inner_ptr).Anonymous.hVal).write(time_100ns);
+            let inner = &mut *inner_ptr;
+            inner.vt = windows::Win32::System::Variant::VT_I8;
+            inner.Anonymous.hVal = time_100ns;
 
             let prop = prop.assume_init();
             self.source_reader
@@ -500,26 +511,6 @@ unsafe fn get_video_info(source_reader: &IMFSourceReader) -> Result<(u32, u32, u
     let frame_rate_den = frame_rate as u32;
 
     Ok((width, height, frame_rate_num, frame_rate_den.max(1)))
-}
-
-unsafe fn get_shared_handle(texture: &ID3D11Texture2D) -> Result<HANDLE, String> {
-    use windows::Win32::Security::SECURITY_ATTRIBUTES;
-
-    let dxgi_resource: IDXGIResource1 = texture
-        .cast()
-        .map_err(|e| format!("Failed to cast to IDXGIResource1: {e:?}"))?;
-
-    let handle = unsafe {
-        dxgi_resource
-            .CreateSharedHandle(
-                None::<*const SECURITY_ATTRIBUTES>,
-                DXGI_SHARED_RESOURCE_READ.0,
-                PCWSTR::null(),
-            )
-            .map_err(|e| format!("CreateSharedHandle failed: {e:?}"))?
-    };
-
-    Ok(handle)
 }
 
 struct YuvPlaneTextures {

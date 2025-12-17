@@ -25,6 +25,12 @@ pub enum YuvConversionError {
         expected: usize,
         actual: usize,
     },
+    #[error("{dimension} dimension ({value}) exceeds maximum allowed ({max})")]
+    DimensionExceedsLimit {
+        dimension: &'static str,
+        value: u32,
+        max: u32,
+    },
     #[cfg(target_os = "macos")]
     #[error("IOSurface error: {0}")]
     IOSurfaceError(#[from] IOSurfaceTextureError),
@@ -78,6 +84,24 @@ fn upload_plane_with_stride(
 
 const MAX_TEXTURE_WIDTH: u32 = 3840;
 const MAX_TEXTURE_HEIGHT: u32 = 2160;
+
+fn validate_dimensions(width: u32, height: u32) -> Result<(), YuvConversionError> {
+    if width > MAX_TEXTURE_WIDTH {
+        return Err(YuvConversionError::DimensionExceedsLimit {
+            dimension: "width",
+            value: width,
+            max: MAX_TEXTURE_WIDTH,
+        });
+    }
+    if height > MAX_TEXTURE_HEIGHT {
+        return Err(YuvConversionError::DimensionExceedsLimit {
+            dimension: "height",
+            value: height,
+            max: MAX_TEXTURE_HEIGHT,
+        });
+    }
+    Ok(())
+}
 
 pub struct YuvToRgbaConverter {
     nv12_pipeline: wgpu::ComputePipeline,
@@ -376,6 +400,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
         self.swap_output_buffer();
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
@@ -469,6 +494,8 @@ impl YuvToRgbaConverter {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
 
+        validate_dimensions(width, height)?;
+
         let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
         let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
 
@@ -544,6 +571,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
         self.swap_output_buffer();
 
         upload_plane_with_stride(queue, &self.y_texture, y_data, width, height, y_stride, "Y")?;
@@ -623,6 +651,8 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
+
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
 
         if self.d3d11_staging_width != width
@@ -773,6 +803,8 @@ impl YuvToRgbaConverter {
         width: u32,
         height: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
+
         use crate::d3d_texture::import_d3d11_texture_to_wgpu;
 
         self.swap_output_buffer();
@@ -848,6 +880,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
         self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];
@@ -898,6 +931,7 @@ impl YuvToRgbaConverter {
         y_stride: u32,
         uv_stride: u32,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        validate_dimensions(width, height)?;
         self.swap_output_buffer();
 
         let mut rgba_data = vec![0u8; (width * height * 4) as usize];

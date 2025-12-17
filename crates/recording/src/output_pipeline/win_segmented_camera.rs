@@ -236,10 +236,15 @@ impl WindowsSegmentedCameraMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
+        if let Err(e) = std::fs::write(
+            &manifest_path,
             serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        ) {
+            warn!(
+                "Failed to write manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn finalize_manifest(&self) {

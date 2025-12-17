@@ -26,6 +26,7 @@ pub struct DisplayLayer {
 }
 
 impl DisplayLayer {
+    #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::new_with_options(device, false)
     }
