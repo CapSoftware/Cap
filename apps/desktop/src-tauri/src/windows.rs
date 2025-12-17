@@ -795,7 +795,7 @@ impl ShowCapWindow {
                         "InProgressRecording window.show() result: {:?}",
                         show_result
                     );
-                    let _ = window.set_focus();
+                    window.set_focus().ok();
                     fake_window::spawn_fake_window_listener(app.clone(), window.clone());
                 }
 

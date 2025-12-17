@@ -271,10 +271,15 @@ impl WindowsSegmentedCameraMuxer {
         };
 
         let manifest_path = self.base_path.join("manifest.json");
-        let _ = std::fs::write(
-            manifest_path,
+        if let Err(e) = std::fs::write(
+            &manifest_path,
             serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-        );
+        ) {
+            warn!(
+                "Failed to write final manifest to {}: {e}",
+                manifest_path.display()
+            );
+        }
     }
 
     fn create_segment(&mut self, first_frame: &NativeCameraFrame) -> anyhow::Result<()> {
@@ -409,10 +414,14 @@ impl WindowsSegmentedCameraMuxer {
                         },
                         |output_sample| {
                             let mut output = output_clone.lock().unwrap();
-                            let _ = muxer
+                            muxer
                                 .write_sample(&output_sample, &mut output)
-                                .map_err(|e| format!("WriteSample: {e}"));
-                            Ok(())
+                                .map_err(|e| {
+                                    windows::core::Error::new(
+                                        windows::core::HRESULT(-1),
+                                        format!("WriteSample: {e}"),
+                                    )
+                                })
                         },
                     )
                     .context("run camera encoder for segment")
@@ -449,7 +458,12 @@ impl WindowsSegmentedCameraMuxer {
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        let _ = handle.join();
+                        if let Err(panic_payload) = handle.join() {
+                            warn!(
+                                "Camera encoder thread panicked during rotation: {:?}",
+                                panic_payload
+                            );
+                        }
                         break;
                     }
                     if start.elapsed() > timeout {

@@ -116,6 +116,57 @@ pub fn nv12_to_rgba_simd(
     let y_stride_usize = y_stride as usize;
     let uv_stride_usize = uv_stride as usize;
 
+    if width_usize == 0 || height_usize == 0 {
+        return;
+    }
+
+    let y_required = (height_usize - 1)
+        .saturating_mul(y_stride_usize)
+        .saturating_add(width_usize);
+
+    let uv_height = height_usize.div_ceil(2);
+    let uv_width_bytes = width_usize.div_ceil(2) * 2;
+    let uv_required = uv_height
+        .saturating_sub(1)
+        .saturating_mul(uv_stride_usize)
+        .saturating_add(uv_width_bytes);
+
+    let output_required = width_usize.saturating_mul(height_usize).saturating_mul(4);
+
+    let strides_valid = y_stride_usize >= width_usize && uv_stride_usize >= uv_width_bytes;
+
+    if !strides_valid
+        || y_data.len() < y_required
+        || uv_data.len() < uv_required
+        || output.len() < output_required
+    {
+        return nv12_to_rgba(y_data, uv_data, width, height, y_stride, uv_stride, output);
+    }
+
+    debug_assert!(
+        y_stride_usize >= width_usize,
+        "Y stride ({y_stride_usize}) must be >= width ({width_usize})"
+    );
+    debug_assert!(
+        uv_stride_usize >= uv_width_bytes,
+        "UV stride ({uv_stride_usize}) must be >= UV width bytes ({uv_width_bytes})"
+    );
+    debug_assert!(
+        y_data.len() >= y_required,
+        "Y buffer too small: {} < {y_required}",
+        y_data.len()
+    );
+    debug_assert!(
+        uv_data.len() >= uv_required,
+        "UV buffer too small: {} < {uv_required}",
+        uv_data.len()
+    );
+    debug_assert!(
+        output.len() >= output_required,
+        "Output buffer too small: {} < {output_required}",
+        output.len()
+    );
+
     let simd_width = (width_usize / 8) * 8;
 
     unsafe {
@@ -258,6 +309,65 @@ pub fn yuv420p_to_rgba_simd(
     let y_stride_usize = y_stride as usize;
     let uv_stride_usize = uv_stride as usize;
 
+    if width_usize == 0 || height_usize == 0 {
+        return;
+    }
+
+    let y_required = (height_usize - 1)
+        .saturating_mul(y_stride_usize)
+        .saturating_add(width_usize);
+
+    let uv_height = height_usize.div_ceil(2);
+    let uv_width = width_usize.div_ceil(2);
+    let uv_required = uv_height
+        .saturating_sub(1)
+        .saturating_mul(uv_stride_usize)
+        .saturating_add(uv_width);
+
+    let output_required = width_usize.saturating_mul(height_usize).saturating_mul(4);
+
+    let strides_valid = y_stride_usize >= width_usize && uv_stride_usize >= uv_width;
+
+    if !strides_valid
+        || y_data.len() < y_required
+        || u_data.len() < uv_required
+        || v_data.len() < uv_required
+        || output.len() < output_required
+    {
+        return yuv420p_to_rgba(
+            y_data, u_data, v_data, width, height, y_stride, uv_stride, output,
+        );
+    }
+
+    debug_assert!(
+        y_stride_usize >= width_usize,
+        "Y stride ({y_stride_usize}) must be >= width ({width_usize})"
+    );
+    debug_assert!(
+        uv_stride_usize >= uv_width,
+        "UV stride ({uv_stride_usize}) must be >= UV width ({uv_width})"
+    );
+    debug_assert!(
+        y_data.len() >= y_required,
+        "Y buffer too small: {} < {y_required}",
+        y_data.len()
+    );
+    debug_assert!(
+        u_data.len() >= uv_required,
+        "U buffer too small: {} < {uv_required}",
+        u_data.len()
+    );
+    debug_assert!(
+        v_data.len() >= uv_required,
+        "V buffer too small: {} < {uv_required}",
+        v_data.len()
+    );
+    debug_assert!(
+        output.len() >= output_required,
+        "Output buffer too small: {} < {output_required}",
+        output.len()
+    );
+
     let simd_width = (width_usize / 8) * 8;
 
     unsafe {
@@ -286,8 +396,8 @@ pub fn yuv420p_to_rgba_simd(
                 let y16 = _mm_unpacklo_epi8(y8, zero);
                 let y_adj = _mm_sub_epi16(y16, c16);
 
-                let u4 = _mm_set_epi32(0, 0, 0, *(u_ptr as *const i32));
-                let v4 = _mm_set_epi32(0, 0, 0, *(v_ptr as *const i32));
+                let u4 = _mm_cvtsi32_si128(std::ptr::read_unaligned(u_ptr as *const i32));
+                let v4 = _mm_cvtsi32_si128(std::ptr::read_unaligned(v_ptr as *const i32));
 
                 let u_dup = _mm_unpacklo_epi8(u4, u4);
                 let v_dup = _mm_unpacklo_epi8(v4, v4);

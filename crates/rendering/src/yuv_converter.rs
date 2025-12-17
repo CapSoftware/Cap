@@ -692,7 +692,9 @@ impl YuvToRgbaConverter {
             self.d3d11_staging_height = height;
         }
 
-        let staging_texture = self.d3d11_staging_texture.as_ref().unwrap();
+        let staging_texture = self.d3d11_staging_texture.as_ref().ok_or_else(|| {
+            YuvConversionError::D3D11Error("D3D11 staging texture not initialized".to_string())
+        })?;
 
         unsafe {
             d3d11_context.CopyResource(staging_texture, nv12_texture);
