@@ -7,7 +7,169 @@ use ffmpeg::{
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tracing::*;
+
+#[derive(Debug, Clone)]
+pub struct HwDecoderCapabilities {
+    pub max_width: u32,
+    pub max_height: u32,
+    pub supports_hw_decode: bool,
+}
+
+impl Default for HwDecoderCapabilities {
+    fn default() -> Self {
+        Self {
+            max_width: 8192,
+            max_height: 8192,
+            supports_hw_decode: true,
+        }
+    }
+}
+
+static HW_CAPABILITIES: OnceLock<HwDecoderCapabilities> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
+    use windows::{
+        Win32::{
+            Foundation::HMODULE,
+            Graphics::{
+                Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+                Direct3D11::{
+                    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_DECODER_PROFILE_H264_VLD_NOFGT,
+                    D3D11_DECODER_PROFILE_HEVC_VLD_MAIN, D3D11_SDK_VERSION,
+                    D3D11_VIDEO_DECODER_DESC, D3D11CreateDevice, ID3D11VideoDevice,
+                },
+                Dxgi::Common::DXGI_FORMAT_NV12,
+            },
+        },
+        core::Interface,
+    };
+
+    let result: Result<HwDecoderCapabilities, String> = (|| {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+            .map_err(|e| format!("D3D11CreateDevice failed: {e:?}"))?;
+        }
+
+        let device = device.ok_or("D3D11CreateDevice returned null")?;
+
+        let video_device: ID3D11VideoDevice = device
+            .cast()
+            .map_err(|e| format!("Failed to get ID3D11VideoDevice: {e:?}"))?;
+
+        let profiles = [
+            D3D11_DECODER_PROFILE_H264_VLD_NOFGT,
+            D3D11_DECODER_PROFILE_HEVC_VLD_MAIN,
+        ];
+
+        let mut max_width = 4096u32;
+        let mut max_height = 4096u32;
+        let mut supports_hw = false;
+
+        for profile in &profiles {
+            let desc = D3D11_VIDEO_DECODER_DESC {
+                Guid: *profile,
+                SampleWidth: 8192,
+                SampleHeight: 8192,
+                OutputFormat: DXGI_FORMAT_NV12,
+            };
+
+            if let Ok(config_count) = unsafe { video_device.GetVideoDecoderConfigCount(&desc) } {
+                if config_count > 0 {
+                    supports_hw = true;
+                    max_width = max_width.max(8192);
+                    max_height = max_height.max(8192);
+                }
+            } else {
+                let desc_4k = D3D11_VIDEO_DECODER_DESC {
+                    Guid: *profile,
+                    SampleWidth: 4096,
+                    SampleHeight: 4096,
+                    OutputFormat: DXGI_FORMAT_NV12,
+                };
+
+                if let Ok(config_count) =
+                    unsafe { video_device.GetVideoDecoderConfigCount(&desc_4k) }
+                {
+                    if config_count > 0 {
+                        supports_hw = true;
+                    }
+                }
+            }
+        }
+
+        Ok(HwDecoderCapabilities {
+            max_width,
+            max_height,
+            supports_hw_decode: supports_hw,
+        })
+    })();
+
+    match result {
+        Ok(caps) => {
+            info!(
+                "D3D11 video decoder capabilities: {}x{}, hw_decode={}",
+                caps.max_width, caps.max_height, caps.supports_hw_decode
+            );
+            caps
+        }
+        Err(e) => {
+            warn!("Failed to query D3D11 video decoder capabilities: {e}, using defaults");
+            HwDecoderCapabilities::default()
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
+    HwDecoderCapabilities::default()
+}
+
+pub fn get_hw_decoder_capabilities() -> &'static HwDecoderCapabilities {
+    HW_CAPABILITIES.get_or_init(query_d3d11_video_decoder_capabilities)
+}
+
+fn configure_software_threading(decoder: &mut avcodec::decoder::Video, width: u32, height: u32) {
+    let pixel_count = (width as u64) * (height as u64);
+
+    let thread_count = if pixel_count > 8294400 {
+        0
+    } else if pixel_count > 2073600 {
+        (num_cpus::get() / 2).max(2) as i32
+    } else {
+        2
+    };
+
+    unsafe {
+        let codec_ctx = decoder.as_mut_ptr();
+        if !codec_ctx.is_null() {
+            (*codec_ctx).thread_count = thread_count;
+            (*codec_ctx).thread_type = ffmpeg::sys::FF_THREAD_FRAME;
+        }
+    }
+
+    info!(
+        "Software decode configured: {width}x{height}, thread_count={}, thread_type=frame",
+        if thread_count == 0 {
+            "auto".to_string()
+        } else {
+            thread_count.to_string()
+        }
+    );
+}
 
 pub struct FFmpegDecoder {
     input: avformat::context::Input,
@@ -48,27 +210,40 @@ impl FFmpegDecoder {
             let width = decoder.width();
             let height = decoder.height();
 
-            let exceeds_common_hw_limits = width > 4096 || height > 4096;
+            let hw_caps = get_hw_decoder_capabilities();
+            let exceeds_hw_limits = width > hw_caps.max_width
+                || height > hw_caps.max_height
+                || !hw_caps.supports_hw_decode;
 
             let hw_device = hw_device_type.and_then(|hw_device_type| {
-                if exceeds_common_hw_limits {
+                if exceeds_hw_limits {
                     warn!(
-                        "Video dimensions {width}x{height} exceed common hardware decoder limits (4096x4096), not using hardware acceleration"
+                        "Video dimensions {width}x{height} exceed hardware decoder limits ({}x{}), using software decode",
+                        hw_caps.max_width, hw_caps.max_height
                     );
+                    configure_software_threading(&mut decoder, width, height);
                     None
                 } else {
                     match decoder.try_use_hw_device(hw_device_type) {
                         Ok(device) => {
-                            debug!("Using hardware device");
+                            info!(
+                                "Using hardware acceleration for {width}x{height} video (device: {:?})",
+                                hw_device_type
+                            );
                             Some(device)
-                        },
+                        }
                         Err(error) => {
-                            error!("Failed to enable hardware decoder: {error:?}");
+                            warn!("Failed to enable hardware decoder: {error:?}, falling back to optimized software decode");
+                            configure_software_threading(&mut decoder, width, height);
                             None
                         }
                     }
                 }
             });
+
+            if hw_device.is_none() && hw_device_type.is_none() {
+                configure_software_threading(&mut decoder, width, height);
+            }
 
             Ok(FFmpegDecoder {
                 input,
