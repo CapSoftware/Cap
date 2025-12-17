@@ -742,28 +742,24 @@ impl ShowCapWindow {
                 };
 
                 #[cfg(windows)]
-                let window = {
-                    let window = self
-                        .window_builder(app, "/in-progress-recording")
-                        .maximized(false)
-                        .resizable(false)
-                        .fullscreen(false)
-                        .shadow(false)
-                        .always_on_top(true)
-                        .transparent(true)
-                        .visible_on_all_workspaces(true)
-                        .content_protected(should_protect)
-                        .inner_size(width, height)
-                        .position(pos_x, pos_y)
-                        .skip_taskbar(false)
-                        .initialization_script(format!(
-                            "window.COUNTDOWN = {};",
-                            countdown.unwrap_or_default()
-                        ))
-                        .build()?;
-
-                    window
-                };
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .transparent(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(should_protect)
+                    .inner_size(width, height)
+                    .position(pos_x, pos_y)
+                    .skip_taskbar(false)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
+                    .build()?;
 
                 debug!(
                     "InProgressRecording window created: label={}, inner_size={:?}, outer_position={:?}",
