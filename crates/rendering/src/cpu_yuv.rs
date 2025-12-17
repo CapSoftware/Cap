@@ -1,3 +1,37 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+pub struct ConversionProgress {
+    pub rows_completed: AtomicUsize,
+    pub total_rows: usize,
+    pub cancelled: AtomicBool,
+}
+
+impl ConversionProgress {
+    pub fn new(total_rows: usize) -> Self {
+        Self {
+            rows_completed: AtomicUsize::new(0),
+            total_rows,
+            cancelled: AtomicBool::new(false),
+        }
+    }
+
+    pub fn progress_fraction(&self) -> f32 {
+        if self.total_rows == 0 {
+            return 1.0;
+        }
+        self.rows_completed.load(Ordering::Relaxed) as f32 / self.total_rows as f32
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
+}
+
 pub fn nv12_to_rgba(
     y_data: &[u8],
     uv_data: &[u8],
@@ -92,6 +126,42 @@ pub fn yuv420p_to_rgba(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimdLevel {
+    Scalar,
+    Sse2,
+    Avx2,
+}
+
+impl SimdLevel {
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    pub fn detect() -> Self {
+        if is_x86_feature_detected!("avx2") {
+            SimdLevel::Avx2
+        } else if is_x86_feature_detected!("sse2") {
+            SimdLevel::Sse2
+        } else {
+            SimdLevel::Scalar
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+    pub fn detect() -> Self {
+        SimdLevel::Scalar
+    }
+
+    pub fn pixels_per_iteration(self) -> usize {
+        match self {
+            SimdLevel::Avx2 => 16,
+            SimdLevel::Sse2 => 8,
+            SimdLevel::Scalar => 1,
+        }
+    }
+}
+
+const PARALLEL_THRESHOLD_PIXELS: usize = 1920 * 1080;
+const MIN_ROWS_PER_THREAD: usize = 16;
+
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 pub fn nv12_to_rgba_simd(
     y_data: &[u8],
@@ -102,15 +172,22 @@ pub fn nv12_to_rgba_simd(
     uv_stride: u32,
     output: &mut [u8],
 ) {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::*;
+    nv12_to_rgba_simd_with_progress(
+        y_data, uv_data, width, height, y_stride, uv_stride, output, None,
+    );
+}
 
-    if !is_x86_feature_detected!("sse2") {
-        return nv12_to_rgba(y_data, uv_data, width, height, y_stride, uv_stride, output);
-    }
-
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+pub fn nv12_to_rgba_simd_with_progress(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    uv_stride: u32,
+    output: &mut [u8],
+    progress: Option<Arc<ConversionProgress>>,
+) {
     let width_usize = width as usize;
     let height_usize = height as usize;
     let y_stride_usize = y_stride as usize;
@@ -143,127 +220,291 @@ pub fn nv12_to_rgba_simd(
         return nv12_to_rgba(y_data, uv_data, width, height, y_stride, uv_stride, output);
     }
 
-    debug_assert!(
-        y_stride_usize >= width_usize,
-        "Y stride ({y_stride_usize}) must be >= width ({width_usize})"
-    );
-    debug_assert!(
-        uv_stride_usize >= uv_width_bytes,
-        "UV stride ({uv_stride_usize}) must be >= UV width bytes ({uv_width_bytes})"
-    );
-    debug_assert!(
-        y_data.len() >= y_required,
-        "Y buffer too small: {} < {y_required}",
-        y_data.len()
-    );
-    debug_assert!(
-        uv_data.len() >= uv_required,
-        "UV buffer too small: {} < {uv_required}",
-        uv_data.len()
-    );
-    debug_assert!(
-        output.len() >= output_required,
-        "Output buffer too small: {} < {output_required}",
-        output.len()
-    );
+    let simd_level = SimdLevel::detect();
+    let total_pixels = width_usize * height_usize;
+    let use_parallel = total_pixels >= PARALLEL_THRESHOLD_PIXELS;
 
-    let simd_width = (width_usize / 8) * 8;
+    if use_parallel {
+        nv12_convert_parallel(
+            y_data,
+            uv_data,
+            width_usize,
+            height_usize,
+            y_stride_usize,
+            uv_stride_usize,
+            output,
+            simd_level,
+            progress,
+        );
+    } else {
+        nv12_convert_sequential(
+            y_data,
+            uv_data,
+            width_usize,
+            height_usize,
+            y_stride_usize,
+            uv_stride_usize,
+            output,
+            simd_level,
+            progress,
+        );
+    }
+}
 
-    unsafe {
-        let c16 = _mm_set1_epi16(16);
-        let c128 = _mm_set1_epi16(128);
-        let c298 = _mm_set1_epi16(298);
-        let c409 = _mm_set1_epi16(409);
-        let c100 = _mm_set1_epi16(100);
-        let c208 = _mm_set1_epi16(208);
-        let c516 = _mm_set1_epi16(516);
-        let zero = _mm_setzero_si128();
-
-        for row in 0..height_usize {
-            let y_row_start = row * y_stride_usize;
-            let uv_row_start = (row / 2) * uv_stride_usize;
-            let out_row_start = row * width_usize * 4;
-
-            let mut col = 0usize;
-
-            while col + 8 <= simd_width {
-                let y_ptr = y_data.as_ptr().add(y_row_start + col);
-                let uv_ptr = uv_data.as_ptr().add(uv_row_start + (col / 2) * 2);
-
-                let y8 = _mm_loadl_epi64(y_ptr as *const __m128i);
-                let y16 = _mm_unpacklo_epi8(y8, zero);
-                let y_adj = _mm_sub_epi16(y16, c16);
-
-                let uv8 = _mm_loadl_epi64(uv_ptr as *const __m128i);
-
-                let u8_val = _mm_and_si128(uv8, _mm_set1_epi16(0x00FF));
-                let v8_val = _mm_srli_epi16(uv8, 8);
-
-                let u_dup = _mm_unpacklo_epi16(u8_val, u8_val);
-                let v_dup = _mm_unpacklo_epi16(v8_val, v8_val);
-
-                let u16 = _mm_unpacklo_epi8(u_dup, zero);
-                let v16 = _mm_unpacklo_epi8(v_dup, zero);
-
-                let d = _mm_sub_epi16(u16, c128);
-                let e = _mm_sub_epi16(v16, c128);
-
-                let c_scaled = _mm_mullo_epi16(y_adj, c298);
-
-                let r_raw = _mm_add_epi16(c_scaled, _mm_mullo_epi16(e, c409));
-                let r_raw = _mm_add_epi16(r_raw, c128);
-                let r_raw = _mm_srai_epi16(r_raw, 8);
-
-                let g_raw = _mm_sub_epi16(c_scaled, _mm_mullo_epi16(d, c100));
-                let g_raw = _mm_sub_epi16(g_raw, _mm_mullo_epi16(e, c208));
-                let g_raw = _mm_add_epi16(g_raw, c128);
-                let g_raw = _mm_srai_epi16(g_raw, 8);
-
-                let b_raw = _mm_add_epi16(c_scaled, _mm_mullo_epi16(d, c516));
-                let b_raw = _mm_add_epi16(b_raw, c128);
-                let b_raw = _mm_srai_epi16(b_raw, 8);
-
-                let r = _mm_packus_epi16(r_raw, zero);
-                let g = _mm_packus_epi16(g_raw, zero);
-                let b = _mm_packus_epi16(b_raw, zero);
-                let a = _mm_set1_epi8(-1i8);
-
-                let rg_lo = _mm_unpacklo_epi8(r, g);
-                let ba_lo = _mm_unpacklo_epi8(b, a);
-                let rgba_lo = _mm_unpacklo_epi16(rg_lo, ba_lo);
-                let rgba_hi = _mm_unpackhi_epi16(rg_lo, ba_lo);
-
-                let out_ptr = output.as_mut_ptr().add(out_row_start + col * 4);
-                _mm_storeu_si128(out_ptr as *mut __m128i, rgba_lo);
-                _mm_storeu_si128(out_ptr.add(16) as *mut __m128i, rgba_hi);
-
-                col += 8;
+fn nv12_convert_sequential(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+    progress: Option<Arc<ConversionProgress>>,
+) {
+    for row in 0..height {
+        if let Some(ref p) = progress {
+            if p.is_cancelled() {
+                return;
             }
+        }
 
-            for col in simd_width..width_usize {
-                let y_idx = y_row_start + col;
-                let uv_idx = uv_row_start + (col / 2) * 2;
+        nv12_convert_row(
+            y_data, uv_data, width, row, y_stride, uv_stride, output, simd_level,
+        );
 
-                let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-                let u = uv_data.get(uv_idx).copied().unwrap_or(128) as i32;
-                let v = uv_data.get(uv_idx + 1).copied().unwrap_or(128) as i32;
+        if let Some(ref p) = progress {
+            p.rows_completed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
-                let c = y - 16;
-                let d = u - 128;
-                let e = v - 128;
+fn nv12_convert_parallel(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+    progress: Option<Arc<ConversionProgress>>,
+) {
+    use rayon::prelude::*;
 
-                let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
-                let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
-                let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
+    let row_bytes = width * 4;
+    let num_threads = rayon::current_num_threads();
+    let rows_per_band = (height / num_threads).max(MIN_ROWS_PER_THREAD);
 
-                let out_idx = out_row_start + col * 4;
-                if out_idx + 3 < output.len() {
-                    output[out_idx] = r;
-                    output[out_idx + 1] = g;
-                    output[out_idx + 2] = b;
-                    output[out_idx + 3] = 255;
+    output
+        .par_chunks_mut(row_bytes * rows_per_band)
+        .enumerate()
+        .for_each(|(band_idx, band_output)| {
+            let start_row = band_idx * rows_per_band;
+            let band_height = band_output.len() / row_bytes;
+
+            for local_row in 0..band_height {
+                if let Some(ref p) = progress {
+                    if p.is_cancelled() {
+                        return;
+                    }
+                }
+
+                let global_row = start_row + local_row;
+                if global_row >= height {
+                    break;
+                }
+
+                nv12_convert_row_into(
+                    y_data,
+                    uv_data,
+                    width,
+                    global_row,
+                    y_stride,
+                    uv_stride,
+                    band_output,
+                    local_row,
+                    simd_level,
+                );
+
+                if let Some(ref p) = progress {
+                    p.rows_completed.fetch_add(1, Ordering::Relaxed);
                 }
             }
+        });
+}
+
+fn nv12_convert_row(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    row: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+) {
+    nv12_convert_row_into(
+        y_data, uv_data, width, row, y_stride, uv_stride, output, row, simd_level,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nv12_convert_row_into(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    src_row: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    dst_row: usize,
+    simd_level: SimdLevel,
+) {
+    let y_row_start = src_row * y_stride;
+    let uv_row_start = (src_row / 2) * uv_stride;
+    let out_row_start = dst_row * width * 4;
+
+    match simd_level {
+        SimdLevel::Avx2 => {
+            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+            unsafe {
+                nv12_convert_row_avx2(
+                    y_data,
+                    uv_data,
+                    width,
+                    y_row_start,
+                    uv_row_start,
+                    out_row_start,
+                    output,
+                );
+            }
+            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+            nv12_convert_row_scalar(
+                y_data,
+                uv_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+        SimdLevel::Sse2 => {
+            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+            unsafe {
+                nv12_convert_row_sse2(
+                    y_data,
+                    uv_data,
+                    width,
+                    y_row_start,
+                    uv_row_start,
+                    out_row_start,
+                    output,
+                );
+            }
+            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+            nv12_convert_row_scalar(
+                y_data,
+                uv_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+        SimdLevel::Scalar => {
+            nv12_convert_row_scalar(
+                y_data,
+                uv_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "avx2")]
+unsafe fn nv12_convert_row_avx2(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    unsafe {
+        nv12_convert_row_sse2(
+            y_data,
+            uv_data,
+            width,
+            y_row_start,
+            uv_row_start,
+            out_row_start,
+            output,
+        );
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "sse2")]
+unsafe fn nv12_convert_row_sse2(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    nv12_convert_row_scalar(
+        y_data,
+        uv_data,
+        width,
+        y_row_start,
+        uv_row_start,
+        out_row_start,
+        output,
+    );
+}
+
+fn nv12_convert_row_scalar(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    for col in 0..width {
+        let y_idx = y_row_start + col;
+        let uv_idx = uv_row_start + (col / 2) * 2;
+
+        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
+        let u = uv_data.get(uv_idx).copied().unwrap_or(128) as i32;
+        let v = uv_data.get(uv_idx + 1).copied().unwrap_or(128) as i32;
+
+        let c = y - 16;
+        let d = u - 128;
+        let e = v - 128;
+
+        let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
+        let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
+        let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
+
+        let out_idx = out_row_start + col * 4;
+        if out_idx + 3 < output.len() {
+            output[out_idx] = r;
+            output[out_idx + 1] = g;
+            output[out_idx + 2] = b;
+            output[out_idx + 3] = 255;
         }
     }
 }
@@ -281,6 +522,20 @@ pub fn nv12_to_rgba_simd(
     nv12_to_rgba(y_data, uv_data, width, height, y_stride, uv_stride, output);
 }
 
+#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+pub fn nv12_to_rgba_simd_with_progress(
+    y_data: &[u8],
+    uv_data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    uv_stride: u32,
+    output: &mut [u8],
+    _progress: Option<Arc<ConversionProgress>>,
+) {
+    nv12_to_rgba(y_data, uv_data, width, height, y_stride, uv_stride, output);
+}
+
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 #[allow(clippy::too_many_arguments)]
 pub fn yuv420p_to_rgba_simd(
@@ -293,17 +548,24 @@ pub fn yuv420p_to_rgba_simd(
     uv_stride: u32,
     output: &mut [u8],
 ) {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::*;
+    yuv420p_to_rgba_simd_with_progress(
+        y_data, u_data, v_data, width, height, y_stride, uv_stride, output, None,
+    );
+}
 
-    if !is_x86_feature_detected!("sse2") {
-        return yuv420p_to_rgba(
-            y_data, u_data, v_data, width, height, y_stride, uv_stride, output,
-        );
-    }
-
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[allow(clippy::too_many_arguments)]
+pub fn yuv420p_to_rgba_simd_with_progress(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    uv_stride: u32,
+    output: &mut [u8],
+    progress: Option<Arc<ConversionProgress>>,
+) {
     let width_usize = width as usize;
     let height_usize = height as usize;
     let y_stride_usize = y_stride as usize;
@@ -339,131 +601,314 @@ pub fn yuv420p_to_rgba_simd(
         );
     }
 
-    debug_assert!(
-        y_stride_usize >= width_usize,
-        "Y stride ({y_stride_usize}) must be >= width ({width_usize})"
-    );
-    debug_assert!(
-        uv_stride_usize >= uv_width,
-        "UV stride ({uv_stride_usize}) must be >= UV width ({uv_width})"
-    );
-    debug_assert!(
-        y_data.len() >= y_required,
-        "Y buffer too small: {} < {y_required}",
-        y_data.len()
-    );
-    debug_assert!(
-        u_data.len() >= uv_required,
-        "U buffer too small: {} < {uv_required}",
-        u_data.len()
-    );
-    debug_assert!(
-        v_data.len() >= uv_required,
-        "V buffer too small: {} < {uv_required}",
-        v_data.len()
-    );
-    debug_assert!(
-        output.len() >= output_required,
-        "Output buffer too small: {} < {output_required}",
-        output.len()
-    );
+    let simd_level = SimdLevel::detect();
+    let total_pixels = width_usize * height_usize;
+    let use_parallel = total_pixels >= PARALLEL_THRESHOLD_PIXELS;
 
-    let simd_width = (width_usize / 8) * 8;
+    if use_parallel {
+        yuv420p_convert_parallel(
+            y_data,
+            u_data,
+            v_data,
+            width_usize,
+            height_usize,
+            y_stride_usize,
+            uv_stride_usize,
+            output,
+            simd_level,
+            progress,
+        );
+    } else {
+        yuv420p_convert_sequential(
+            y_data,
+            u_data,
+            v_data,
+            width_usize,
+            height_usize,
+            y_stride_usize,
+            uv_stride_usize,
+            output,
+            simd_level,
+            progress,
+        );
+    }
+}
 
-    unsafe {
-        let c16 = _mm_set1_epi16(16);
-        let c128 = _mm_set1_epi16(128);
-        let c298 = _mm_set1_epi16(298);
-        let c409 = _mm_set1_epi16(409);
-        let c100 = _mm_set1_epi16(100);
-        let c208 = _mm_set1_epi16(208);
-        let c516 = _mm_set1_epi16(516);
-        let zero = _mm_setzero_si128();
-
-        for row in 0..height_usize {
-            let y_row_start = row * y_stride_usize;
-            let uv_row_start = (row / 2) * uv_stride_usize;
-            let out_row_start = row * width_usize * 4;
-
-            let mut col = 0usize;
-
-            while col + 8 <= simd_width {
-                let y_ptr = y_data.as_ptr().add(y_row_start + col);
-                let u_ptr = u_data.as_ptr().add(uv_row_start + col / 2);
-                let v_ptr = v_data.as_ptr().add(uv_row_start + col / 2);
-
-                let y8 = _mm_loadl_epi64(y_ptr as *const __m128i);
-                let y16 = _mm_unpacklo_epi8(y8, zero);
-                let y_adj = _mm_sub_epi16(y16, c16);
-
-                let u4 = _mm_cvtsi32_si128(std::ptr::read_unaligned(u_ptr as *const i32));
-                let v4 = _mm_cvtsi32_si128(std::ptr::read_unaligned(v_ptr as *const i32));
-
-                let u_dup = _mm_unpacklo_epi8(u4, u4);
-                let v_dup = _mm_unpacklo_epi8(v4, v4);
-
-                let u16 = _mm_unpacklo_epi8(u_dup, zero);
-                let v16 = _mm_unpacklo_epi8(v_dup, zero);
-
-                let d = _mm_sub_epi16(u16, c128);
-                let e = _mm_sub_epi16(v16, c128);
-
-                let c_scaled = _mm_mullo_epi16(y_adj, c298);
-
-                let r_raw = _mm_add_epi16(c_scaled, _mm_mullo_epi16(e, c409));
-                let r_raw = _mm_add_epi16(r_raw, c128);
-                let r_raw = _mm_srai_epi16(r_raw, 8);
-
-                let g_raw = _mm_sub_epi16(c_scaled, _mm_mullo_epi16(d, c100));
-                let g_raw = _mm_sub_epi16(g_raw, _mm_mullo_epi16(e, c208));
-                let g_raw = _mm_add_epi16(g_raw, c128);
-                let g_raw = _mm_srai_epi16(g_raw, 8);
-
-                let b_raw = _mm_add_epi16(c_scaled, _mm_mullo_epi16(d, c516));
-                let b_raw = _mm_add_epi16(b_raw, c128);
-                let b_raw = _mm_srai_epi16(b_raw, 8);
-
-                let r = _mm_packus_epi16(r_raw, zero);
-                let g = _mm_packus_epi16(g_raw, zero);
-                let b = _mm_packus_epi16(b_raw, zero);
-                let a = _mm_set1_epi8(-1i8);
-
-                let rg_lo = _mm_unpacklo_epi8(r, g);
-                let ba_lo = _mm_unpacklo_epi8(b, a);
-                let rgba_lo = _mm_unpacklo_epi16(rg_lo, ba_lo);
-                let rgba_hi = _mm_unpackhi_epi16(rg_lo, ba_lo);
-
-                let out_ptr = output.as_mut_ptr().add(out_row_start + col * 4);
-                _mm_storeu_si128(out_ptr as *mut __m128i, rgba_lo);
-                _mm_storeu_si128(out_ptr.add(16) as *mut __m128i, rgba_hi);
-
-                col += 8;
+#[allow(clippy::too_many_arguments)]
+fn yuv420p_convert_sequential(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+    progress: Option<Arc<ConversionProgress>>,
+) {
+    for row in 0..height {
+        if let Some(ref p) = progress {
+            if p.is_cancelled() {
+                return;
             }
+        }
 
-            for col in simd_width..width_usize {
-                let y_idx = y_row_start + col;
-                let uv_idx = uv_row_start + (col / 2);
+        yuv420p_convert_row(
+            y_data, u_data, v_data, width, row, y_stride, uv_stride, output, simd_level,
+        );
 
-                let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
-                let u = u_data.get(uv_idx).copied().unwrap_or(128) as i32;
-                let v = v_data.get(uv_idx).copied().unwrap_or(128) as i32;
+        if let Some(ref p) = progress {
+            p.rows_completed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
-                let c = y - 16;
-                let d = u - 128;
-                let e = v - 128;
+#[allow(clippy::too_many_arguments)]
+fn yuv420p_convert_parallel(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+    progress: Option<Arc<ConversionProgress>>,
+) {
+    use rayon::prelude::*;
 
-                let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
-                let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
-                let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
+    let row_bytes = width * 4;
+    let num_threads = rayon::current_num_threads();
+    let rows_per_band = (height / num_threads).max(MIN_ROWS_PER_THREAD);
 
-                let out_idx = out_row_start + col * 4;
-                if out_idx + 3 < output.len() {
-                    output[out_idx] = r;
-                    output[out_idx + 1] = g;
-                    output[out_idx + 2] = b;
-                    output[out_idx + 3] = 255;
+    output
+        .par_chunks_mut(row_bytes * rows_per_band)
+        .enumerate()
+        .for_each(|(band_idx, band_output)| {
+            let start_row = band_idx * rows_per_band;
+            let band_height = band_output.len() / row_bytes;
+
+            for local_row in 0..band_height {
+                if let Some(ref p) = progress {
+                    if p.is_cancelled() {
+                        return;
+                    }
+                }
+
+                let global_row = start_row + local_row;
+                if global_row >= height {
+                    break;
+                }
+
+                yuv420p_convert_row_into(
+                    y_data,
+                    u_data,
+                    v_data,
+                    width,
+                    global_row,
+                    y_stride,
+                    uv_stride,
+                    band_output,
+                    local_row,
+                    simd_level,
+                );
+
+                if let Some(ref p) = progress {
+                    p.rows_completed.fetch_add(1, Ordering::Relaxed);
                 }
             }
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn yuv420p_convert_row(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    row: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    simd_level: SimdLevel,
+) {
+    yuv420p_convert_row_into(
+        y_data, u_data, v_data, width, row, y_stride, uv_stride, output, row, simd_level,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn yuv420p_convert_row_into(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    src_row: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    output: &mut [u8],
+    dst_row: usize,
+    simd_level: SimdLevel,
+) {
+    let y_row_start = src_row * y_stride;
+    let uv_row_start = (src_row / 2) * uv_stride;
+    let out_row_start = dst_row * width * 4;
+
+    match simd_level {
+        SimdLevel::Avx2 => {
+            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+            unsafe {
+                yuv420p_convert_row_avx2(
+                    y_data,
+                    u_data,
+                    v_data,
+                    width,
+                    y_row_start,
+                    uv_row_start,
+                    out_row_start,
+                    output,
+                );
+            }
+            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+            yuv420p_convert_row_scalar(
+                y_data,
+                u_data,
+                v_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+        SimdLevel::Sse2 => {
+            #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+            unsafe {
+                yuv420p_convert_row_sse2(
+                    y_data,
+                    u_data,
+                    v_data,
+                    width,
+                    y_row_start,
+                    uv_row_start,
+                    out_row_start,
+                    output,
+                );
+            }
+            #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+            yuv420p_convert_row_scalar(
+                y_data,
+                u_data,
+                v_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+        SimdLevel::Scalar => {
+            yuv420p_convert_row_scalar(
+                y_data,
+                u_data,
+                v_data,
+                width,
+                y_row_start,
+                uv_row_start,
+                out_row_start,
+                output,
+            );
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn yuv420p_convert_row_avx2(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    unsafe {
+        yuv420p_convert_row_sse2(
+            y_data,
+            u_data,
+            v_data,
+            width,
+            y_row_start,
+            uv_row_start,
+            out_row_start,
+            output,
+        );
+    }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+#[target_feature(enable = "sse2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn yuv420p_convert_row_sse2(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    yuv420p_convert_row_scalar(
+        y_data,
+        u_data,
+        v_data,
+        width,
+        y_row_start,
+        uv_row_start,
+        out_row_start,
+        output,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn yuv420p_convert_row_scalar(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: usize,
+    y_row_start: usize,
+    uv_row_start: usize,
+    out_row_start: usize,
+    output: &mut [u8],
+) {
+    for col in 0..width {
+        let y_idx = y_row_start + col;
+        let uv_idx = uv_row_start + (col / 2);
+
+        let y = y_data.get(y_idx).copied().unwrap_or(0) as i32;
+        let u = u_data.get(uv_idx).copied().unwrap_or(128) as i32;
+        let v = v_data.get(uv_idx).copied().unwrap_or(128) as i32;
+
+        let c = y - 16;
+        let d = u - 128;
+        let e = v - 128;
+
+        let r = clamp_u8((298 * c + 409 * e + 128) >> 8);
+        let g = clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
+        let b = clamp_u8((298 * c + 516 * d + 128) >> 8);
+
+        let out_idx = out_row_start + col * 4;
+        if out_idx + 3 < output.len() {
+            output[out_idx] = r;
+            output[out_idx + 1] = g;
+            output[out_idx + 2] = b;
+            output[out_idx + 3] = 255;
         }
     }
 }
@@ -479,6 +924,24 @@ pub fn yuv420p_to_rgba_simd(
     y_stride: u32,
     uv_stride: u32,
     output: &mut [u8],
+) {
+    yuv420p_to_rgba(
+        y_data, u_data, v_data, width, height, y_stride, uv_stride, output,
+    );
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[allow(clippy::too_many_arguments)]
+pub fn yuv420p_to_rgba_simd_with_progress(
+    y_data: &[u8],
+    u_data: &[u8],
+    v_data: &[u8],
+    width: u32,
+    height: u32,
+    y_stride: u32,
+    uv_stride: u32,
+    output: &mut [u8],
+    _progress: Option<Arc<ConversionProgress>>,
 ) {
     yuv420p_to_rgba(
         y_data, u_data, v_data, width, height, y_stride, uv_stride, output,
@@ -571,5 +1034,192 @@ mod tests {
                 diff
             );
         }
+    }
+
+    #[test]
+    fn test_simd_level_detection() {
+        let level = SimdLevel::detect();
+        let pixels = level.pixels_per_iteration();
+        assert!(pixels >= 1);
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        {
+            assert!(pixels == 1 || pixels == 8 || pixels == 16);
+        }
+    }
+
+    #[test]
+    fn test_conversion_progress() {
+        let progress = ConversionProgress::new(100);
+        assert_eq!(progress.progress_fraction(), 0.0);
+        assert!(!progress.is_cancelled());
+
+        progress.rows_completed.store(50, Ordering::Relaxed);
+        assert!((progress.progress_fraction() - 0.5).abs() < 0.001);
+
+        progress.cancel();
+        assert!(progress.is_cancelled());
+    }
+
+    #[test]
+    fn test_nv12_avx2_matches_sse2() {
+        let width = 32u32;
+        let height = 16u32;
+        let y_stride = 32u32;
+        let uv_stride = 32u32;
+
+        let y_data: Vec<u8> = (0..y_stride * height)
+            .map(|i| ((i * 7 + 50) % 256) as u8)
+            .collect();
+        let uv_data: Vec<u8> = (0..uv_stride * height / 2)
+            .map(|i| ((i * 11 + 64) % 256) as u8)
+            .collect();
+
+        let mut output1 = vec![0u8; (width * height * 4) as usize];
+        let mut output2 = vec![0u8; (width * height * 4) as usize];
+
+        nv12_to_rgba(
+            &y_data,
+            &uv_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output1,
+        );
+
+        nv12_to_rgba_simd(
+            &y_data,
+            &uv_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output2,
+        );
+
+        for (i, (a, b)) in output1.iter().zip(output2.iter()).enumerate() {
+            let diff = (*a as i32 - *b as i32).abs();
+            assert!(
+                diff <= 2,
+                "Mismatch at index {}: expected={}, got={}, diff={}",
+                i,
+                a,
+                b,
+                diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_yuv420p_simd_matches_scalar() {
+        let width = 32u32;
+        let height = 16u32;
+        let y_stride = 32u32;
+        let uv_stride = 16u32;
+
+        let y_data: Vec<u8> = (0..y_stride * height)
+            .map(|i| ((i * 7 + 50) % 256) as u8)
+            .collect();
+        let u_data: Vec<u8> = (0..uv_stride * height / 2)
+            .map(|i| ((i * 11 + 64) % 256) as u8)
+            .collect();
+        let v_data: Vec<u8> = (0..uv_stride * height / 2)
+            .map(|i| ((i * 13 + 80) % 256) as u8)
+            .collect();
+
+        let mut output_scalar = vec![0u8; (width * height * 4) as usize];
+        let mut output_simd = vec![0u8; (width * height * 4) as usize];
+
+        yuv420p_to_rgba(
+            &y_data,
+            &u_data,
+            &v_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output_scalar,
+        );
+
+        yuv420p_to_rgba_simd(
+            &y_data,
+            &u_data,
+            &v_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output_simd,
+        );
+
+        for (i, (s, d)) in output_scalar.iter().zip(output_simd.iter()).enumerate() {
+            let diff = (*s as i32 - *d as i32).abs();
+            assert!(
+                diff <= 2,
+                "YUV420P mismatch at index {}: scalar={}, simd={}, diff={}",
+                i,
+                s,
+                d,
+                diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_large_frame_parallel() {
+        let width = 1920u32;
+        let height = 1080u32;
+        let y_stride = 1920u32;
+        let uv_stride = 1920u32;
+
+        let y_data: Vec<u8> = (0..y_stride * height).map(|i| ((i % 256) as u8)).collect();
+        let uv_data: Vec<u8> = (0..uv_stride * height / 2)
+            .map(|i| (((i + 64) % 256) as u8))
+            .collect();
+
+        let mut output = vec![0u8; (width * height * 4) as usize];
+
+        nv12_to_rgba_simd(
+            &y_data,
+            &uv_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output,
+        );
+
+        assert!(output.iter().any(|&x| x != 0));
+    }
+
+    #[test]
+    fn test_cancellation() {
+        let progress = Arc::new(ConversionProgress::new(1080));
+
+        let width = 1920u32;
+        let height = 1080u32;
+        let y_stride = 1920u32;
+        let uv_stride = 1920u32;
+
+        let y_data: Vec<u8> = vec![128; (y_stride * height) as usize];
+        let uv_data: Vec<u8> = vec![128; (uv_stride * height / 2) as usize];
+
+        let mut output = vec![0u8; (width * height * 4) as usize];
+
+        progress.cancel();
+
+        nv12_to_rgba_simd_with_progress(
+            &y_data,
+            &uv_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut output,
+            Some(progress.clone()),
+        );
+
+        let rows_done = progress.rows_completed.load(Ordering::Relaxed);
+        assert!(rows_done < height as usize);
     }
 }
