@@ -41,7 +41,8 @@
 			"Bash(rustfmt:*)",
 			"Bash(cargo tree:*)",
 			"WebFetch(domain:github.com)",
-			"WebFetch(domain:docs.rs)"
+			"WebFetch(domain:docs.rs)",
+			"WebFetch(domain:gix.github.io)"
 		],
 		"deny": [],
 		"ask": []

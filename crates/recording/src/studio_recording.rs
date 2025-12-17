@@ -18,7 +18,10 @@ use crate::output_pipeline::{
 };
 
 #[cfg(windows)]
-use crate::output_pipeline::{WindowsCameraMuxer, WindowsCameraMuxerConfig};
+use crate::output_pipeline::{
+    WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsSegmentedCameraMuxer,
+    WindowsSegmentedCameraMuxerConfig,
+};
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
 use cap_project::{
@@ -901,16 +904,27 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
-        OutputPipeline::builder(dir.join("camera.mp4"))
-            .with_video::<sources::NativeCamera>(camera_feed)
-            .with_timestamps(start_time)
-            .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig::default())
-            .instrument(error_span!("camera-out"))
-    }))
-    .await
-    .transpose()
-    .context("camera pipeline setup")?;
+    let camera = if let Some(camera_feed) = base_inputs.camera_feed {
+        let pipeline = if fragmented {
+            let fragments_dir = dir.join("camera");
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<WindowsSegmentedCameraMuxer>(WindowsSegmentedCameraMuxerConfig::default())
+                .instrument(error_span!("camera-out"))
+                .await
+        } else {
+            OutputPipeline::builder(dir.join("camera.mp4"))
+                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_timestamps(start_time)
+                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig::default())
+                .instrument(error_span!("camera-out"))
+                .await
+        };
+        Some(pipeline.context("camera pipeline setup")?)
+    } else {
+        None
+    };
 
     let microphone = if let Some(mic_feed) = base_inputs.mic_feed {
         let pipeline = if fragmented {

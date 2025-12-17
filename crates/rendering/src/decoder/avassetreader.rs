@@ -17,7 +17,7 @@ use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
 use crate::{DecodedFrame, PixelFormat};
 
-use super::frame_converter::copy_rgba_plane;
+use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
@@ -102,6 +102,21 @@ impl ImageBufProcessor {
                 };
 
                 let bytes = copy_rgba_plane(slice, bytes_per_row, width, height);
+                (bytes, PixelFormat::Rgba, width as u32 * 4, 0)
+            }
+            format::Pixel::BGRA => {
+                let bytes_per_row = image_buf.plane_bytes_per_row(0);
+                let width = image_buf.width();
+                let height = image_buf.height();
+
+                let slice = unsafe {
+                    std::slice::from_raw_parts::<'static, _>(
+                        image_buf.plane_base_address(0),
+                        bytes_per_row * height,
+                    )
+                };
+
+                let bytes = copy_bgra_to_rgba(slice, bytes_per_row, width, height);
                 (bytes, PixelFormat::Rgba, width as u32 * 4, 0)
             }
             format::Pixel::NV12 => {

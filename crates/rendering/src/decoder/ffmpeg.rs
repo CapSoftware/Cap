@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use ffmpeg::{format, frame, sys::AVHWDeviceType};
 use log::debug;
 use std::{

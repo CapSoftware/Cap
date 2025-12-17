@@ -73,8 +73,11 @@ impl Renderer {
     async fn run(mut self) {
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
-        let mut layers =
-            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
+        let mut layers = RendererLayers::new_with_options(
+            &self.render_constants.device,
+            &self.render_constants.queue,
+            self.render_constants.is_software_adapter,
+        );
 
         struct PendingFrame {
             segment_frames: DecodedSegmentFrames,

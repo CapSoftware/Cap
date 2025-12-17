@@ -1110,6 +1110,7 @@ dependencies = [
  "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
+ "tracing",
  "windows 0.60.0",
  "windows-core 0.60.1",
  "workspace-hack",
@@ -1432,6 +1433,7 @@ dependencies = [
 name = "cap-gpu-converters"
 version = "0.1.0"
 dependencies = [
+ "thiserror 1.0.69",
  "wgpu",
  "workspace-hack",
 ]
@@ -1604,6 +1606,7 @@ dependencies = [
  "wgpu",
  "wgpu-core",
  "wgpu-hal",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1662,6 +1665,7 @@ dependencies = [
  "ffmpeg-next",
  "tokio",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 

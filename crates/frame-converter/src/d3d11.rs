@@ -567,7 +567,7 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
                 }
             }
         }
-        Pixel::YUYV422 | Pixel::UYVY422 => {
+        Pixel::YUYV422 => {
             let row_bytes = frame.width() as usize * 2;
             for y in 0..height {
                 unsafe {

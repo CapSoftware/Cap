@@ -19,3 +19,13 @@ pub use macos::*;
 mod win;
 #[cfg(windows)]
 pub use win::*;
+
+#[cfg(windows)]
+mod win_segmented;
+#[cfg(windows)]
+pub use win_segmented::*;
+
+#[cfg(windows)]
+mod win_segmented_camera;
+#[cfg(windows)]
+pub use win_segmented_camera::*;

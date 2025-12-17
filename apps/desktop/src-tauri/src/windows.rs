@@ -708,6 +708,40 @@ impl ShowCapWindow {
                 let title = CapWindowId::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
 
+                let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
+                let pos_y =
+                    (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0;
+
+                debug!(
+                    "InProgressRecording window: monitor size={:?}, scale={}, pos=({}, {})",
+                    monitor.size(),
+                    monitor.scale_factor(),
+                    pos_x,
+                    pos_y
+                );
+
+                #[cfg(target_os = "macos")]
+                let window = {
+                    self.window_builder(app, "/in-progress-recording")
+                        .maximized(false)
+                        .resizable(false)
+                        .fullscreen(false)
+                        .shadow(false)
+                        .always_on_top(true)
+                        .transparent(true)
+                        .visible_on_all_workspaces(true)
+                        .content_protected(should_protect)
+                        .inner_size(width, height)
+                        .position(pos_x, pos_y)
+                        .skip_taskbar(true)
+                        .initialization_script(format!(
+                            "window.COUNTDOWN = {};",
+                            countdown.unwrap_or_default()
+                        ))
+                        .build()?
+                };
+
+                #[cfg(windows)]
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -719,23 +753,47 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .inner_size(width, height)
-                    .position(
-                        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
-                        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
-                    )
-                    .skip_taskbar(true)
+                    .position(pos_x, pos_y)
+                    .skip_taskbar(false)
                     .initialization_script(format!(
                         "window.COUNTDOWN = {};",
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
 
+                debug!(
+                    "InProgressRecording window created: label={}, inner_size={:?}, outer_position={:?}",
+                    window.label(),
+                    window.inner_size(),
+                    window.outer_position()
+                );
+
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 1000);
                 }
 
-                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+                #[cfg(target_os = "macos")]
+                {
+                    let show_result = window.show();
+                    debug!(
+                        "InProgressRecording window.show() result: {:?}",
+                        show_result
+                    );
+                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+                }
+
+                #[cfg(windows)]
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let show_result = window.show();
+                    debug!(
+                        "InProgressRecording window.show() result: {:?}",
+                        show_result
+                    );
+                    window.set_focus().ok();
+                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+                }
 
                 window
             }
