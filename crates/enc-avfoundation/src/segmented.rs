@@ -20,10 +20,10 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
 
     std::fs::rename(&temp_path, path)?;
 
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = std::fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = std::fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
 
     Ok(())
