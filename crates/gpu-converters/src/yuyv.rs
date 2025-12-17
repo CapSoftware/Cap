@@ -13,7 +13,7 @@ pub fn create_input_texture(
     if height == 0 {
         return Err("YUYV texture height must be non-zero".to_string());
     }
-    if width % 2 != 0 {
+    if !width.is_multiple_of(2) {
         return Err(format!(
             "YUYV texture width must be even (got {width}), as YUYV encodes pairs of pixels"
         ));

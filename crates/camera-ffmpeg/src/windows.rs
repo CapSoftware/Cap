@@ -103,12 +103,12 @@ impl H264Decoder {
     }
 
     pub fn flush(&mut self) -> Result<Vec<FFVideo>, AsFFmpegError> {
-        if let Err(e) = self.decoder.send_eof() {
-            if !matches!(e, ffmpeg::Error::Eof) {
-                return Err(AsFFmpegError::H264DecodeError(format!(
-                    "Failed to send EOF: {e}"
-                )));
-            }
+        if let Err(e) = self.decoder.send_eof()
+            && !matches!(e, ffmpeg::Error::Eof)
+        {
+            return Err(AsFFmpegError::H264DecodeError(format!(
+                "Failed to send EOF: {e}"
+            )));
         }
 
         self.drain_frames()?;

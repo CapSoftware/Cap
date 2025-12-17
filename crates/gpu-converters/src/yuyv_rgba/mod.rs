@@ -89,7 +89,7 @@ impl YUYVToRGBA {
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>, ConvertError> {
-        if width % 2 != 0 {
+        if !width.is_multiple_of(2) {
             return Err(ConvertError::OddWidth { width });
         }
 
