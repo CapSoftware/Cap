@@ -147,7 +147,9 @@ pub struct Capturer {
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     session: GraphicsCaptureSession,
-    _frame_pool: Direct3D11CaptureFramePool,
+    frame_pool: Direct3D11CaptureFramePool,
+    frame_arrived_token: i64,
+    stop_flag: Arc<AtomicBool>,
 }
 
 impl Capturer {
@@ -265,11 +267,12 @@ impl Capturer {
             })
             .transpose()?;
 
-        frame_pool
+        let frame_arrived_token = frame_pool
             .FrameArrived(
                 &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new({
                     let d3d_context = d3d_context.clone();
                     let d3d_device = d3d_device.clone();
+                    let stop_flag = stop_flag.clone();
 
                     move |frame_pool, _| {
                         if stop_flag.load(Ordering::Relaxed) {
@@ -337,11 +340,12 @@ impl Capturer {
 
         Ok(Capturer {
             settings,
-            // thread_handle: None,
             d3d_device,
             d3d_context,
             session,
-            _frame_pool: frame_pool,
+            frame_pool,
+            frame_arrived_token,
+            stop_flag,
         })
     }
 
@@ -380,7 +384,12 @@ pub enum StopCapturerError {
 
 impl Capturer {
     pub fn stop(&mut self) -> windows::core::Result<()> {
-        self.session.Close()
+        if self.stop_flag.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let _ = self.frame_pool.RemoveFrameArrived(self.frame_arrived_token);
+        let _ = self.session.Close();
+        self.frame_pool.Close()
     }
 }
 

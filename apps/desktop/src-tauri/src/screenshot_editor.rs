@@ -232,13 +232,14 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                let (instance, adapter, device, queue) =
+                let (instance, adapter, device, queue, is_software_adapter) =
                     if let Some(shared) = gpu_context::get_shared_gpu().await {
                         (
                             shared.instance.clone(),
                             shared.adapter.clone(),
                             shared.device.clone(),
                             shared.queue.clone(),
+                            shared.is_software_adapter,
                         )
                     } else {
                         let instance =
@@ -262,7 +263,7 @@ impl ScreenshotEditorInstances {
                             })
                             .await
                             .map_err(|e| e.to_string())?;
-                        (instance, adapter, Arc::new(device), Arc::new(queue))
+                        (instance, adapter, Arc::new(device), Arc::new(queue), false)
                     };
 
                 let options = cap_rendering::RenderOptions {
@@ -285,6 +286,7 @@ impl ScreenshotEditorInstances {
                     meta: studio_meta,
                     recording_meta: recording_meta.clone(),
                     background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                    is_software_adapter,
                 };
 
                 let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
@@ -304,7 +306,11 @@ impl ScreenshotEditorInstances {
 
                 tokio::spawn(async move {
                     let mut frame_renderer = FrameRenderer::new(&constants);
-                    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+                    let mut layers = RendererLayers::new_with_options(
+                        &constants.device,
+                        &constants.queue,
+                        constants.is_software_adapter,
+                    );
                     let shutdown_token = render_shutdown_token;
 
                     // Initial render

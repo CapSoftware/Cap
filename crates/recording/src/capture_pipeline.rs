@@ -138,29 +138,41 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();
 
-        let actual_output_path = if fragmented {
-            output_path
+        if fragmented {
+            let fragments_dir = output_path
                 .parent()
-                .map(|p| p.join("display.mp4"))
-                .unwrap_or_else(|| output_path.with_file_name("display.mp4"))
-        } else {
-            output_path.clone()
-        };
+                .map(|p| p.join("display"))
+                .unwrap_or_else(|| output_path.with_file_name("display"));
 
-        OutputPipeline::builder(actual_output_path)
-            .with_video::<screen_capture::VideoSource>(screen_capture)
-            .with_timestamps(start_time)
-            .build::<WindowsMuxer>(WindowsMuxerConfig {
-                pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                d3d_device,
-                bitrate_multiplier: 0.15f32,
-                frame_rate: 30u32,
-                output_size: None,
-                encoder_preferences,
-                fragmented,
-                frag_duration_us: 2_000_000,
-            })
-            .await
+            OutputPipeline::builder(fragments_dir)
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<WindowsSegmentedMuxer>(WindowsSegmentedMuxerConfig {
+                    pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
+                    d3d_device,
+                    bitrate_multiplier: 0.15f32,
+                    frame_rate: 30u32,
+                    output_size: None,
+                    encoder_preferences,
+                    segment_duration: std::time::Duration::from_secs(3),
+                })
+                .await
+        } else {
+            OutputPipeline::builder(output_path.clone())
+                .with_video::<screen_capture::VideoSource>(screen_capture)
+                .with_timestamps(start_time)
+                .build::<WindowsMuxer>(WindowsMuxerConfig {
+                    pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
+                    d3d_device,
+                    bitrate_multiplier: 0.15f32,
+                    frame_rate: 30u32,
+                    output_size: None,
+                    encoder_preferences,
+                    fragmented: false,
+                    frag_duration_us: 2_000_000,
+                })
+                .await
+        }
     }
 
     async fn make_instant_mode_pipeline(

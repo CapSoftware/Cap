@@ -16,6 +16,7 @@ fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static 
         .width
         .checked_mul(4)
         .ok_or("overflow computing expected_stride")?;
+
     if frame.padded_bytes_per_row == expected_stride {
         Ok((frame.data, expected_stride))
     } else {
@@ -30,6 +31,7 @@ fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static 
             let end = start + expected_stride as usize;
             stripped.extend_from_slice(&frame.data[start..end]);
         }
+
         Ok((stripped, expected_stride))
     }
 }

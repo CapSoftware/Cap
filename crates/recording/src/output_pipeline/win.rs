@@ -721,7 +721,7 @@ impl AudioMuxer for WindowsCameraMuxer {
     }
 }
 
-fn upload_mf_buffer_to_texture(
+pub fn upload_mf_buffer_to_texture(
     device: &ID3D11Device,
     frame: &NativeCameraFrame,
 ) -> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> {

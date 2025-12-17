@@ -485,10 +485,18 @@ function PreviewCanvas() {
 		}
 	});
 
+	const isWindows = navigator.userAgent.includes("Windows");
+
 	const initCanvas = (canvas: HTMLCanvasElement) => {
 		if (canvasTransferredRef.current) return;
 		const controls = canvasControls();
 		if (!controls) return;
+
+		if (isWindows) {
+			controls.initDirectCanvas(canvas);
+			canvasTransferredRef.current = true;
+			return;
+		}
 
 		try {
 			const offscreen = canvas.transferControlToOffscreen();
