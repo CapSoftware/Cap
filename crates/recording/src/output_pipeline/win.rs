@@ -212,8 +212,7 @@ impl Muxer for WindowsMuxer {
                                     Ok(guard) => guard,
                                     Err(poisoned) => {
                                         return fallback(Some(format!(
-                                            "Failed to lock output mutex: {}",
-                                            poisoned
+                                            "Failed to lock output mutex: {poisoned}"
                                         )));
                                     }
                                 };
@@ -541,7 +540,7 @@ impl Muxer for WindowsCameraMuxer {
                             let mut output_guard = match output.lock() {
                                 Ok(guard) => guard,
                                 Err(poisoned) => {
-                                    let msg = format!("Failed to lock output mutex: {}", poisoned);
+                                    let msg = format!("Failed to lock output mutex: {poisoned}");
                                     let _ = ready_tx.send(Err(anyhow!("{}", msg)));
                                     return Err(anyhow!("{}", msg));
                                 }
