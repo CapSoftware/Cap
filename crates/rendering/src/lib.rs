@@ -22,7 +22,10 @@ use tokio::sync::mpsc;
 
 mod composite_frame;
 mod coord;
+pub mod cpu_yuv;
 mod cursor_interpolation;
+#[cfg(target_os = "windows")]
+pub mod d3d_texture;
 pub mod decoder;
 mod frame_pipeline;
 #[cfg(target_os = "macos")]
@@ -268,7 +271,11 @@ pub async fn render_video_to_channel(
 
     let mut frame_renderer = FrameRenderer::new(constants);
 
-    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let mut layers = RendererLayers::new_with_options(
+        &constants.device,
+        &constants.queue,
+        constants.is_software_adapter,
+    );
 
     loop {
         if frame_number >= total_frames {
@@ -372,6 +379,7 @@ pub struct RenderVideoConstants {
     pub meta: StudioRecordingMeta,
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    pub is_software_adapter: bool,
 }
 
 impl RenderVideoConstants {
@@ -391,14 +399,41 @@ impl RenderVideoConstants {
         };
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = instance
+
+        let hardware_adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
             .await
-            .map_err(|_| RenderingError::NoAdapter)?;
+            .ok();
+
+        let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
+            tracing::info!(
+                adapter_name = adapter.get_info().name,
+                adapter_backend = ?adapter.get_info().backend,
+                "Using hardware GPU adapter"
+            );
+            (adapter, false)
+        } else {
+            tracing::warn!("No hardware GPU adapter found, attempting software fallback");
+            let software_adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|_| RenderingError::NoAdapter)?;
+
+            tracing::info!(
+                adapter_name = software_adapter.get_info().name,
+                adapter_backend = ?software_adapter.get_info().backend,
+                "Using software adapter (CPU rendering - performance may be reduced)"
+            );
+            (software_adapter, true)
+        };
 
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("cap-rendering-device"),
@@ -419,6 +454,7 @@ impl RenderVideoConstants {
             background_textures,
             meta,
             recording_meta,
+            is_software_adapter,
         })
     }
 }
@@ -1598,10 +1634,18 @@ pub struct RendererLayers {
 
 impl RendererLayers {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::new_with_options(device, queue, false)
+    }
+
+    pub fn new_with_options(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        prefer_cpu_conversion: bool,
+    ) -> Self {
         Self {
             background: BackgroundLayer::new(device),
             background_blur: BlurLayer::new(device),
-            display: DisplayLayer::new(device),
+            display: DisplayLayer::new_with_options(device, prefer_cpu_conversion),
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
             camera_only: CameraLayer::new(device),

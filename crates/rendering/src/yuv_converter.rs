@@ -1,3 +1,4 @@
+use crate::cpu_yuv;
 use crate::decoder::PixelFormat;
 
 #[cfg(target_os = "macos")]
@@ -7,6 +8,15 @@ use crate::iosurface_texture::{
 
 #[cfg(target_os = "macos")]
 use cidre::cv;
+
+#[cfg(target_os = "windows")]
+use crate::d3d_texture::D3DTextureError;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum YuvConversionError {
@@ -19,6 +29,12 @@ pub enum YuvConversionError {
     #[cfg(target_os = "macos")]
     #[error("IOSurface error: {0}")]
     IOSurfaceError(#[from] IOSurfaceTextureError),
+    #[cfg(target_os = "windows")]
+    #[error("D3D texture error: {0}")]
+    D3DTextureError(#[from] D3DTextureError),
+    #[cfg(target_os = "windows")]
+    #[error("D3D11 error: {0}")]
+    D3D11Error(String),
 }
 
 fn upload_plane_with_stride(
@@ -81,6 +97,12 @@ pub struct YuvToRgbaConverter {
     cached_format: Option<PixelFormat>,
     #[cfg(target_os = "macos")]
     iosurface_cache: Option<IOSurfaceTextureCache>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_texture: Option<ID3D11Texture2D>,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_width: u32,
+    #[cfg(target_os = "windows")]
+    d3d11_staging_height: u32,
 }
 
 impl YuvToRgbaConverter {
@@ -234,6 +256,12 @@ impl YuvToRgbaConverter {
             cached_format: None,
             #[cfg(target_os = "macos")]
             iosurface_cache: IOSurfaceTextureCache::new(),
+            #[cfg(target_os = "windows")]
+            d3d11_staging_texture: None,
+            #[cfg(target_os = "windows")]
+            d3d11_staging_width: 0,
+            #[cfg(target_os = "windows")]
+            d3d11_staging_height: 0,
         }
     }
 
@@ -653,6 +681,405 @@ impl YuvToRgbaConverter {
         queue.submit(std::iter::once(encoder.finish()));
 
         Ok(self.output_view.as_ref().unwrap())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn convert_nv12_from_d3d11_texture(
+        &mut self,
+        wgpu_device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        d3d11_device: &ID3D11Device,
+        d3d11_context: &ID3D11DeviceContext,
+        nv12_texture: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12;
+
+        if self.d3d11_staging_width != width
+            || self.d3d11_staging_height != height
+            || self.d3d11_staging_texture.is_none()
+        {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+
+            let staging_texture = unsafe {
+                let mut texture: Option<ID3D11Texture2D> = None;
+                d3d11_device
+                    .CreateTexture2D(&desc, None, Some(&mut texture))
+                    .map_err(|e| {
+                        YuvConversionError::D3D11Error(format!("CreateTexture2D failed: {e:?}"))
+                    })?;
+                texture.ok_or_else(|| {
+                    YuvConversionError::D3D11Error("CreateTexture2D returned null".to_string())
+                })?
+            };
+
+            self.d3d11_staging_texture = Some(staging_texture);
+            self.d3d11_staging_width = width;
+            self.d3d11_staging_height = height;
+        }
+
+        let staging_texture = self.d3d11_staging_texture.as_ref().unwrap();
+
+        unsafe {
+            d3d11_context.CopyResource(staging_texture, nv12_texture);
+        }
+
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            d3d11_context
+                .Map(staging_texture, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| YuvConversionError::D3D11Error(format!("Map failed: {e:?}")))?;
+        }
+
+        let y_stride = mapped.RowPitch;
+        let uv_stride = mapped.RowPitch;
+
+        let y_size = (y_stride * height) as usize;
+        let uv_size = (uv_stride * height / 2) as usize;
+
+        let (y_data_vec, uv_data_vec) = unsafe {
+            let y_data = std::slice::from_raw_parts(mapped.pData as *const u8, y_size);
+            let uv_data =
+                std::slice::from_raw_parts((mapped.pData as *const u8).add(y_size), uv_size);
+            (y_data.to_vec(), uv_data.to_vec())
+        };
+
+        unsafe {
+            d3d11_context.Unmap(staging_texture, 0);
+        }
+
+        self.ensure_textures(wgpu_device, width, height, PixelFormat::Nv12);
+
+        let y_texture = self.y_texture.as_ref().unwrap();
+        let uv_texture = self.uv_texture.as_ref().unwrap();
+        let output_texture = self.output_texture.as_ref().unwrap();
+
+        upload_plane_with_stride(queue, y_texture, &y_data_vec, width, height, y_stride, "Y")?;
+
+        let half_height = height / 2;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: uv_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &uv_data_vec,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(uv_stride),
+                rows_per_image: Some(half_height),
+            },
+            wgpu::Extent3d {
+                width: width / 2,
+                height: half_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let bind_group = wgpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("NV12 D3D11 Converter Bind Group"),
+            layout: &self.nv12_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &y_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &uv_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &output_texture.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        });
+
+        let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 D3D11 Conversion Encoder"),
+        });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 D3D11 Conversion Pass"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.output_view.as_ref().unwrap())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn convert_nv12_from_d3d11_shared_handles(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        y_handle: windows::Win32::Foundation::HANDLE,
+        uv_handle: windows::Win32::Foundation::HANDLE,
+        width: u32,
+        height: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        use crate::d3d_texture::import_d3d11_texture_to_wgpu;
+
+        let y_wgpu_texture = import_d3d11_texture_to_wgpu(
+            device,
+            y_handle,
+            wgpu::TextureFormat::R8Unorm,
+            width,
+            height,
+            Some("D3D11 Y Plane Zero-Copy"),
+        )?;
+
+        let uv_wgpu_texture = import_d3d11_texture_to_wgpu(
+            device,
+            uv_handle,
+            wgpu::TextureFormat::Rg8Unorm,
+            width / 2,
+            height / 2,
+            Some("D3D11 UV Plane Zero-Copy"),
+        )?;
+
+        if self.cached_width != width
+            || self.cached_height != height
+            || self.cached_format != Some(PixelFormat::Nv12)
+        {
+            self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("RGBA Output Texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+
+            self.output_view = Some(
+                self.output_texture
+                    .as_ref()
+                    .unwrap()
+                    .create_view(&Default::default()),
+            );
+
+            self.cached_width = width;
+            self.cached_height = height;
+            self.cached_format = Some(PixelFormat::Nv12);
+        }
+
+        let output_texture = self.output_texture.as_ref().unwrap();
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("NV12 D3D11 Zero-Copy Converter Bind Group"),
+            layout: &self.nv12_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &y_wgpu_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &uv_wgpu_texture.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        &output_texture.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("NV12 D3D11 Zero-Copy Conversion Encoder"),
+        });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("NV12 D3D11 Zero-Copy Conversion Pass"),
+                ..Default::default()
+            });
+            compute_pass.set_pipeline(&self.nv12_pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        Ok(self.output_view.as_ref().unwrap())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_nv12_cpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        y_data: &[u8],
+        uv_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        self.ensure_output_texture_only(device, width, height);
+
+        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+
+        cpu_yuv::nv12_to_rgba_simd(
+            y_data,
+            uv_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut rgba_data,
+        );
+
+        let output_texture = self.output_texture.as_ref().unwrap();
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        Ok(self.output_view.as_ref().unwrap())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn convert_yuv420p_cpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        y_data: &[u8],
+        u_data: &[u8],
+        v_data: &[u8],
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Result<&wgpu::TextureView, YuvConversionError> {
+        self.ensure_output_texture_only(device, width, height);
+
+        let mut rgba_data = vec![0u8; (width * height * 4) as usize];
+
+        cpu_yuv::yuv420p_to_rgba_simd(
+            y_data,
+            u_data,
+            v_data,
+            width,
+            height,
+            y_stride,
+            uv_stride,
+            &mut rgba_data,
+        );
+
+        let output_texture = self.output_texture.as_ref().unwrap();
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba_data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        Ok(self.output_view.as_ref().unwrap())
+    }
+
+    fn ensure_output_texture_only(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.cached_width == width && self.cached_height == height {
+            return;
+        }
+
+        self.output_texture = Some(device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("RGBA Output Texture (CPU)"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        }));
+
+        self.output_view = Some(
+            self.output_texture
+                .as_ref()
+                .unwrap()
+                .create_view(&Default::default()),
+        );
+
+        self.cached_width = width;
+        self.cached_height = height;
     }
 
     pub fn output_texture(&self) -> Option<&wgpu::Texture> {
