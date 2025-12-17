@@ -201,10 +201,10 @@ impl Muxer for WindowsSegmentedCameraMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.current_state {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("Camera encoder channel already closed during stop: {e}");
-            }
+        if let Some(state) = &self.current_state
+            && let Err(e) = state.video_tx.send(None)
+        {
+            trace!("Camera encoder channel already closed during stop: {e}");
         }
     }
 

@@ -207,10 +207,10 @@ impl Muxer for WindowsSegmentedMuxer {
     }
 
     fn stop(&mut self) {
-        if let Some(state) = &self.current_state {
-            if let Err(e) = state.video_tx.send(None) {
-                trace!("Screen encoder channel already closed during stop: {e}");
-            }
+        if let Some(state) = &self.current_state
+            && let Err(e) = state.video_tx.send(None)
+        {
+            trace!("Screen encoder channel already closed during stop: {e}");
         }
     }
 
