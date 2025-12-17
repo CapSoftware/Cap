@@ -619,10 +619,9 @@ impl YuvToRgbaConverter {
         queue: &wgpu::Queue,
         image_buf: &cv::ImageBuf,
     ) -> Result<&wgpu::TextureView, YuvConversionError> {
-        let cache = self
-            .iosurface_cache
-            .as_ref()
-            .ok_or(IOSurfaceTextureError::NoMetalDevice)?;
+        if self.iosurface_cache.is_none() {
+            return Err(IOSurfaceTextureError::NoMetalDevice.into());
+        }
 
         let io_surface = image_buf
             .io_surf()
@@ -636,6 +635,7 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
+        let cache = self.iosurface_cache.as_ref().unwrap();
         let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
         let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
 

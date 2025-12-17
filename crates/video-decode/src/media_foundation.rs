@@ -78,13 +78,12 @@ fn query_mf_decoder_capabilities(device: &ID3D11Device) -> MFDecoderCapabilities
             };
 
             if let Ok(config_count) = unsafe { video_device.GetVideoDecoderConfigCount(&h264_desc) }
+                && config_count > 0
             {
-                if config_count > 0 {
-                    supports_h264 = true;
-                    max_width = max_width.max(test_w);
-                    max_height = max_height.max(test_h);
-                    break;
-                }
+                supports_h264 = true;
+                max_width = max_width.max(test_w);
+                max_height = max_height.max(test_h);
+                break;
             }
         }
 
@@ -97,13 +96,12 @@ fn query_mf_decoder_capabilities(device: &ID3D11Device) -> MFDecoderCapabilities
             };
 
             if let Ok(config_count) = unsafe { video_device.GetVideoDecoderConfigCount(&hevc_desc) }
+                && config_count > 0
             {
-                if config_count > 0 {
-                    supports_hevc = true;
-                    max_width = max_width.max(test_w);
-                    max_height = max_height.max(test_h);
-                    break;
-                }
+                supports_hevc = true;
+                max_width = max_width.max(test_w);
+                max_height = max_height.max(test_h);
+                break;
             }
         }
 
