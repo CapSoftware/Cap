@@ -239,18 +239,17 @@ impl RecoveryManager {
                         return None;
                     }
 
-                    if let Some(expected_size) = expected_file_size(f) {
-                        if let Ok(metadata) = std::fs::metadata(&path) {
-                            if metadata.len() != expected_size {
-                                warn!(
-                                    "Fragment {} size mismatch: expected {}, got {}",
-                                    path.display(),
-                                    expected_size,
-                                    metadata.len()
-                                );
-                                return None;
-                            }
-                        }
+                    if let Some(expected_size) = expected_file_size(f)
+                        && let Ok(metadata) = std::fs::metadata(&path)
+                        && metadata.len() != expected_size
+                    {
+                        warn!(
+                            "Fragment {} size mismatch: expected {}, got {}",
+                            path.display(),
+                            expected_size,
+                            metadata.len()
+                        );
+                        return None;
                     }
 
                     if Self::is_video_file(&path) {
@@ -405,10 +404,10 @@ impl RecoveryManager {
                     info!("Moving single display fragment to {:?}", display_output);
                     std::fs::rename(source, &display_output)?;
                     let display_dir = segment_dir.join("display");
-                    if display_dir.exists() {
-                        if let Err(e) = std::fs::remove_dir_all(&display_dir) {
-                            debug!("Failed to clean up display dir {:?}: {e}", display_dir);
-                        }
+                    if display_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&display_dir)
+                    {
+                        debug!("Failed to clean up display dir {:?}: {e}", display_dir);
                     }
                 }
             } else if segment.display_fragments.len() > 1 {
@@ -426,10 +425,10 @@ impl RecoveryManager {
                     }
                 }
                 let display_dir = segment_dir.join("display");
-                if display_dir.exists() {
-                    if let Err(e) = std::fs::remove_dir_all(&display_dir) {
-                        debug!("Failed to clean up display dir {:?}: {e}", display_dir);
-                    }
+                if display_dir.exists()
+                    && let Err(e) = std::fs::remove_dir_all(&display_dir)
+                {
+                    debug!("Failed to clean up display dir {:?}: {e}", display_dir);
                 }
             }
 
@@ -441,10 +440,10 @@ impl RecoveryManager {
                         info!("Moving single camera fragment to {:?}", camera_output);
                         std::fs::rename(source, &camera_output)?;
                         let camera_dir = segment_dir.join("camera");
-                        if camera_dir.exists() {
-                            if let Err(e) = std::fs::remove_dir_all(&camera_dir) {
-                                debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
-                            }
+                        if camera_dir.exists()
+                            && let Err(e) = std::fs::remove_dir_all(&camera_dir)
+                        {
+                            debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
                         }
                     }
                 } else if camera_frags.len() > 1 {
@@ -462,10 +461,10 @@ impl RecoveryManager {
                         }
                     }
                     let camera_dir = segment_dir.join("camera");
-                    if camera_dir.exists() {
-                        if let Err(e) = std::fs::remove_dir_all(&camera_dir) {
-                            debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
-                        }
+                    if camera_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&camera_dir)
+                    {
+                        debug!("Failed to clean up camera dir {:?}: {e}", camera_dir);
                     }
                 }
             }
@@ -488,10 +487,10 @@ impl RecoveryManager {
                             }
                         }
                         let mic_dir = segment_dir.join("audio-input");
-                        if mic_dir.exists() {
-                            if let Err(e) = std::fs::remove_dir_all(&mic_dir) {
-                                debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
-                            }
+                        if mic_dir.exists()
+                            && let Err(e) = std::fs::remove_dir_all(&mic_dir)
+                        {
+                            debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
                         }
                     }
                 } else if mic_frags.len() > 1 {
@@ -509,10 +508,10 @@ impl RecoveryManager {
                         }
                     }
                     let mic_dir = segment_dir.join("audio-input");
-                    if mic_dir.exists() {
-                        if let Err(e) = std::fs::remove_dir_all(&mic_dir) {
-                            debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
-                        }
+                    if mic_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&mic_dir)
+                    {
+                        debug!("Failed to clean up mic dir {:?}: {e}", mic_dir);
                     }
                 }
             }
@@ -538,10 +537,10 @@ impl RecoveryManager {
                             }
                         }
                         let system_dir = segment_dir.join("system_audio");
-                        if system_dir.exists() {
-                            if let Err(e) = std::fs::remove_dir_all(&system_dir) {
-                                debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
-                            }
+                        if system_dir.exists()
+                            && let Err(e) = std::fs::remove_dir_all(&system_dir)
+                        {
+                            debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
                         }
                     }
                 } else if system_frags.len() > 1 {
@@ -559,10 +558,10 @@ impl RecoveryManager {
                         }
                     }
                     let system_dir = segment_dir.join("system_audio");
-                    if system_dir.exists() {
-                        if let Err(e) = std::fs::remove_dir_all(&system_dir) {
-                            debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
-                        }
+                    if system_dir.exists()
+                        && let Err(e) = std::fs::remove_dir_all(&system_dir)
+                    {
+                        debug!("Failed to clean up system audio dir {:?}: {e}", system_dir);
                     }
                 }
             }
