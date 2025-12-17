@@ -22,10 +22,16 @@ pub struct DisplayLayer {
     last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
     pending_copy: Option<PendingTextureCopy>,
+    prefer_cpu_conversion: bool,
 }
 
 impl DisplayLayer {
+    #[allow(dead_code)]
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::new_with_options(device, false)
+    }
+
+    pub fn new_with_options(device: &wgpu::Device, prefer_cpu_conversion: bool) -> Self {
         let frame_texture_0 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_1 = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
         let frame_texture_view_0 = frame_texture_0.create_view(&Default::default());
@@ -40,6 +46,10 @@ impl DisplayLayer {
 
         let yuv_converter = YuvToRgbaConverter::new(device);
 
+        if prefer_cpu_conversion {
+            tracing::info!("DisplayLayer initialized with CPU YUV conversion preference");
+        }
+
         Self {
             frame_textures: [frame_texture_0, frame_texture_1],
             frame_texture_views: [frame_texture_view_0, frame_texture_view_1],
@@ -50,6 +60,7 @@ impl DisplayLayer {
             last_recording_time: None,
             yuv_converter,
             pending_copy: None,
+            prefer_cpu_conversion,
         }
     }
 
@@ -68,6 +79,15 @@ impl DisplayLayer {
         let actual_height = segment_frames.screen_frame.height();
         let format = segment_frames.screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
+
+        tracing::trace!(
+            format = ?format,
+            actual_width,
+            actual_height,
+            frame_data_len = frame_data.len(),
+            recording_time = current_recording_time,
+            "DisplayLayer::prepare - frame info"
+        );
 
         let skipped = self
             .last_recording_time
@@ -130,14 +150,64 @@ impl DisplayLayer {
                     });
 
                     #[cfg(target_os = "macos")]
-                    if let Some(Ok(_)) = iosurface_result {
-                        if self.yuv_converter.output_texture().is_some() {
-                            self.pending_copy = Some(PendingTextureCopy {
-                                width: frame_size.x,
-                                height: frame_size.y,
-                                dst_texture_index: next_texture,
-                            });
-                            true
+                    if !self.prefer_cpu_conversion {
+                        if let Some(Ok(_)) = iosurface_result {
+                            if self.yuv_converter.output_texture().is_some() {
+                                self.pending_copy = Some(PendingTextureCopy {
+                                    width: frame_size.x,
+                                    height: frame_size.y,
+                                    dst_texture_index: next_texture,
+                                });
+                                true
+                            } else {
+                                false
+                            }
+                        } else if let (Some(y_data), Some(uv_data)) =
+                            (screen_frame.y_plane(), screen_frame.uv_plane())
+                        {
+                            let y_stride = screen_frame.y_stride();
+                            let uv_stride = screen_frame.uv_stride();
+                            let convert_result = self.yuv_converter.convert_nv12(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                y_stride,
+                                uv_stride,
+                            );
+
+                            match convert_result {
+                                Ok(_) => {
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: frame_size.x,
+                                            height: frame_size.y,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        true
+                                    } else {
+                                        tracing::debug!(
+                                            width = frame_size.x,
+                                            height = frame_size.y,
+                                            y_stride,
+                                            "NV12 conversion succeeded but output texture is None, skipping copy"
+                                        );
+                                        false
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        error = ?e,
+                                        width = frame_size.x,
+                                        height = frame_size.y,
+                                        y_stride,
+                                        "NV12 to RGBA conversion failed"
+                                    );
+                                    false
+                                }
+                            }
                         } else {
                             false
                         }
@@ -146,7 +216,7 @@ impl DisplayLayer {
                     {
                         let y_stride = screen_frame.y_stride();
                         let uv_stride = screen_frame.uv_stride();
-                        let convert_result = self.yuv_converter.convert_nv12(
+                        let convert_result = self.yuv_converter.convert_nv12_cpu(
                             device,
                             queue,
                             y_data,
@@ -167,23 +237,11 @@ impl DisplayLayer {
                                     });
                                     true
                                 } else {
-                                    tracing::debug!(
-                                        width = frame_size.x,
-                                        height = frame_size.y,
-                                        y_stride,
-                                        "NV12 conversion succeeded but output texture is None, skipping copy"
-                                    );
                                     false
                                 }
                             }
                             Err(e) => {
-                                tracing::debug!(
-                                    error = ?e,
-                                    width = frame_size.x,
-                                    height = frame_size.y,
-                                    y_stride,
-                                    "NV12 to RGBA conversion failed"
-                                );
+                                tracing::debug!(error = ?e, "CPU NV12 conversion failed");
                                 false
                             }
                         }
@@ -191,22 +249,162 @@ impl DisplayLayer {
                         false
                     }
 
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(target_os = "windows")]
+                    {
+                        let mut d3d11_succeeded = false;
+
+                        let has_y_handle = screen_frame.d3d11_y_handle().is_some();
+                        let has_uv_handle = screen_frame.d3d11_uv_handle().is_some();
+                        let has_y_plane = screen_frame.y_plane().is_some();
+                        let has_uv_plane = screen_frame.uv_plane().is_some();
+
+                        tracing::debug!(
+                            has_y_handle,
+                            has_uv_handle,
+                            has_y_plane,
+                            has_uv_plane,
+                            data_len = screen_frame.data().len(),
+                            y_stride = screen_frame.y_stride(),
+                            uv_stride = screen_frame.uv_stride(),
+                            actual_width,
+                            actual_height,
+                            frame_size_x = frame_size.x,
+                            frame_size_y = frame_size.y,
+                            "Windows NV12 frame info"
+                        );
+
+                        if let (Some(y_handle), Some(uv_handle)) = (
+                            screen_frame.d3d11_y_handle(),
+                            screen_frame.d3d11_uv_handle(),
+                        ) {
+                            tracing::trace!("Using D3D11 zero-copy path for NV12 conversion");
+                            match self.yuv_converter.convert_nv12_from_d3d11_shared_handles(
+                                device,
+                                queue,
+                                y_handle,
+                                uv_handle,
+                                actual_width,
+                                actual_height,
+                            ) {
+                                Ok(_) => {
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: actual_width,
+                                            height: actual_height,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        d3d11_succeeded = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!(error = ?e, "D3D11 zero-copy conversion failed, falling back to CPU path");
+                                }
+                            }
+                        }
+
+                        if d3d11_succeeded {
+                            true
+                        } else if let (Some(y_data), Some(uv_data)) =
+                            (screen_frame.y_plane(), screen_frame.uv_plane())
+                        {
+                            let y_stride = screen_frame.y_stride();
+                            let uv_stride = screen_frame.uv_stride();
+
+                            tracing::debug!(
+                                y_data_len = y_data.len(),
+                                uv_data_len = uv_data.len(),
+                                y_stride,
+                                uv_stride,
+                                actual_width,
+                                actual_height,
+                                prefer_cpu = self.prefer_cpu_conversion,
+                                "Attempting NV12 conversion"
+                            );
+
+                            let convert_result = if self.prefer_cpu_conversion {
+                                self.yuv_converter.convert_nv12_cpu(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    actual_width,
+                                    actual_height,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            } else {
+                                self.yuv_converter.convert_nv12(
+                                    device,
+                                    queue,
+                                    y_data,
+                                    uv_data,
+                                    actual_width,
+                                    actual_height,
+                                    y_stride,
+                                    uv_stride,
+                                )
+                            };
+
+                            match convert_result {
+                                Ok(_) => {
+                                    tracing::debug!("NV12 conversion succeeded");
+                                    if self.yuv_converter.output_texture().is_some() {
+                                        self.pending_copy = Some(PendingTextureCopy {
+                                            width: actual_width,
+                                            height: actual_height,
+                                            dst_texture_index: next_texture,
+                                        });
+                                        true
+                                    } else {
+                                        tracing::warn!(
+                                            "NV12 conversion succeeded but output texture is None"
+                                        );
+                                        false
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = ?e, "NV12 conversion failed");
+                                    false
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                "No D3D11 handles and no CPU data available for NV12 frame"
+                            );
+                            false
+                        }
+                    }
+
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                     if let (Some(y_data), Some(uv_data)) =
                         (screen_frame.y_plane(), screen_frame.uv_plane())
                     {
                         let y_stride = screen_frame.y_stride();
                         let uv_stride = screen_frame.uv_stride();
-                        let convert_result = self.yuv_converter.convert_nv12(
-                            device,
-                            queue,
-                            y_data,
-                            uv_data,
-                            frame_size.x,
-                            frame_size.y,
-                            y_stride,
-                            uv_stride,
-                        );
+
+                        let convert_result = if self.prefer_cpu_conversion {
+                            self.yuv_converter.convert_nv12_cpu(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                y_stride,
+                                uv_stride,
+                            )
+                        } else {
+                            self.yuv_converter.convert_nv12(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                y_stride,
+                                uv_stride,
+                            )
+                        };
 
                         match convert_result {
                             Ok(_) => {
@@ -218,25 +416,10 @@ impl DisplayLayer {
                                     });
                                     true
                                 } else {
-                                    tracing::debug!(
-                                        width = frame_size.x,
-                                        height = frame_size.y,
-                                        y_stride,
-                                        "NV12 conversion succeeded but output texture is None, skipping copy"
-                                    );
                                     false
                                 }
                             }
-                            Err(e) => {
-                                tracing::debug!(
-                                    error = ?e,
-                                    width = frame_size.x,
-                                    height = frame_size.y,
-                                    y_stride,
-                                    "NV12 to RGBA conversion failed"
-                                );
-                                false
-                            }
+                            Err(_) => false,
                         }
                     } else {
                         false
@@ -244,32 +427,53 @@ impl DisplayLayer {
                 }
                 PixelFormat::Yuv420p => {
                     let screen_frame = &segment_frames.screen_frame;
-                    if let (Some(y_data), Some(u_data), Some(v_data)) = (
-                        screen_frame.y_plane(),
-                        screen_frame.u_plane(),
-                        screen_frame.v_plane(),
-                    ) && self
-                        .yuv_converter
-                        .convert_yuv420p(
-                            device,
-                            queue,
-                            y_data,
-                            u_data,
-                            v_data,
-                            frame_size.x,
-                            frame_size.y,
-                            screen_frame.y_stride(),
-                            screen_frame.uv_stride(),
-                        )
-                        .is_ok()
-                        && self.yuv_converter.output_texture().is_some()
+                    let y_plane = screen_frame.y_plane();
+                    let u_plane = screen_frame.u_plane();
+                    let v_plane = screen_frame.v_plane();
+
+                    if let (Some(y_data), Some(u_data), Some(v_data)) = (y_plane, u_plane, v_plane)
                     {
-                        self.pending_copy = Some(PendingTextureCopy {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            dst_texture_index: next_texture,
-                        });
-                        true
+                        let convert_result = if self.prefer_cpu_conversion {
+                            self.yuv_converter.convert_yuv420p_cpu(
+                                device,
+                                queue,
+                                y_data,
+                                u_data,
+                                v_data,
+                                frame_size.x,
+                                frame_size.y,
+                                screen_frame.y_stride(),
+                                screen_frame.uv_stride(),
+                            )
+                        } else {
+                            self.yuv_converter.convert_yuv420p(
+                                device,
+                                queue,
+                                y_data,
+                                u_data,
+                                v_data,
+                                frame_size.x,
+                                frame_size.y,
+                                screen_frame.y_stride(),
+                                screen_frame.uv_stride(),
+                            )
+                        };
+
+                        match convert_result {
+                            Ok(_) => {
+                                if self.yuv_converter.output_texture().is_some() {
+                                    self.pending_copy = Some(PendingTextureCopy {
+                                        width: frame_size.x,
+                                        height: frame_size.y,
+                                        dst_texture_index: next_texture,
+                                    });
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                            Err(_) => false,
+                        }
                     } else {
                         false
                     }
@@ -288,10 +492,12 @@ impl DisplayLayer {
 
     pub fn copy_to_texture(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(pending) = self.pending_copy.take() else {
+            tracing::trace!("copy_to_texture: no pending copy");
             return;
         };
 
         let Some(src_texture) = self.yuv_converter.output_texture() else {
+            tracing::warn!("copy_to_texture: no source texture from YUV converter");
             return;
         };
 
@@ -318,9 +524,18 @@ impl DisplayLayer {
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
+            tracing::trace!(
+                current_texture_index = self.current_texture,
+                "DisplayLayer::render - rendering with bind group"
+            );
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
+            pass.draw(0..3, 0..1);
+        } else {
+            tracing::warn!(
+                current_texture_index = self.current_texture,
+                "DisplayLayer::render - no bind group available"
+            );
         }
     }
 }

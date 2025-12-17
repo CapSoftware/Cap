@@ -125,6 +125,12 @@ let lastRawFrameData: Uint8ClampedArray | null = null;
 let lastRawFrameWidth = 0;
 let lastRawFrameHeight = 0;
 
+let webgpuFrameBuffer: Uint8ClampedArray | null = null;
+let webgpuFrameBufferSize = 0;
+
+let frameDropCount = 0;
+let lastFrameDropLogTime = 0;
+
 let consumer: Consumer | null = null;
 let useSharedBuffer = false;
 
@@ -214,6 +220,10 @@ function cleanup() {
 	lastRawFrameData = null;
 	lastRawFrameWidth = 0;
 	lastRawFrameHeight = 0;
+	webgpuFrameBuffer = null;
+	webgpuFrameBufferSize = 0;
+	frameDropCount = 0;
+	lastFrameDropLogTime = 0;
 }
 
 function initWorker() {
@@ -241,7 +251,9 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 	const doInit = async () => {
 		offscreenCanvas = canvas;
 
-		if (await isWebGPUSupported()) {
+		const webgpuSupported = await isWebGPUSupported();
+
+		if (webgpuSupported) {
 			try {
 				webgpuRenderer = await initWebGPU(canvas);
 				renderMode = "webgpu";
@@ -249,7 +261,8 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 					type: "renderer-mode",
 					mode: "webgpu",
 				} satisfies RendererModeMessage);
-			} catch {
+			} catch (e) {
+				console.error("[frame-worker] WebGPU init failed:", e);
 				renderMode = "canvas2d";
 				offscreenCtx = canvas.getContext("2d", {
 					alpha: false,
@@ -382,17 +395,39 @@ async function processFrame(buffer: ArrayBuffer): Promise<DecodeResult> {
 	}
 
 	if (renderMode === "webgpu" && webgpuRenderer) {
-		const frameDataCopy = new Uint8ClampedArray(processedFrameData);
+		if (pendingRenderFrame !== null) {
+			frameDropCount++;
+			const now = performance.now();
+			if (now - lastFrameDropLogTime > 1000) {
+				if (frameDropCount > 0) {
+					console.warn(
+						`[frame-worker] Dropped ${frameDropCount} frames in the last second`,
+					);
+				}
+				frameDropCount = 0;
+				lastFrameDropLogTime = now;
+			}
+		}
+
+		if (!webgpuFrameBuffer || webgpuFrameBufferSize < expectedLength) {
+			webgpuFrameBuffer = new Uint8ClampedArray(expectedLength);
+			webgpuFrameBufferSize = expectedLength;
+		}
+		webgpuFrameBuffer.set(processedFrameData);
+
 		pendingRenderFrame = {
 			mode: "webgpu",
-			data: frameDataCopy,
+			data: webgpuFrameBuffer,
 			width,
 			height,
 		};
 		return { type: "frame-queued", width, height };
 	}
 
-	lastRawFrameData = new Uint8ClampedArray(processedFrameData);
+	if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {
+		lastRawFrameData = new Uint8ClampedArray(expectedLength);
+	}
+	lastRawFrameData.set(processedFrameData);
 	lastRawFrameWidth = width;
 	lastRawFrameHeight = height;
 

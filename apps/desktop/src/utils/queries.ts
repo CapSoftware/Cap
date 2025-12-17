@@ -76,6 +76,7 @@ export const listDisplaysWithThumbnails = queryOptions({
 const getCurrentRecording = queryOptions({
 	queryKey: ["currentRecording"] as const,
 	queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
+	staleTime: 0,
 });
 
 export const listRecordings = queryOptions({

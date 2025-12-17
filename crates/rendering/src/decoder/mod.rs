@@ -11,9 +11,14 @@ use tracing::debug;
 mod avassetreader;
 mod ffmpeg;
 mod frame_converter;
+#[cfg(target_os = "windows")]
+mod media_foundation;
 
 #[cfg(target_os = "macos")]
 use cidre::{arc::R, cv};
+
+#[cfg(target_os = "windows")]
+use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
 
 #[cfg(target_os = "macos")]
 pub struct SendableImageBuf(R<cv::ImageBuf>);
@@ -34,6 +39,70 @@ impl SendableImageBuf {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub struct SendableD3D11Texture {
+    texture: ID3D11Texture2D,
+    shared_handle: Option<HANDLE>,
+    y_handle: Option<HANDLE>,
+    uv_handle: Option<HANDLE>,
+}
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for SendableD3D11Texture {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for SendableD3D11Texture {}
+
+#[cfg(target_os = "windows")]
+impl SendableD3D11Texture {
+    pub fn new(texture: ID3D11Texture2D) -> Self {
+        Self {
+            texture,
+            shared_handle: None,
+            y_handle: None,
+            uv_handle: None,
+        }
+    }
+
+    pub fn new_with_handle(texture: ID3D11Texture2D, shared_handle: Option<HANDLE>) -> Self {
+        Self {
+            texture,
+            shared_handle,
+            y_handle: None,
+            uv_handle: None,
+        }
+    }
+
+    pub fn new_with_yuv_handles(
+        texture: ID3D11Texture2D,
+        shared_handle: Option<HANDLE>,
+        y_handle: Option<HANDLE>,
+        uv_handle: Option<HANDLE>,
+    ) -> Self {
+        Self {
+            texture,
+            shared_handle,
+            y_handle,
+            uv_handle,
+        }
+    }
+
+    pub fn inner(&self) -> &ID3D11Texture2D {
+        &self.texture
+    }
+
+    pub fn shared_handle(&self) -> Option<HANDLE> {
+        self.shared_handle
+    }
+
+    pub fn y_handle(&self) -> Option<HANDLE> {
+        self.y_handle
+    }
+
+    pub fn uv_handle(&self) -> Option<HANDLE> {
+        self.uv_handle
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelFormat {
     Rgba,
@@ -51,6 +120,8 @@ pub struct DecodedFrame {
     uv_stride: u32,
     #[cfg(target_os = "macos")]
     iosurface_backing: Option<Arc<SendableImageBuf>>,
+    #[cfg(target_os = "windows")]
+    d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
 }
 
 impl fmt::Debug for DecodedFrame {
@@ -77,6 +148,8 @@ impl DecodedFrame {
             uv_stride: 0,
             #[cfg(target_os = "macos")]
             iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
         }
     }
 
@@ -90,6 +163,8 @@ impl DecodedFrame {
             uv_stride,
             #[cfg(target_os = "macos")]
             iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
         }
     }
 
@@ -109,6 +184,8 @@ impl DecodedFrame {
             uv_stride,
             #[cfg(target_os = "macos")]
             iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
         }
     }
 
@@ -135,6 +212,91 @@ impl DecodedFrame {
     #[cfg(target_os = "macos")]
     pub fn iosurface_backing(&self) -> Option<&cv::ImageBuf> {
         self.iosurface_backing.as_ref().map(|b| b.inner())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn new_nv12_with_d3d11_texture(width: u32, height: u32, texture: ID3D11Texture2D) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride: width,
+            uv_stride: width,
+            d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn new_nv12_with_d3d11_texture_and_handle(
+        width: u32,
+        height: u32,
+        texture: ID3D11Texture2D,
+        shared_handle: Option<HANDLE>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride: width,
+            uv_stride: width,
+            d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_handle(
+                texture,
+                shared_handle,
+            ))),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn new_nv12_with_d3d11_texture_and_yuv_handles(
+        width: u32,
+        height: u32,
+        texture: ID3D11Texture2D,
+        shared_handle: Option<HANDLE>,
+        y_handle: Option<HANDLE>,
+        uv_handle: Option<HANDLE>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride: width,
+            uv_stride: width,
+            d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new_with_yuv_handles(
+                texture,
+                shared_handle,
+                y_handle,
+                uv_handle,
+            ))),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn d3d11_texture_backing(&self) -> Option<&ID3D11Texture2D> {
+        self.d3d11_texture_backing.as_ref().map(|b| b.inner())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn d3d11_shared_handle(&self) -> Option<HANDLE> {
+        self.d3d11_texture_backing
+            .as_ref()
+            .and_then(|b| b.shared_handle())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn d3d11_y_handle(&self) -> Option<HANDLE> {
+        self.d3d11_texture_backing
+            .as_ref()
+            .and_then(|b| b.y_handle())
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn d3d11_uv_handle(&self) -> Option<HANDLE> {
+        self.d3d11_texture_backing
+            .as_ref()
+            .and_then(|b| b.uv_handle())
     }
 
     pub fn data(&self) -> &[u8] {
@@ -276,10 +438,44 @@ pub async fn spawn_decoder(
 
     let path_display = path.display().to_string();
 
-    if cfg!(target_os = "macos") {
-        #[cfg(target_os = "macos")]
+    #[cfg(target_os = "macos")]
+    {
         avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
-    } else {
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match media_foundation::MFDecoder::spawn(name, path.clone(), fps, rx, ready_tx) {
+            Ok(()) => {
+                debug!("Using MediaFoundation decoder for '{name}'");
+            }
+            Err(mf_err) => {
+                debug!(
+                    "MediaFoundation decoder failed for '{name}': {mf_err}, falling back to FFmpeg"
+                );
+                let (ready_tx, ready_rx_new) = oneshot::channel::<Result<(), String>>();
+                let (tx, rx) = mpsc::channel();
+                let handle = AsyncVideoDecoderHandle { sender: tx, offset };
+
+                ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
+                    .map_err(|e| format!("'{name}' decoder / {e}"))?;
+
+                return match tokio::time::timeout(std::time::Duration::from_secs(30), ready_rx_new)
+                    .await
+                {
+                    Ok(result) => result
+                        .map_err(|e| format!("'{name}' decoder channel closed: {e}"))?
+                        .map(|()| handle),
+                    Err(_) => Err(format!(
+                        "'{name}' decoder timed out after 30s initializing: {path_display}"
+                    )),
+                };
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
         ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx, ready_tx)
             .map_err(|e| format!("'{name}' decoder / {e}"))?;
     }

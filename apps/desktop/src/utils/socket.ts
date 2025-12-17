@@ -25,6 +25,7 @@ export type CanvasControls = {
 	initCanvas: (canvas: OffscreenCanvas) => void;
 	resizeCanvas: (width: number, height: number) => void;
 	hasRenderedFrame: () => boolean;
+	initDirectCanvas: (canvas: HTMLCanvasElement) => void;
 };
 
 interface ReadyMessage {
@@ -107,6 +108,9 @@ export function createImageDataWS(
 	const [hasRenderedFrame, setHasRenderedFrame] = createSignal(false);
 	let isCleanedUp = false;
 
+	let directCanvas: HTMLCanvasElement | null = null;
+	let directCtx: CanvasRenderingContext2D | null = null;
+
 	function cleanup() {
 		if (isCleanedUp) return;
 		isCleanedUp = true;
@@ -134,6 +138,10 @@ export function createImageDataWS(
 			worker.postMessage({ type: "resize", width, height });
 		},
 		hasRenderedFrame,
+		initDirectCanvas: (canvas: HTMLCanvasElement) => {
+			directCanvas = canvas;
+			directCtx = canvas.getContext("2d", { alpha: false });
+		},
 	};
 
 	worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
@@ -216,6 +224,54 @@ export function createImageDataWS(
 	ws.binaryType = "arraybuffer";
 	ws.onmessage = (event) => {
 		const buffer = event.data as ArrayBuffer;
+
+		if (directCanvas && directCtx) {
+			const data = new Uint8Array(buffer);
+			if (data.length >= 12) {
+				const metadataOffset = data.length - 12;
+				const meta = new DataView(buffer, metadataOffset, 12);
+				const strideBytes = meta.getUint32(0, true);
+				const height = meta.getUint32(4, true);
+				const width = meta.getUint32(8, true);
+
+				if (width > 0 && height > 0) {
+					const expectedRowBytes = width * 4;
+					let frameData: Uint8ClampedArray;
+
+					if (strideBytes === expectedRowBytes) {
+						frameData = new Uint8ClampedArray(
+							buffer,
+							0,
+							expectedRowBytes * height,
+						);
+					} else {
+						frameData = new Uint8ClampedArray(expectedRowBytes * height);
+						for (let row = 0; row < height; row++) {
+							const srcStart = row * strideBytes;
+							const destStart = row * expectedRowBytes;
+							frameData.set(
+								new Uint8ClampedArray(buffer, srcStart, expectedRowBytes),
+								destStart,
+							);
+						}
+					}
+
+					if (directCanvas.width !== width || directCanvas.height !== height) {
+						directCanvas.width = width;
+						directCanvas.height = height;
+					}
+
+					const imageData = new ImageData(frameData, width, height);
+					directCtx.putImageData(imageData, 0, 0);
+
+					if (!hasRenderedFrame()) {
+						setHasRenderedFrame(true);
+					}
+					onmessage({ width, height });
+				}
+			}
+			return;
+		}
 
 		if (isProcessing) {
 			nextFrame = buffer;

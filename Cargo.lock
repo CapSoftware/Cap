@@ -1606,6 +1606,7 @@ dependencies = [
  "wgpu",
  "wgpu-core",
  "wgpu-hal",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1664,6 +1665,7 @@ dependencies = [
  "ffmpeg-next",
  "tokio",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 

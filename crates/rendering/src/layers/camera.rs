@@ -213,7 +213,7 @@ impl CameraLayer {
         {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..4, 0..1);
+            pass.draw(0..3, 0..1);
         }
     }
 }
