@@ -12,6 +12,7 @@ import {
 	batch,
 	createEffect,
 	createResource,
+	createRoot,
 	createSignal,
 	on,
 	onCleanup,
@@ -39,6 +40,10 @@ import {
 	type TimelineConfiguration,
 	type XY,
 } from "~/utils/tauri";
+import {
+	cleanup as cleanupCropVideoPreloader,
+	preloadCropVideoMetadata,
+} from "./cropVideoPreloader";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
@@ -747,10 +752,21 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 		const [canvasControls, setCanvasControls] =
 			createSignal<CanvasControls | null>(null);
 
+		let disposeWorkerReadyEffect: (() => void) | undefined;
+
+		onCleanup(() => {
+			disposeWorkerReadyEffect?.();
+			cleanupCropVideoPreloader();
+		});
+
 		const [editorInstance] = createResource(async () => {
 			console.log("[Editor] Creating editor instance...");
 			const instance = await commands.createEditorInstance();
 			console.log("[Editor] Editor instance created, setting up WebSocket");
+
+			preloadCropVideoMetadata(
+				`${instance.path}/content/segments/segment-0/display.mp4`,
+			);
 
 			const requestFrame = () => {
 				events.renderFrameEvent.emit({
@@ -768,8 +784,11 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
 			setCanvasControls(controls);
 
-			createEffect(() => {
-				setIsWorkerReady(workerReady());
+			disposeWorkerReadyEffect = createRoot((dispose) => {
+				createEffect(() => {
+					setIsWorkerReady(workerReady());
+				});
+				return dispose;
 			});
 
 			ws.addEventListener("open", () => {

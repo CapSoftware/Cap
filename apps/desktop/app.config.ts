@@ -37,5 +37,21 @@ export default defineConfig({
 		define: {
 			"import.meta.vitest": "undefined",
 		},
+		optimizeDeps: {
+			include: [
+				"@tauri-apps/plugin-os",
+				"@tanstack/solid-query",
+				"@tauri-apps/api/webviewWindow",
+				"@tauri-apps/plugin-dialog",
+				"@tauri-apps/plugin-store",
+				"posthog-js",
+				"uuid",
+				"@tauri-apps/plugin-clipboard-manager",
+				"@tauri-apps/api/window",
+				"@tauri-apps/api/core",
+				"@tauri-apps/api/event",
+				"cva",
+			],
+		},
 	}),
 });

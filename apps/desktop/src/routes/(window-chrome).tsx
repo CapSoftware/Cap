@@ -13,12 +13,6 @@ import {
 	WindowChromeContext,
 } from "./(window-chrome)/Context";
 
-export const route = {
-	info: {
-		AUTO_SHOW_WINDOW: false,
-	},
-};
-
 export default function (props: RouteSectionProps) {
 	let unlistenResize: UnlistenFn | undefined;
 
