@@ -4,7 +4,10 @@ use parking_lot::Mutex;
 use std::{
     mem::ManuallyDrop,
     ptr,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 use windows::{
     Win32::{
@@ -25,7 +28,7 @@ use windows::{
             },
             Dxgi::{
                 Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
-                IDXGIAdapter, IDXGIDevice,
+                CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory1,
             },
         },
     },
@@ -77,6 +80,53 @@ impl GpuInfo {
             GpuVendor::Microsoft => "Microsoft",
             GpuVendor::Unknown(_) => "Unknown",
         }
+    }
+}
+
+static DETECTED_GPU: OnceLock<Option<GpuInfo>> = OnceLock::new();
+
+pub fn detect_primary_gpu() -> Option<&'static GpuInfo> {
+    DETECTED_GPU
+        .get_or_init(|| {
+            let result = detect_primary_gpu_inner();
+            if let Some(ref info) = result {
+                tracing::debug!(
+                    "Detected primary GPU: {} (Vendor: {}, VendorID: 0x{:04X}, VRAM: {} MB)",
+                    info.description,
+                    info.vendor_name(),
+                    info.vendor_id,
+                    info.dedicated_video_memory / (1024 * 1024)
+                );
+            } else {
+                tracing::debug!("No GPU detected via DXGI, using default encoder order");
+            }
+            result
+        })
+        .as_ref()
+}
+
+fn detect_primary_gpu_inner() -> Option<GpuInfo> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let adapter: IDXGIAdapter = factory.EnumAdapters(0).ok()?;
+        let desc = adapter.GetDesc().ok()?;
+
+        let description = String::from_utf16_lossy(
+            &desc
+                .Description
+                .iter()
+                .take_while(|&&c| c != 0)
+                .copied()
+                .collect::<Vec<_>>(),
+        );
+
+        Some(GpuInfo {
+            vendor: GpuVendor::from_id(desc.VendorId),
+            vendor_id: desc.VendorId,
+            device_id: desc.DeviceId,
+            description,
+            dedicated_video_memory: desc.DedicatedVideoMemory as u64,
+        })
     }
 }
 

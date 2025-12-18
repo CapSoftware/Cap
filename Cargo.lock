@@ -1328,6 +1328,7 @@ dependencies = [
 name = "cap-enc-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
  "serde",

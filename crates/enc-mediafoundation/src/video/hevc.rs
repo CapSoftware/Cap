@@ -29,7 +29,7 @@ use windows::{
             MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
             MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
             MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY,
-            MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+            MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
         },
     },
     core::{Error, Interface},
@@ -37,17 +37,7 @@ use windows::{
 
 const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
 
-pub struct VideoEncoderOutputSample {
-    sample: IMFSample,
-}
-
-impl VideoEncoderOutputSample {
-    pub fn sample(&self) -> &IMFSample {
-        &self.sample
-    }
-}
-
-pub struct H264Encoder {
+pub struct HevcEncoder {
     _d3d_device: ID3D11Device,
     _media_device_manager: IMFDXGIDeviceManager,
     _device_manager_reset_token: u32,
@@ -63,7 +53,7 @@ pub struct H264Encoder {
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum NewVideoEncoderError {
+pub enum NewHevcEncoderError {
     #[error("NoVideoEncoderDevice")]
     NoVideoEncoderDevice,
     #[error("EncoderTransform: {0}")]
@@ -82,25 +72,9 @@ pub enum NewVideoEncoderError {
     InputType(windows::core::Error),
 }
 
-#[derive(Clone, Debug, thiserror::Error)]
-pub enum HandleNeedsInputError {
-    #[error("ProcessTexture: {0}")]
-    ProcessTexture(windows::core::Error),
-    #[error("CreateSurfaceBuffer: {0}")]
-    CreateSurfaceBuffer(windows::core::Error),
-    #[error("CreateSample: {0}")]
-    CreateSample(windows::core::Error),
-    #[error("AddBuffer: {0}")]
-    AddBuffer(windows::core::Error),
-    #[error("SetSampleTime: {0}")]
-    SetSampleTime(windows::core::Error),
-    #[error("ProcessInput: {0}")]
-    ProcessInput(windows::core::Error),
-}
+unsafe impl Send for HevcEncoder {}
 
-unsafe impl Send for H264Encoder {}
-
-impl H264Encoder {
+impl HevcEncoder {
     #[allow(clippy::too_many_arguments)]
     fn new_with_scaled_output_with_flags(
         d3d_device: &ID3D11Device,
@@ -111,7 +85,7 @@ impl H264Encoder {
         bitrate_multipler: f32,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
-    ) -> Result<Self, NewVideoEncoderError> {
+    ) -> Result<Self, NewHevcEncoderError> {
         let bitrate = calculate_bitrate(
             output_resolution.Width as u32,
             output_resolution.Height as u32,
@@ -120,13 +94,13 @@ impl H264Encoder {
         );
 
         let transform =
-            EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
-                .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
+            EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_HEVC, flags)
+                .map_err(|_| NewHevcEncoderError::NoVideoEncoderDevice)?
                 .first()
                 .cloned()
-                .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
+                .ok_or(NewHevcEncoderError::NoVideoEncoderDevice)?
                 .create_transform()
-                .map_err(NewVideoEncoderError::EncoderTransform)?;
+                .map_err(NewHevcEncoderError::EncoderTransform)?;
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
@@ -136,7 +110,7 @@ impl H264Encoder {
             output_resolution,
             frame_rate,
         )
-        .map_err(NewVideoEncoderError::VideoProcessor)?;
+        .map_err(NewHevcEncoderError::VideoProcessor)?;
 
         let mut device_manager_reset_token: u32 = 0;
         let media_device_manager = {
@@ -146,34 +120,34 @@ impl H264Encoder {
                     &mut device_manager_reset_token,
                     &mut media_device_manager,
                 )
-                .map_err(NewVideoEncoderError::DeviceManager)?
+                .map_err(NewHevcEncoderError::DeviceManager)?
             };
             media_device_manager.expect("Device manager unexpectedly None")
         };
         unsafe {
             media_device_manager
                 .ResetDevice(d3d_device, device_manager_reset_token)
-                .map_err(NewVideoEncoderError::DeviceManager)?
+                .map_err(NewHevcEncoderError::DeviceManager)?
         };
 
         let event_generator: IMFMediaEventGenerator = transform
             .cast()
-            .map_err(NewVideoEncoderError::EventGenerator)?;
+            .map_err(NewHevcEncoderError::EventGenerator)?;
         let attributes = unsafe {
             transform
                 .GetAttributes()
-                .map_err(NewVideoEncoderError::EventGenerator)?
+                .map_err(NewHevcEncoderError::EventGenerator)?
         };
         unsafe {
             attributes
                 .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
-                .map_err(NewVideoEncoderError::EventGenerator)?;
+                .map_err(NewHevcEncoderError::EventGenerator)?;
             attributes
                 .SetUINT32(
                     &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
                     enable_hardware_transforms as u32,
                 )
-                .map_err(NewVideoEncoderError::EventGenerator)?;
+                .map_err(NewHevcEncoderError::EventGenerator)?;
         };
 
         let mut number_of_input_streams = 0;
@@ -181,7 +155,7 @@ impl H264Encoder {
         unsafe {
             transform
                 .GetStreamCount(&mut number_of_input_streams, &mut number_of_output_streams)
-                .map_err(NewVideoEncoderError::EventGenerator)?
+                .map_err(NewHevcEncoderError::EventGenerator)?
         };
         let (input_stream_ids, output_stream_ids) = {
             let mut input_stream_ids = vec![0u32; number_of_input_streams as usize];
@@ -199,7 +173,7 @@ impl H264Encoder {
                             output_stream_ids[i as usize] = i;
                         }
                     } else {
-                        return Err(NewVideoEncoderError::ConfigureStreams(error));
+                        return Err(NewHevcEncoderError::ConfigureStreams(error));
                     }
                 }
             }
@@ -215,14 +189,14 @@ impl H264Encoder {
                     MFT_MESSAGE_SET_D3D_MANAGER,
                     std::mem::transmute::<IMFDXGIDeviceManager, usize>(temp),
                 )
-                .map_err(NewVideoEncoderError::EncoderTransform)?;
+                .map_err(NewHevcEncoderError::EncoderTransform)?;
         };
 
         let output_type = (|| unsafe {
             let output_type = MFCreateMediaType()?;
             let attributes: IMFAttributes = output_type.cast()?;
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+            output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_HEVC)?;
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
             MFSetAttributeSize(
                 &attributes,
@@ -237,7 +211,7 @@ impl H264Encoder {
             transform.SetOutputType(output_stream_id, &output_type, 0)?;
             Ok(output_type)
         })()
-        .map_err(NewVideoEncoderError::OutputType)?;
+        .map_err(NewHevcEncoderError::OutputType)?;
 
         let input_type: Option<IMFMediaType> = (|| unsafe {
             let mut count = 0;
@@ -275,12 +249,12 @@ impl H264Encoder {
                 break Ok(Some(input_type));
             }
         })()
-        .map_err(NewVideoEncoderError::InputType)?;
+        .map_err(NewHevcEncoderError::InputType)?;
         if let Some(input_type) = input_type {
             unsafe { transform.SetInputType(input_stream_id, &input_type, 0) }
-                .map_err(NewVideoEncoderError::InputType)?;
+                .map_err(NewHevcEncoderError::InputType)?;
         } else {
-            return Err(NewVideoEncoderError::InputType(Error::new(
+            return Err(NewHevcEncoderError::InputType(Error::new(
                 MF_E_TRANSFORM_TYPE_NOT_SET,
                 "No suitable input type found! Try a different set of encoding settings.",
             )));
@@ -310,7 +284,7 @@ impl H264Encoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
-    ) -> Result<Self, NewVideoEncoderError> {
+    ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
             format,
@@ -330,7 +304,7 @@ impl H264Encoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
-    ) -> Result<Self, NewVideoEncoderError> {
+    ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
             format,
@@ -349,7 +323,7 @@ impl H264Encoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
-    ) -> Result<Self, NewVideoEncoderError> {
+    ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output(
             d3d_device,
             format,
@@ -366,7 +340,7 @@ impl H264Encoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
-    ) -> Result<Self, NewVideoEncoderError> {
+    ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_software(
             d3d_device,
             format,
@@ -435,15 +409,10 @@ impl H264Encoder {
                             ..Default::default()
                         };
 
-                        // ProcessOutput may succeed but not populate pSample in some edge cases
-                        // (e.g., hardware encoder transient failures, specific MFT implementations).
-                        // This is a known contract violation by certain Media Foundation Transforms.
-                        // We handle this gracefully by skipping the frame instead of panicking.
                         let mut output_buffers = [output_buffer];
                         self.transform
                             .ProcessOutput(0, &mut output_buffers, &mut status)?;
 
-                        // Use the sample directly without cloning to prevent memory leaks
                         if let Some(sample) = output_buffers[0].pSample.take() {
                             consecutive_empty_samples = 0;
                             on_sample(sample)?;
@@ -477,5 +446,5 @@ impl H264Encoder {
 
 fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
     let frame_rate_factor = (fps as f32 - 30.0).max(0.0) / 2.0 + 30.0;
-    (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
+    (width as f32 * height as f32 * frame_rate_factor * multiplier * 0.6) as u32
 }

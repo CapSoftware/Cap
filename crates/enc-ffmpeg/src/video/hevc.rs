@@ -19,23 +19,23 @@ fn is_420(format: ffmpeg::format::Pixel) -> bool {
         .unwrap_or(false)
 }
 
-pub struct H264EncoderBuilder {
+pub struct HevcEncoderBuilder {
     bpp: f32,
     input_config: VideoInfo,
-    preset: H264Preset,
+    preset: HevcPreset,
     output_size: Option<(u32, u32)>,
     external_conversion: bool,
 }
 
 #[derive(Clone, Copy)]
-pub enum H264Preset {
+pub enum HevcPreset {
     Slow,
     Medium,
     Ultrafast,
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum H264EncoderError {
+pub enum HevcEncoderError {
     #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Codec not found")]
@@ -46,20 +46,20 @@ pub enum H264EncoderError {
     InvalidOutputDimensions { width: u32, height: u32 },
 }
 
-impl H264EncoderBuilder {
-    pub const QUALITY_BPP: f32 = 0.3;
+impl HevcEncoderBuilder {
+    pub const QUALITY_BPP: f32 = 0.2;
 
     pub fn new(input_config: VideoInfo) -> Self {
         Self {
             input_config,
             bpp: Self::QUALITY_BPP,
-            preset: H264Preset::Ultrafast,
+            preset: HevcPreset::Ultrafast,
             output_size: None,
             external_conversion: false,
         }
     }
 
-    pub fn with_preset(mut self, preset: H264Preset) -> Self {
+    pub fn with_preset(mut self, preset: HevcPreset) -> Self {
         self.preset = preset;
         self
     }
@@ -69,9 +69,9 @@ impl H264EncoderBuilder {
         self
     }
 
-    pub fn with_output_size(mut self, width: u32, height: u32) -> Result<Self, H264EncoderError> {
+    pub fn with_output_size(mut self, width: u32, height: u32) -> Result<Self, HevcEncoderError> {
         if width == 0 || height == 0 {
-            return Err(H264EncoderError::InvalidOutputDimensions { width, height });
+            return Err(HevcEncoderError::InvalidOutputDimensions { width, height });
         }
 
         self.output_size = Some((width, height));
@@ -86,14 +86,14 @@ impl H264EncoderBuilder {
     pub fn build(
         self,
         output: &mut format::context::Output,
-    ) -> Result<H264Encoder, H264EncoderError> {
+    ) -> Result<HevcEncoder, HevcEncoderError> {
         let input_config = self.input_config;
         let (output_width, output_height) = self
             .output_size
             .unwrap_or((input_config.width, input_config.height));
 
         if output_width == 0 || output_height == 0 {
-            return Err(H264EncoderError::InvalidOutputDimensions {
+            return Err(HevcEncoderError::InvalidOutputDimensions {
                 width: output_width,
                 height: output_height,
             });
@@ -101,7 +101,7 @@ impl H264EncoderBuilder {
 
         let candidates = get_codec_and_options(&input_config, self.preset);
         if candidates.is_empty() {
-            return Err(H264EncoderError::CodecNotFound);
+            return Err(HevcEncoderError::CodecNotFound);
         }
 
         let mut last_error = None;
@@ -120,17 +120,17 @@ impl H264EncoderBuilder {
                 self.external_conversion,
             ) {
                 Ok(encoder) => {
-                    debug!("Using encoder {}", codec_name);
+                    debug!("Using HEVC encoder {}", codec_name);
                     return Ok(encoder);
                 }
                 Err(err) => {
-                    debug!("Encoder {} init failed: {:?}", codec_name, err);
+                    debug!("HEVC encoder {} init failed: {:?}", codec_name, err);
                     last_error = Some(err);
                 }
             }
         }
 
-        Err(last_error.unwrap_or(H264EncoderError::CodecNotFound))
+        Err(last_error.unwrap_or(HevcEncoderError::CodecNotFound))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -143,7 +143,7 @@ impl H264EncoderBuilder {
         output_height: u32,
         bpp: f32,
         external_conversion: bool,
-    ) -> Result<H264Encoder, H264EncoderError> {
+    ) -> Result<HevcEncoder, HevcEncoderError> {
         let encoder_supports_input_format = codec
             .video()
             .ok()
@@ -159,7 +159,7 @@ impl H264EncoderBuilder {
             let format = ffmpeg::format::Pixel::NV12;
             if !external_conversion {
                 debug!(
-                    "Converting from {:?} to {:?} for H264 encoding",
+                    "Converting from {:?} to {:?} for HEVC encoding",
                     input_config.pixel_format, format
                 );
             }
@@ -169,7 +169,7 @@ impl H264EncoderBuilder {
         if is_420(output_format)
             && (!output_width.is_multiple_of(2) || !output_height.is_multiple_of(2))
         {
-            return Err(H264EncoderError::InvalidOutputDimensions {
+            return Err(HevcEncoderError::InvalidOutputDimensions {
                 width: output_width,
                 height: output_height,
             });
@@ -180,7 +180,7 @@ impl H264EncoderBuilder {
 
         if needs_scaling && !external_conversion {
             debug!(
-                "Scaling video frames for H264 encoding from {}x{} to {}x{}",
+                "Scaling video frames for HEVC encoding from {}x{} to {}x{}",
                 input_config.width, input_config.height, output_width, output_height
             );
         }
@@ -214,12 +214,12 @@ impl H264EncoderBuilder {
                             "Failed to create converter from {:?} to {:?}: {:?}",
                             input_config.pixel_format, output_format, e
                         );
-                        return Err(H264EncoderError::PixFmtNotSupported(
+                        return Err(HevcEncoderError::PixFmtNotSupported(
                             input_config.pixel_format,
                         ));
                     }
 
-                    return Err(H264EncoderError::FFmpeg(e));
+                    return Err(HevcEncoderError::FFmpeg(e));
                 }
             }
         } else {
@@ -254,11 +254,11 @@ impl H264EncoderBuilder {
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
-        output_stream.set_time_base((1, H264Encoder::TIME_BASE));
+        output_stream.set_time_base((1, HevcEncoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
 
-        Ok(H264Encoder {
+        Ok(HevcEncoder {
             base: EncoderBase::new(stream_index),
             encoder,
             converter,
@@ -272,7 +272,7 @@ impl H264EncoderBuilder {
     }
 }
 
-pub struct H264Encoder {
+pub struct HevcEncoder {
     base: EncoderBase,
     encoder: encoder::Video,
     converter: Option<ffmpeg::software::scaling::Context>,
@@ -302,11 +302,11 @@ pub enum QueueFrameError {
     Encode(ffmpeg::Error),
 }
 
-impl H264Encoder {
+impl HevcEncoder {
     const TIME_BASE: i32 = 90000;
 
-    pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
-        H264EncoderBuilder::new(input_config)
+    pub fn builder(input_config: VideoInfo) -> HevcEncoderBuilder {
+        HevcEncoderBuilder::new(input_config)
     }
 
     pub fn conversion_requirements(&self) -> ConversionRequirements {
@@ -386,12 +386,12 @@ fn get_encoder_priority() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
         &[
-            "h264_videotoolbox",
-            "h264_qsv",
-            "h264_nvenc",
-            "h264_amf",
-            "h264_mf",
-            "libx264",
+            "hevc_videotoolbox",
+            "hevc_qsv",
+            "hevc_nvenc",
+            "hevc_amf",
+            "hevc_mf",
+            "libx265",
         ]
     }
 
@@ -400,13 +400,13 @@ fn get_encoder_priority() -> &'static [&'static str] {
         use cap_frame_converter::{GpuVendor, detect_primary_gpu};
 
         static ENCODER_PRIORITY_NVIDIA: &[&str] =
-            &["h264_nvenc", "h264_mf", "h264_qsv", "h264_amf", "libx264"];
+            &["hevc_nvenc", "hevc_mf", "hevc_qsv", "hevc_amf", "libx265"];
         static ENCODER_PRIORITY_AMD: &[&str] =
-            &["h264_amf", "h264_mf", "h264_nvenc", "h264_qsv", "libx264"];
+            &["hevc_amf", "hevc_mf", "hevc_nvenc", "hevc_qsv", "libx265"];
         static ENCODER_PRIORITY_INTEL: &[&str] =
-            &["h264_qsv", "h264_mf", "h264_nvenc", "h264_amf", "libx264"];
+            &["hevc_qsv", "hevc_mf", "hevc_nvenc", "hevc_amf", "libx265"];
         static ENCODER_PRIORITY_DEFAULT: &[&str] =
-            &["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libx264"];
+            &["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf", "libx265"];
 
         match detect_primary_gpu().map(|info| info.vendor) {
             Some(GpuVendor::Nvidia) => ENCODER_PRIORITY_NVIDIA,
@@ -418,13 +418,13 @@ fn get_encoder_priority() -> &'static [&'static str] {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        &["libx264"]
+        &["libx265"]
     }
 }
 
 fn get_codec_and_options(
     config: &VideoInfo,
-    preset: H264Preset,
+    preset: HevcPreset,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = 2;
     let denominator = config.frame_rate.denominator();
@@ -447,48 +447,47 @@ fn get_codec_and_options(
         let mut options = Dictionary::new();
 
         match *encoder_name {
-            "h264_videotoolbox" => {
+            "hevc_videotoolbox" => {
                 options.set("realtime", "true");
             }
-            "h264_nvenc" => {
+            "hevc_nvenc" => {
                 options.set("preset", "p4");
                 options.set("tune", "ll");
                 options.set("rc", "vbr");
                 options.set("spatial-aq", "1");
                 options.set("temporal-aq", "1");
+                options.set("tier", "main");
                 options.set("g", &keyframe_interval_str);
             }
-            "h264_qsv" => {
+            "hevc_qsv" => {
                 options.set("preset", "faster");
                 options.set("look_ahead", "1");
                 options.set("g", &keyframe_interval_str);
             }
-            "h264_amf" => {
+            "hevc_amf" => {
                 options.set("quality", "balanced");
                 options.set("rc", "vbr_latency");
                 options.set("g", &keyframe_interval_str);
             }
-            "h264_mf" => {
+            "hevc_mf" => {
                 options.set("hw_encoding", "true");
                 options.set("scenario", "4");
                 options.set("quality", "1");
                 options.set("g", &keyframe_interval_str);
             }
-            "libx264" => {
+            "libx265" => {
                 options.set(
                     "preset",
                     match preset {
-                        H264Preset::Slow => "slow",
-                        H264Preset::Medium => "medium",
-                        H264Preset::Ultrafast => "ultrafast",
+                        HevcPreset::Slow => "slow",
+                        HevcPreset::Medium => "medium",
+                        HevcPreset::Ultrafast => "ultrafast",
                     },
                 );
-                if let H264Preset::Ultrafast = preset {
+                if let HevcPreset::Ultrafast = preset {
                     options.set("tune", "zerolatency");
                 }
-                options.set("vsync", "1");
                 options.set("g", &keyframe_interval_str);
-                options.set("keyint_min", &keyframe_interval_str);
             }
             _ => {}
         }
@@ -500,7 +499,6 @@ fn get_codec_and_options(
 }
 
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {
-    // higher frame rates don't really need double the bitrate lets be real
     let frame_rate_multiplier = ((frame_rate as f64 - 30.0).max(0.0) * 0.6) + 30.0;
     let area = (width as f64) * (height as f64);
     let pixels_per_second = area * frame_rate_multiplier;
