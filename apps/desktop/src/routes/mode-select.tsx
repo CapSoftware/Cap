@@ -24,8 +24,8 @@ const ModeSelectWindow = () => {
 		try {
 			const currentSize = await window.innerSize();
 
-			if (currentSize.width !== 900 || currentSize.height !== 500) {
-				await window.setSize(new LogicalSize(900, 500));
+			if (currentSize.width !== 580 || currentSize.height !== 340) {
+				await window.setSize(new LogicalSize(580, 340));
 			}
 		} catch (error) {
 			console.error("Failed to set window size:", error);
@@ -39,21 +39,27 @@ const ModeSelectWindow = () => {
 	return (
 		<div
 			data-tauri-drag-region
-			class="flex relative justify-center items-center p-4 min-h-screen bg-gray-1"
+			class="flex flex-col relative justify-center items-center min-h-screen bg-gray-1"
 		>
 			{isWindows && (
 				<div class="absolute top-0 right-0 z-50 h-9">
 					<CaptionControlsWindows11 />
 				</div>
 			)}
-			<div
-				data-tauri-drag-region="none"
-				class="relative z-10 space-y-10 w-full max-w-5xl"
-			>
-				<h2 class="text-[24px] font-medium text-center text-gray-12">
-					Recording Modes
-				</h2>
-				<ModeSelect />
+
+			<div class="flex flex-col items-center w-full px-6 py-5">
+				<div class="mb-5 text-center">
+					<h2 class="text-xl font-semibold text-gray-12 mb-1">
+						Choose Recording Mode
+					</h2>
+					<p class="text-sm text-gray-11">
+						Select how you want to capture your screen
+					</p>
+				</div>
+
+				<div data-tauri-drag-region="none" class="w-full max-w-lg">
+					<ModeSelect />
+				</div>
 			</div>
 		</div>
 	);

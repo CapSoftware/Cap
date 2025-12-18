@@ -20,6 +20,7 @@ import {
 	createSignal,
 	For,
 	onCleanup,
+	onMount,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
@@ -60,6 +61,17 @@ const NO_WEBCAM = "No Webcam";
 const FAKE_WINDOW_BOUNDS_NAME = "recording-controls-interactive-area";
 
 export default function () {
+	console.log("[in-progress-recording] Wrapper rendering");
+
+	document.documentElement.setAttribute("data-transparent-window", "true");
+	document.body.style.background = "transparent";
+
+	return <InProgressRecordingInner />;
+}
+
+function InProgressRecordingInner() {
+	console.log("[in-progress-recording] Inner component rendering");
+
 	const [state, setState] = createSignal<State>(
 		window.COUNTDOWN === 0
 			? { variant: "initializing" }
@@ -75,7 +87,16 @@ export default function () {
 	const optionsQuery = createOptionsQuery();
 	const startedWithMicrophone = optionsQuery.rawOptions.micName != null;
 	const startedWithCameraInput = optionsQuery.rawOptions.cameraID != null;
-	const auth = authStore.createQuery();
+
+	const [authData, setAuthData] = createSignal<{
+		plan?: { upgraded?: boolean };
+	} | null>(null);
+	onMount(() => {
+		authStore
+			.get()
+			.then(setAuthData)
+			.catch(() => setAuthData(null));
+	});
 
 	const audioLevel = createAudioInputLevel();
 	const [disconnectedInputs, setDisconnectedInputs] =
@@ -498,7 +519,7 @@ export default function () {
 		return (
 			optionsQuery.rawOptions.mode === "instant" &&
 			// If the data is loaded and the user is not upgraded
-			auth.data?.plan?.upgraded === false
+			authData()?.plan?.upgraded === false
 		);
 	};
 

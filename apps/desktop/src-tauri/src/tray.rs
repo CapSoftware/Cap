@@ -1,8 +1,10 @@
 use crate::{
     NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
     RequestOpenRecordingPicker, RequestOpenSettings, recording,
-    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    windows::ShowCapWindow,
 };
+use cap_recording::RecordingMode;
 
 use cap_project::{RecordingMeta, RecordingMetaInner};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +41,9 @@ pub enum TrayItem {
     UploadLogs,
     Quit,
     PreviousItem(String),
+    ModeStudio,
+    ModeInstant,
+    ModeScreenshot,
 }
 
 impl From<TrayItem> for MenuId {
@@ -56,6 +61,9 @@ impl From<TrayItem> for MenuId {
             TrayItem::PreviousItem(id) => {
                 return format!("{PREVIOUS_ITEM_PREFIX}{id}").into();
             }
+            TrayItem::ModeStudio => "mode_studio",
+            TrayItem::ModeInstant => "mode_instant",
+            TrayItem::ModeScreenshot => "mode_screenshot",
         }
         .into()
     }
@@ -81,6 +89,9 @@ impl TryFrom<MenuId> for TrayItem {
             "open_settings" => Ok(TrayItem::OpenSettings),
             "upload_logs" => Ok(TrayItem::UploadLogs),
             "quit" => Ok(TrayItem::Quit),
+            "mode_studio" => Ok(TrayItem::ModeStudio),
+            "mode_instant" => Ok(TrayItem::ModeInstant),
+            "mode_screenshot" => Ok(TrayItem::ModeScreenshot),
             value => Err(format!("Invalid tray item id {value}")),
         }
     }
@@ -302,8 +313,47 @@ fn create_previous_submenu(
     Ok(submenu)
 }
 
+fn get_current_mode(app: &AppHandle) -> RecordingMode {
+    RecordingSettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|s| s.mode)
+        .unwrap_or_default()
+}
+
+fn create_mode_submenu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    let current_mode = get_current_mode(app);
+
+    let submenu = Submenu::with_id(app, "select_mode", "Select Mode", true)?;
+
+    let modes = [
+        (TrayItem::ModeStudio, RecordingMode::Studio, "Studio"),
+        (TrayItem::ModeInstant, RecordingMode::Instant, "Instant"),
+        (
+            TrayItem::ModeScreenshot,
+            RecordingMode::Screenshot,
+            "Screenshot",
+        ),
+    ];
+
+    for (tray_item, mode, label) in modes {
+        let is_selected = current_mode == mode;
+        let display_label = if is_selected {
+            format!("✓ {label}")
+        } else {
+            format!("   {label}")
+        };
+
+        let menu_item = MenuItem::with_id(app, tray_item, display_label, true, None::<&str>)?;
+        submenu.append(&menu_item)?;
+    }
+
+    Ok(submenu)
+}
+
 fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result<Menu<tauri::Wry>> {
     let previous_submenu = create_previous_submenu(app, cache)?;
+    let mode_submenu = create_mode_submenu(app)?;
 
     Menu::with_items(
         app,
@@ -331,6 +381,7 @@ fn build_tray_menu(app: &AppHandle, cache: &PreviousItemsCache) -> tauri::Result
             )?,
             &MenuItem::with_id(app, TrayItem::RecordArea, "Record Area", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
+            &mode_submenu,
             &previous_submenu,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
@@ -445,6 +496,38 @@ fn handle_previous_item_click(app: &AppHandle, path_str: &str) {
     }
 }
 
+pub fn get_mode_icon(mode: RecordingMode) -> &'static [u8] {
+    match mode {
+        RecordingMode::Studio => include_bytes!("../icons/tray-default-icon-studio.png"),
+        RecordingMode::Instant => include_bytes!("../icons/tray-default-icon-instant.png"),
+        RecordingMode::Screenshot => include_bytes!("../icons/tray-default-icon-screenshot.png"),
+    }
+}
+
+pub fn update_tray_icon_for_mode(app: &AppHandle, mode: RecordingMode) {
+    let Some(tray) = app.tray_by_id("tray") else {
+        return;
+    };
+
+    if let Ok(icon) = Image::from_bytes(get_mode_icon(mode)) {
+        let _ = tray.set_icon(Some(icon));
+    }
+}
+
+fn handle_mode_selection(
+    app: &AppHandle,
+    mode: RecordingMode,
+    cache: &Arc<Mutex<PreviousItemsCache>>,
+) {
+    if let Err(e) = RecordingSettingsStore::set_mode(app, mode) {
+        tracing::error!("Failed to set recording mode: {e}");
+        return;
+    }
+
+    update_tray_icon_for_mode(app, mode);
+    refresh_tray_menu(app, cache);
+}
+
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let items = load_all_previous_items(app, false);
     let cache = Arc::new(Mutex::new(PreviousItemsCache { items }));
@@ -456,14 +539,16 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let app = app.clone();
     let is_recording = Arc::new(AtomicBool::new(false));
 
+    let current_mode = get_current_mode(&app);
+    let initial_icon = Image::from_bytes(get_mode_icon(current_mode))?;
+
     let _ = TrayIconBuilder::with_id("tray")
-        .icon(Image::from_bytes(include_bytes!(
-            "../icons/tray-default-icon.png"
-        ))?)
+        .icon(initial_icon)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event({
             let app_handle = app.clone();
+            let cache = cache.clone();
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
@@ -533,6 +618,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 Ok(TrayItem::PreviousItem(path)) => {
                     handle_previous_item_click(app, &path);
+                }
+                Ok(TrayItem::ModeStudio) => {
+                    handle_mode_selection(app, RecordingMode::Studio, &cache);
+                }
+                Ok(TrayItem::ModeInstant) => {
+                    handle_mode_selection(app, RecordingMode::Instant, &cache);
+                }
+                Ok(TrayItem::ModeScreenshot) => {
+                    handle_mode_selection(app, RecordingMode::Screenshot, &cache);
                 }
                 _ => {}
             }
@@ -622,7 +716,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 return;
             };
 
-            if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-default-icon.png")) {
+            let current_mode = get_current_mode(&app_handle);
+            if let Ok(icon) = Image::from_bytes(get_mode_icon(current_mode)) {
                 let _ = tray.set_icon(Some(icon));
             }
         }

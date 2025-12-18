@@ -209,6 +209,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "alsa"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1104,6 +1110,7 @@ dependencies = [
  "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
+ "tracing",
  "windows 0.60.0",
  "windows-core 0.60.1",
  "workspace-hack",
@@ -1212,6 +1219,7 @@ dependencies = [
  "keyed_priority_queue",
  "lazy_static",
  "log",
+ "lz4_flex",
  "md5",
  "nix 0.29.0",
  "objc",
@@ -1290,6 +1298,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "futures",
+ "lru",
  "ringbuf",
  "sentry",
  "serde",
@@ -1307,6 +1316,8 @@ dependencies = [
  "cap-media-info",
  "cidre",
  "ffmpeg-next",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -1318,6 +1329,8 @@ version = "0.1.0"
 dependencies = [
  "cap-media-info",
  "ffmpeg-next",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -1420,6 +1433,7 @@ dependencies = [
 name = "cap-gpu-converters"
 version = "0.1.0"
 dependencies = [
+ "thiserror 1.0.69",
  "wgpu",
  "workspace-hack",
 ]
@@ -1571,12 +1585,16 @@ dependencies = [
  "clap",
  "ffmpeg-hw-device",
  "ffmpeg-next",
+ "foreign-types 0.5.0",
  "futures",
  "futures-intrusive",
  "glyphon",
  "image 0.25.8",
  "log",
+ "metal 0.31.0",
+ "objc2 0.6.2",
  "pretty_assertions",
+ "rayon",
  "reactive_graph",
  "resvg",
  "serde",
@@ -1587,6 +1605,9 @@ dependencies = [
  "tokio",
  "tracing",
  "wgpu",
+ "wgpu-core",
+ "wgpu-hal",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -1643,8 +1664,10 @@ dependencies = [
  "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
+ "num_cpus",
  "tokio",
  "tracing",
+ "windows 0.60.0",
  "workspace-hack",
 ]
 
@@ -3889,6 +3912,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash",
 ]
 
@@ -4945,12 +4970,24 @@ name = "lru"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
+dependencies = [
+ "hashbrown 0.15.5",
+]
 
 [[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
+
+[[package]]
+name = "lz4_flex"
+version = "0.11.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08ab2867e3eeeca90e844d1940eab391c9dc5228783db2ed999acbc0a9ed375a"
+dependencies = [
+ "twox-hash",
+]
 
 [[package]]
 name = "mac"
@@ -10229,6 +10266,12 @@ dependencies = [
  "thiserror 1.0.69",
  "utf-8",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 
 [[package]]
 name = "typeid"

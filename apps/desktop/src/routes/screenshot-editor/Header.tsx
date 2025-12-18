@@ -66,16 +66,16 @@ export function Header() {
 
 	const cropDialogHandler = () => {
 		const frame = latestFrame();
-		if (!frame?.data) return;
+		if (!frame?.bitmap) return;
 		setDialog({
 			open: true,
 			type: "crop",
-			originalSize: { x: frame.data.width, y: frame.data.height },
+			originalSize: { x: frame.width, y: frame.height },
 			currentCrop: project.background.crop,
 		});
 	};
 
-	const isCropDisabled = () => !latestFrame()?.data;
+	const isCropDisabled = () => !latestFrame()?.bitmap;
 
 	return (
 		<div

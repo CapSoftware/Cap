@@ -75,7 +75,10 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
     use objc::runtime::{Object, Sel};
     use std::ffi::c_void;
 
-    let ns_win = window.ns_window().expect("Failed to create window handle");
+    let Ok(ns_win) = window.ns_window() else {
+        tracing::warn!("Failed to get window handle for delegate setup");
+        return;
+    };
 
     // Do the initial positioning
     position_window_controls(UnsafeWindowHandle(ns_win), &controls_inset);
