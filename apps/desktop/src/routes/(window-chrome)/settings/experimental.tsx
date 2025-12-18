@@ -27,7 +27,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNewRecordingFlow: true,
 			autoZoomOnClicks: false,
 			custom_cursor_capture2: true,
-			crashRecoveryRecording: false,
+			crashRecoveryRecording: true,
 		},
 	);
 

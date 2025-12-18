@@ -124,7 +124,7 @@ pub struct GeneralSettingsStore {
     pub instant_mode_max_resolution: u32,
     #[serde(default)]
     pub default_project_name_template: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub crash_recovery_recording: bool,
 }
 
@@ -192,7 +192,7 @@ impl Default for GeneralSettingsStore {
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,
             default_project_name_template: None,
-            crash_recovery_recording: false,
+            crash_recovery_recording: true,
         }
     }
 }
