@@ -1,6 +1,8 @@
-// a whole bunch of credit to https://github.com/NiiightmareXD/windows-capture
-
 #![cfg(windows)]
+
+mod windows_version;
+
+pub use windows_version::WindowsVersion;
 
 use std::{
     sync::{
@@ -287,6 +289,23 @@ impl Capturer {
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
         d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
+        if let Some(version) = WindowsVersion::detect() {
+            tracing::debug!(
+                version = %version.display_name(),
+                meets_requirements = version.meets_minimum_requirements(),
+                "Initializing screen capture"
+            );
+
+            if !version.meets_minimum_requirements() {
+                tracing::error!(
+                    version = %version.display_name(),
+                    required = "Windows 10 version 1903 (build 18362)",
+                    "Windows version does not meet minimum requirements"
+                );
+                return Err(NewCapturerError::WindowsVersionTooOld);
+            }
+        }
+
         let api_present = ApiInformation::IsApiContractPresentByMajor(
             &HSTRING::from("Windows.Foundation.UniversalApiContract"),
             8,

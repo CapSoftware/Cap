@@ -29,6 +29,7 @@ windows = { workspace = true, features = [
     "Win32_System_Variant",
     "Storage_Search",
     "Storage_Streams",
+    "Win32_System_SystemInformation",
 ] }
 
 [dev-dependencies]
