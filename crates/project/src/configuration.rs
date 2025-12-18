@@ -788,7 +788,6 @@ pub struct CaptionSettings {
     pub background_opacity: u32,
     #[serde(default)]
     pub position: String,
-    pub bold: bool,
     pub italic: bool,
     #[serde(alias = "fontWeight", default = "CaptionSettings::default_font_weight")]
     pub font_weight: u32,
@@ -851,7 +850,6 @@ impl Default for CaptionSettings {
             background_color: "#000000".to_string(),
             background_opacity: 90,
             position: "bottom-center".to_string(),
-            bold: false,
             italic: false,
             font_weight: Self::default_font_weight(),
             outline: false,

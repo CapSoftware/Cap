@@ -7,6 +7,7 @@ import {
 	createSignal,
 	For,
 	on,
+	onCleanup,
 	onMount,
 } from "solid-js";
 import { produce } from "solid-js/store";
@@ -193,9 +194,18 @@ function TextSegmentOverlay(props: {
 	let hiddenMeasureRef: HTMLDivElement | undefined;
 	const [mounted, setMounted] = createSignal(false);
 	const [isResizing, setIsResizing] = createSignal(false);
+	let pendingResizeCleanup: (() => void) | null = null;
 
 	onMount(() => {
 		setMounted(true);
+	});
+
+	onCleanup(() => {
+		if (pendingResizeCleanup) {
+			pendingResizeCleanup();
+			pendingResizeCleanup = null;
+		}
+		setIsResizing(false);
 	});
 
 	const isDefaultSize = (size: { x: number; y: number }) =>
@@ -423,8 +433,13 @@ function TextSegmentOverlay(props: {
 				const onMouseUp = () => {
 					setIsResizing(false);
 					window.removeEventListener("mouseup", onMouseUp);
+					pendingResizeCleanup = null;
 				};
 				window.addEventListener("mouseup", onMouseUp);
+				pendingResizeCleanup = () => {
+					setIsResizing(false);
+					window.removeEventListener("mouseup", onMouseUp);
+				};
 			}
 		};
 	};

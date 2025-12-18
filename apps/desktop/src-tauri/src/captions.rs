@@ -1777,10 +1777,13 @@ pub async fn save_captions(
         "position".to_string(),
         serde_json::Value::String(settings.position.clone()),
     );
-    settings_obj.insert("bold".to_string(), serde_json::Value::Bool(settings.bold));
     settings_obj.insert(
         "italic".to_string(),
         serde_json::Value::Bool(settings.italic),
+    );
+    settings_obj.insert(
+        "fontWeight".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(settings.font_weight)),
     );
     settings_obj.insert(
         "outline".to_string(),
@@ -1914,10 +1917,6 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_str())
                         .unwrap_or("bottom")
                         .to_string();
-                    let bold = settings_obj
-                        .get("bold")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
                     let italic = settings_obj
                         .get("italic")
                         .and_then(|v| v.as_bool())
@@ -1978,7 +1977,6 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         background_color,
                         background_opacity,
                         position,
-                        bold,
                         italic,
                         font_weight,
                         outline,

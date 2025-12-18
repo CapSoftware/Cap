@@ -2677,7 +2677,9 @@ function TextSegmentConfig(props: {
 										{ label: "Medium", value: 500 },
 										{ label: "Bold", value: 700 },
 									].find((o) => o.value === weight);
-									return option ? option.label : "Normal";
+									if (option) return option.label;
+									if (weight != null) return `Custom (${weight})`;
+									return "Normal";
 								}}
 							</KSelect.Value>
 							<KSelect.Icon>

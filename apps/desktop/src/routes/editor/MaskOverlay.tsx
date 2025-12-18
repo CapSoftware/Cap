@@ -113,7 +113,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 						>
 							<MaskOverlayContent
 								size={props.size}
-								maskState={maskState()}
+								maskState={maskState}
 								updateSegment={updateSegment}
 								projectHistory={projectHistory}
 							/>
@@ -127,7 +127,7 @@ export function MaskOverlay(props: MaskOverlayProps) {
 
 function MaskOverlayContent(props: {
 	size: { width: number; height: number };
-	maskState: ReturnType<typeof evaluateMask>;
+	maskState: () => ReturnType<typeof evaluateMask>;
 	updateSegment: (fn: (segment: MaskSegment) => void) => void;
 	projectHistory: ReturnType<typeof useEditorContext>["projectHistory"];
 }) {
@@ -170,7 +170,7 @@ function MaskOverlayContent(props: {
 		};
 	}
 
-	const state = () => props.maskState;
+	const state = () => props.maskState();
 	const rect = () => {
 		const width = state().size.x * props.size.width;
 		const height = state().size.y * props.size.height;

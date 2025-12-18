@@ -24,7 +24,7 @@ export const defaultTextSegment = (
 	enabled: true,
 	content: "Text",
 	center: { x: 0.5, y: 0.5 },
-	size: { x: 0.01, y: 0.01 },
+	size: { x: 0.35, y: 0.2 },
 	fontFamily: "sans-serif",
 	fontSize: 48,
 	fontWeight: 700,
