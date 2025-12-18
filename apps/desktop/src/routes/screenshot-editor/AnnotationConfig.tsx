@@ -224,7 +224,7 @@ function ColorPickerButton(props: {
 				</div>
 			</Popover.Trigger>
 			<Popover.Portal>
-				<Popover.Content class="z-[200] w-[220px] overflow-hidden rounded-lg border border-gray-4 bg-gray-1 dark:bg-gray-2 shadow-lg animate-in fade-in zoom-in-95 p-2.5">
+				<Popover.Content class="z-200 w-[220px] overflow-hidden rounded-lg border border-gray-4 bg-gray-1 dark:bg-gray-2 shadow-lg animate-in fade-in zoom-in-95 p-2.5">
 					<div class="flex flex-col gap-2.5">
 						<RgbInput
 							value={rgbValue()}

@@ -126,8 +126,7 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 				}}
 			/>
 			<TextInput
-				// class="w-20 p-1.5 border text-gray-400 rounded-lg bg-gray-50"
-				class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
+				class="w-20 p-1.5 border border-gray-3 text-gray-12 rounded-lg bg-gray-2"
 				value={text()}
 				onFocus={() => {
 					prevColor = props.value;
@@ -216,7 +215,7 @@ export function CaptionsTab() {
 			if (downloadedModelNames.length > 0) {
 				const modelToPrewarm = downloadedModelNames[0];
 				const modelPath = await join(modelsPath, `${modelToPrewarm}.bin`);
-				commands.prewarmWhisperx(modelPath).catch(() => { });
+				commands.prewarmWhisperx(modelPath).catch(() => {});
 			}
 
 			const savedModel = localStorage.getItem("selectedTranscriptionModel");
