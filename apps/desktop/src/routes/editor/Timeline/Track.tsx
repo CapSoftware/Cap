@@ -113,16 +113,16 @@ export function SegmentHandle(
 	props: ComponentProps<"div"> & { position: "start" | "end" },
 ) {
 	const ctx = useSegmentContext();
-	const hidden = () => ctx.width() < 80;
+	const hidden = () => ctx.width() < 40;
 
 	return (
 		<div
 			{...props}
 			class={cx(
-				"w-3 cursor-col-resize transition-opacity h-full flex flex-row items-center",
+				"w-4 min-w-4 cursor-col-resize transition-opacity h-full flex flex-row items-center relative z-10",
 				props.position === "start"
-					? "left-0 justify-end"
-					: "right-0 justify-start",
+					? "left-0 justify-center -ml-1"
+					: "right-0 justify-center -mr-1",
 				hidden() ? "opacity-0" : "opacity-0 group-hover:opacity-100",
 				props.class,
 			)}

@@ -213,7 +213,7 @@ impl H264Encoder {
             transform
                 .ProcessMessage(
                     MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute::<_, usize>(temp),
+                    std::mem::transmute::<IMFDXGIDeviceManager, usize>(temp),
                 )
                 .map_err(NewVideoEncoderError::EncoderTransform)?;
         };

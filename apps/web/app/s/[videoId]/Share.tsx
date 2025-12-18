@@ -145,6 +145,7 @@ interface ShareProps {
 		summary?: string | null;
 		chapters?: { title: string; start: number }[] | null;
 		processing?: boolean;
+		generationSkipped?: boolean;
 	} | null;
 	aiGenerationEnabled: boolean;
 }
@@ -159,6 +160,7 @@ const useVideoStatus = (
 			summary?: string | null;
 			chapters?: { title: string; start: number }[] | null;
 			processing?: boolean;
+			generationSkipped?: boolean;
 		} | null;
 	},
 ) => {
@@ -178,6 +180,7 @@ const useVideoStatus = (
 						| "ERROR"
 						| null,
 					aiProcessing: initialData.aiData?.processing || false,
+					aiGenerationSkipped: initialData.aiData?.generationSkipped || false,
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
@@ -201,6 +204,10 @@ const useVideoStatus = (
 
 				if (data.transcriptionStatus === "COMPLETE") {
 					if (!aiGenerationEnabled) {
+						return false;
+					}
+
+					if (data.aiGenerationSkipped) {
 						return false;
 					}
 
@@ -265,7 +272,7 @@ export const Share = ({
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
 			processing: videoStatus?.aiProcessing || false,
-			// generationError: videoStatus?.generationError || null,
+			generationSkipped: videoStatus?.aiGenerationSkipped || false,
 		}),
 		[videoStatus],
 	);
@@ -296,9 +303,9 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			// if (aiData.generationError) {
-			// 	return false;
-			// }
+			if (aiData.generationSkipped) {
+				return false;
+			}
 			if (aiData.processing === true) {
 				return true;
 			}

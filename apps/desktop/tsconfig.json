@@ -18,7 +18,8 @@
 			"vite/client",
 			"vinxi/client",
 			"@cap/ui-solid/types",
-			"vitest/importMeta"
+			"vitest/importMeta",
+			"@webgpu/types"
 		],
 
 		/* Linting */

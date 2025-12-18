@@ -32,7 +32,8 @@ mod windows {
                 let Ok(bytes) = frame.bytes() else {
                     return;
                 };
-                dbg!(
+                println!(
+                    "Frame: len={}, pixel_format={:?}, timestamp={:?}, perf_counter={:?}",
                     bytes.len(),
                     frame.pixel_format,
                     frame.timestamp,

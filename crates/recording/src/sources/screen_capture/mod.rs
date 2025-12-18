@@ -305,23 +305,26 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
-        let output_size = crop_bounds
-            .and_then(|b| {
-                #[cfg(target_os = "macos")]
-                {
+        let output_size: PhysicalSize = {
+            #[cfg(target_os = "macos")]
+            {
+                crop_bounds.and_then(|b| {
                     let logical_size = b.size();
                     let scale = display.raw_handle().scale()?;
                     Some(PhysicalSize::new(
                         logical_size.width() * scale,
                         logical_size.height() * scale,
                     ))
-                }
+                })
+            }
 
-                #[cfg(windows)]
-                Some(b.size().map(|v| (v / 2.0).floor() * 2.0))
-            })
-            .or_else(|| display.physical_size())
-            .ok_or(ScreenCaptureInitError::NoBounds)?;
+            #[cfg(target_os = "windows")]
+            {
+                crop_bounds.map(|b| b.size().map(|v| (v / 2.0).floor() * 2.0))
+            }
+        }
+        .or_else(|| display.physical_size())
+        .ok_or(ScreenCaptureInitError::NoBounds)?;
 
         Ok(Self {
             config: Config {

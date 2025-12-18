@@ -38,7 +38,7 @@ impl AVAssetReaderDecoder {
                 .map_err(|e| format!("video decoder / {e}"))?;
 
             (
-                pixel_to_pixel_format(decoder.format()),
+                pixel_to_pixel_format(decoder.format())?,
                 decoder.width(),
                 decoder.height(),
             )
@@ -137,6 +137,14 @@ impl AVAssetReaderDecoder {
             track_output: &mut self.track_output,
         }
     }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
 }
 
 pub struct FramesIter<'a> {
@@ -151,13 +159,21 @@ impl<'a> Iterator for FramesIter<'a> {
     }
 }
 
-pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> cv::PixelFormat {
+pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> Result<cv::PixelFormat, String> {
     match pixel {
-        avformat::Pixel::NV12 => cv::PixelFormat::_420V,
-        // this is intentional, it works and is faster /shrug
-        avformat::Pixel::YUV420P => cv::PixelFormat::_420V,
-        avformat::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
-        _ => todo!(),
+        avformat::Pixel::NV12 => Ok(cv::PixelFormat::_420V),
+        avformat::Pixel::YUV420P => Ok(cv::PixelFormat::_420V),
+        avformat::Pixel::RGBA => Ok(cv::PixelFormat::_32_RGBA),
+        avformat::Pixel::BGRA => Ok(cv::PixelFormat::_32_BGRA),
+        other => {
+            tracing::error!(
+                pixel_format = ?other,
+                "Unhandled pixel format encountered - no mapping to cv::PixelFormat available"
+            );
+            Err(format!(
+                "Unsupported pixel format: {other:?}. Supported formats: NV12, YUV420P, RGBA, BGRA"
+            ))
+        }
     }
 }
 
@@ -165,6 +181,7 @@ pub fn pixel_format_to_pixel(format: cv::PixelFormat) -> avformat::Pixel {
     match format {
         cv::PixelFormat::_420V => avformat::Pixel::NV12,
         cv::PixelFormat::_32_RGBA => avformat::Pixel::RGBA,
-        _ => todo!(),
+        cv::PixelFormat::_32_BGRA => avformat::Pixel::BGRA,
+        _ => avformat::Pixel::RGBA,
     }
 }

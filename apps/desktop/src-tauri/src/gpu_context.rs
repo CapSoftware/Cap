@@ -42,6 +42,7 @@ pub struct SharedGpuContext {
     pub queue: Arc<wgpu::Queue>,
     pub adapter: Arc<wgpu::Adapter>,
     pub instance: Arc<wgpu::Instance>,
+    pub is_software_adapter: bool,
 }
 
 static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
@@ -49,14 +50,41 @@ static GPU: OnceCell<Option<SharedGpuContext>> = OnceCell::const_new();
 pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
     GPU.get_or_init(|| async {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = instance
+
+        let hardware_adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
             .await
-            .ok()?;
+            .ok();
+
+        let (adapter, is_software_adapter) = if let Some(adapter) = hardware_adapter {
+            tracing::info!(
+                adapter_name = adapter.get_info().name,
+                adapter_backend = ?adapter.get_info().backend,
+                "Using hardware GPU adapter for shared context"
+            );
+            (adapter, false)
+        } else {
+            tracing::warn!("No hardware GPU adapter found, attempting software fallback for shared context");
+            let software_adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    force_fallback_adapter: true,
+                    compatible_surface: None,
+                })
+                .await
+                .ok()?;
+
+            tracing::info!(
+                adapter_name = software_adapter.get_info().name,
+                adapter_backend = ?software_adapter.get_info().backend,
+                "Using software adapter for shared context (CPU rendering - performance may be reduced)"
+            );
+            (software_adapter, true)
+        };
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -72,6 +100,7 @@ pub async fn get_shared_gpu() -> Option<&'static SharedGpuContext> {
             queue: Arc::new(queue),
             adapter: Arc::new(adapter),
             instance: Arc::new(instance),
+            is_software_adapter,
         })
     })
     .await

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use ffmpeg::{format, frame, software};
 
 pub struct FrameConverter {
@@ -86,6 +88,25 @@ pub fn copy_rgba_plane(data: &[u8], stride: usize, width: usize, height: usize) 
 
     for row in data.chunks(stride).take(height) {
         frame_buffer.extend_from_slice(&row[..row_len]);
+    }
+
+    frame_buffer
+}
+
+#[cfg(target_os = "macos")]
+pub fn copy_bgra_to_rgba(data: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
+    debug_assert!(stride >= width * 4, "stride too small for BGRA frame");
+
+    let row_len = width * 4;
+    let mut frame_buffer = Vec::with_capacity(row_len * height);
+
+    for row in data.chunks(stride).take(height) {
+        for pixel in row[..row_len].chunks_exact(4) {
+            frame_buffer.push(pixel[2]);
+            frame_buffer.push(pixel[1]);
+            frame_buffer.push(pixel[0]);
+            frame_buffer.push(pixel[3]);
+        }
     }
 
     frame_buffer

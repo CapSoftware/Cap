@@ -234,9 +234,7 @@ export function CapVideoPlayer({
 		}, retryInterval);
 	}, [reloadVideo]);
 
-	// Reset state when video source changes
 	useEffect(() => {
-		resolvedSrc.refetch();
 		setVideoLoaded(false);
 		setHasError(false);
 		isRetryingRef.current = false;
@@ -248,7 +246,7 @@ export function CapVideoPlayer({
 			clearTimeout(retryTimeout.current);
 			retryTimeout.current = null;
 		}
-	}, [resolvedSrc.refetch]);
+	}, [videoSrc]);
 
 	// Track video duration for comment markers
 	useEffect(() => {

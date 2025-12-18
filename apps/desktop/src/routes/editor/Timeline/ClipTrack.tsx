@@ -421,7 +421,8 @@ export function ClipTrack(
 										const fraction = (e.clientX - rect.left) / rect.width;
 										const seg = segment();
 
-										const splitTime = fraction * (seg.end - seg.start);
+										const splitTime =
+											(fraction * (seg.end - seg.start)) / seg.timescale;
 
 										projectActions.splitClipSegment(prevDuration() + splitTime);
 									} else {

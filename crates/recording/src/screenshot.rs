@@ -350,7 +350,7 @@ fn capture_bitmap_with(
         return Err(unsupported_error());
     }
 
-    let mut info = BITMAPINFO {
+    let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,
@@ -369,7 +369,7 @@ fn capture_bitmap_with(
 
     let mut data = std::ptr::null_mut();
     let bitmap =
-        unsafe { CreateDIBSection(Some(mem_dc), &mut info, DIB_RGB_COLORS, &mut data, None, 0) };
+        unsafe { CreateDIBSection(Some(mem_dc), &info, DIB_RGB_COLORS, &mut data, None, 0) };
     let bitmap = match bitmap {
         Ok(b) if !b.0.is_null() && !data.is_null() => b,
         _ => {

@@ -2,21 +2,26 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle, PlaybackStartError};
 use cap_audio::AudioData;
 use cap_project::StudioRecordingMeta;
-use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
+use cap_project::{
+    CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, TimelineConfiguration,
+    TimelineSegment, XY,
+};
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    RenderedFrame, SegmentVideoPaths, get_duration,
+    RenderedFrame, SegmentVideoPaths, Video, get_duration,
 };
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
-use tracing::{trace, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    // pub ws_port: u16,
     pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
+    playback_active: watch::Sender<bool>,
+    playback_active_rx: watch::Receiver<bool>,
     pub state: Arc<Mutex<EditorState>>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
@@ -36,15 +41,97 @@ impl EditorInstance {
         frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
         if !project_path.exists() {
-            println!("Video path {} not found!", project_path.display());
-            panic!("Video path {} not found!", project_path.display());
+            return Err(format!("Video path {} not found!", project_path.display()));
         }
 
-        let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
+        let recording_meta = cap_project::RecordingMeta::load_for_project(&project_path)
+            .map_err(|e| format!("Failed to load recording meta: {e}"))?;
+
         let RecordingMetaInner::Studio(meta) = &recording_meta.inner else {
             return Err("Cannot edit non-studio recordings".to_string());
         };
-        let project = recording_meta.project_config();
+
+        let segment_count = match meta {
+            StudioRecordingMeta::SingleSegment { .. } => 1,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+        };
+
+        if segment_count == 0 {
+            return Err(
+                "Recording has no segments. It may need to be recovered first.".to_string(),
+            );
+        }
+
+        let mut project = recording_meta.project_config();
+
+        if project.timeline.is_none() {
+            warn!("Project config has no timeline, creating one from recording segments");
+            let timeline_segments = match meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    let display_path = recording_meta.path(&segment.display.path);
+                    let duration = match Video::new(&display_path, 0.0) {
+                        Ok(v) => v.duration,
+                        Err(e) => {
+                            warn!(
+                                "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                e,
+                                display_path.display()
+                            );
+                            5.0
+                        }
+                    };
+                    vec![TimelineSegment {
+                        recording_clip: 0,
+                        start: 0.0,
+                        end: duration,
+                        timescale: 1.0,
+                    }]
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => inner
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, segment)| {
+                        let display_path = recording_meta.path(&segment.display.path);
+                        let duration = match Video::new(&display_path, 0.0) {
+                            Ok(v) => v.duration,
+                            Err(e) => {
+                                warn!(
+                                    "Failed to load video for duration calculation: {} (path: {}), using default duration 5.0s",
+                                    e,
+                                    display_path.display()
+                                );
+                                5.0
+                            }
+                        };
+                        if duration <= 0.0 {
+                            return None;
+                        }
+                        Some(TimelineSegment {
+                            recording_clip: i as u32,
+                            start: 0.0,
+                            end: duration,
+                            timescale: 1.0,
+                        })
+                    })
+                    .collect(),
+            };
+
+            if !timeline_segments.is_empty() {
+                project.timeline = Some(TimelineConfiguration {
+                    segments: timeline_segments,
+                    zoom_segments: Vec::new(),
+                    scene_segments: Vec::new(),
+                    mask_segments: Vec::new(),
+                    text_segments: Vec::new(),
+                });
+
+                if let Err(e) = project.write(&recording_meta.project_path) {
+                    warn!("Failed to save auto-generated timeline: {}", e);
+                }
+            }
+        }
+
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
             meta,
@@ -55,7 +142,7 @@ impl EditorInstance {
         let render_constants = Arc::new(
             RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
-                .unwrap(),
+                .map_err(|e| format!("Failed to create render constants: {e}"))?,
         );
 
         let renderer = Arc::new(editor::Renderer::spawn(
@@ -66,6 +153,7 @@ impl EditorInstance {
         )?);
 
         let (preview_tx, preview_rx) = watch::channel(None);
+        let (playback_active_tx, playback_active_rx) = watch::channel(false);
 
         let this = Arc::new(Self {
             project_path,
@@ -82,6 +170,8 @@ impl EditorInstance {
             project_config: watch::channel(project),
             segment_medias: Arc::new(segments),
             meta: recording_meta,
+            playback_active: playback_active_tx,
+            playback_active_rx,
         });
 
         this.state.lock().await.preview_task =
@@ -95,25 +185,19 @@ impl EditorInstance {
     }
 
     pub async fn dispose(&self) {
-        trace!("Disposing EditorInstance");
-
         let mut state = self.state.lock().await;
 
-        // Stop playback
         if let Some(handle) = state.playback_task.take() {
-            trace!("Stopping playback");
             handle.stop();
         }
 
-        // Stop preview
         if let Some(task) = state.preview_task.take() {
-            trace!("Stopping preview");
             task.abort();
-            task.await.ok(); // Await the task to ensure it's fully stopped
+            if let Err(e) = task.await {
+                tracing::warn!("preview task abort await failed: {e}");
+            }
         }
 
-        // Stop renderer
-        trace!("Stopping renderer");
         self.renderer.stop().await;
 
         // // Clear audio data
@@ -126,8 +210,6 @@ impl EditorInstance {
         tokio::task::yield_now().await;
 
         drop(state);
-
-        println!("EditorInstance disposed");
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -138,9 +220,7 @@ impl EditorInstance {
 
     pub async fn start_playback(self: &Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let (mut handle, prev) = {
-            let Ok(mut state) = self.state.try_lock() else {
-                return;
-            };
+            let mut state = self.state.lock().await;
 
             let start_frame_number = state.playhead_position;
 
@@ -161,6 +241,10 @@ impl EditorInstance {
                 }
             };
 
+            if let Err(e) = self.playback_active.send(true) {
+                tracing::warn!(%e, "failed to send playback_active=true");
+            }
+
             let prev = state.playback_task.replace(playback_handle.clone());
 
             (playback_handle, prev)
@@ -180,7 +264,9 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
-                        // ! This editor instance (self) gets dropped here
+                        if let Err(e) = this.playback_active.send(false) {
+                            tracing::warn!(%e, "failed to send playback_active=false");
+                        }
                         return;
                     }
                 }
@@ -197,6 +283,8 @@ impl EditorInstance {
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
+            let mut prefetch_cancel_token: Option<CancellationToken> = None;
+
             loop {
                 preview_rx.changed().await.unwrap();
 
@@ -207,11 +295,23 @@ impl EditorInstance {
                         break;
                     };
 
+                    if let Some(token) = prefetch_cancel_token.take() {
+                        token.cancel();
+                    }
+
+                    if *self.playback_active_rx.borrow() {
+                        break;
+                    }
+
                     let project = self.project_config.1.borrow().clone();
 
                     let Some((segment_time, segment)) =
                         project.get_segment_time(frame_number as f64 / fps as f64)
                     else {
+                        warn!(
+                            "Preview renderer: no segment found for frame {}",
+                            frame_number
+                        );
                         break;
                     };
 
@@ -221,6 +321,55 @@ impl EditorInstance {
                         .iter()
                         .find(|v| v.index == segment.recording_clip);
                     let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
+
+                    let new_cancel_token = CancellationToken::new();
+                    prefetch_cancel_token = Some(new_cancel_token.clone());
+
+                    let playback_is_active = *self.playback_active_rx.borrow();
+                    if !playback_is_active {
+                        let prefetch_frames_count = 5u32;
+                        let hide_camera = project.camera.hide;
+                        let playback_rx = self.playback_active_rx.clone();
+                        for offset in 1..=prefetch_frames_count {
+                            let prefetch_frame = frame_number + offset;
+                            if let Some((prefetch_segment_time, prefetch_segment)) =
+                                project.get_segment_time(prefetch_frame as f64 / fps as f64)
+                                && let Some(prefetch_segment_media) = self
+                                    .segment_medias
+                                    .get(prefetch_segment.recording_clip as usize)
+                            {
+                                let prefetch_clip_offsets = project
+                                    .clips
+                                    .iter()
+                                    .find(|v| v.index == prefetch_segment.recording_clip)
+                                    .map(|v| v.offsets)
+                                    .unwrap_or_default();
+                                let decoders = prefetch_segment_media.decoders.clone();
+                                let cancel_token = new_cancel_token.clone();
+                                let playback_rx = playback_rx.clone();
+                                tokio::spawn(async move {
+                                    if cancel_token.is_cancelled() || *playback_rx.borrow() {
+                                        return;
+                                    }
+                                    if decoders
+                                        .get_frames(
+                                            prefetch_segment_time as f32,
+                                            !hide_camera,
+                                            prefetch_clip_offsets,
+                                        )
+                                        .await
+                                        .is_none()
+                                    {
+                                        tracing::warn!(
+                                            prefetch_segment_time,
+                                            hide_camera,
+                                            "prefetch get_frames returned None"
+                                        );
+                                    }
+                                });
+                            }
+                        }
+                    }
 
                     let get_frames_future = segment_medias.decoders.get_frames(
                         segment_time as f32,
@@ -251,8 +400,10 @@ impl EditorInstance {
                                     &segment_frames,
                                 );
                                 self.renderer
-                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone(), frame_number)
+                                    .render_frame(segment_frames, uniforms, segment_medias.cursor.clone())
                                     .await;
+                            } else {
+                                warn!("Preview renderer: no frames returned for frame {}", frame_number);
                             }
                         }
                     }
@@ -284,14 +435,7 @@ impl EditorInstance {
 }
 
 impl Drop for EditorInstance {
-    fn drop(&mut self) {
-        // TODO: Ensure that *all* resources have been released by this point?
-        // For now the `dispose` method is adequate.
-        println!(
-            "*** Editor instance has been released: {:?} ***",
-            self.project_path
-        );
-    }
+    fn drop(&mut self) {}
 }
 
 type PreviewFrameInstruction = (u32, u32, XY<u32>);
