@@ -4,8 +4,8 @@
 
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::RecvError,
     },
     time::Duration,
@@ -25,10 +25,9 @@ use windows::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ_WRITE,
-                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
-                ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice,
+                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
                 Common::{
@@ -66,6 +65,88 @@ impl PixelFormat {
             Self::R8G8B8A8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
             Self::B8G8R8A8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
         }
+    }
+}
+
+const STAGING_POOL_SIZE: usize = 3;
+
+struct PooledStagingTexture {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+pub struct StagingTexturePool {
+    textures: Mutex<Vec<PooledStagingTexture>>,
+    d3d_device: ID3D11Device,
+    pixel_format: PixelFormat,
+    next_index: AtomicUsize,
+}
+
+impl StagingTexturePool {
+    fn new(d3d_device: ID3D11Device, pixel_format: PixelFormat) -> Self {
+        Self {
+            textures: Mutex::new(Vec::with_capacity(STAGING_POOL_SIZE)),
+            d3d_device,
+            pixel_format,
+            next_index: AtomicUsize::new(0),
+        }
+    }
+
+    fn get_or_create_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        let mut textures = self.textures.lock().unwrap();
+
+        let index = self.next_index.fetch_add(1, Ordering::Relaxed) % STAGING_POOL_SIZE;
+
+        if let Some(pooled) = textures.get(index) {
+            if pooled.width == width && pooled.height == height {
+                return Ok(pooled.texture.clone());
+            }
+        }
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: self.pixel_format.as_dxgi(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+
+        let mut texture = None;
+        unsafe {
+            self.d3d_device
+                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+        };
+
+        let texture = texture.unwrap();
+
+        if index < textures.len() {
+            textures[index] = PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            };
+        } else {
+            textures.push(PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            });
+        }
+
+        Ok(texture)
     }
 }
 
@@ -201,6 +282,11 @@ impl Capturer {
             .map_err(NewCapturerError::Context)?
             .unwrap();
 
+        let staging_pool = Arc::new(StagingTexturePool::new(
+            d3d_device.clone(),
+            settings.pixel_format,
+        ));
+
         let item = item.clone();
         let settings = settings.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -273,6 +359,7 @@ impl Capturer {
                     let d3d_context = d3d_context.clone();
                     let d3d_device = d3d_device.clone();
                     let stop_flag = stop_flag.clone();
+                    let staging_pool = staging_pool.clone();
 
                     move |frame_pool, _| {
                         if stop_flag.load(Ordering::Relaxed) {
@@ -312,6 +399,7 @@ impl Capturer {
                                 texture: cropped_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
+                                staging_pool: staging_pool.clone(),
                             }
                         } else {
                             Frame {
@@ -322,6 +410,7 @@ impl Capturer {
                                 texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
+                                staging_pool: staging_pool.clone(),
                             }
                         };
 
@@ -407,6 +496,7 @@ pub struct Frame {
     texture: ID3D11Texture2D,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
+    staging_pool: Arc<StagingTexturePool>,
 }
 
 impl std::fmt::Debug for Frame {
@@ -447,49 +537,29 @@ impl Frame {
         &self.d3d_context
     }
 
-    pub fn as_buffer<'a>(&'a self) -> windows::core::Result<FrameBuffer<'a>> {
-        let texture_desc = D3D11_TEXTURE2D_DESC {
-            Width: self.width,
-            Height: self.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: self.pixel_format.as_dxgi(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32 | D3D11_CPU_ACCESS_WRITE.0 as u32,
-            MiscFlags: 0,
-        };
+    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'_>> {
+        let staging_texture = self
+            .staging_pool
+            .get_or_create_texture(self.width, self.height)?;
 
-        let mut texture = None;
         unsafe {
-            self.d3d_device
-                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
-        };
-
-        let texture = texture.unwrap();
-
-        // Copies GPU only texture to CPU-mappable texture
-        unsafe {
-            self.d3d_context.CopyResource(&texture, &self.texture);
+            self.d3d_context
+                .CopyResource(&staging_texture, &self.texture);
         };
 
         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d_context.Map(
-                &texture,
+                &staging_texture,
                 0,
-                D3D11_MAP_READ_WRITE,
+                D3D11_MAP_READ,
                 0,
                 Some(&mut mapped_resource),
             )?;
         };
 
         let data = unsafe {
-            std::slice::from_raw_parts_mut(
+            std::slice::from_raw_parts(
                 mapped_resource.pData.cast(),
                 (self.height * mapped_resource.RowPitch) as usize,
             )
@@ -501,21 +571,31 @@ impl Frame {
             height: self.height,
             stride: mapped_resource.RowPitch,
             pixel_format: self.pixel_format,
-            resource: mapped_resource,
+            staging_texture,
+            d3d_context: self.d3d_context.clone(),
         })
     }
 }
 
 pub struct FrameBuffer<'a> {
-    data: &'a mut [u8],
+    data: &'a [u8],
     width: u32,
     height: u32,
     stride: u32,
-    resource: D3D11_MAPPED_SUBRESOURCE,
     pixel_format: PixelFormat,
+    staging_texture: ID3D11Texture2D,
+    d3d_context: ID3D11DeviceContext,
 }
 
-impl<'a> FrameBuffer<'a> {
+impl Drop for FrameBuffer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.d3d_context.Unmap(&self.staging_texture, 0);
+        }
+    }
+}
+
+impl FrameBuffer<'_> {
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -530,10 +610,6 @@ impl<'a> FrameBuffer<'a> {
 
     pub fn data(&self) -> &[u8] {
         self.data
-    }
-
-    pub fn inner(&self) -> &D3D11_MAPPED_SUBRESOURCE {
-        &self.resource
     }
 
     pub fn pixel_format(&self) -> PixelFormat {
