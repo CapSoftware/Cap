@@ -972,6 +972,9 @@ async fn create_segment_pipeline(
         None
     };
 
+    #[cfg(target_os = "macos")]
+    let _ = cap_cursor_info::CursorShapeMacOS::get_cursor_cache();
+
     let cursor = custom_cursor_capture
         .then(move || {
             let cursor_crop_bounds = base_inputs

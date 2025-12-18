@@ -23,6 +23,7 @@ sha2 = "0.10"
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.0", features = ["NSCursor", "NSApplication"] }
+os_info = "3.13.0"
 
 
 [lints]

@@ -1,10 +1,12 @@
+use crate::{CursorShape, ResolvedCursor};
 use strum::{EnumString, IntoStaticStr};
 
-use crate::{CursorShape, ResolvedCursor};
+#[cfg(target_os = "macos")]
+use std::{collections::HashMap, sync::OnceLock};
 
 /// macOS Cursors
 /// https://developer.apple.com/documentation/appkit/nscursor
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, EnumString, IntoStaticStr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Ord, EnumString, IntoStaticStr)]
 pub enum CursorShapeMacOS {
     /// https://developer.apple.com/documentation/appkit/nscursor/arrow
     Arrow,
@@ -224,111 +226,229 @@ impl CursorShapeMacOS {
         })
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn is_tahoe() -> bool {
+        let info = os_info::get();
+        let version_str = info.version().to_string();
+        const MACOS_TAHOE_MAJOR_VERSION: &str = "26";
+
+        if version_str.starts_with(MACOS_TAHOE_MAJOR_VERSION) {
+            return true;
+        }
+        false
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn get_cursor_cache() -> &'static HashMap<String, CursorShapeMacOS> {
+        use objc2::rc::Retained;
+        use objc2_app_kit::NSCursor;
+        use sha2::{Digest, Sha256};
+
+        static CURSOR_CACHE: OnceLock<HashMap<String, CursorShapeMacOS>> = OnceLock::new();
+
+        CURSOR_CACHE.get_or_init(|| {
+            #[inline]
+            fn load_cursor(cursor: Retained<NSCursor>) -> String {
+                // runtime get a give cursor to hash String
+                unsafe {
+                    hex::encode(Sha256::digest(
+                        cursor
+                            .image()
+                            .TIFFRepresentation()
+                            .expect("Failed to get TIFF representation of build-in cursor")
+                            .as_bytes_unchecked(),
+                    ))
+                }
+            }
+
+            let cursors: Vec<(String, CursorShapeMacOS)> = if CursorShapeMacOS::is_tahoe() {
+                // tahoe cursor
+                vec![
+                    (
+                        load_cursor(NSCursor::arrowCursor()),
+                        CursorShapeMacOS::TahoeArrow,
+                    ),
+                    (
+                        load_cursor(NSCursor::contextualMenuCursor()),
+                        CursorShapeMacOS::TahoeContextualMenu,
+                    ),
+                    (
+                        load_cursor(NSCursor::closedHandCursor()),
+                        CursorShapeMacOS::TahoeClosedHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::crosshairCursor()),
+                        CursorShapeMacOS::TahoeCrosshair,
+                    ),
+                    (
+                        load_cursor(NSCursor::disappearingItemCursor()),
+                        CursorShapeMacOS::TahoeDisappearingItem,
+                    ),
+                    (
+                        load_cursor(NSCursor::dragCopyCursor()),
+                        CursorShapeMacOS::TahoeDragCopy,
+                    ),
+                    (
+                        load_cursor(NSCursor::dragLinkCursor()),
+                        CursorShapeMacOS::TahoeDragLink,
+                    ),
+                    (
+                        load_cursor(NSCursor::IBeamCursor()),
+                        CursorShapeMacOS::TahoeIBeam,
+                    ),
+                    (
+                        load_cursor(NSCursor::openHandCursor()),
+                        CursorShapeMacOS::TahoeOpenHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::operationNotAllowedCursor()),
+                        CursorShapeMacOS::TahoeOperationNotAllowed,
+                    ),
+                    (
+                        load_cursor(NSCursor::pointingHandCursor()),
+                        CursorShapeMacOS::TahoePointingHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeDownCursor()),
+                        CursorShapeMacOS::TahoeResizeDown,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeLeftCursor()),
+                        CursorShapeMacOS::TahoeResizeLeft,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeLeftRightCursor()),
+                        CursorShapeMacOS::TahoeResizeLeftRight,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeRightCursor()),
+                        CursorShapeMacOS::TahoeResizeRight,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeUpCursor()),
+                        CursorShapeMacOS::TahoeResizeUp,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeUpDownCursor()),
+                        CursorShapeMacOS::TahoeResizeUpDown,
+                    ),
+                    (
+                        load_cursor(NSCursor::IBeamCursorForVerticalLayout()),
+                        CursorShapeMacOS::TahoeIBeamVerticalForVerticalLayout,
+                    ),
+                    (
+                        unsafe { load_cursor(NSCursor::zoomOutCursor()) },
+                        CursorShapeMacOS::TahoeZoomOut,
+                    ),
+                    (
+                        unsafe { load_cursor(NSCursor::zoomInCursor()) },
+                        CursorShapeMacOS::TahoeZoomIn,
+                    ),
+                ]
+            } else {
+                vec![
+                    (
+                        load_cursor(NSCursor::arrowCursor()),
+                        CursorShapeMacOS::Arrow,
+                    ),
+                    (
+                        load_cursor(NSCursor::contextualMenuCursor()),
+                        CursorShapeMacOS::ContextualMenu,
+                    ),
+                    (
+                        load_cursor(NSCursor::closedHandCursor()),
+                        CursorShapeMacOS::ClosedHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::crosshairCursor()),
+                        CursorShapeMacOS::Crosshair,
+                    ),
+                    (
+                        load_cursor(NSCursor::disappearingItemCursor()),
+                        CursorShapeMacOS::DisappearingItem,
+                    ),
+                    (
+                        load_cursor(NSCursor::dragCopyCursor()),
+                        CursorShapeMacOS::DragCopy,
+                    ),
+                    (
+                        load_cursor(NSCursor::dragLinkCursor()),
+                        CursorShapeMacOS::DragLink,
+                    ),
+                    (
+                        load_cursor(NSCursor::IBeamCursor()),
+                        CursorShapeMacOS::IBeam,
+                    ),
+                    (
+                        load_cursor(NSCursor::openHandCursor()),
+                        CursorShapeMacOS::OpenHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::operationNotAllowedCursor()),
+                        CursorShapeMacOS::OperationNotAllowed,
+                    ),
+                    (
+                        load_cursor(NSCursor::pointingHandCursor()),
+                        CursorShapeMacOS::PointingHand,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeDownCursor()),
+                        CursorShapeMacOS::ResizeDown,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeLeftCursor()),
+                        CursorShapeMacOS::ResizeLeft,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeLeftRightCursor()),
+                        CursorShapeMacOS::ResizeLeftRight,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeRightCursor()),
+                        CursorShapeMacOS::ResizeRight,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeUpCursor()),
+                        CursorShapeMacOS::ResizeUp,
+                    ),
+                    (
+                        load_cursor(NSCursor::resizeUpDownCursor()),
+                        CursorShapeMacOS::ResizeUpDown,
+                    ),
+                    (
+                        load_cursor(NSCursor::IBeamCursorForVerticalLayout()),
+                        CursorShapeMacOS::IBeamVerticalForVerticalLayout,
+                    ),
+                ]
+            };
+
+            let mut cursors_map = HashMap::new();
+
+            for (hash, cursor) in cursors {
+                cursors_map.insert(hash, cursor);
+            }
+
+            cursors_map
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_only {
+    use super::*;
+
     /// Derive the cursor type from a hash
     /// macOS doesn't allow comparing `NSCursor` instances directly so we hash the image data.
     /// macOS cursor are also resolution-independent so this works.
-    pub fn from_hash(hash: &str) -> Option<Self> {
-        Some(match hash {
-            "de2d1f4a81e520b65fd1317b845b00a1c51a4d1f71cca3cd4ccdab52b98d1ac9" => Self::Arrow,
-            "ab26ca862492d41355b711c58544687a799dd7ae14cf161959ca524bbc97c322" => {
-                Self::ContextualMenu
-            }
-            "fbb165d4603dd8808b536f45bb74a9a72d9358ad19714b318bb7c06358a7d3c2" => Self::ClosedHand,
-            "c583f776531f4e7b76ea7ba2ab159765e2da11fd63cb897cc10362183859d1d8" => Self::Crosshair,
-            "67c369820fbc37af9b59b840c675ca24117ca8dfdccec7702b10894058617951" => {
-                Self::DisappearingItem
-            }
-            "af060876004c8647d82411eeac1bbd613d2991d46794aba16b56c91d3081e128" => Self::DragCopy,
-            "59ac2483461f4ad577a0a6b68be89fe663c36263b583c5f038eee2ae6a5ad98f" => Self::DragLink,
-            "492dca0bb6751a30607ac728803af992ba69365052b7df2dff1c0dfe463e653c" => Self::IBeam,
-            "3f6a5594a3c9334065944b9c56d9f73fd5fe5f02108a5e28f37e222e770be476" => Self::OpenHand,
-            "37287ef1d097704d3e9d0be9c1049ce1fb6dfabd6d210af0429b1b6ec7084c59" => {
-                Self::OperationNotAllowed
-            }
-            "b0443e9f72e724cb6d94b879bf29c6cb18376d0357c6233e5a7561cf8a9943c6" => {
-                Self::PointingHand
-            }
-            "3c9bf0ce893b64fe9e4363793b406140d4b3900b7beafa1c409e78cf5a8cf954" => Self::ResizeDown,
-            "50431d8fd537119aefb4c3673f9b9ff00d3cd1d2bf6c35e5dfb09ed40cfd5e7c" => Self::ResizeLeft,
-            "0fdaea89910bcbe34ad0d4d63a6ada2095489df18537bbf54dd0d0769588b381" => {
-                Self::ResizeLeftRight
-            }
-            "e74de88f863f059e5beb27152b2dfc2cd1e8dcc458ce775607765e9a4859667e" => Self::ResizeRight,
-            "912ca42451a9624f6fb8c1d53c29c26782b7590d383a66075a6768c4409024d9" => Self::ResizeUp,
-            "9c93eb53df68d7fd86298ba1eb3e3b32ccd34d168b81a31a6fc4bb79f131331f" => {
-                Self::ResizeUpDown
-            }
-            "024e1d486a7f16368669d419e69c9a326e464ec1b8ed39645e5c89cb183e03c5" => {
-                Self::IBeamVerticalForVerticalLayout
-            }
+    impl TryFrom<&String> for super::CursorShape {
+        type Error = ();
 
-            // macOS Tahoe
-            "57a1d610df3e421ebef670ba58c97319d2ab6990d64dca34d28140e4527fd54d" => Self::TahoeArrow,
-            "24ae740b1b618e08ccf3f54375e6f072da5eb47048426460d0500e21a8be0963" => {
-                Self::ContextualMenu
+        fn try_from(hash: &String) -> Result<Self, Self::Error> {
+            match CursorShapeMacOS::get_cursor_cache().get(hash) {
+                Some(cursor_shape) => Ok(super::CursorShape::MacOS(*cursor_shape)),
+                None => Err(()),
             }
-            "e8dcb6cb19ebfa9336297a61950674a365e19ff01b8bf1a327a2f83851f3bc6c" => {
-                Self::TahoeClosedHand
-            }
-            "c5bc204d864e56fce70bca01f309b6cf21e1c77b4389c32883c1c140621bc024" => {
-                Self::TahoeCrosshair
-            }
-            "45bc17d1d3754c60229ebf534ba62827af72815dd4a100d20464ce8072b87fea" => {
-                Self::TahoeDisappearingItem
-            }
-            "ef6d71540be9ba0eac3f45328171cb3c864e267d29ee24c15467a353f958529d" => {
-                Self::TahoeDragCopy
-            }
-            "f5299f02b606041ce03a39c518feafaf977d3d178f73849be00e5e6468ca2f09" => {
-                Self::TahoeDragLink
-            }
-            "3de4a52b22f76f28db5206dc4c2219dff28a6ee5abfb9c5656a469f2140f7eaa" => Self::TahoeIBeam,
-            "e335333967dc50a93683f85da145e3e4858f0618a81e5d2ca93d496d9159fbf1" => {
-                Self::TahoeOpenHand
-            }
-            "57f34c3b50a051f7504b165226f552d009378f1cd20f16ba6568216f3982fd59" => {
-                Self::TahoeOperationNotAllowed
-            }
-            "65d626a50079c3111f3c3da9ad8a98220331a592332e00afcf61c0c9c77402f2" => {
-                Self::TahoePointingHand
-            }
-            // As calculated from `NSCursor` directly
-            "de549b270ba98c1d02ee6b72ec8019001d09e6a750aa65b012c529d90eb2aeea" |
-            // As reported when hovering on HTML cursor tester
-            "d0cceb4314b74f8f0bc82d206e28c0e5f84ec441c62882542ab2ab2a4b5bd033" => Self::ResizeDown,
-            // As calculated from `NSCursor` directly
-            "ac46c5f4d94cc2ec68ca760e197d3467e2113efd18808cc3da88dd35045d7b49" |
-            // As reported when hovering on HTML cursor tester
-            "2a527730da48b7943c4b1ad844eba0a12fcc81147114b47a4eb1e0fef01241a9" => Self::ResizeLeft,
-            // As calculated from `NSCursor` directly
-            "b94c84b13da63547851b41fbd7897a423cf87d30c19b1c7f67f69c266f614268" |
-            // As reported when hovering on HTML cursor tester
-            "4c4dae9b638d0c74629e6073f1301a6a36cd4b47602cff7bf168559e4c745903" => {
-                Self::ResizeLeftRight
-            }
-            // As calculated from `NSCursor` directly
-            "324b63acd82ca78ba13e69f65eb21c7f047f87dbb49d2d552b3c112e425fbfb6" |
-            // As reported when hovering on HTML cursor tester
-            "3a8abc0eeeeb0ded8a2070bc9af9cd7da4e3eff057aa13b5721db2748f6c340a" => Self::ResizeRight,
-            // As calculated from `NSCursor` directly
-            "d07eda9c435c22c0874a6c9953cecd886dee38c5f115c3b8c754a99ebab76ad5" |
-            // As reported when hovering on HTML cursor tester
-            "78e3453975ac617f3dd108e5f39574e51955cf234b5c4f1971b73dc6836c928b" => Self::ResizeUp,
-            // As calculated from `NSCursor` directly
-            "b3b52be9bbdc48f26b5f2b6d808c9d9facd8d11f5d5eaad4ebe21ec2b7ec1e98" |
-            // As reported when hovering on HTML cursor tester
-            "1fbfd7a8b9bdb0ed9455d88726bcbefe031893a523ac74d27ab7f993c0239f1d" => {
-                Self::ResizeUpDown
-            }
-            "c715df2b1e5956f746fea3cdbe259136f3349773e9dbf26cc65b122905c4eb1c" => {
-                Self::IBeamVerticalForVerticalLayout
-            }
-            "08bb474d7bdb5ee4be6e3a797a7fd05ebd8e4e813e92a685a91f33dbc32c572a" => Self::TahoeZoomIn,
-            "411f5864a498e2d7533d462e85fe2bfe44bcad5b4120300fdf3c3f9f541dade0" => {
-                Self::TahoeZoomOut
-            }
-            _ => return None,
-        })
+        }
     }
 }
 
