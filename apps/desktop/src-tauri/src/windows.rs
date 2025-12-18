@@ -501,12 +501,11 @@ impl CapWindow {
             }
             Self::ModeSelect => {
                 // Hide main window when mode select window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                let mut builder = self
-                    .window_builder(app, "/mode-select")
+                self.window_builder(app, "/mode-select")
                     .inner_size(580.0, 340.0)
                     .min_inner_size(580.0, 340.0)
                     .resizable(false)
@@ -683,7 +682,7 @@ impl CapWindow {
                 let width = 320.0;
                 let height = 150.0;
 
-                let title = CapWindowId::RecordingControls.title();
+                let title = CapWindowDef::RecordingControls.title();
                 let should_protect = should_protect_window(app, &title);
 
                 let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
@@ -741,11 +740,6 @@ impl CapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
-
-                #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 1000);
-                }
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 

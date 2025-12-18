@@ -1,6 +1,8 @@
 use crate::{
     RequestOpenRecordingPicker, RequestStartRecording, recording,
-    recording_settings::RecordingTargetMode, windows::CapWindow,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    tray,
+    windows::CapWindow,
 };
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};

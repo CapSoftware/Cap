@@ -1595,7 +1595,7 @@ dependencies = [
  "image 0.25.8",
  "log",
  "metal 0.31.0",
- "objc2 0.6.2",
+ "objc2 0.6.3",
  "pretty_assertions",
  "rayon",
  "reactive_graph",
