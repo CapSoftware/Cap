@@ -1,9 +1,11 @@
 #![cfg(windows)]
 
 use std::sync::OnceLock;
-use windows::Win32::System::SystemInformation::{GetVersionExW, OSVERSIONINFOEXW, OSVERSIONINFOW};
+use windows::Win32::System::SystemInformation::OSVERSIONINFOEXW;
 
 static DETECTED_VERSION: OnceLock<Option<WindowsVersion>> = OnceLock::new();
+
+type RtlGetVersionFn = unsafe extern "system" fn(*mut OSVERSIONINFOEXW) -> i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsVersion {
@@ -14,7 +16,7 @@ pub struct WindowsVersion {
 
 impl WindowsVersion {
     pub fn detect() -> Option<Self> {
-        *DETECTED_VERSION.get_or_init(|| detect_version_internal())
+        *DETECTED_VERSION.get_or_init(detect_version_internal)
     }
 
     pub fn meets_minimum_requirements(&self) -> bool {
@@ -45,15 +47,22 @@ impl WindowsVersion {
 
 fn detect_version_internal() -> Option<WindowsVersion> {
     unsafe {
+        let ntdll =
+            windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::w!("ntdll.dll"))
+                .ok()?;
+
+        let rtl_get_version: RtlGetVersionFn =
+            std::mem::transmute(windows::Win32::System::LibraryLoader::GetProcAddress(
+                ntdll,
+                windows::core::s!("RtlGetVersion"),
+            )?);
+
         let mut info = OSVERSIONINFOEXW {
             dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOEXW>() as u32,
             ..Default::default()
         };
 
-        let info_ptr = &mut info as *mut OSVERSIONINFOEXW as *mut OSVERSIONINFOW;
-
-        #[allow(deprecated)]
-        if GetVersionExW(info_ptr).is_ok() {
+        if rtl_get_version(&mut info) == 0 {
             let version = WindowsVersion {
                 major: info.dwMajorVersion,
                 minor: info.dwMinorVersion,
@@ -65,37 +74,13 @@ fn detect_version_internal() -> Option<WindowsVersion> {
                 minor = version.minor,
                 build = version.build,
                 display_name = %version.display_name(),
-                "Detected Windows version"
+                "Detected Windows version via RtlGetVersion"
             );
 
             return Some(version);
         }
 
-        let mut basic_info = OSVERSIONINFOW {
-            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
-            ..Default::default()
-        };
-
-        #[allow(deprecated)]
-        if GetVersionExW(&mut basic_info).is_ok() {
-            let version = WindowsVersion {
-                major: basic_info.dwMajorVersion,
-                minor: basic_info.dwMinorVersion,
-                build: basic_info.dwBuildNumber,
-            };
-
-            tracing::debug!(
-                major = version.major,
-                minor = version.minor,
-                build = version.build,
-                display_name = %version.display_name(),
-                "Detected Windows version (basic)"
-            );
-
-            return Some(version);
-        }
-
-        tracing::warn!("Failed to detect Windows version");
+        tracing::warn!("RtlGetVersion failed");
         None
     }
 }
