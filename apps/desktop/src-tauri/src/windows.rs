@@ -417,7 +417,7 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window and target select overlays when settings window opens
+                // Close main window and target select overlays when settings window opens
                 for (label, window) in app.webview_windows() {
                     if let Ok(id) = CapWindowId::from_str(&label)
                         && matches!(
@@ -427,7 +427,7 @@ impl ShowCapWindow {
                                 | CapWindowId::Camera
                         )
                     {
-                        let _ = window.hide();
+                        let _ = window.close();
                     }
                 }
 
