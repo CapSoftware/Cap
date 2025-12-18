@@ -2491,14 +2491,6 @@ function CornerStyleSelect(props: {
 	);
 }
 
-const TEXT_FONT_OPTIONS = [
-	{ value: "sans-serif", label: "Sans" },
-	{ value: "serif", label: "Serif" },
-	{ value: "monospace", label: "Monospace" },
-	{ value: "Inter", label: "Inter" },
-	{ value: "Geist Sans", label: "Geist Sans" },
-];
-
 const normalizeHexInput = (value: string, fallback: string) => {
 	const trimmed = value.trim();
 	const withHash = trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
@@ -2522,32 +2514,28 @@ function HexColorInput(props: {
 
 	return (
 		<div class="flex items-center gap-3">
-			<button
-				type="button"
-				class="w-10 h-10 rounded-md border border-gray-4"
-				style={{ "background-color": text() }}
-				onClick={() => {
-					const input = colorInput as
-						| (HTMLInputElement & { showPicker?: () => void })
-						| undefined;
-					input?.showPicker?.();
-					input?.click();
-				}}
-			/>
-			<input
-				ref={(el) => {
-					colorInput = el;
-				}}
-				type="color"
-				class="absolute w-0 h-0 opacity-0"
-				value={text()}
-				onInput={(e) => {
-					const next = e.currentTarget.value;
-					setText(next);
-					prevColor = next;
-					props.onChange(next);
-				}}
-			/>
+			<div class="relative">
+				<button
+					type="button"
+					class="w-10 h-10 rounded-md border border-gray-4 cursor-pointer hover:border-gray-5 transition-colors"
+					style={{ "background-color": text() }}
+					onClick={() => colorInput?.click()}
+				/>
+				<input
+					ref={(el) => {
+						colorInput = el;
+					}}
+					type="color"
+					class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+					value={text()}
+					onInput={(e) => {
+						const next = e.currentTarget.value;
+						setText(next);
+						prevColor = next;
+						props.onChange(next);
+					}}
+				/>
+			</div>
 			<TextInput
 				class="flex-1 px-3 py-2 rounded-lg border border-gray-3 bg-gray-2 text-sm text-gray-12"
 				value={text()}
@@ -2575,21 +2563,6 @@ function TextSegmentConfig(props: {
 	const { setProject } = useEditorContext();
 	const clampNumber = (value: number, min: number, max: number) =>
 		Math.min(Math.max(Number.isFinite(value) ? value : min), max);
-	const textFontOptions = createMemo(() => {
-		const font = props.segment.fontFamily;
-		if (!font) return TEXT_FONT_OPTIONS;
-		const exists = TEXT_FONT_OPTIONS.some((option) => option.value === font);
-		return exists
-			? TEXT_FONT_OPTIONS
-			: [...TEXT_FONT_OPTIONS, { value: font, label: font }];
-	});
-
-	const selectedFont = createMemo(
-		() =>
-			textFontOptions().find(
-				(option) => option.value === props.segment.fontFamily,
-			) ?? textFontOptions()[0],
-	);
 
 	const updateSegment = (fn: (segment: TextSegment) => void) => {
 		setProject(
@@ -2632,67 +2605,26 @@ function TextSegmentConfig(props: {
 					</div>
 				</div>
 			</Field>
-			<Field name="Font" icon={<IconLucideType class="size-4" />}>
-				<div class="grid grid-cols-2 gap-3">
-					<KSelect<{ label: string; value: string }>
-						options={textFontOptions()}
-						optionValue="value"
-						optionTextValue="label"
-						value={selectedFont()}
-						onChange={(option) => {
-							if (option) {
-								updateSegment((segment) => {
-									segment.fontFamily = option.value;
-								});
-							}
-						}}
-						itemComponent={(selectProps) => (
-							<MenuItem<typeof KSelect.Item>
-								as={KSelect.Item}
-								item={selectProps.item}
-							>
-								<KSelect.ItemLabel class="flex-1">
-									{selectProps.item.rawValue.label}
-								</KSelect.ItemLabel>
-							</MenuItem>
-						)}
-					>
-						<KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
-							<KSelect.Value<{
-								label: string;
-								value: string;
-							}> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
-								{(state) => <span>{state.selectedOption().label}</span>}
-							</KSelect.Value>
-							<KSelect.Icon<ValidComponent>
-								as={(selectProps) => (
-									<IconCapChevronDown
-										{...selectProps}
-										class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
-									/>
-								)}
-							/>
-						</KSelect.Trigger>
-						<KSelect.Portal>
-							<PopperContent<typeof KSelect.Content>
-								as={KSelect.Content}
-								class={cx(topSlideAnimateClasses, "z-50")}
-							>
-								<MenuItemList<typeof KSelect.Listbox>
-									class="overflow-y-auto max-h-40"
-									as={KSelect.Listbox}
-								/>
-							</PopperContent>
-						</KSelect.Portal>
-					</KSelect>
-				</div>
-			</Field>
 			<Field name="Size" icon={<IconCapEnlarge class="size-4" />}>
 				<Slider
 					value={[clampNumber(props.segment.fontSize, 8, 200)]}
 					onChange={([value]) =>
 						updateSegment((segment) => {
-							segment.fontSize = clampNumber(value, 8, 200);
+							const newFontSize = clampNumber(value, 8, 200);
+							const oldFontSize = segment.fontSize || 48;
+							const scale = newFontSize / oldFontSize;
+
+							segment.fontSize = newFontSize;
+
+							if (
+								segment.size &&
+								segment.size.x > 0.025 &&
+								segment.size.y > 0.025
+							) {
+								const maxSize = 0.95;
+								segment.size.x = Math.min(segment.size.x * scale, maxSize);
+								segment.size.y = Math.min(segment.size.y * scale, maxSize);
+							}
 						})
 					}
 					minValue={8}
@@ -2700,19 +2632,13 @@ function TextSegmentConfig(props: {
 					step={1}
 				/>
 			</Field>
-			<Field name="Font Weight" icon={<IconLucideSparkles class="size-4" />}>
+			<Field name="Style" icon={<IconLucideSparkles class="size-4" />}>
 				<div class="flex flex-col gap-2">
 					<KSelect
 						options={[
-							{ label: "Thin", value: 100 },
-							{ label: "Extra Light", value: 200 },
-							{ label: "Light", value: 300 },
 							{ label: "Normal", value: 400 },
 							{ label: "Medium", value: 500 },
-							{ label: "Semi Bold", value: 600 },
 							{ label: "Bold", value: 700 },
-							{ label: "Extra Bold", value: 800 },
-							{ label: "Black", value: 900 },
 						]}
 						optionValue="value"
 						optionTextValue="label"
@@ -2726,13 +2652,13 @@ function TextSegmentConfig(props: {
 								segment.fontWeight = value.value;
 							});
 						}}
-						itemComponent={(props) => (
+						itemComponent={(selectItemProps) => (
 							<MenuItem<typeof KSelect.Item>
 								as={KSelect.Item}
-								item={props.item}
+								item={selectItemProps.item}
 							>
 								<KSelect.ItemLabel class="flex-1">
-									{props.item.rawValue.label}
+									{selectItemProps.item.rawValue.label}
 								</KSelect.ItemLabel>
 								<KSelect.ItemIndicator class="ml-auto text-blue-9">
 									<IconCapCircleCheck />
@@ -2745,20 +2671,13 @@ function TextSegmentConfig(props: {
 								{(state) => {
 									const selected = state.selectedOption();
 									if (selected) return selected.label;
-									// Find label for current weight
 									const weight = props.segment.fontWeight;
 									const option = [
-										{ label: "Thin", value: 100 },
-										{ label: "Extra Light", value: 200 },
-										{ label: "Light", value: 300 },
 										{ label: "Normal", value: 400 },
 										{ label: "Medium", value: 500 },
-										{ label: "Semi Bold", value: 600 },
 										{ label: "Bold", value: 700 },
-										{ label: "Extra Bold", value: 800 },
-										{ label: "Black", value: 900 },
 									].find((o) => o.value === weight);
-									return option ? option.label : weight.toString();
+									return option ? option.label : "Normal";
 								}}
 							</KSelect.Value>
 							<KSelect.Icon>
@@ -2799,6 +2718,20 @@ function TextSegmentConfig(props: {
 							segment.color = value;
 						})
 					}
+				/>
+			</Field>
+			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[clampNumber(props.segment.fadeDuration ?? 0.15, 0, 1)]}
+					onChange={([value]) =>
+						updateSegment((segment) => {
+							segment.fadeDuration = clampNumber(value, 0, 1);
+						})
+					}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip="s"
 				/>
 			</Field>
 		</div>
@@ -2959,6 +2892,20 @@ function MaskSegmentConfig(props: {
 					/>
 				</Field>
 			</Show>
+			<Field name="Fade Duration" icon={<IconLucideTimer class="size-4" />}>
+				<Slider
+					value={[props.segment.fadeDuration ?? 0.15]}
+					onChange={([v]) =>
+						updateSegment((segment) => {
+							segment.fadeDuration = v;
+						})
+					}
+					minValue={0}
+					maxValue={1}
+					step={0.01}
+					formatTooltip="s"
+				/>
+			</Field>
 		</div>
 	);
 }

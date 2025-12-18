@@ -560,7 +560,6 @@ export function AnnotationLayer(props: {
 									ref={(el) => {
 										setTimeout(() => {
 											el.focus();
-											// Select all text
 											const range = document.createRange();
 											range.selectNodeContents(el);
 											const sel = window.getSelection();
@@ -568,29 +567,32 @@ export function AnnotationLayer(props: {
 											sel?.addRange(range);
 										});
 									}}
+									onInput={(e) => {
+										const text = e.currentTarget.innerText;
+										setAnnotations((a) => a.id === ann.id, "text", text);
+									}}
 									onBlur={(e) => {
 										const text = e.currentTarget.innerText;
-										const originalText = annotations.find(
-											(a) => a.id === ann.id,
-										)?.text;
 
 										if (!text.trim()) {
-											// If deleting, use snapshot
 											if (textSnapshot) projectHistory.push(textSnapshot);
 											setAnnotations((prev) =>
 												prev.filter((a) => a.id !== ann.id),
 											);
-										} else if (text !== originalText) {
-											// If changed, use snapshot
-											if (textSnapshot) projectHistory.push(textSnapshot);
-											setAnnotations((a) => a.id === ann.id, "text", text);
+										} else if (textSnapshot) {
+											const originalText = textSnapshot.annotations.find(
+												(a) => a.id === ann.id,
+											)?.text;
+											if (text !== originalText) {
+												projectHistory.push(textSnapshot);
+											}
 										}
 
 										textSnapshot = null;
 										setTextEditingId(null);
 									}}
 									onKeyDown={(e) => {
-										e.stopPropagation(); // Prevent deleting annotation
+										e.stopPropagation();
 										if (e.key === "Enter" && !e.shiftKey) {
 											e.preventDefault();
 											e.currentTarget.blur();
