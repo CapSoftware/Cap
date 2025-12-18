@@ -11,24 +11,25 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::HMODULE,
+        Foundation::{CloseHandle, HANDLE, HMODULE},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAP_WRITE,
-                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
-                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-                D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VPIV_DIMENSION_TEXTURE2D,
-                D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device,
-                ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
-                ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+                D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_SDK_VERSION,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+                D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+                D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
+                D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice,
+                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
+                ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
                 ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
             },
             Dxgi::{
                 Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
-                CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory1,
+                CreateDXGIFactory1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
+                IDXGIAdapter, IDXGIDevice, IDXGIFactory1, IDXGIResource1,
             },
         },
     },
@@ -140,6 +141,8 @@ struct D3D11Resources {
     enumerator: ID3D11VideoProcessorEnumerator,
     input_texture: ID3D11Texture2D,
     output_texture: ID3D11Texture2D,
+    input_shared_handle: Option<HANDLE>,
+    output_shared_handle: Option<HANDLE>,
     staging_input: ID3D11Texture2D,
     staging_output: ID3D11Texture2D,
 }
@@ -287,24 +290,20 @@ impl D3D11Converter {
                 })?
         };
 
-        let input_texture = create_texture(
+        let (input_texture, input_shared_handle) = create_shared_texture(
             &device,
             config.input_width,
             config.input_height,
             input_dxgi,
-            D3D11_USAGE_DEFAULT,
             D3D11_BIND_RENDER_TARGET.0 as u32,
-            0,
         )?;
 
-        let output_texture = create_texture(
+        let (output_texture, output_shared_handle) = create_shared_texture(
             &device,
             config.output_width,
             config.output_height,
             output_dxgi,
-            D3D11_USAGE_DEFAULT,
             D3D11_BIND_RENDER_TARGET.0 as u32,
-            0,
         )?;
 
         let staging_input = create_texture(
@@ -327,6 +326,16 @@ impl D3D11Converter {
             D3D11_CPU_ACCESS_READ.0 as u32,
         )?;
 
+        if input_shared_handle.is_some() && output_shared_handle.is_some() {
+            tracing::info!("D3D11 converter created with shared texture handles enabled");
+        } else {
+            tracing::warn!(
+                "D3D11 converter created without shared handles (input: {}, output: {})",
+                input_shared_handle.is_some(),
+                output_shared_handle.is_some()
+            );
+        }
+
         let resources = D3D11Resources {
             device,
             context,
@@ -336,6 +345,8 @@ impl D3D11Converter {
             enumerator,
             input_texture,
             output_texture,
+            input_shared_handle,
+            output_shared_handle,
             staging_input,
             staging_output,
         };
@@ -367,6 +378,23 @@ impl D3D11Converter {
 
     pub fn gpu_info(&self) -> &GpuInfo {
         &self.gpu_info
+    }
+
+    pub fn input_shared_handle(&self) -> Option<HANDLE> {
+        self.resources.lock().input_shared_handle
+    }
+
+    pub fn output_shared_handle(&self) -> Option<HANDLE> {
+        self.resources.lock().output_shared_handle
+    }
+
+    pub fn output_texture(&self) -> ID3D11Texture2D {
+        self.resources.lock().output_texture.clone()
+    }
+
+    pub fn has_shared_handles(&self) -> bool {
+        let resources = self.resources.lock();
+        resources.input_shared_handle.is_some() && resources.output_shared_handle.is_some()
     }
 }
 
@@ -582,6 +610,81 @@ fn create_texture(
     }
 }
 
+fn create_shared_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+    bind_flags: u32,
+) -> Result<(ID3D11Texture2D, Option<HANDLE>), ConvertError> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: width,
+        Height: height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: format,
+        SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: bind_flags,
+        CPUAccessFlags: 0,
+        MiscFlags: D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32,
+    };
+
+    let texture = unsafe {
+        let mut texture: Option<ID3D11Texture2D> = None;
+        device
+            .CreateTexture2D(&desc, None, Some(&mut texture))
+            .map_err(|e| {
+                ConvertError::HardwareUnavailable(format!(
+                    "CreateTexture2D with shared handle failed: {e:?}"
+                ))
+            })?;
+        texture.ok_or_else(|| {
+            ConvertError::HardwareUnavailable("CreateTexture2D returned null".to_string())
+        })?
+    };
+
+    let shared_handle = extract_shared_handle(&texture);
+
+    Ok((texture, shared_handle))
+}
+
+fn extract_shared_handle(texture: &ID3D11Texture2D) -> Option<HANDLE> {
+    unsafe {
+        let dxgi_resource: Result<IDXGIResource1, _> = texture.cast();
+        match dxgi_resource {
+            Ok(resource) => {
+                let result = resource.CreateSharedHandle(
+                    None,
+                    DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+                    None,
+                );
+                match result {
+                    Ok(handle) if !handle.is_invalid() => {
+                        tracing::debug!("Created shared handle for texture: {:?}", handle);
+                        Some(handle)
+                    }
+                    Ok(_) => {
+                        tracing::warn!("CreateSharedHandle returned invalid handle");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("CreateSharedHandle failed: {e:?}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to cast texture to IDXGIResource1: {e:?}");
+                None
+            }
+        }
+    }
+}
+
 unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: usize) {
     let height = frame.height() as usize;
     let format = frame.format();
@@ -669,3 +772,20 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
 
 unsafe impl Send for D3D11Converter {}
 unsafe impl Sync for D3D11Converter {}
+
+impl Drop for D3D11Resources {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(handle) = self.input_shared_handle.take() {
+                if !handle.is_invalid() {
+                    let _ = CloseHandle(handle);
+                }
+            }
+            if let Some(handle) = self.output_shared_handle.take() {
+                if !handle.is_invalid() {
+                    let _ = CloseHandle(handle);
+                }
+            }
+        }
+    }
+}
