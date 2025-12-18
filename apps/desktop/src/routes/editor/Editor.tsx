@@ -570,7 +570,7 @@ function Dialogs() {
 												<Button
 													variant="white"
 													size="xs"
-													class="flex items-center justify-center text-center rounded-full h-8 w-8 border focus:border-blue-9"
+													class="flex items-center justify-center text-center rounded-full h-8 w-8 border outline-hidden focus:border-blue-9"
 													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
