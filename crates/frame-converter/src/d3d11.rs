@@ -8,6 +8,7 @@ use std::{
         OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 use windows::{
     Win32::{
@@ -27,7 +28,10 @@ use windows::{
                 ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
             },
             Dxgi::{
-                Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_YUY2},
+                Common::{
+                    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_P010,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_YUY2,
+                },
                 CreateDXGIFactory1, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE,
                 IDXGIAdapter, IDXGIDevice, IDXGIFactory1, IDXGIResource1,
             },
@@ -149,18 +153,16 @@ struct D3D11Resources {
 
 pub struct D3D11Converter {
     resources: Mutex<D3D11Resources>,
-    #[allow(dead_code)]
     input_format: Pixel,
     output_format: Pixel,
-    #[allow(dead_code)]
     input_width: u32,
-    #[allow(dead_code)]
     input_height: u32,
     output_width: u32,
     output_height: u32,
     gpu_info: GpuInfo,
     conversion_count: AtomicU64,
     verified_gpu_usage: AtomicBool,
+    total_conversion_time_ns: AtomicU64,
 }
 
 fn get_gpu_info(device: &ID3D11Device) -> Result<GpuInfo, ConvertError> {
@@ -373,6 +375,7 @@ impl D3D11Converter {
             gpu_info,
             conversion_count: AtomicU64::new(0),
             verified_gpu_usage: AtomicBool::new(false),
+            total_conversion_time_ns: AtomicU64::new(0),
         })
     }
 
@@ -396,15 +399,56 @@ impl D3D11Converter {
         let resources = self.resources.lock();
         resources.input_shared_handle.is_some() && resources.output_shared_handle.is_some()
     }
+
+    pub fn average_conversion_time_ms(&self) -> Option<f64> {
+        let count = self.conversion_count.load(Ordering::Relaxed);
+        if count == 0 {
+            return None;
+        }
+        let total_ns = self.total_conversion_time_ns.load(Ordering::Relaxed);
+        Some((total_ns as f64 / count as f64) / 1_000_000.0)
+    }
+
+    pub fn format_info(&self) -> (Pixel, Pixel, u32, u32, u32, u32) {
+        (
+            self.input_format,
+            self.output_format,
+            self.input_width,
+            self.input_height,
+            self.output_width,
+            self.output_height,
+        )
+    }
+}
+
+pub fn supported_input_formats() -> &'static [Pixel] {
+    &[
+        Pixel::NV12,
+        Pixel::YUYV422,
+        Pixel::BGRA,
+        Pixel::RGBA,
+        Pixel::P010LE,
+    ]
+}
+
+pub fn is_format_supported(pixel: Pixel) -> bool {
+    pixel_to_dxgi(pixel).is_ok()
 }
 
 impl FrameConverter for D3D11Converter {
     fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+        let start = Instant::now();
         let count = self.conversion_count.fetch_add(1, Ordering::Relaxed);
 
         if count == 0 {
             tracing::info!(
-                "D3D11 converter first frame: converting on GPU {} ({})",
+                "D3D11 converter first frame: {:?} {}x{} -> {:?} {}x{} on GPU {} ({})",
+                self.input_format,
+                self.input_width,
+                self.input_height,
+                self.output_format,
+                self.output_width,
+                self.output_height,
                 self.gpu_info.description,
                 self.gpu_info.vendor_name()
             );
@@ -543,6 +587,25 @@ impl FrameConverter for D3D11Converter {
             resources.context.Unmap(&resources.staging_output, 0);
 
             output.set_pts(pts);
+
+            let elapsed_ns = start.elapsed().as_nanos() as u64;
+            self.total_conversion_time_ns
+                .fetch_add(elapsed_ns, Ordering::Relaxed);
+
+            let frame_count = count + 1;
+            if frame_count > 0 && frame_count % 300 == 0 {
+                let total_ns = self.total_conversion_time_ns.load(Ordering::Relaxed);
+                let avg_ms = (total_ns as f64 / frame_count as f64) / 1_000_000.0;
+                tracing::debug!(
+                    "D3D11 converter: {:.2}ms avg over {} frames ({:?} -> {:?}) on {}",
+                    avg_ms,
+                    frame_count,
+                    self.input_format,
+                    self.output_format,
+                    self.gpu_info.description
+                );
+            }
+
             Ok(output)
         }
     }
@@ -568,7 +631,22 @@ fn pixel_to_dxgi(pixel: Pixel) -> Result<DXGI_FORMAT, ConvertError> {
     match pixel {
         Pixel::NV12 => Ok(DXGI_FORMAT_NV12),
         Pixel::YUYV422 => Ok(DXGI_FORMAT_YUY2),
+        Pixel::BGRA => Ok(DXGI_FORMAT_B8G8R8A8_UNORM),
+        Pixel::RGBA => Ok(DXGI_FORMAT_R8G8B8A8_UNORM),
+        Pixel::P010LE => Ok(DXGI_FORMAT_P010),
         _ => Err(ConvertError::UnsupportedFormat(pixel, Pixel::NV12)),
+    }
+}
+
+#[allow(dead_code)]
+fn dxgi_format_name(format: DXGI_FORMAT) -> &'static str {
+    match format {
+        DXGI_FORMAT_NV12 => "NV12",
+        DXGI_FORMAT_YUY2 => "YUY2",
+        DXGI_FORMAT_B8G8R8A8_UNORM => "BGRA",
+        DXGI_FORMAT_R8G8B8A8_UNORM => "RGBA",
+        DXGI_FORMAT_P010 => "P010",
+        _ => "Unknown",
     }
 }
 
@@ -687,6 +765,7 @@ fn extract_shared_handle(texture: &ID3D11Texture2D) -> Option<HANDLE> {
 
 unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: usize) {
     let height = frame.height() as usize;
+    let width = frame.width() as usize;
     let format = frame.format();
 
     match format {
@@ -696,7 +775,7 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
                     ptr::copy_nonoverlapping(
                         frame.data(0).as_ptr().add(y * frame.stride(0)),
                         dst.add(y * dst_stride),
-                        frame.width() as usize,
+                        width,
                     );
                 }
             }
@@ -706,18 +785,52 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
                     ptr::copy_nonoverlapping(
                         frame.data(1).as_ptr().add(y * frame.stride(1)),
                         dst.add(uv_offset + y * dst_stride),
-                        frame.width() as usize,
+                        width,
                     );
                 }
             }
         }
         Pixel::YUYV422 => {
-            let row_bytes = frame.width() as usize * 2;
+            let row_bytes = width * 2;
             for y in 0..height {
                 unsafe {
                     ptr::copy_nonoverlapping(
                         frame.data(0).as_ptr().add(y * frame.stride(0)),
                         dst.add(y * dst_stride),
+                        row_bytes,
+                    );
+                }
+            }
+        }
+        Pixel::BGRA | Pixel::RGBA => {
+            let row_bytes = width * 4;
+            for y in 0..height {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        row_bytes,
+                    );
+                }
+            }
+        }
+        Pixel::P010LE => {
+            let row_bytes = width * 2;
+            for y in 0..height {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(0).as_ptr().add(y * frame.stride(0)),
+                        dst.add(y * dst_stride),
+                        row_bytes,
+                    );
+                }
+            }
+            let uv_offset = height * dst_stride;
+            for y in 0..height / 2 {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        frame.data(1).as_ptr().add(y * frame.stride(1)),
+                        dst.add(uv_offset + y * dst_stride),
                         row_bytes,
                     );
                 }
@@ -729,6 +842,7 @@ unsafe fn copy_frame_to_mapped(frame: &frame::Video, dst: *mut u8, dst_stride: u
 
 unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut frame::Video) {
     let height = frame.height() as usize;
+    let width = frame.width() as usize;
     let format = frame.format();
 
     match format {
@@ -738,7 +852,7 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
                     ptr::copy_nonoverlapping(
                         src.add(y * src_stride),
                         frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
-                        frame.width() as usize,
+                        width,
                     );
                 }
             }
@@ -748,19 +862,52 @@ unsafe fn copy_mapped_to_frame(src: *const u8, src_stride: usize, frame: &mut fr
                     ptr::copy_nonoverlapping(
                         src.add(uv_offset + y * src_stride),
                         frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
-                        frame.width() as usize,
+                        width,
                     );
                 }
             }
         }
         Pixel::YUYV422 => {
-            let bytes_per_pixel = 2;
-            let row_bytes = frame.width() as usize * bytes_per_pixel;
+            let row_bytes = width * 2;
             for y in 0..height {
                 unsafe {
                     ptr::copy_nonoverlapping(
                         src.add(y * src_stride),
                         frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        row_bytes,
+                    );
+                }
+            }
+        }
+        Pixel::BGRA | Pixel::RGBA => {
+            let row_bytes = width * 4;
+            for y in 0..height {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        row_bytes,
+                    );
+                }
+            }
+        }
+        Pixel::P010LE => {
+            let row_bytes = width * 2;
+            for y in 0..height {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(y * src_stride),
+                        frame.data_mut(0).as_mut_ptr().add(y * frame.stride(0)),
+                        row_bytes,
+                    );
+                }
+            }
+            let uv_offset = height * src_stride;
+            for y in 0..height / 2 {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        src.add(uv_offset + y * src_stride),
+                        frame.data_mut(1).as_mut_ptr().add(y * frame.stride(1)),
                         row_bytes,
                     );
                 }
