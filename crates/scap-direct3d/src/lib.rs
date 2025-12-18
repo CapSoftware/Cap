@@ -164,6 +164,7 @@ pub struct Settings {
     pub min_update_interval: Option<Duration>,
     pub pixel_format: PixelFormat,
     pub crop: Option<D3D11_BOX>,
+    pub fps: Option<u32>,
 }
 
 impl Settings {
@@ -298,10 +299,15 @@ impl Capturer {
         })()
         .map_err(NewCapturerError::Direct3DDevice)?;
 
+        let frame_pool_size = settings
+            .fps
+            .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
+            .unwrap_or(2);
+
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             settings.pixel_format.as_directx(),
-            1,
+            frame_pool_size,
             item.Size().map_err(NewCapturerError::ItemSize)?,
         )
         .map_err(NewCapturerError::FramePool)?;

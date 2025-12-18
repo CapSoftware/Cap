@@ -113,7 +113,9 @@ impl Muxer for WindowsMuxer {
         let output_size = config.output_size.unwrap_or(input_size);
         let fragmented = config.fragmented;
         let frag_duration_us = config.frag_duration_us;
-        let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
+        let queue_depth = ((config.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
+        let (video_tx, video_rx) =
+            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(queue_depth);
 
         let mut output = ffmpeg::format::output(&output_path)?;
 

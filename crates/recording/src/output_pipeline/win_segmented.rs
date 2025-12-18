@@ -354,7 +354,9 @@ impl WindowsSegmentedMuxer {
         };
         let output_size = self.output_size.unwrap_or(input_size);
 
-        let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
+        let queue_depth = ((self.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
+        let (video_tx, video_rx) =
+            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(queue_depth);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
         let output = ffmpeg::format::output(&segment_path)?;
         let output = Arc::new(Mutex::new(output));
