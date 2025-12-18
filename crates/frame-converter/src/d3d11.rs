@@ -73,6 +73,26 @@ pub struct GpuInfo {
     pub device_id: u32,
     pub description: String,
     pub dedicated_video_memory: u64,
+    pub adapter_index: u32,
+    pub is_software_adapter: bool,
+}
+
+impl GpuInfo {
+    pub fn is_basic_render_driver(&self) -> bool {
+        self.vendor == GpuVendor::Microsoft
+            && (self.description.contains("Basic Render Driver")
+                || self.description.contains("Microsoft Basic")
+                || self.dedicated_video_memory == 0)
+    }
+
+    pub fn is_warp(&self) -> bool {
+        self.description.contains("Microsoft Basic Render Driver")
+            || self.description.contains("WARP")
+    }
+
+    pub fn supports_hardware_encoding(&self) -> bool {
+        !self.is_software_adapter && !self.is_basic_render_driver()
+    }
 }
 
 impl GpuInfo {
@@ -90,19 +110,30 @@ impl GpuInfo {
 }
 
 static DETECTED_GPU: OnceLock<Option<GpuInfo>> = OnceLock::new();
+static ALL_GPUS: OnceLock<Vec<GpuInfo>> = OnceLock::new();
 
 pub fn detect_primary_gpu() -> Option<&'static GpuInfo> {
     DETECTED_GPU
         .get_or_init(|| {
-            let result = detect_primary_gpu_inner();
+            let all_gpus = enumerate_all_gpus();
+            let result = select_best_gpu(&all_gpus);
             if let Some(ref info) = result {
                 tracing::debug!(
-                    "Detected primary GPU: {} (Vendor: {}, VendorID: 0x{:04X}, VRAM: {} MB)",
+                    "Selected primary GPU: {} (Vendor: {}, VendorID: 0x{:04X}, VRAM: {} MB, Adapter: {}, SoftwareRenderer: {})",
                     info.description,
                     info.vendor_name(),
                     info.vendor_id,
-                    info.dedicated_video_memory / (1024 * 1024)
+                    info.dedicated_video_memory / (1024 * 1024),
+                    info.adapter_index,
+                    info.is_software_adapter
                 );
+
+                if info.is_basic_render_driver() {
+                    tracing::warn!(
+                        "Detected Microsoft Basic Render Driver - hardware encoding will be disabled. \
+                        This may indicate missing GPU drivers or a remote desktop session."
+                    );
+                }
             } else {
                 tracing::debug!("No GPU detected via DXGI, using default encoder order");
             }
@@ -111,29 +142,126 @@ pub fn detect_primary_gpu() -> Option<&'static GpuInfo> {
         .as_ref()
 }
 
-fn detect_primary_gpu_inner() -> Option<GpuInfo> {
+pub fn get_all_gpus() -> &'static Vec<GpuInfo> {
+    ALL_GPUS.get_or_init(enumerate_all_gpus)
+}
+
+fn enumerate_all_gpus() -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
+
     unsafe {
-        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
-        let adapter: IDXGIAdapter = factory.EnumAdapters(0).ok()?;
-        let desc = adapter.GetDesc().ok()?;
+        let factory: IDXGIFactory1 = match CreateDXGIFactory1() {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("Failed to create DXGI factory: {e:?}");
+                return gpus;
+            }
+        };
 
-        let description = String::from_utf16_lossy(
-            &desc
-                .Description
-                .iter()
-                .take_while(|&&c| c != 0)
-                .copied()
-                .collect::<Vec<_>>(),
-        );
+        let mut adapter_index = 0u32;
+        loop {
+            let adapter: IDXGIAdapter = match factory.EnumAdapters(adapter_index) {
+                Ok(a) => a,
+                Err(_) => break,
+            };
 
-        Some(GpuInfo {
-            vendor: GpuVendor::from_id(desc.VendorId),
-            vendor_id: desc.VendorId,
-            device_id: desc.DeviceId,
-            description,
-            dedicated_video_memory: desc.DedicatedVideoMemory as u64,
-        })
+            if let Ok(desc) = adapter.GetDesc() {
+                let description = String::from_utf16_lossy(
+                    &desc
+                        .Description
+                        .iter()
+                        .take_while(|&&c| c != 0)
+                        .copied()
+                        .collect::<Vec<_>>(),
+                );
+
+                let is_software = desc.VendorId == 0x1414
+                    && (description.contains("Basic Render")
+                        || description.contains("WARP")
+                        || description.contains("Microsoft Basic"));
+
+                let gpu_info = GpuInfo {
+                    vendor: GpuVendor::from_id(desc.VendorId),
+                    vendor_id: desc.VendorId,
+                    device_id: desc.DeviceId,
+                    description: description.clone(),
+                    dedicated_video_memory: desc.DedicatedVideoMemory as u64,
+                    adapter_index,
+                    is_software_adapter: is_software,
+                };
+
+                tracing::debug!(
+                    "Found GPU adapter {}: {} (Vendor: 0x{:04X}, VRAM: {} MB, Software: {})",
+                    adapter_index,
+                    description,
+                    desc.VendorId,
+                    desc.DedicatedVideoMemory / (1024 * 1024),
+                    is_software
+                );
+
+                gpus.push(gpu_info);
+            }
+
+            adapter_index += 1;
+        }
     }
+
+    if gpus.is_empty() {
+        tracing::warn!("No GPU adapters found via DXGI enumeration");
+    } else {
+        tracing::info!("Enumerated {} GPU adapter(s)", gpus.len());
+    }
+
+    gpus
+}
+
+fn select_best_gpu(gpus: &[GpuInfo]) -> Option<GpuInfo> {
+    if gpus.is_empty() {
+        return None;
+    }
+
+    let hardware_gpus: Vec<&GpuInfo> = gpus.iter().filter(|g| !g.is_software_adapter).collect();
+
+    if hardware_gpus.is_empty() {
+        tracing::warn!("No hardware GPUs found, falling back to software adapter");
+        return gpus.first().cloned();
+    }
+
+    let discrete_gpus: Vec<&GpuInfo> = hardware_gpus
+        .iter()
+        .filter(|g| {
+            matches!(
+                g.vendor,
+                GpuVendor::Nvidia | GpuVendor::Amd | GpuVendor::Qualcomm | GpuVendor::Arm
+            )
+        })
+        .copied()
+        .collect();
+
+    if !discrete_gpus.is_empty() {
+        let best = discrete_gpus
+            .iter()
+            .max_by_key(|g| g.dedicated_video_memory)
+            .unwrap();
+
+        if discrete_gpus.len() > 1 || hardware_gpus.len() > 1 {
+            tracing::info!(
+                "Multi-GPU system detected ({} GPUs). Selected {} with {} MB VRAM for encoding.",
+                gpus.len(),
+                best.description,
+                best.dedicated_video_memory / (1024 * 1024)
+            );
+        }
+
+        return Some((*best).clone());
+    }
+
+    let best = hardware_gpus
+        .iter()
+        .max_by_key(|g| g.dedicated_video_memory)
+        .unwrap();
+
+    Some((*best).clone())
 }
 
 struct D3D11Resources {
@@ -189,12 +317,19 @@ fn get_gpu_info(device: &ID3D11Device) -> Result<GpuInfo, ConvertError> {
                 .collect::<Vec<_>>(),
         );
 
+        let is_software = desc.VendorId == 0x1414
+            && (description.contains("Basic Render")
+                || description.contains("WARP")
+                || description.contains("Microsoft Basic"));
+
         Ok(GpuInfo {
             vendor: GpuVendor::from_id(desc.VendorId),
             vendor_id: desc.VendorId,
             device_id: desc.DeviceId,
             description,
             dedicated_video_memory: desc.DedicatedVideoMemory as u64,
+            adapter_index: 0,
+            is_software_adapter: is_software,
         })
     }
 }

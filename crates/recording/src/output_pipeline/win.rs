@@ -867,18 +867,54 @@ impl AudioMuxer for WindowsCameraMuxer {
 
 fn convert_uyvy_to_yuyv(src: &[u8], width: u32, height: u32) -> Vec<u8> {
     let total_bytes = (width * height * 2) as usize;
+    let src_len = src.len().min(total_bytes);
     let mut dst = vec![0u8; total_bytes];
 
-    for i in (0..src.len().min(total_bytes)).step_by(4) {
-        if i + 3 < src.len() && i + 3 < total_bytes {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("ssse3") {
+            unsafe {
+                convert_uyvy_to_yuyv_ssse3(src, &mut dst, src_len);
+            }
+            return dst;
+        }
+    }
+
+    convert_uyvy_to_yuyv_scalar(src, &mut dst, src_len);
+    dst
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn convert_uyvy_to_yuyv_ssse3(src: &[u8], dst: &mut [u8], len: usize) {
+    use std::arch::x86_64::*;
+
+    unsafe {
+        let shuffle_mask = _mm_setr_epi8(1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14);
+
+        let mut i = 0;
+        let simd_end = len & !15;
+
+        while i < simd_end {
+            let chunk = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+            let shuffled = _mm_shuffle_epi8(chunk, shuffle_mask);
+            _mm_storeu_si128(dst.as_mut_ptr().add(i) as *mut __m128i, shuffled);
+            i += 16;
+        }
+
+        convert_uyvy_to_yuyv_scalar(&src[i..], &mut dst[i..], len - i);
+    }
+}
+
+fn convert_uyvy_to_yuyv_scalar(src: &[u8], dst: &mut [u8], len: usize) {
+    for i in (0..len).step_by(4) {
+        if i + 3 < src.len() && i + 3 < dst.len() {
             dst[i] = src[i + 1];
             dst[i + 1] = src[i];
             dst[i + 2] = src[i + 3];
             dst[i + 3] = src[i + 2];
         }
     }
-
-    dst
 }
 
 pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpeg::frame::Video> {

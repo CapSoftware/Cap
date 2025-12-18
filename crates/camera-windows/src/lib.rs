@@ -21,12 +21,148 @@ const MF_VIDEO_FORMAT_P010: GUID = GUID::from_u128(0x30313050_0000_0010_8000_00a
 
 const MEDIASUBTYPE_Y800: GUID = GUID::from_u128(0x30303859_0000_0010_8000_00aa00389b71);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceCategory {
+    Physical,
+    Virtual,
+    CaptureCard,
+}
+
+impl DeviceCategory {
+    pub fn is_virtual(&self) -> bool {
+        matches!(self, DeviceCategory::Virtual)
+    }
+
+    pub fn is_capture_card(&self) -> bool {
+        matches!(self, DeviceCategory::CaptureCard)
+    }
+}
+
+const VIRTUAL_CAMERA_PATTERNS: &[&str] = &[
+    "obs",
+    "virtual",
+    "snap camera",
+    "manycam",
+    "xsplit",
+    "streamlabs",
+    "droidcam",
+    "iriun",
+    "epoccam",
+    "ndi",
+    "newtek",
+    "camtwist",
+    "mmhmm",
+    "chromacam",
+    "vtuber",
+    "prism live",
+    "camo",
+    "avatarify",
+    "facerig",
+];
+
+const CAPTURE_CARD_PATTERNS: &[&str] = &[
+    "elgato",
+    "avermedia",
+    "magewell",
+    "blackmagic",
+    "decklink",
+    "intensity",
+    "ultrastudio",
+    "atomos",
+    "hauppauge",
+    "startech",
+    "j5create",
+    "razer ripsaw",
+    "pengo",
+    "evga xr1",
+    "nzxt signal",
+    "genki shadowcast",
+    "cam link",
+    "live gamer",
+    "game capture",
+];
+
+fn detect_device_category(name: &OsStr, model_id: Option<&str>) -> DeviceCategory {
+    let name_lower = name.to_string_lossy().to_lowercase();
+    let model_lower = model_id.map(|m| m.to_lowercase());
+
+    let matches_pattern = |patterns: &[&str]| {
+        patterns.iter().any(|pattern| {
+            name_lower.contains(pattern)
+                || model_lower.as_ref().is_some_and(|m| m.contains(pattern))
+        })
+    };
+
+    if matches_pattern(CAPTURE_CARD_PATTERNS) {
+        DeviceCategory::CaptureCard
+    } else if matches_pattern(VIRTUAL_CAMERA_PATTERNS) {
+        DeviceCategory::Virtual
+    } else {
+        DeviceCategory::Physical
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FormatPreference {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: f32,
+    pub format_priority: Vec<PixelFormat>,
+}
+
+impl FormatPreference {
+    pub fn new(width: u32, height: u32, frame_rate: f32) -> Self {
+        Self {
+            width,
+            height,
+            frame_rate,
+            format_priority: vec![
+                PixelFormat::NV12,
+                PixelFormat::YUYV422,
+                PixelFormat::UYVY422,
+                PixelFormat::YUV420P,
+                PixelFormat::MJPEG,
+                PixelFormat::RGB32,
+            ],
+        }
+    }
+
+    pub fn with_format_priority(mut self, priority: Vec<PixelFormat>) -> Self {
+        self.format_priority = priority;
+        self
+    }
+
+    pub fn for_hardware_encoding() -> Self {
+        Self::new(1920, 1080, 30.0).with_format_priority(vec![
+            PixelFormat::NV12,
+            PixelFormat::YUYV422,
+            PixelFormat::UYVY422,
+            PixelFormat::YUV420P,
+        ])
+    }
+
+    pub fn for_capture_card() -> Self {
+        Self::new(1920, 1080, 60.0).with_format_priority(vec![
+            PixelFormat::NV12,
+            PixelFormat::YUYV422,
+            PixelFormat::UYVY422,
+            PixelFormat::P010,
+        ])
+    }
+}
+
+impl Default for FormatPreference {
+    fn default() -> Self {
+        Self::new(1920, 1080, 30.0)
+    }
+}
+
 #[derive(Clone)]
 pub struct VideoDeviceInfo {
     id: OsString,
     name: OsString,
     model_id: Option<String>,
-    // formats: Vec<VideoFormat>,
+    category: DeviceCategory,
     inner: VideoDeviceInfoInner,
 }
 
@@ -65,6 +201,104 @@ impl VideoDeviceInfo {
 
     pub fn model_id(&self) -> Option<&str> {
         self.model_id.as_deref()
+    }
+
+    pub fn category(&self) -> DeviceCategory {
+        self.category
+    }
+
+    pub fn is_virtual_camera(&self) -> bool {
+        self.category.is_virtual()
+    }
+
+    pub fn is_capture_card(&self) -> bool {
+        self.category.is_capture_card()
+    }
+
+    pub fn is_high_bandwidth(&self) -> bool {
+        if !self.is_capture_card() {
+            return false;
+        }
+        self.formats().iter().any(|f| {
+            let pixels = f.width() as u64 * f.height() as u64;
+            let fps = f.frame_rate() as u64;
+            pixels >= 3840 * 2160 && fps >= 30
+        })
+    }
+
+    pub fn max_resolution(&self) -> Option<(u32, u32)> {
+        self.formats()
+            .iter()
+            .map(|f| (f.width(), f.height()))
+            .max_by_key(|(w, h)| (*w as u64) * (*h as u64))
+    }
+
+    pub fn find_best_format(&self, preference: &FormatPreference) -> Option<VideoFormat> {
+        let formats = self.formats();
+        if formats.is_empty() {
+            return None;
+        }
+
+        let target_pixels = preference.width as u64 * preference.height as u64;
+
+        let score_format = |f: &VideoFormat| {
+            let format_priority = preference
+                .format_priority
+                .iter()
+                .position(|&pf| pf == f.pixel_format())
+                .map(|pos| 1000 - pos as i32)
+                .unwrap_or(0);
+
+            let pixels = f.width() as u64 * f.height() as u64;
+            let resolution_score = if pixels == target_pixels {
+                500
+            } else if pixels > target_pixels {
+                400 - ((pixels - target_pixels) / 10000).min(300) as i32
+            } else {
+                300 - ((target_pixels - pixels) / 10000).min(200) as i32
+            };
+
+            let fps_diff = (f.frame_rate() - preference.frame_rate).abs();
+            let fps_score = 100 - (fps_diff * 10.0).min(100.0) as i32;
+
+            format_priority + resolution_score + fps_score
+        };
+
+        formats.into_iter().max_by_key(score_format)
+    }
+
+    pub fn find_format_with_fallback(&self, preference: &FormatPreference) -> Option<VideoFormat> {
+        if let Some(format) = self.find_best_format(preference) {
+            return Some(format);
+        }
+
+        let fallback_formats = [
+            PixelFormat::NV12,
+            PixelFormat::YUYV422,
+            PixelFormat::UYVY422,
+            PixelFormat::MJPEG,
+            PixelFormat::RGB32,
+            PixelFormat::YUV420P,
+        ];
+
+        let formats = self.formats();
+        for fallback_pixel_format in fallback_formats {
+            if let Some(format) = formats
+                .iter()
+                .filter(|f| f.pixel_format() == fallback_pixel_format)
+                .max_by_key(|f| {
+                    let res_score = (f.width() as i32).min(preference.width as i32)
+                        + (f.height() as i32).min(preference.height as i32);
+                    let fps_score =
+                        (100.0 - (f.frame_rate() - preference.frame_rate).abs().min(100.0)) as i32;
+                    res_score + fps_score
+                })
+            {
+                return Some(format.clone());
+            }
+        }
+
+        formats.into_iter().next()
     }
 
     pub fn is_mf(&self) -> bool {
@@ -285,11 +519,13 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
             let name = device.name()?;
             let id = device.id()?;
             let model_id = device.model_id();
+            let category = detect_device_category(&name, model_id.as_deref());
 
             Ok::<_, windows_core::Error>(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
+                category,
                 inner: VideoDeviceInfoInner::MediaFoundation { device },
             })
         })
@@ -308,11 +544,13 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
             let id = device.id()?;
             let name = device.name()?;
             let model_id = device.model_id();
+            let category = detect_device_category(&name, model_id.as_deref());
 
             Some(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
+                category,
                 inner: VideoDeviceInfoInner::DirectShow(device),
             })
         })
