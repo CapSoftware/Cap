@@ -152,11 +152,8 @@ function AppearanceSection(props: {
 
 	return (
 		<div class="flex flex-col gap-4">
-			<div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">General</h2>
-				<p class="text-sm text-gray-10">
-					General settings of your Cap application.
-				</p>
+			<div class="flex flex-col border-b border-gray-2">
+				<h2 class="text-lg font-medium text-gray-12">General Settings</h2>
 			</div>
 			<div
 				class="flex justify-start items-center text-gray-12"

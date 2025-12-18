@@ -1,6 +1,7 @@
 use cap_project::{TextSegment, XY};
 
 const BASE_TEXT_HEIGHT: f64 = 0.2;
+const MAX_FONT_SIZE_PX: f32 = 256.0;
 
 #[derive(Debug, Clone)]
 pub struct PreparedText {
@@ -11,6 +12,7 @@ pub struct PreparedText {
     pub font_size: f32,
     pub font_weight: f32,
     pub italic: bool,
+    pub opacity: f32,
 }
 
 fn parse_color(hex: &str) -> [f32; 4] {
@@ -70,14 +72,29 @@ pub fn prepare_texts(
         let right = (left + width).min(output_size.x as f32);
         let bottom = (top + height).min(output_size.y as f32);
 
+        let fade_duration = segment.fade_duration.max(0.0);
+        let opacity = if fade_duration > 0.0 {
+            let time_since_start = (frame_time - segment.start).max(0.0);
+            let time_until_end = (segment.end - frame_time).max(0.0);
+
+            let fade_in = (time_since_start / fade_duration).min(1.0);
+            let fade_out = (time_until_end / fade_duration).min(1.0);
+
+            (fade_in * fade_out) as f32
+        } else {
+            1.0
+        };
+
         prepared.push(PreparedText {
             content: segment.content.clone(),
             bounds: [left, top, right, bottom],
             color: parse_color(&segment.color),
             font_family: segment.font_family.clone(),
-            font_size: (segment.font_size * size_scale).max(1.0) * height_scale,
+            font_size: ((segment.font_size * size_scale).max(1.0) * height_scale)
+                .min(MAX_FONT_SIZE_PX),
             font_weight: segment.font_weight,
             italic: segment.italic,
+            opacity,
         });
     }
 

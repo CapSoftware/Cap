@@ -5,6 +5,7 @@ use ffmpeg::{
     format::{self as avformat},
     software::resampling,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs::File;
@@ -12,7 +13,8 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, Window};
+use tauri::{AppHandle, Manager};
+use tauri_specta::Event;
 use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
@@ -1775,10 +1777,13 @@ pub async fn save_captions(
         "position".to_string(),
         serde_json::Value::String(settings.position.clone()),
     );
-    settings_obj.insert("bold".to_string(), serde_json::Value::Bool(settings.bold));
     settings_obj.insert(
         "italic".to_string(),
         serde_json::Value::Bool(settings.italic),
+    );
+    settings_obj.insert(
+        "fontWeight".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(settings.font_weight)),
     );
     settings_obj.insert(
         "outline".to_string(),
@@ -1912,18 +1917,19 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         .and_then(|v| v.as_str())
                         .unwrap_or("bottom")
                         .to_string();
-                    let bold = settings_obj
-                        .get("bold")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
                     let italic = settings_obj
                         .get("italic")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
+                    let font_weight = settings_obj
+                        .get("fontWeight")
+                        .or_else(|| settings_obj.get("font_weight"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(700) as u32;
                     let outline = settings_obj
                         .get("outline")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                        .unwrap_or(false);
 
                     let outline_color = settings_obj
                         .get("outlineColor")
@@ -1971,8 +1977,8 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                         background_color,
                         background_opacity,
                         position,
-                        bold,
                         italic,
+                        font_weight,
                         outline,
                         outline_color,
                         export_with_subtitles,
@@ -2081,16 +2087,11 @@ pub struct DownloadProgress {
     pub message: String,
 }
 
-impl DownloadProgress {
-    const EVENT_NAME: &'static str = "download-progress";
-}
-
 #[tauri::command]
 #[specta::specta]
-#[instrument(skip(window))]
+#[instrument(skip(app))]
 pub async fn download_whisper_model(
     app: AppHandle,
-    window: Window,
     model_name: String,
     output_path: String,
 ) -> Result<(), String> {
@@ -2128,22 +2129,17 @@ pub async fn download_whisper_model(
         .await
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
-    let mut downloaded = 0;
-    let mut bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to get response bytes: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
 
-    const CHUNK_SIZE: usize = 1024 * 1024;
-    while !bytes.is_empty() {
-        let chunk_size = std::cmp::min(CHUNK_SIZE, bytes.len());
-        let chunk = bytes.split_to(chunk_size);
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("Error while downloading: {e}"))?;
 
         file.write_all(&chunk)
             .await
             .map_err(|e| format!("Error while writing to file: {e}"))?;
 
-        downloaded += chunk_size as u64;
+        downloaded += chunk.len() as u64;
 
         let progress = if total_size > 0 {
             (downloaded as f64 / total_size as f64) * 100.0
@@ -2151,15 +2147,12 @@ pub async fn download_whisper_model(
             0.0
         };
 
-        window
-            .emit(
-                DownloadProgress::EVENT_NAME,
-                DownloadProgress {
-                    message: format!("Downloading model: {progress:.1}%"),
-                    progress,
-                },
-            )
-            .map_err(|e| format!("Failed to emit progress: {e}"))?;
+        DownloadProgress {
+            progress,
+            message: format!("Downloading model: {progress:.1}%"),
+        }
+        .emit(&app)
+        .ok();
     }
 
     file.flush()

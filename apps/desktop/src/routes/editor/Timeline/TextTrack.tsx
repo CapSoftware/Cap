@@ -288,7 +288,7 @@ export function TextTrack(props: {
 								)}
 							/>
 							<SegmentContent
-								class="flex justify-center items-center cursor-grab px-3"
+								class="flex justify-center items-center cursor-grab px-3 overflow-hidden"
 								onMouseDown={createMouseDownDrag(
 									i,
 									() => {
@@ -325,10 +325,10 @@ export function TextTrack(props: {
 									},
 								)}
 							>
-								<div class="flex flex-col gap-0.5 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+								<div class="flex flex-col gap-0.5 justify-center items-center text-xs text-gray-1 dark:text-gray-12 w-full min-w-0 overflow-hidden">
 									<span class="opacity-70">Text</span>
-									<div class="flex gap-1 items-center text-md">
-										<span class="max-w-[10rem] truncate">
+									<div class="flex gap-1 items-center text-md w-full min-w-0 justify-center">
+										<span class="truncate max-w-full">
 											{segment.content || "Label"}
 										</span>
 									</div>

@@ -12,6 +12,7 @@ export type TextSegment = {
 	fontWeight: number;
 	italic: boolean;
 	color: string;
+	fadeDuration: number;
 };
 
 export const defaultTextSegment = (
@@ -29,4 +30,5 @@ export const defaultTextSegment = (
 	fontWeight: 700,
 	italic: false,
 	color: "#ffffff",
+	fadeDuration: 0.15,
 });
