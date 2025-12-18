@@ -275,7 +275,7 @@ impl Muxer for WindowsMuxer {
                                 };
 
                                 let relative = if let Some(first) = first_timestamp {
-                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                    timestamp.saturating_sub(first)
                                 } else {
                                     first_timestamp = Some(timestamp);
                                     Duration::ZERO
@@ -672,7 +672,7 @@ impl Muxer for WindowsCameraMuxer {
                             )>,
                         > {
                             let relative = if let Some(first) = first_timestamp {
-                                timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                timestamp.saturating_sub(first)
                             } else {
                                 first_timestamp = Some(timestamp);
                                 Duration::ZERO
@@ -754,7 +754,7 @@ impl Muxer for WindowsCameraMuxer {
                              timestamp: Duration|
                              -> anyhow::Result<Option<Duration>> {
                                 let relative = if let Some(first) = first_timestamp {
-                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                    timestamp.saturating_sub(first)
                                 } else {
                                     first_timestamp = Some(timestamp);
                                     Duration::ZERO
@@ -936,12 +936,12 @@ pub fn camera_frame_to_ffmpeg(frame: &NativeCameraFrame) -> anyhow::Result<ffmpe
         .map_err(|e| anyhow!("Failed to lock MF buffer: {:?}", e))?;
     let data = &*lock;
 
-    let converted_data: Option<Vec<u8>>;
+    let converted_data_storage;
     let (final_data, final_format): (&[u8], ffmpeg::format::Pixel) =
         if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-            converted_data = Some(convert_uyvy_to_yuyv(data, frame.width, frame.height));
+            converted_data_storage = convert_uyvy_to_yuyv(data, frame.width, frame.height);
             (
-                converted_data.as_ref().unwrap(),
+                converted_data_storage.as_slice(),
                 ffmpeg::format::Pixel::YUYV422,
             )
         } else {
@@ -996,14 +996,10 @@ pub fn upload_mf_buffer_to_texture(
     let lock = buffer_guard.lock()?;
     let original_data = &*lock;
 
-    let converted_buffer: Option<Vec<u8>>;
+    let converted_buffer_storage;
     let data: &[u8] = if frame.pixel_format == cap_camera_windows::PixelFormat::UYVY422 {
-        converted_buffer = Some(convert_uyvy_to_yuyv(
-            original_data,
-            frame.width,
-            frame.height,
-        ));
-        converted_buffer.as_ref().unwrap()
+        converted_buffer_storage = convert_uyvy_to_yuyv(original_data, frame.width, frame.height);
+        converted_buffer_storage.as_slice()
     } else {
         original_data
     };
