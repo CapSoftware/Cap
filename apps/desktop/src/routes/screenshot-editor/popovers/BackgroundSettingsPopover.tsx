@@ -263,12 +263,12 @@ export function BackgroundSettingsPopover() {
 									}
 								}}
 							>
-								<KTabs.List class="flex flex-row gap-2 items-center rounded-[0.5rem] relative">
+								<KTabs.List class="flex flex-row gap-2 items-center rounded-lg relative">
 									<For each={BACKGROUND_SOURCES_LIST}>
 										{(item) => {
 											return (
 												<KTabs.Trigger
-													class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  ui-selected:border-gray-3 ui-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border ui-selected:text-gray-12 peer"
+													class="z-10 flex-1 py-2.5 px-2 text-xs text-gray-11  data-selected:border-gray-3 data-selected:bg-gray-3 ui-not-selected:hover:border-gray-7 rounded-[10px] transition-colors duration-200 outline-none border data-selected:text-gray-12 peer"
 													value={item}
 												>
 													{BACKGROUND_SOURCES[item]}
@@ -295,7 +295,7 @@ export function BackgroundSettingsPopover() {
 															)
 														}
 														value={key}
-														class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 ui-selected:bg-gray-3 ui-selected:border-gray-3 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+														class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 bg-transparent rounded-lg border transition-colors duration-200 text-gray-11 ui-not-selected:hover:border-gray-7 data-selected:bg-gray-3 data-selected:border-gray-3 group data-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
 													>
 														{value}
 													</KTabs.Trigger>
@@ -332,7 +332,7 @@ export function BackgroundSettingsPopover() {
 													class="relative aspect-square group"
 												>
 													<KRadioGroup.ItemInput class="peer" />
-													<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 ui-checked:ring-2 ui-checked:ring-gray-500 ui-checked:ring-offset-2 ui-checked:ring-offset-gray-200">
+													<KRadioGroup.ItemControl class="overflow-hidden w-full h-full rounded-lg transition cursor-pointer ui-not-checked:ring-offset-1 ui-not-checked:ring-offset-gray-200 ui-not-checked:hover:ring-1 ui-not-checked:hover:ring-gray-400 data-checked:ring-2 data-checked:ring-gray-500 data-checked:ring-offset-2 data-checked:ring-offset-gray-200">
 														<img
 															src={photo.url}
 															loading="eager"
@@ -356,7 +356,7 @@ export function BackgroundSettingsPopover() {
 											<button
 												type="button"
 												onClick={() => fileInput.click()}
-												class="p-6 bg-gray-2 text-[13px] w-full rounded-[0.5rem] border border-gray-5 border-dashed flex flex-col items-center justify-center gap-[0.5rem] hover:bg-gray-3 transition-colors duration-100"
+												class="p-6 bg-gray-2 text-[13px] w-full rounded-lg border border-gray-5 border-dashed flex flex-col items-center justify-center gap-2 hover:bg-gray-3 transition-colors duration-100"
 											>
 												<IconCapImage class="text-gray-11 size-6" />
 												<span class="text-gray-12">

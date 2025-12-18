@@ -12,8 +12,8 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
-	"Win32_Graphics_Gdi",
-	"Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
@@ -21,7 +21,7 @@ hex = "0.4"
 sha2 = "0.10"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2 = "0.6"
+objc2 = { workspace = true }
 objc2-app-kit = { version = "0.3.0", features = ["NSCursor", "NSApplication"] }
 
 

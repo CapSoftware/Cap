@@ -947,7 +947,7 @@ function Page() {
 	onCleanup(() => startSignInCleanup.then((cb) => cb()));
 
 	return (
-		<div class="flex relative flex-col px-3 gap-2 h-full min-h-0 text-[--text-primary]">
+		<div class="flex relative flex-col px-3 gap-2 h-full min-h-0 text-(--text-primary)">
 			<WindowChromeHeader hideMaximize>
 				<div
 					class={cx(
@@ -1029,7 +1029,7 @@ function Page() {
 				<div class="flex items-center justify-between mt-4">
 					<div class="flex items-center space-x-1">
 						<a
-							class="*:w-[92px] *:h-auto text-[--text-primary]"
+							class="*:w-[92px] *:h-auto text-(--text-primary)"
 							target="_blank"
 							href={
 								auth.data
@@ -1049,9 +1049,9 @@ function Page() {
 										}
 									}}
 									class={cx(
-										"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+										"text-[0.6rem] rounded-lg px-1 py-0.5",
 										license.data?.type === "pro"
-											? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+											? "bg-(--blue-400) text-gray-1 dark:text-gray-12"
 											: "bg-gray-3 cursor-pointer hover:bg-gray-5",
 									)}
 								>

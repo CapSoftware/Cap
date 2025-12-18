@@ -2,7 +2,7 @@ use crate::{
     NewScreenshotAdded, NewStudioRecordingAdded, RecordingStarted, RecordingStopped,
     RequestOpenRecordingPicker, RequestOpenSettings, recording,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
-    windows::ShowCapWindow,
+    windows::CapWindow,
 };
 use cap_recording::RecordingMode;
 
@@ -456,7 +456,7 @@ fn handle_previous_item_click(app: &AppHandle, path_str: &str) {
         let app = app.clone();
         let screenshot_path = path;
         tokio::spawn(async move {
-            let _ = ShowCapWindow::ScreenshotEditor {
+            let _ = CapWindow::ScreenshotEditor {
                 path: screenshot_path,
             }
             .show(&app)
@@ -478,7 +478,7 @@ fn handle_previous_item_click(app: &AppHandle, path_str: &str) {
             let app = app.clone();
             let project_path = path.clone();
             tokio::spawn(async move {
-                let _ = ShowCapWindow::Editor { project_path }.show(&app).await;
+                let _ = CapWindow::Editor { project_path }.show(&app).await;
             });
         }
         RecordingMetaInner::Instant(_) => {
@@ -553,7 +553,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Main {
+                        let _ = CapWindow::Main {
                             init_target_mode: None,
                         }
                         .show(&app)
@@ -593,7 +593,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::OpenSettings) => {
                     let app = app.clone();
                     tokio::spawn(
-                        async move { ShowCapWindow::Settings { page: None }.show(&app).await },
+                        async move { CapWindow::Settings { page: None }.show(&app).await },
                     );
                 }
                 Ok(TrayItem::UploadLogs) => {

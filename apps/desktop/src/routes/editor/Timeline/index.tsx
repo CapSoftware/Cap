@@ -356,7 +356,7 @@ export function Timeline() {
 			timelineBounds={timelineBounds}
 		>
 			<div
-				class="pt-[2rem] relative overflow-hidden flex flex-col gap-2 h-full"
+				class="pt-8 relative overflow-hidden flex flex-col gap-2 h-full"
 				style={{
 					"padding-left": `${TIMELINE_PADDING}px`,
 					"padding-right": `${TIMELINE_PADDING}px`,
@@ -450,7 +450,7 @@ export function Timeline() {
 						{(time) => (
 							<div
 								class={cx(
-									"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+									"flex absolute bottom-0 z-10 justify-center items-center w-px pointer-events-none bg-linear-to-b to-120%",
 									split() ? "from-red-300" : "from-gray-400",
 								)}
 								style={{
@@ -472,7 +472,7 @@ export function Timeline() {
 					</Show>
 					<div
 						class={cx(
-							"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+							"absolute bottom-0 h-full rounded-full z-10 w-px pointer-events-none bg-linear-to-b to-120% from-[rgb(226,64,64)]",
 							split() && "opacity-50",
 						)}
 						style={{
@@ -590,7 +590,7 @@ function TimelineMarkings() {
 							}}
 						>
 							<Show when={second % 1 === 0}>
-								<div class="absolute -top-[1.125rem] -translate-x-1/2">
+								<div class="absolute -top-4.5 -translate-x-1/2">
 									{formatTime(second)}
 								</div>
 							</Show>

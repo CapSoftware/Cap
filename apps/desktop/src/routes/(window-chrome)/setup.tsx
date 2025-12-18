@@ -100,7 +100,7 @@ export default function () {
 	};
 
 	return (
-		<div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
+		<div class="flex flex-col px-8 text-[0.875rem] font-normal flex-1 bg-gray-1 justify-evenly items-center">
 			{showStartup() && (
 				<Startup
 					onClose={() => {
@@ -112,7 +112,7 @@ export default function () {
 			<Show when={currentStep() === "permissions"}>
 				<div class="flex flex-col items-center">
 					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+					<h1 class="text-[1.2rem] font-bold mb-1 text-(--text-primary)">
 						Permissions Required
 					</h1>
 					<p class="text-gray-11">Cap needs permissions to run properly.</p>
@@ -126,11 +126,11 @@ export default function () {
 							return (
 								<Show when={permissionCheck() !== "notNeeded"}>
 									<li class="flex flex-row items-center gap-4">
-										<div class="flex flex-col flex-[2]">
-											<span class="font-[500] text-[0.875rem] text-[--text-primary]">
+										<div class="flex flex-col flex-2">
+											<span class="font-medium text-[0.875rem] text-(--text-primary)">
 												{permission.name} Permission
 											</span>
-											<span class="text-[--text-secondary]">
+											<span class="text-(--text-secondary)">
 												{permission.description}
 											</span>
 										</div>
@@ -172,7 +172,7 @@ export default function () {
 			<Show when={currentStep() === "mode"}>
 				<div class="flex flex-col items-center">
 					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+					<h1 class="text-[1.2rem] font-bold mb-1 text-(--text-primary)">
 						Select Recording Mode
 					</h1>
 					<p class="text-gray-11">
@@ -314,7 +314,7 @@ function Startup(props: { onClose: () => void }) {
 				>
 					<div
 						class={cx(
-							"flex justify-between items-center gap-[0.25rem] w-full h-full z-10",
+							"flex justify-between items-center gap-1 w-full h-full z-10",
 							ostype() === "windows" ? "flex-row" : "flex-row-reverse",
 						)}
 						data-tauri-drag-region
@@ -445,7 +445,7 @@ function Startup(props: { onClose: () => void }) {
 						}`}
 					>
 						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
+							class="cloud-image w-screen md:w-[80vw] -mr-40"
 							src={cloud1}
 							alt="Cloud One"
 						/>
@@ -457,7 +457,7 @@ function Startup(props: { onClose: () => void }) {
 						}`}
 					>
 						<img
-							class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
+							class="cloud-image w-screen md:w-[80vw] -ml-40"
 							src={cloud2}
 							alt="Cloud Two"
 						/>

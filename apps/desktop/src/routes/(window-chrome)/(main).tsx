@@ -260,7 +260,7 @@ function Page() {
 	});
 
 	return (
-		<div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
+		<div class="flex justify-center flex-col p-4 gap-3 text-[0.875rem] font-normal h-full text-(--text-primary)">
 			<WindowChromeHeader hideMaximize>
 				<div
 					dir={ostype() === "windows" ? "rtl" : "rtl"}
@@ -320,10 +320,10 @@ function Page() {
 					)}
 				</div>
 			</WindowChromeHeader>
-			<div class="flex items-center justify-between pb-[0.25rem]">
+			<div class="flex items-center justify-between pb-1">
 				<div class="flex items-center space-x-1">
 					<a
-						class="*:w-[92px] *:h-auto text-[--text-primary]"
+						class="*:w-[92px] *:h-auto text-(--text-primary)"
 						target="_blank"
 						href={
 							auth.data
@@ -345,7 +345,7 @@ function Page() {
 								class={cx(
 									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
-										? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+										? "bg-(--blue-400) text-gray-1 dark:text-gray-12"
 										: "bg-gray-3 cursor-pointer hover:bg-gray-5",
 								)}
 							>
@@ -383,7 +383,7 @@ function Page() {
 				/>
 				<div
 					class={cx(
-						"flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
+						"flex flex-row items-center rounded-lg relative border h-8 transition-all duration-500",
 						(rawOptions.captureTarget.variant === "display" ||
 							rawOptions.captureTarget.variant === "area") &&
 							"ml-[2.4rem]",
@@ -514,7 +514,7 @@ function Page() {
 							variant="blue"
 							size="md"
 							onClick={() => toggleRecording.mutate({ mode: rawOptions.mode })}
-							class="flex flex-grow justify-center items-center"
+							class="flex grow justify-center items-center"
 						>
 							{isRecording() ? (
 								"Stop Recording"
@@ -712,9 +712,9 @@ function AreaSelectButton(props: {
 							disabled={!targetScreenOrArea}
 							onClick={handleAreaSelectButtonClick}
 							class={cx(
-								"flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+								"flex items-center justify-center shrink-0 w-full h-full rounded-lg transition-all duration-200",
 								"hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
-								"focus-visible:outline font-[200] text-[0.875rem]",
+								"focus-visible:outline font-extralight text-[0.875rem]",
 								props.targetVariant === "area"
 									? "bg-gray-2 text-blue-9 border border-blue-200"
 									: "bg-gray-2 text-gray-11",
@@ -722,7 +722,7 @@ function AreaSelectButton(props: {
 						>
 							<IconCapCrop
 								class={cx(
-									"w-[1rem] h-[1rem]",
+									"w-4 h-4",
 									areaSelection.pending &&
 										"animate-gentle-bounce duration-1000 text-gray-12 mt-1",
 								)}
@@ -745,8 +745,8 @@ function CameraSelect(props: {
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
-			iconClass="text-gray-11 size-[1.25rem]"
+			class="flex flex-row items-center h-8 px-1.5 gap-1.5 border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
+			iconClass="text-gray-11 size-5"
 		/>
 	);
 }
@@ -760,9 +760,9 @@ function MicrophoneSelect(props: {
 	return (
 		<MicrophoneSelectBase
 			{...props}
-			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+			class="relative flex flex-row items-center h-8 px-1.5 gap-1.5 border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 			levelIndicatorClass="bg-blue-100"
-			iconClass="text-gray-11 size-[1.25rem]"
+			iconClass="text-gray-11 size-5"
 			PillComponent={InfoPill}
 		/>
 	);
@@ -771,10 +771,10 @@ function MicrophoneSelect(props: {
 function SystemAudio() {
 	return (
 		<SystemAudioToggleRoot
-			class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
+			class="relative flex flex-row items-center h-8 px-1.5 gap-1.5 border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 			PillComponent={InfoPill}
 			icon={
-				<div class="size-[1.25rem] flex items-center justify-center">
+				<div class="size-5 flex items-center justify-center">
 					<IconPhMonitorBold class="text-gray-11 stroke-2 size-[1.2rem]" />
 				</div>
 			}
@@ -850,7 +850,7 @@ function InfoPill(
 			{...props}
 			type="button"
 			class={cx(
-				"px-[0.375rem] rounded-full text-[0.75rem]",
+				"px-1.5 rounded-full text-[0.75rem]",
 				props.variant === "blue"
 					? "bg-blue-3 text-blue-9"
 					: "bg-red-3 text-red-9",

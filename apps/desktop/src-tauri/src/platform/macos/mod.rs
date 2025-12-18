@@ -1,53 +1,40 @@
-// use std::ffi::c_void;
+use objc2::{Message, rc::Retained};
+use objc2_app_kit::{NSWindow, NSWindowButton};
+use tauri::WebviewWindow;
 
-// use cocoa::{
-//     base::{id, nil},
-//     foundation::NSString,
-// };
-// use core_graphics::{
-//     base::boolean_t,
-//     display::{CFDictionaryRef, CGRect},
-// };
-// use objc::{class, msg_send, sel, sel_impl};
-
-pub mod delegates;
 mod sc_shareable_content;
 
 pub use sc_shareable_content::*;
 
-pub fn set_window_level(window: tauri::Window, level: objc2_app_kit::NSWindowLevel) {
-    let c_window = window.clone();
-    _ = window.run_on_main_thread(move || unsafe {
-        let Ok(ns_win) = c_window.ns_window() else {
-            return;
-        };
-        let ns_win = ns_win as *const objc2_app_kit::NSWindow;
-        (*ns_win).setLevel(level);
-    });
+pub trait WebviewWindowExt {
+    fn objc2_nswindow(&self) -> Retained<NSWindow>;
+
+    fn set_traffic_lights_visible(&self, visible: bool);
 }
 
-// pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
-//     let ns_window = ns_window as *const objc2_app_kit::NSWindow;
+impl WebviewWindowExt for WebviewWindow {
+    #[inline]
+    fn objc2_nswindow(&self) -> Retained<NSWindow> {
+        // SAFETY: This cast is safe as the existence of the WebviewWindow means it's attached to an NSWindow
+        unsafe {
+            (&*self
+                .ns_window()
+                .expect("WebviewWindow is always backed by NSWindow")
+                .cast::<NSWindow>())
+                .retain()
+        }
+    }
 
-//     unsafe { (*ns_window).windowNumber() }
-// }
-
-// #[link(name = "CoreGraphics", kind = "framework")]
-// unsafe extern "C" {
-//     pub fn CGRectMakeWithDictionaryRepresentation(
-//         dict: CFDictionaryRef,
-//         rect: *mut CGRect,
-//     ) -> boolean_t;
-// }
-
-// /// Makes the background of the WKWebView layer transparent.
-// /// This differs from Tauri's implementation as it does not change the window background which causes performance performance issues and artifacts when shadows are enabled on the window.
-// /// Use Tauri's implementation to make the window itself transparent.
-// pub fn make_webview_transparent(target: &tauri::WebviewWindow) -> tauri::Result<()> {
-//     target.with_webview(|webview| unsafe {
-//         let wkwebview = webview.inner() as id;
-//         let no: id = msg_send![class!(NSNumber), numberWithBool:0];
-//         // [https://developer.apple.com/documentation/webkit/webview/1408486-drawsbackground]
-//         let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
-//     })
-// }
+    fn set_traffic_lights_visible(&self, visible: bool) {
+        let nswindow = self.objc2_nswindow();
+        for btn in [
+            NSWindowButton::CloseButton,
+            NSWindowButton::MiniaturizeButton,
+            NSWindowButton::ZoomButton,
+        ] {
+            if let Some(btn) = nswindow.standardWindowButton(btn) {
+                btn.setHidden(!visible);
+            }
+        }
+    }
+}

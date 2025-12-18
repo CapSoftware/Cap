@@ -198,7 +198,7 @@ export default function TargetCard(props: TargetCardProps) {
 		return parts.map((part) => {
 			if (part.toLowerCase() === lowercaseQuery) {
 				return (
-					<span class="rounded bg-blue-9/20 px-[1px] text-gray-12">{part}</span>
+					<span class="rounded bg-blue-9/20 px-px text-gray-12">{part}</span>
 				);
 			}
 			return part;
@@ -319,7 +319,7 @@ export default function TargetCard(props: TargetCardProps) {
 				local.class,
 			)}
 		>
-			<div class="relative h-[4.75rem] w-full overflow-hidden bg-gray-4/40">
+			<div class="relative h-19 w-full overflow-hidden bg-gray-4/40">
 				<Show
 					when={imageExists() ? thumbnailSrc() : undefined}
 					fallback={
@@ -354,7 +354,7 @@ export default function TargetCard(props: TargetCardProps) {
 					)}
 				</Show>
 				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
-				<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t to-transparent pointer-events-none from-black/40" />
+				<div class="absolute inset-x-0 bottom-0 h-10 bg-linear-to-t to-transparent pointer-events-none from-black/40" />
 				<Show when={recordingFailed() || recordingUploadFailed()}>
 					<div class="absolute inset-0 flex items-center justify-center bg-black/75">
 						<div class="flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-9/20 text-red-11">
@@ -519,7 +519,7 @@ export function TargetCardSkeleton(props: { class?: string }) {
 				props.class,
 			)}
 		>
-			<div class="h-[4.75rem] w-full animate-pulse bg-gray-4" />
+			<div class="h-19 w-full animate-pulse bg-gray-4" />
 			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
 				<div class="flex-1 space-y-1">
 					<div class="w-3/4 h-3 rounded bg-gray-4" />

@@ -75,7 +75,7 @@ export function Header() {
 				data-tauri-drag-region
 				class={cx("flex flex-row flex-1 gap-2 items-center px-4 h-full")}
 			>
-				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
+				{ostype() === "macos" && <div class="h-full w-16" />}
 				<EditorButton
 					onClick={async () => {
 						clearTimelineSelection();

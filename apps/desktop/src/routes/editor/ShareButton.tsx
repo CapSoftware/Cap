@@ -205,7 +205,7 @@ function ShareButton() {
 										upload.mutate();
 									}}
 									variant="dark"
-									class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1"
+									class="flex justify-center items-center size-[41px] px-0! py-0! space-x-1"
 								>
 									{upload.isPending ? (
 										<IconLucideLoaderCircle class="animate-spin size-4" />
@@ -215,7 +215,7 @@ function ShareButton() {
 								</Button>
 							</Tooltip>
 							<Tooltip content="Open link">
-								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-[0.375rem] bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
+								<div class="rounded-xl px-3 py-2 flex flex-row items-center gap-1.5 bg-gray-3 hover:bg-gray-4 transition-colors duration-100">
 									<a
 										href={
 											linkToDisplay() === customLink
@@ -258,7 +258,7 @@ function ShareButton() {
 											>
 												<KSelect.Trigger class="flex justify-center items-center transition-colors duration-200 rounded-lg size-[22px] text-gray-12 bg-gray-6 hover:bg-gray-7 group focus:outline-none focus-visible:outline-none">
 													<KSelect.Icon>
-														<IconCapChevronDown class="size-4 transition-transform duration-200 group-data-[expanded]:rotate-180" />
+														<IconCapChevronDown class="size-4 transition-transform duration-200 group-data-expanded:rotate-180" />
 													</KSelect.Icon>
 												</KSelect.Trigger>
 												<KSelect.Portal>

@@ -530,7 +530,7 @@ function Dialogs() {
 											format={false}
 										>
 											<NumberField.Input
-												class="rounded-[0.5rem] bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-[2rem] font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-[0.5rem] w-full text-[0.875rem] outline-none text-gray-12"
+												class="rounded-lg bg-gray-2 hover:ring-1 py-[18px] hover:ring-gray-5 h-8 font-normal placeholder:text-black-transparent-40 text-xs caret-gray-500 transition-shadow duration-200 focus:ring-offset-1 focus:bg-gray-3 focus:ring-offset-gray-100 focus:ring-1 focus:ring-gray-10 px-2 w-full text-[0.875rem] outline-none text-gray-12"
 												onKeyDown={composeEventHandlers<HTMLInputElement>([
 													(e) => e.stopPropagation(),
 												])}
@@ -542,35 +542,35 @@ function Dialogs() {
 								return (
 									<>
 										<Dialog.Header>
-											<div class="flex flex-row space-x-[2rem]">
-												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
+											<div class="flex flex-row space-x-8">
+												<div class="flex flex-row items-center space-x-3 text-gray-11">
 													<span>Size</span>
-													<div class="w-[3.25rem]">
+													<div class="w-13">
 														<BoundInput field="width" max={display.width} />
 													</div>
 													<span>×</span>
-													<div class="w-[3.25rem]">
+													<div class="w-13">
 														<BoundInput field="height" max={display.height} />
 													</div>
 												</div>
-												<div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
+												<div class="flex flex-row items-center space-x-3 text-gray-11">
 													<span>Position</span>
-													<div class="w-[3.25rem]">
+													<div class="w-13">
 														<BoundInput field="x" />
 													</div>
 													<span>×</span>
-													<div class="w-[3.25rem]">
+													<div class="w-13">
 														<BoundInput field="y" />
 													</div>
 												</div>
 											</div>
 											<div class="flex flex-row gap-3 justify-end items-center w-full">
-												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11"></div>
+												<div class="flex flex-row items-center space-x-2 text-gray-11"></div>
 
 												<Button
 													variant="white"
 													size="xs"
-													class="flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border focus:border-blue-9"
+													class="flex items-center justify-center text-center rounded-full h-8 w-8 border outline-hidden focus:border-blue-9"
 													onMouseDown={showCropOptionsMenu}
 													onClick={showCropOptionsMenu}
 												>
@@ -580,7 +580,7 @@ function Dialogs() {
 														</Show>
 														<Transition
 															enterClass="scale-50 opacity-0 blur-md"
-															enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+															enterActiveClass="duration-200 ease-[cubic-bezier(0.215,0.61,0.355,1)]"
 															enterToClass="scale-100 opacity-100 blur-0"
 															exitClass="opacity-0"
 															exitActiveClass="duration-0"

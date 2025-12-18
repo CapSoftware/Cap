@@ -21,9 +21,9 @@ export default function Settings(props: RouteSectionProps) {
 	};
 
 	return (
-		<div class="flex-1 flex flex-row divide-x divide-gray-3 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
+		<div class="flex-1 flex flex-row divide-x divide-gray-3 text-[0.875rem] leading-5 overflow-y-hidden">
 			<div class="flex flex-col h-full bg-gray-2">
-				<ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-gray-12">
+				<ul class="min-w-48 h-full p-2.5 space-y-1 text-gray-12">
 					<For
 						each={[
 							{
@@ -78,7 +78,7 @@ export default function Settings(props: RouteSectionProps) {
 								<A
 									href={item.href}
 									activeClass="bg-gray-5 pointer-events-none"
-									class="rounded-lg h-[2rem] hover:bg-gray-3 text-[13px] px-2 flex flex-row items-center gap-[0.375rem] transition-colors"
+									class="rounded-lg h-8 hover:bg-gray-3 text-[13px] px-2 flex flex-row items-center gap-1.5 transition-colors"
 								>
 									<item.icon class="opacity-60 size-4" />
 									<span>{item.name}</span>
@@ -87,7 +87,7 @@ export default function Settings(props: RouteSectionProps) {
 						)}
 					</For>
 				</ul>
-				<div class="p-[0.625rem] text-left flex flex-col">
+				<div class="p-2.5 text-left flex flex-col">
 					<Show when={version()}>
 						{(v) => <p class="mb-2 text-xs text-gray-11">v{v()}</p>}
 					</Show>

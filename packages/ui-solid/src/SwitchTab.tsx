@@ -12,7 +12,7 @@ function List(props: ComponentProps<typeof KTabs.List>) {
 		<KTabs.List
 			{...others}
 			class={cx(
-				"flex flex-row items-center rounded-[0.5rem] relative border",
+				"flex flex-row items-center rounded-lg relative border",
 				local.class,
 			)}
 		>
@@ -35,7 +35,7 @@ function Trigger<T extends ValidComponent = "button">(
 		<KTabs.Trigger
 			{...others}
 			class={cx(
-				"flex-1 text-gray-8 py-1 z-10 ui-selected:text-gray-1 peer outline-none transition-colors duration-100",
+				"flex-1 text-gray-8 py-1 z-10 data-selected:text-gray-1 peer outline-none transition-colors duration-100",
 				local.class,
 			)}
 		/>

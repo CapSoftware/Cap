@@ -57,7 +57,7 @@ const NavigationMenuTrigger = React.forwardRef<
 		{children}{" "}
 		{caret && (
 			<ChevronDown
-				className="relative top-[-1px] ml-[3px] h-4 w-4 transition duration-200 group-data-[state=open]:rotate-180"
+				className="relative -top-px ml-[3px] h-4 w-4 transition duration-200 group-data-[state=open]:rotate-180"
 				aria-hidden="true"
 			/>
 		)}
@@ -89,7 +89,7 @@ const NavigationMenuViewport = React.forwardRef<
 	<div className={classNames("flex absolute left-0 top-full justify-center")}>
 		<NavigationMenuPrimitive.Viewport
 			className={classNames(
-				"origin-top-center relative mt-1.5 h-[var(--radix-navigation-menu-viewport-height)] w-full overflow-hidden rounded-lg border border-gray-5 bg-gray-1/80 backdrop-blur-md text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 md:w-[var(--radix-navigation-menu-viewport-width)]",
+				"origin-top-center relative mt-1.5 h-(--radix-navigation-menu-viewport-height) w-full overflow-hidden rounded-lg border border-gray-5 bg-gray-1/80 backdrop-blur-md text-popover-foreground shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-200 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 md:w-(--radix-navigation-menu-viewport-width)",
 				className,
 			)}
 			ref={ref}
@@ -107,7 +107,7 @@ const NavigationMenuIndicator = React.forwardRef<
 	<NavigationMenuPrimitive.Indicator
 		ref={ref}
 		className={classNames(
-			"top-full z-[1] flex h-1.5 items-end justify-center overflow-hidden data-[state=visible]:animate-in data-[state=hidden]:animate-out data-[state=hidden]:fade-out data-[state=visible]:fade-in",
+			"top-full z-1 flex h-1.5 items-end justify-center overflow-hidden data-[state=visible]:animate-in data-[state=hidden]:animate-out data-[state=hidden]:fade-out data-[state=visible]:fade-in",
 			className,
 		)}
 		{...props}

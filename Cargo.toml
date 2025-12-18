@@ -22,12 +22,12 @@ tokio = { version = "1.39.3", features = [
     "rt-multi-thread",
     "time",
 ] }
-tauri = { version = "2.5.0", features = ["specta"] }
+tauri = { version = "2.9.4", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
     "uuid",
-    "chrono"
+    "chrono",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -65,6 +65,7 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "io_surface",
     "mtl",
 ], default-features = false }
+objc2 = "0.6.3"
 
 windows = "0.60.0"
 windows-core = "0.60"

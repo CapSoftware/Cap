@@ -80,7 +80,7 @@ function Header() {
 			data-tauri-drag-region
 		>
 			{ctx.state()?.items}
-			{isWindows && <CaptionControlsWindows11 class="!ml-auto" />}
+			{isWindows && <CaptionControlsWindows11 class="ml-auto!" />}
 		</header>
 	);
 }

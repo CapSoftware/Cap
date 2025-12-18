@@ -54,6 +54,7 @@
 			"../src/assets/rive/*.riv": "assets/rive/"
 		},
 		"macOS": {
+			"minimumSystemVersion": "13.1",
 			"dmg": {
 				"background": "assets/dmg-background.png",
 				"appPosition": {
@@ -84,7 +85,13 @@
 				"ext": ["cap"],
 				"name": "Cap Project",
 				"mimeType": "application/x-cap-project",
-				"role": "Editor"
+				"role": "Editor",
+				"rank": "Owner",
+				"description": "Cap Project",
+				"exportedType": {
+					"identifier": "so.cap.desktop.project",
+					"conformsTo": ["com.apple.package"]
+				}
 			}
 		]
 	}

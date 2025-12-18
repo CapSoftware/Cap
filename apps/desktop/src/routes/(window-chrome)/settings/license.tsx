@@ -233,7 +233,7 @@ function CommercialLicensePurchase() {
 							<h3 class="text-2xl font-medium tracking-tight leading-5">
 								Commercial License
 							</h3>
-							<p class="mt-2 text-sm text-[--text-tertiary]">
+							<p class="mt-2 text-sm text-(--text-tertiary)">
 								For commercial use
 							</p>
 						</div>
@@ -261,7 +261,7 @@ function CommercialLicensePurchase() {
 							onClick={() => openCommercialCheckout.mutate()}
 							disabled={openCommercialCheckout.isPending}
 							variant="dark"
-							class="w-full !rounded-full mt-10 !h-[48px] text-lg font-medium"
+							class="w-full rounded-full! mt-10 h-[48px]! text-lg font-medium"
 							size="lg"
 						>
 							{openCommercialCheckout.isPending
@@ -281,9 +281,9 @@ function CommercialLicensePurchase() {
 							].map((feature) => (
 								<li class="flex justify-start items-center">
 									<div class="flex justify-center items-center p-0 m-0 w-6 h-6">
-										<IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
+										<IconLucideCheck class="w-4 h-4 text-(--text-primary)" />
 									</div>
-									<span class="ml-1 text-[0.9rem] text-[--text-primary]">
+									<span class="ml-1 text-[0.9rem] text-(--text-primary)">
 										{feature}
 									</span>
 								</li>

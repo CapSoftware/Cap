@@ -328,7 +328,7 @@ export default function Page() {
 				) : (
 					<>
 						<div class="text-center">
-							<h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-[--text-primary]">
+							<h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-(--text-primary)">
 								Early Adopter Pricing
 							</h1>
 						</div>
@@ -361,7 +361,7 @@ export default function Page() {
 											<h3 class="text-2xl font-medium tracking-tight leading-5">
 												Commercial License
 											</h3>
-											<p class="mt-2 text-sm text-[--text-tertiary]">
+											<p class="mt-2 text-sm text-(--text-tertiary)">
 												For commercial use
 											</p>
 										</div>
@@ -402,9 +402,9 @@ export default function Page() {
 											].map((feature) => (
 												<li class="flex justify-start items-center">
 													<div class="flex justify-center items-center p-0 m-0 w-6 h-6">
-														<IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
+														<IconLucideCheck class="w-4 h-4 text-(--text-primary)" />
 													</div>
-													<span class="ml-1 text-[0.9rem] text-[--text-primary]">
+													<span class="ml-1 text-[0.9rem] text-(--text-primary)">
 														{feature}
 													</span>
 												</li>
@@ -421,7 +421,7 @@ export default function Page() {
 										onClick={() => openCommercialCheckout.mutate()}
 										disabled={openCommercialCheckout.isPending}
 										variant="dark"
-										class="w-full !rounded-full !h-[48px] text-lg font-medium"
+										class="w-full rounded-full! h-[48px]! text-lg font-medium"
 										size="lg"
 									>
 										{openCommercialCheckout.isPending
@@ -457,7 +457,7 @@ export default function Page() {
 										riveInstance.play("items-coming-in");
 									}
 								}}
-								class="flex-grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
+								class="grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
 							>
 								<div class="flex flex-col justify-between space-y-5 h-full">
 									<div class="flex flex-col gap-6 items-center px-6">
@@ -512,7 +512,7 @@ export default function Page() {
 									</div>
 									<Button
 										variant="blue"
-										class="!rounded-full !text-lg w-full mx-auto"
+										class="rounded-full! text-lg! w-full mx-auto"
 										onClick={openCheckoutInExternalBrowser}
 									>
 										{loading() ? "Loading..." : "Upgrade to Cap Pro"}

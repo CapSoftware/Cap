@@ -66,7 +66,7 @@ use crate::{
         InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
     },
     web_api::ManagerExt,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindow, CapWindowDef},
 };
 
 #[derive(Clone)]
@@ -478,7 +478,7 @@ pub async fn start_recording(
         .add_recording_logging_handle(&project_file_path.join("recording-logs.log"))
         .await?;
 
-    if let Some(window) = CapWindowId::Camera.get(&app) {
+    if let Some(window) = CapWindowDef::Camera.get(&app) {
         let _ = window.set_content_protected(matches!(inputs.mode, RecordingMode::Studio));
     }
 
@@ -563,13 +563,13 @@ pub async fn start_recording(
             if let Some(show) = inputs
                 .capture_target
                 .display()
-                .map(|d| ShowCapWindow::WindowCaptureOccluder { screen_id: d.id() })
+                .map(|d| CapWindow::WindowCaptureOccluder { screen_id: d.id() })
             {
                 let _ = show.show(&app).await;
             }
         }
         ScreenCaptureTarget::Area { screen, .. } => {
-            let _ = ShowCapWindow::WindowCaptureOccluder {
+            let _ = CapWindow::WindowCaptureOccluder {
                 screen_id: screen.clone(),
             }
             .show(&app)
@@ -588,17 +588,17 @@ pub async fn start_recording(
     for (id, win) in app
         .webview_windows()
         .iter()
-        .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
+        .filter_map(|(label, win)| CapWindowDef::from_str(label).ok().map(|id| (id, win)))
     {
-        if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+        if matches!(id, CapWindowDef::TargetSelectOverlay { .. }) {
             win.close().ok();
         }
     }
-    let _ = ShowCapWindow::InProgressRecording { countdown }
+    let _ = CapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
+    if let Some(window) = CapWindowDef::Main.get(&app) {
         let _ = general_settings
             .map(|v| v.main_window_recording_start_behaviour)
             .unwrap_or_default()
@@ -906,7 +906,7 @@ pub async fn start_recording(
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-                    if let Some(window) = CapWindowId::RecordingControls.get(&app) {
+                    if let Some(window) = CapWindowDef::RecordingControls.get(&app) {
                         dialog = dialog.parent(&window);
                     }
 
@@ -970,7 +970,7 @@ async fn handle_spawn_failure(
     )
     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
-    if let Some(window) = CapWindowId::RecordingControls.get(app) {
+    if let Some(window) = CapWindowDef::RecordingControls.get(app) {
         dialog = dialog.parent(&window);
     }
 
@@ -1097,14 +1097,14 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .flatten()
             .unwrap_or_default();
 
-        if let Some(window) = CapWindowId::RecordingControls.get(&app) {
+        if let Some(window) = CapWindowDef::RecordingControls.get(&app) {
             let _ = window.close();
         }
 
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
-                let _ = ShowCapWindow::Main {
+                let _ = CapWindow::Main {
                     init_target_mode: None,
                 }
                 .show(&app)
@@ -1327,14 +1327,14 @@ async fn handle_recording_end(
 
     let _ = app.recording_logging_handle.reload(None);
 
-    if let Some(window) = CapWindowId::RecordingControls.get(&handle) {
+    if let Some(window) = CapWindowDef::RecordingControls.get(&handle) {
         let _ = window.close();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&handle) {
+    if let Some(window) = CapWindowDef::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) {
+        if let Some(v) = CapWindowDef::Camera.get(&handle) {
             let _ = v.close();
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
@@ -1342,7 +1342,7 @@ async fn handle_recording_end(
         app.selected_mic_label = None;
         app.selected_camera_id = None;
         app.camera_in_use = false;
-        if let Some(win) = CapWindowId::Camera.get(&handle) {
+        if let Some(win) = CapWindowDef::Camera.get(&handle) {
             win.close().ok();
         }
     }
@@ -1560,14 +1560,14 @@ async fn handle_recording_finish(
             .unwrap_or(PostStudioRecordingBehaviour::OpenEditor)
         {
             PostStudioRecordingBehaviour::OpenEditor => {
-                let _ = ShowCapWindow::Editor {
+                let _ = CapWindow::Editor {
                     project_path: recording_dir,
                 }
                 .show(app)
                 .await;
             }
             PostStudioRecordingBehaviour::ShowOverlay => {
-                let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+                let _ = CapWindow::RecordingsOverlay.show(app).await;
 
                 let app = AppHandle::clone(app);
                 tokio::spawn(async move {

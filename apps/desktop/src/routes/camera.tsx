@@ -192,7 +192,7 @@ function NativeCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-13">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class="flex flex-row gap-1 p-1 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>
@@ -274,7 +274,7 @@ function ControlButton(
 	return (
 		<KToggleButton
 			type="button"
-			class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+			class="p-2 rounded-lg data-pressed:bg-gray-3 data-pressed:text-gray-12"
 			{...props}
 		/>
 	);
@@ -613,7 +613,7 @@ function LegacyCameraPreviewPage(props: { disconnected: Accessor<boolean> }) {
 			<div class="h-14">
 				<div class="flex flex-row justify-center items-center">
 					<div
-						class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
+						class="flex flex-row gap-1 p-1 opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10"
 						style={{ transform: `scale(${scale()})` }}
 					>
 						<ControlButton onClick={() => getCurrentWindow().close()}>

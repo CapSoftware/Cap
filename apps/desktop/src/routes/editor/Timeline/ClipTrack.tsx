@@ -328,7 +328,7 @@ export function ClipTrack(
 											transform: `translateX(${segmentX()}px)`,
 										}}
 									>
-										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-linear-to-b -translate-x-1/2" />
 										<Switch>
 											<Match
 												when={(() => {
@@ -386,7 +386,7 @@ export function ClipTrack(
 														<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 															<CutOffsetButton
 																value={value()}
-																class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
+																class="-left-px absolute rounded-r-full pl-1.5! rounded-tl-full"
 																onClick={() => {
 																	setProject(
 																		"timeline",
@@ -408,7 +408,7 @@ export function ClipTrack(
 							<SegmentRoot
 								class={cx(
 									"border transition-colors duration-200 group hover:border-gray-12",
-									"bg-gradient-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
+									"bg-linear-to-r from-[#2675DB] via-[#4FA0FF] to-[#2675DB] shadow-[inset_0_5px_10px_5px_rgba(255,255,255,0.2)]",
 									isSelected() ? "border-gray-12" : "border-transparent",
 								)}
 								innerClass="ring-blue-9"
@@ -732,11 +732,11 @@ export function ClipTrack(
 												transform: `translateX(${segmentX() + segmentWidth()}px)`,
 											}}
 										>
-											<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
+											<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-linear-to-b -translate-x-1/2" />
 											<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 												<CutOffsetButton
 													value={value()}
-													class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
+													class="-right-px absolute rounded-l-full pr-1.5! rounded-tr-full"
 													onClick={() => {
 														setProject(
 															"timeline",
@@ -789,7 +789,7 @@ function Markings(props: { segment: TimelineSegment; prevDuration: number }) {
 							(marking - props.segment.start) / secsPerPixel()
 						}px)`,
 					}}
-					class="absolute z-10 w-px h-12 bg-gradient-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
+					class="absolute z-10 w-px h-12 bg-linear-to-b from-transparent to-transparent via-white-transparent-40 dark:via-black-transparent-60"
 				/>
 			)}
 		</For>

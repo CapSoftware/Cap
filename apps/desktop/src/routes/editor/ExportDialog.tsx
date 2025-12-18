@@ -789,14 +789,14 @@ export function ExportDialog() {
 									<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 rounded-xl transition-colors dark:bg-gray-3 bg-gray-4 disabled:text-gray-11">
 										<KSelect.Value<
 											(typeof FPS_OPTIONS)[number]
-										> class="flex-1 text-sm text-left truncate tabular-nums text-[--gray-500]">
+										> class="flex-1 text-sm text-left truncate tabular-nums text-(--gray-500)">
 											{(state) => <span>{state.selectedOption()?.label}</span>}
 										</KSelect.Value>
 										<KSelect.Icon<ValidComponent>
 											as={(props) => (
 												<IconCapChevronDown
 													{...props}
-													class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+													class="size-4 shrink-0 transform transition-transform data-expanded:rotate-180 text-(--gray-500)"
 												/>
 											)}
 										/>

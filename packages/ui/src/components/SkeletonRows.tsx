@@ -15,13 +15,13 @@ export const SkeletonRows = () => {
 							.map((_, index) => (
 								<div
 									key={index}
-									className="flex relative flex-col gap-4 w-full h-full bg-gray-3 rounded-2xl border-gray-4 border-[1px]"
+									className="flex relative flex-col gap-4 w-full h-full bg-gray-3 rounded-2xl border-gray-4 border"
 								>
 									{/* Thumbnail */}
 									<Skeleton
 										baseColor="var(--gray-4)"
 										highlightColor="var(--gray-5)"
-										className="h-[150px] w-full aspect-video align-top !rounded-t-2xl !leading-none !rounded-b-none"
+										className="h-[150px] w-full aspect-video align-top rounded-t-2xl! leading-none! rounded-b-none!"
 									/>
 									<div className="px-4 pb-4">
 										{/* Title */}

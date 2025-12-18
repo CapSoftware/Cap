@@ -33,10 +33,10 @@ use crate::{
 use cap_recording::feeds;
 
 #[cfg(target_os = "macos")]
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
+use crate::platform::{self, WebviewWindowExt};
 
 #[derive(Clone, Deserialize, Type)]
-pub enum CapWindowId {
+pub enum CapWindowDef {
     // Contains onboarding + permissions
     Setup,
     Main,
@@ -54,7 +54,7 @@ pub enum CapWindowId {
     ScreenshotEditor { id: u32 },
 }
 
-impl FromStr for CapWindowId {
+impl FromStr for CapWindowDef {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -99,7 +99,7 @@ impl FromStr for CapWindowId {
     }
 }
 
-impl std::fmt::Display for CapWindowId {
+impl std::fmt::Display for CapWindowDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Setup => write!(f, "setup"),
@@ -124,28 +124,28 @@ impl std::fmt::Display for CapWindowId {
     }
 }
 
-impl CapWindowId {
+impl CapWindowDef {
     pub fn label(&self) -> String {
         self.to_string()
     }
 
-    pub fn title(&self) -> String {
+    pub const fn title(&self) -> &str {
         match self {
-            Self::Setup => "Cap Setup".to_string(),
-            Self::Settings => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder".to_string(),
-            Self::CaptureArea => "Cap Capture Area".to_string(),
-            Self::RecordingControls => "Cap Recording Controls".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor".to_string(),
-            Self::ModeSelect => "Cap Mode Selection".to_string(),
-            Self::Camera => "Cap Camera".to_string(),
-            Self::RecordingsOverlay => "Cap Recordings Overlay".to_string(),
-            _ => "Cap".to_string(),
+            Self::Setup => "Cap Setup",
+            Self::Settings => "Cap Settings",
+            Self::WindowCaptureOccluder { .. } => "Cap Window Capture Occluder",
+            Self::CaptureArea => "Cap Capture Area",
+            Self::RecordingControls => "Cap Recording Controls",
+            Self::Editor { .. } => "Cap Editor",
+            Self::ScreenshotEditor { .. } => "Cap Screenshot Editor",
+            Self::ModeSelect => "Cap Mode Selection",
+            Self::Camera => "Cap Camera",
+            Self::RecordingsOverlay => "Cap Recordings Overlay",
+            _ => "Cap",
         }
     }
 
-    pub fn activates_dock(&self) -> bool {
+    pub const fn activates_dock(&self) -> bool {
         matches!(
             self,
             Self::Setup
@@ -158,28 +158,57 @@ impl CapWindowId {
         )
     }
 
+    #[cfg(target_os = "macos")]
+    pub const fn pre_solarium_traffic_lights_position(&self) -> LogicalPosition<f64> {
+        match self {
+            Self::Editor { .. } | Self::ScreenshotEditor { .. } => LogicalPosition::new(20.0, 25.0),
+            _ => LogicalPosition::new(12.0, 16.0),
+        }
+    }
+
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
     }
 
     #[cfg(target_os = "macos")]
-    pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
-        match self {
-            Self::Editor { .. } | Self::ScreenshotEditor { .. } => {
-                Some(Some(LogicalPosition::new(20.0, 32.0)))
-            }
-            Self::RecordingControls => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+    pub const fn undecorated(&self) -> bool {
+        matches!(
+            self,
             Self::Camera
-            | Self::WindowCaptureOccluder { .. }
-            | Self::CaptureArea
-            | Self::RecordingsOverlay
-            | Self::TargetSelectOverlay { .. } => None,
-            _ => Some(None),
-        }
+                | Self::WindowCaptureOccluder { .. }
+                | Self::CaptureArea
+                | Self::RecordingsOverlay
+                | Self::TargetSelectOverlay { .. }
+        )
     }
 
-    pub fn min_size(&self) -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    pub const fn disables_window_buttons(&self) -> bool {
+        matches!(self, Self::RecordingControls)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub const fn disables_fullscreen(&self) -> bool {
+        matches!(self, Self::Settings)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub const fn window_level(&self) -> Option<objc2_app_kit::NSWindowLevel> {
+        use objc2_app_kit::{
+            NSMainMenuWindowLevel, NSPopUpMenuWindowLevel, NSScreenSaverWindowLevel,
+        };
+
+        match self {
+            Self::RecordingControls => Some(NSMainMenuWindowLevel),
+            Self::TargetSelectOverlay { .. } | Self::CaptureArea => Some(45),
+            Self::RecordingsOverlay | Self::WindowCaptureOccluder { .. } => {
+                Some(NSScreenSaverWindowLevel)
+            }
+            _ => None,
+        }
+    }
+    pub const fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
@@ -195,7 +224,7 @@ impl CapWindowId {
 }
 
 #[derive(Debug, Clone, Type, Deserialize)]
-pub enum ShowCapWindow {
+pub enum CapWindow {
     Setup,
     Main {
         init_target_mode: Option<RecordingTargetMode>,
@@ -227,7 +256,7 @@ pub enum ShowCapWindow {
     },
 }
 
-impl ShowCapWindow {
+impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
@@ -244,7 +273,7 @@ impl ShowCapWindow {
                 }
             };
 
-            let window_label = CapWindowId::Editor { id: window_id }.label();
+            let window_label = CapWindowDef::Editor { id: window_id }.label();
             PendingEditorInstances::start_prewarm(app, window_label, project_path.clone()).await;
         }
 
@@ -261,14 +290,14 @@ impl ShowCapWindow {
             }
         }
 
-        if let Some(window) = self.id(app).get(app) {
+        let def = self.def(app);
+        if let Some(window) = def.get(app) {
             window.show().ok();
             window.unminimize().ok();
             window.set_focus().ok();
             return Ok(window);
         }
 
-        let _id = self.id(app);
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -292,9 +321,6 @@ impl ShowCapWindow {
                     .map(|s| s.enable_new_recording_flow)
                     .unwrap_or_default();
 
-                let title = CapWindowId::Main.title();
-                let should_protect = should_protect_window(app, &title);
-
                 let window = self
                     .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
                     .resizable(false)
@@ -303,7 +329,6 @@ impl ShowCapWindow {
                     .minimizable(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(should_protect)
                     .center()
                     .initialization_script(format!(
                         "
@@ -315,13 +340,15 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                if new_recording_flow {
-                    #[cfg(target_os = "macos")]
-                    crate::platform::set_window_level(window.as_ref().window(), 50);
-                }
-
                 #[cfg(target_os = "macos")]
                 {
+                    if new_recording_flow {
+                        let _ = window.run_on_main_thread({
+                            let window = window.clone();
+                            move || window.objc2_nswindow().setLevel(50)
+                        });
+                    }
+
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
                         let prewarmer =
@@ -344,13 +371,7 @@ impl ShowCapWindow {
                     .map(|d| d.id())
                     == Some(display.id());
 
-                let title = CapWindowId::TargetSelectOverlay {
-                    display_id: display_id.clone(),
-                }
-                .title();
-                let should_protect = should_protect_window(app, &title);
-
-                let mut window_builder = self
+                let mut builder = self
                     .window_builder(
                         app,
                         format!("/target-select-overlay?displayId={display_id}&isHoveredDisplay={is_hovered_display}"),
@@ -359,29 +380,27 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .content_protected(should_protect)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
-                    .transparent(true)
-                    .visible(false);
+                    .transparent(true);
 
                 #[cfg(target_os = "macos")]
                 {
                     let position = display.raw_handle().logical_position();
                     let size = display.logical_size().unwrap();
 
-                    window_builder = window_builder
+                    builder = builder
                         .inner_size(size.width(), size.height())
                         .position(position.x(), position.y());
                 }
 
                 #[cfg(windows)]
                 {
-                    window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
+                    builder = builder.inner_size(100.0, 100.0).position(0.0, 0.0);
                 }
 
-                let window = window_builder.build()?;
+                let window = builder.build()?;
 
                 #[cfg(windows)]
                 {
@@ -409,42 +428,39 @@ impl ShowCapWindow {
                 app.state::<WindowFocusManager>()
                     .spawn(display_id, window.clone());
 
-                #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 45);
-                }
-
                 window
             }
             Self::Settings { page } => {
                 // Hide main window and target select overlays when settings window opens
                 for (label, window) in app.webview_windows() {
-                    if let Ok(id) = CapWindowId::from_str(&label)
+                    if let Ok(id) = CapWindowDef::from_str(&label)
                         && matches!(
                             id,
-                            CapWindowId::TargetSelectOverlay { .. }
-                                | CapWindowId::Main
-                                | CapWindowId::Camera
+                            CapWindowDef::TargetSelectOverlay { .. }
+                                | CapWindowDef::Main
+                                | CapWindowDef::Camera
                         )
                     {
                         let _ = window.hide();
                     }
                 }
 
-                self.window_builder(
-                    app,
-                    format!("/settings/{}", page.clone().unwrap_or_default()),
-                )
-                .resizable(true)
-                .maximized(false)
-                .center()
-                .build()?
+                let mut builder = self
+                    .window_builder(
+                        app,
+                        format!("/settings/{}", page.clone().unwrap_or_default()),
+                    )
+                    .resizable(true)
+                    .maximized(false)
+                    .center();
+
+                builder.build()?
             }
             Self::Editor { .. } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
                     let _ = camera.close();
                 };
 
@@ -455,10 +471,10 @@ impl ShowCapWindow {
                     .build()?
             }
             Self::ScreenshotEditor { path: _ } => {
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
-                if let Some(camera) = CapWindowId::Camera.get(app) {
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
                     let _ = camera.close();
                 };
 
@@ -470,28 +486,26 @@ impl ShowCapWindow {
             }
             Self::Upgrade => {
                 // Hide main window when upgrade window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                let mut builder = self
-                    .window_builder(app, "/upgrade")
+                self.window_builder(app, "/upgrade")
                     .resizable(false)
                     .focused(true)
                     .always_on_top(true)
                     .maximized(false)
                     .shadow(true)
-                    .center();
-
-                builder.build()?
+                    .center()
+                    .build()?
             }
             Self::ModeSelect => {
-                if let Some(main) = CapWindowId::Main.get(app) {
+                // Hide main window when mode select window opens
+                if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                let mut builder = self
-                    .window_builder(app, "/mode-select")
+                self.window_builder(app, "/mode-select")
                     .inner_size(580.0, 340.0)
                     .min_inner_size(580.0, 340.0)
                     .resizable(false)
@@ -499,9 +513,8 @@ impl ShowCapWindow {
                     .maximizable(false)
                     .center()
                     .focused(true)
-                    .shadow(true);
-
-                builder.build()?
+                    .shadow(true)
+                    .build()?
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
@@ -517,7 +530,7 @@ impl ShowCapWindow {
 
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
                         error!("Unable to initialize camera preview as one already exists!");
-                        if let Some(window) = CapWindowId::Camera.get(app) {
+                        if let Some(window) = CapWindowDef::Camera.get(app) {
                             window.show().ok();
                         }
                         return Err(anyhow!(
@@ -526,7 +539,7 @@ impl ShowCapWindow {
                         .into());
                     }
 
-                    let mut window_builder = self
+                    let mut builder = self
                         .window_builder(app, "/camera")
                         .maximized(false)
                         .resizable(false)
@@ -551,7 +564,7 @@ impl ShowCapWindow {
                         .transparent(true)
                         .visible(false); // We set this true in `CameraWindowState::init_window`
 
-                    let window = window_builder.build()?;
+                    let window = builder.build()?;
 
                     if enable_native_camera_preview {
                         if let Some(id) = state.selected_camera_id.clone()
@@ -582,22 +595,13 @@ impl ShowCapWindow {
                     }
 
                     #[cfg(target_os = "macos")]
-                    {
-                        crate::platform::set_window_level(window.as_ref().window(), 60);
-
-                        _ = window.run_on_main_thread({
-                            let window = window.as_ref().window();
-                            move || unsafe {
-                                let Ok(win) = window.ns_window() else {
-                                    return;
-                                };
-                                let win = win as *const objc2_app_kit::NSWindow;
-                                (*win).setCollectionBehavior(
-                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                                );
-                            }
-                        });
-                    }
+                    dispatch2::run_on_main(|_| {
+                        let nswindow = window.objc2_nswindow();
+                        nswindow.setCollectionBehavior(
+                            nswindow.collectionBehavior()
+                                | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                        );
+                    });
 
                     window
                 }
@@ -607,12 +611,6 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let title = CapWindowId::WindowCaptureOccluder {
-                    screen_id: screen_id.clone(),
-                }
-                .title();
-                let should_protect = should_protect_window(app, &title);
-
                 #[cfg(target_os = "macos")]
                 let position = display.raw_handle().logical_position();
 
@@ -621,7 +619,7 @@ impl ShowCapWindow {
 
                 let bounds = display.physical_size().unwrap();
 
-                let mut window_builder = self
+                let mut builder = self
                     .window_builder(app, "/window-capture-occluder")
                     .maximized(false)
                     .resizable(false)
@@ -629,35 +627,22 @@ impl ShowCapWindow {
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(should_protect)
                     .skip_taskbar(true)
                     .inner_size(bounds.width(), bounds.height())
                     .position(position.x(), position.y())
                     .transparent(true);
 
-                let window = window_builder.build()?;
-
+                let window = builder.build()?;
                 window.set_ignore_cursor_events(true).unwrap();
-
-                #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 900);
-                }
-
                 window
             }
             Self::CaptureArea { screen_id } => {
-                let title = CapWindowId::CaptureArea.title();
-                let should_protect = should_protect_window(app, &title);
-
-                let mut window_builder = self
+                let mut builder = self
                     .window_builder(app, "/capture-area")
                     .maximized(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .resizable(false)
                     .always_on_top(true)
-                    .content_protected(should_protect)
                     .skip_taskbar(true)
                     .closable(true)
                     .decorations(false)
@@ -669,28 +654,20 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "macos")]
                 if let Some(bounds) = display.raw_handle().logical_bounds() {
-                    window_builder = window_builder
+                    builder = builder
                         .inner_size(bounds.size().width(), bounds.size().height())
                         .position(bounds.position().x(), bounds.position().y());
                 }
 
                 #[cfg(windows)]
                 if let Some(bounds) = display.raw_handle().physical_bounds() {
-                    window_builder = window_builder
+                    builder = builder
                         .inner_size(bounds.size().width(), bounds.size().height())
                         .position(bounds.position().x(), bounds.position().y());
                 }
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                crate::platform::set_window_level(
-                    window.as_ref().window(),
-                    objc2_app_kit::NSPopUpMenuWindowLevel,
-                );
-
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(app)
+                if let Some(main_window) = CapWindowDef::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
                     && let Ok(scale_factor) = main_window.scale_factor()
@@ -699,14 +676,14 @@ impl ShowCapWindow {
                     let _ = main_window.minimize();
                 };
 
-                window
+                builder.build()?
             }
             Self::InProgressRecording { countdown } => {
                 let width = 320.0;
                 let height = 150.0;
 
-                let title = CapWindowId::RecordingControls.title();
-                let should_protect = should_protect_window(app, &title);
+                let title = CapWindowDef::RecordingControls.title();
+                let should_protect = should_protect_window(app, title);
 
                 let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
                 let pos_y =
@@ -753,54 +730,22 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(should_protect)
                     .inner_size(width, height)
-                    .position(pos_x, pos_y)
-                    .skip_taskbar(false)
+                    .position(
+                        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
+                        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
+                    )
+                    .skip_taskbar(true)
                     .initialization_script(format!(
                         "window.COUNTDOWN = {};",
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
 
-                debug!(
-                    "InProgressRecording window created: label={}, inner_size={:?}, outer_position={:?}",
-                    window.label(),
-                    window.inner_size(),
-                    window.outer_position()
-                );
-
-                #[cfg(target_os = "macos")]
-                {
-                    crate::platform::set_window_level(window.as_ref().window(), 1000);
-                }
-
-                #[cfg(target_os = "macos")]
-                {
-                    let show_result = window.show();
-                    debug!(
-                        "InProgressRecording window.show() result: {:?}",
-                        show_result
-                    );
-                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
-                }
-
-                #[cfg(windows)]
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let show_result = window.show();
-                    debug!(
-                        "InProgressRecording window.show() result: {:?}",
-                        show_result
-                    );
-                    window.set_focus().ok();
-                    fake_window::spawn_fake_window_listener(app.clone(), window.clone());
-                }
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }
             Self::RecordingsOverlay => {
-                let title = CapWindowId::RecordingsOverlay.title();
-                let should_protect = should_protect_window(app, &title);
-
                 let window = self
                     .window_builder(app, "/recordings-overlay")
                     .maximized(false)
@@ -810,7 +755,6 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .accept_first_mouse(true)
-                    .content_protected(should_protect)
                     .inner_size(
                         (monitor.size().width as f64) / monitor.scale_factor(),
                         (monitor.size().height as f64) / monitor.scale_factor(),
@@ -830,7 +774,7 @@ impl ShowCapWindow {
 
                             let panel = window.to_panel().unwrap();
 
-                            panel.set_level(cocoa::appkit::NSMainMenuWindowLevel);
+                            panel.set_level(objc2_app_kit::NSMainMenuWindowLevel as i32);
 
                             panel.set_collection_behaviour(
                                 NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
@@ -854,13 +798,28 @@ impl ShowCapWindow {
             }
         };
 
-        // removing this for now as it causes windows to just stay hidden sometimes -_-
-        // window.hide().ok();
-
         #[cfg(target_os = "macos")]
-        if let Some(position) = _id.traffic_lights_position() {
-            add_traffic_lights(&window, position);
-        }
+        let _ = window.run_on_main_thread({
+            let window = window.clone();
+            move || {
+                if def.disables_window_buttons() {
+                    window.set_traffic_lights_visible(false);
+                }
+
+                let nswindow = window.objc2_nswindow();
+
+                if def.disables_fullscreen() {
+                    nswindow.setCollectionBehavior(
+                        nswindow.collectionBehavior()
+                            | objc2_app_kit::NSWindowCollectionBehavior::FullScreenNone,
+                    );
+                }
+
+                if let Some(level) = def.window_level() {
+                    nswindow.setLevel(level)
+                }
+            }
+        });
 
         Ok(window)
     }
@@ -870,29 +829,30 @@ impl ShowCapWindow {
         app: &'a AppHandle<Wry>,
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
-        let id = self.id(app);
+        let def = self.def(app);
+        let should_protect = should_protect_window(app, def.title());
 
-        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
-            .title(id.title())
+        let mut builder = WebviewWindow::builder(app, def.label(), WebviewUrl::App(url.into()))
+            .title(def.title())
             .visible(false)
             .accept_first_mouse(true)
-            .shadow(true);
+            .shadow(true)
+            .content_protected(should_protect);
 
-        if let Some(min) = id.min_size() {
+        if let Some(min) = def.min_size() {
             builder = builder
                 .inner_size(min.0, min.1)
                 .min_inner_size(min.0, min.1);
         }
 
         #[cfg(target_os = "macos")]
-        {
-            if id.traffic_lights_position().is_some() {
-                builder = builder
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay);
-            } else {
-                builder = builder.decorations(false)
-            }
+        if def.undecorated() {
+            builder = builder.decorations(false);
+        } else {
+            builder = builder
+                .hidden_title(true)
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .traffic_light_position(def.pre_solarium_traffic_lights_position());
         }
 
         #[cfg(windows)]
@@ -903,62 +863,37 @@ impl ShowCapWindow {
         builder
     }
 
-    pub fn id(&self, app: &AppHandle) -> CapWindowId {
+    pub fn def(&self, app: &AppHandle) -> CapWindowDef {
         match self {
-            ShowCapWindow::Setup => CapWindowId::Setup,
-            ShowCapWindow::Main { .. } => CapWindowId::Main,
-            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
-            ShowCapWindow::Editor { project_path } => {
+            CapWindow::Setup => CapWindowDef::Setup,
+            CapWindow::Main { .. } => CapWindowDef::Main,
+            CapWindow::Settings { .. } => CapWindowDef::Settings,
+            CapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(path, _)| path == project_path).unwrap().1;
-                CapWindowId::Editor { id }
+                CapWindowDef::Editor { id }
             }
-            ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
-            ShowCapWindow::TargetSelectOverlay { display_id } => CapWindowId::TargetSelectOverlay {
+            CapWindow::RecordingsOverlay => CapWindowDef::RecordingsOverlay,
+            CapWindow::TargetSelectOverlay { display_id } => CapWindowDef::TargetSelectOverlay {
                 display_id: display_id.clone(),
             },
-            ShowCapWindow::WindowCaptureOccluder { screen_id } => {
-                CapWindowId::WindowCaptureOccluder {
-                    screen_id: screen_id.clone(),
-                }
-            }
-            ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera => CapWindowId::Camera,
-            ShowCapWindow::InProgressRecording { .. } => CapWindowId::RecordingControls,
-            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
-            ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
-            ShowCapWindow::ScreenshotEditor { path } => {
+            CapWindow::WindowCaptureOccluder { screen_id } => CapWindowDef::WindowCaptureOccluder {
+                screen_id: screen_id.clone(),
+            },
+            CapWindow::CaptureArea { .. } => CapWindowDef::CaptureArea,
+            CapWindow::Camera => CapWindowDef::Camera,
+            CapWindow::InProgressRecording { .. } => CapWindowDef::RecordingControls,
+            CapWindow::Upgrade => CapWindowDef::Upgrade,
+            CapWindow::ModeSelect => CapWindowDef::ModeSelect,
+            CapWindow::ScreenshotEditor { path } => {
                 let state = app.state::<ScreenshotEditorWindowIds>();
                 let s = state.ids.lock().unwrap();
                 let id = s.iter().find(|(p, _)| p == path).unwrap().1;
-                CapWindowId::ScreenshotEditor { id }
+                CapWindowDef::ScreenshotEditor { id }
             }
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
-    use crate::platform::delegates;
-
-    let target_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            delegates::setup(
-                target_window.as_ref().window(),
-                controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-
-            let c_win = target_window.clone();
-            target_window.on_window_event(move |event| match event {
-                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
-                }
-                _ => {}
-            });
-        })
-        .ok();
 }
 
 #[tauri::command]
@@ -970,49 +905,6 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
         AppTheme::Light => Some(tauri::Theme::Light),
         AppTheme::Dark => Some(tauri::Theme::Dark),
     });
-
-    #[cfg(target_os = "macos")]
-    match CapWindowId::from_str(window.label()) {
-        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
-        Ok(_) | Err(_) => {}
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-#[instrument(skip(_window))]
-pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
-    #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(
-        &_window,
-        _controls_inset.map(LogicalPosition::from).or_else(|| {
-            // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(_window.label())
-                .ok()
-                .and_then(|id| id.traffic_lights_position().flatten())
-        }),
-    );
-}
-
-#[cfg(target_os = "macos")]
-fn position_traffic_lights_impl(
-    window: &tauri::Window,
-    controls_inset: Option<LogicalPosition<f64>>,
-) {
-    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
-    let c_win = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let ns_window = match c_win.ns_window() {
-                Ok(handle) => handle,
-                Err(_) => return,
-            };
-            position_window_controls(
-                UnsafeWindowHandle(ns_window),
-                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-            );
-        })
-        .ok();
 }
 
 fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
@@ -1033,10 +925,10 @@ fn should_protect_window(app: &AppHandle<Wry>, window_title: &str) -> bool {
 #[instrument(skip(app))]
 pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), String> {
     for (label, window) in app.webview_windows() {
-        if let Ok(id) = CapWindowId::from_str(&label) {
+        if let Ok(id) = CapWindowDef::from_str(&label) {
             let title = id.title();
             window
-                .set_content_protected(should_protect_window(&app, &title))
+                .set_content_protected(should_protect_window(&app, title))
                 .map_err(|e| e.to_string())?;
         }
     }
@@ -1113,7 +1005,6 @@ impl MonitorExt for Display {
 
 #[specta::specta]
 #[tauri::command(async)]
-#[instrument(skip(_window))]
 pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     #[cfg(target_os = "macos")]
     {

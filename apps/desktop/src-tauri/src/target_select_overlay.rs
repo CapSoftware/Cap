@@ -11,7 +11,7 @@ use cap_recording::screen_capture::ScreenCaptureTarget;
 use crate::{
     general_settings,
     window_exclusion::WindowExclusion,
-    windows::{CapWindowId, ShowCapWindow},
+    windows::{CapWindow, CapWindowDef},
 };
 use scap_targets::{
     Display, DisplayId, Window, WindowId,
@@ -59,7 +59,7 @@ pub async fn open_target_select_overlays(
         .map(|d| d.id())
         .collect::<Vec<_>>();
     for display_id in displays {
-        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
+        let _ = CapWindow::TargetSelectOverlay { display_id }
             .show(&app)
             .await;
     }
@@ -184,7 +184,7 @@ pub async fn update_camera_overlay_bounds(
 #[instrument(skip(app))]
 pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
-        if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
+        if let Ok(CapWindowDef::TargetSelectOverlay { .. }) = CapWindowDef::from_str(&id) {
             let _ = window.close();
         }
     }
@@ -238,12 +238,8 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             .owner_pid()
             .ok_or("Could not get window owner PID")?;
 
-        if let Some(app) =
-            unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
-        {
-            unsafe {
-                app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
-            }
+        if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
+            app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
         }
     }
 
@@ -299,8 +295,8 @@ impl WindowFocusManager {
             tokio::spawn(async move {
                 let app = window.app_handle();
                 loop {
-                    let cap_main = CapWindowId::Main.get(app);
-                    let cap_settings = CapWindowId::Settings.get(app);
+                    let cap_main = CapWindowDef::Main.get(app);
+                    let cap_settings = CapWindowDef::Settings.get(app);
 
                     let main_window_available = cap_main.is_some();
                     let settings_window_available = cap_settings.is_some();

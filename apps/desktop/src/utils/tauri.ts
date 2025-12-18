@@ -182,16 +182,13 @@ async isCameraWindowOpen() : Promise<boolean> {
 async seekTo(frameNumber: number) : Promise<null> {
     return await TAURI_INVOKE("seek_to", { frameNumber });
 },
-async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
-    await TAURI_INVOKE("position_traffic_lights", { controlsInset });
-},
 async setTheme(theme: AppTheme) : Promise<void> {
     await TAURI_INVOKE("set_theme", { theme });
 },
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
-async showWindow(window: ShowCapWindow) : Promise<null> {
+async showWindow(window: CapWindow) : Promise<null> {
     return await TAURI_INVOKE("show_window", { window });
 },
 async writeClipboardString(text: string) : Promise<null> {
@@ -376,6 +373,7 @@ export type CameraPreviewState = { size: number; shape: CameraPreviewShape; mirr
 export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
+export type CapWindow = "Setup" | { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId } } | { CaptureArea: { screen_id: DisplayId } } | "Camera" | { InProgressRecording: { countdown: number | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } }
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
 export type CaptionSegment = { id: string; start: number; end: number; text: string; words?: CaptionWord[] }
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position?: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean; highlightColor?: string; fadeDuration?: number; lingerDuration?: number; wordTransitionDuration?: number }
@@ -488,7 +486,6 @@ export type SerializedScreenshotEditorInstance = { framesSocketUrl: string; path
 export type SetCaptureAreaPending = boolean
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
-export type ShowCapWindow = "Setup" | { Main: { init_target_mode: RecordingTargetMode | null } } | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: DisplayId } } | { TargetSelectOverlay: { display_id: DisplayId } } | { CaptureArea: { screen_id: DisplayId } } | "Camera" | { InProgressRecording: { countdown: number | null } } | "Upgrade" | "ModeSelect" | { ScreenshotEditor: { path: string } }
 export type SingleSegment = { display: VideoMeta; camera?: VideoMeta | null; audio?: AudioMeta | null; cursor?: string | null }
 export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; capture_system_audio?: boolean; mode: RecordingMode; organization_id?: string | null }
 export type StereoMode = "stereo" | "monoL" | "monoR"
