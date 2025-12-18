@@ -1314,7 +1314,7 @@ struct SerializedEditorInstance {
 #[specta::specta]
 #[instrument(skip(window))]
 async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
-    let CapWindowDef::Editor { id } = CapWindowDef::from_str(window.label()).unwrap() else {
+    let Ok(CapWindowDef::Editor { id }) = CapWindowDef::from_str(window.label()) else {
         return Err("Invalid window".to_string());
     };
 
