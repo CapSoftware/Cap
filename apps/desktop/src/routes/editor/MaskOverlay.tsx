@@ -1,6 +1,6 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
-import { createMemo, createRoot, Show } from "solid-js";
+import { createMemo, createRoot, For, Show } from "solid-js";
 import { produce } from "solid-js/store";
 
 import { useEditorContext } from "./context";
@@ -11,25 +11,32 @@ type MaskOverlayProps = {
 };
 
 export function MaskOverlay(props: MaskOverlayProps) {
-	const { project, setProject, editorState, projectHistory } =
+	const { project, setProject, editorState, setEditorState, projectHistory } =
 		useEditorContext();
-
-	const selectedMask = createMemo(() => {
-		const selection = editorState.timeline.selection;
-		if (!selection || selection.type !== "mask") return;
-		const index = selection.indices[0];
-		const segment = project.timeline?.maskSegments?.[index];
-		if (!segment) return;
-		return { index, segment };
-	});
 
 	const currentAbsoluteTime = () =>
 		editorState.previewTime ?? editorState.playbackTime ?? 0;
 
-	const maskState = createMemo(() => {
-		const selected = selectedMask();
-		if (!selected) return;
-		return evaluateMask(selected.segment, currentAbsoluteTime());
+	const visibleMaskSegments = createMemo(() => {
+		const segments = project.timeline?.maskSegments ?? [];
+		const time = currentAbsoluteTime();
+		return segments
+			.map((segment, index) => ({ segment, index }))
+			.filter(({ segment }) => time >= segment.start && time < segment.end);
+	});
+
+	const selectedMaskIndex = createMemo(() => {
+		const selection = editorState.timeline.selection;
+		if (!selection || selection.type !== "mask") return null;
+		return selection.indices[0] ?? null;
+	});
+
+	const selectedMask = createMemo(() => {
+		const index = selectedMaskIndex();
+		if (index === null) return;
+		const segment = project.timeline?.maskSegments?.[index];
+		if (!segment) return;
+		return { index, segment };
 	});
 
 	const updateSegment = (fn: (segment: MaskSegment) => void) => {
@@ -48,18 +55,73 @@ export function MaskOverlay(props: MaskOverlayProps) {
 		);
 	};
 
-	const currentMaskState = maskState();
-	const selected = selectedMask();
+	const handleSelectSegment = (index: number, e: MouseEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		setEditorState("timeline", "selection", {
+			type: "mask",
+			indices: [index],
+		});
+	};
+
+	const getMaskRect = (segment: MaskSegment) => {
+		const state = evaluateMask(segment, currentAbsoluteTime());
+		const width = state.size.x * props.size.width;
+		const height = state.size.y * props.size.height;
+		const left = state.position.x * props.size.width - width / 2;
+		const top = state.position.y * props.size.height - height / 2;
+		return { width, height, left, top };
+	};
+
+	const handleBackgroundClick = (e: MouseEvent) => {
+		if (e.target === e.currentTarget && selectedMaskIndex() !== null) {
+			e.preventDefault();
+			e.stopPropagation();
+			setEditorState("timeline", "selection", null);
+		}
+	};
+
+	const hasMaskSelection = () => selectedMaskIndex() !== null;
 
 	return (
-		<Show when={selected && currentMaskState}>
-			<MaskOverlayContent
-				size={props.size}
-				maskState={currentMaskState as ReturnType<typeof evaluateMask>}
-				updateSegment={updateSegment}
-				projectHistory={projectHistory}
-			/>
-		</Show>
+		<div
+			class="absolute inset-0"
+			classList={{ "pointer-events-none": !hasMaskSelection() }}
+			onMouseDown={handleBackgroundClick}
+		>
+			<For each={visibleMaskSegments()}>
+				{({ segment, index }) => {
+					const isSelected = () => selectedMaskIndex() === index;
+					const rect = () => getMaskRect(segment);
+					const maskState = () => evaluateMask(segment, currentAbsoluteTime());
+
+					return (
+						<Show
+							when={isSelected() && selectedMask()}
+							fallback={
+								<div
+									class="absolute pointer-events-auto cursor-pointer rounded-md border-2 border-transparent hover:border-gray-12 hover:bg-gray-9/5 transition-colors"
+									style={{
+										left: `${rect().left}px`,
+										top: `${rect().top}px`,
+										width: `${rect().width}px`,
+										height: `${rect().height}px`,
+									}}
+									onMouseDown={(e) => handleSelectSegment(index, e)}
+								/>
+							}
+						>
+							<MaskOverlayContent
+								size={props.size}
+								maskState={maskState()}
+								updateSegment={updateSegment}
+								projectHistory={projectHistory}
+							/>
+						</Show>
+					);
+				}}
+			</For>
+		</div>
 	);
 }
 
@@ -160,53 +222,51 @@ function MaskOverlayContent(props: {
 	};
 
 	return (
-		<div class="absolute inset-0 pointer-events-none">
-			<div
-				class="absolute pointer-events-auto group"
-				style={{
-					left: `${rect().left}px`,
-					top: `${rect().top}px`,
-					width: `${rect().width}px`,
-					height: `${rect().height}px`,
-				}}
-				onMouseDown={onMove}
-			>
-				<div class="absolute inset-0 rounded-md border-2 border-blue-9 bg-blue-9/10 cursor-move" />
+		<div
+			class="absolute pointer-events-auto group"
+			style={{
+				left: `${rect().left}px`,
+				top: `${rect().top}px`,
+				width: `${rect().width}px`,
+				height: `${rect().height}px`,
+			}}
+			onMouseDown={onMove}
+		>
+			<div class="absolute inset-0 rounded-md border-2 border-gray-12 bg-gray-9/10 cursor-move" />
 
-				<ResizeHandle
-					class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"
-					onMouseDown={createResizeHandler(-1, -1)}
-				/>
-				<ResizeHandle
-					class="top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-ne-resize"
-					onMouseDown={createResizeHandler(1, -1)}
-				/>
-				<ResizeHandle
-					class="bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-sw-resize"
-					onMouseDown={createResizeHandler(-1, 1)}
-				/>
-				<ResizeHandle
-					class="bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-se-resize"
-					onMouseDown={createResizeHandler(1, 1)}
-				/>
+			<ResizeHandle
+				class="top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nw-resize"
+				onMouseDown={createResizeHandler(-1, -1)}
+			/>
+			<ResizeHandle
+				class="top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-ne-resize"
+				onMouseDown={createResizeHandler(1, -1)}
+			/>
+			<ResizeHandle
+				class="bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-sw-resize"
+				onMouseDown={createResizeHandler(-1, 1)}
+			/>
+			<ResizeHandle
+				class="bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-se-resize"
+				onMouseDown={createResizeHandler(1, 1)}
+			/>
 
-				<ResizeHandle
-					class="top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 cursor-n-resize"
-					onMouseDown={createResizeHandler(0, -1)}
-				/>
-				<ResizeHandle
-					class="bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-s-resize"
-					onMouseDown={createResizeHandler(0, 1)}
-				/>
-				<ResizeHandle
-					class="left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-w-resize"
-					onMouseDown={createResizeHandler(-1, 0)}
-				/>
-				<ResizeHandle
-					class="right-0 top-1/2 translate-x-1/2 -translate-y-1/2 cursor-e-resize"
-					onMouseDown={createResizeHandler(1, 0)}
-				/>
-			</div>
+			<ResizeHandle
+				class="top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 cursor-n-resize"
+				onMouseDown={createResizeHandler(0, -1)}
+			/>
+			<ResizeHandle
+				class="bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-s-resize"
+				onMouseDown={createResizeHandler(0, 1)}
+			/>
+			<ResizeHandle
+				class="left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-w-resize"
+				onMouseDown={createResizeHandler(-1, 0)}
+			/>
+			<ResizeHandle
+				class="right-0 top-1/2 translate-x-1/2 -translate-y-1/2 cursor-e-resize"
+				onMouseDown={createResizeHandler(1, 0)}
+			/>
 		</div>
 	);
 }
@@ -218,7 +278,7 @@ function ResizeHandle(props: {
 	return (
 		<div
 			class={cx(
-				"absolute w-3 h-3 bg-blue-9 border border-white rounded-full shadow-sm transition-transform hover:scale-125",
+				"absolute w-3 h-3 bg-gray-12 border border-white rounded-full shadow-sm transition-transform hover:scale-125",
 				props.class,
 			)}
 			onMouseDown={props.onMouseDown}
