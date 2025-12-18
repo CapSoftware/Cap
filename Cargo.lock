@@ -1122,6 +1122,7 @@ version = "0.1.0"
 dependencies = [
  "cap-mediafoundation-utils",
  "inquire",
+ "parking_lot",
  "thiserror 1.0.69",
  "tracing",
  "windows 0.60.0",
