@@ -427,7 +427,10 @@ impl HevcEncoder {
                         }
                     }
                     _ => {
-                        panic!("Unknown media event type: {}", event_type.0);
+                        eprintln!(
+                            "[cap-enc-mediafoundation] Ignoring unknown media event type: {}",
+                            event_type.0
+                        );
                     }
                 }
             }

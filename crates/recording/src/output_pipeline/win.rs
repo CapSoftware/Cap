@@ -287,9 +287,9 @@ impl Muxer for WindowsMuxer {
                             |output_sample| {
                                 let mut output = output.lock().unwrap();
 
-                                let _ = muxer
-                                    .write_sample(&output_sample, &mut output)
-                                    .map_err(|e| format!("WriteSample: {e}"));
+                                if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
+                                    tracing::error!("WriteSample failed: {e}");
+                                }
 
                                 Ok(())
                             },
@@ -707,9 +707,10 @@ impl Muxer for WindowsCameraMuxer {
                                 },
                                 |output_sample| {
                                     let mut output = output.lock().unwrap();
-                                    let _ = muxer
-                                        .write_sample(&output_sample, &mut output)
-                                        .map_err(|e| format!("WriteSample: {e}"));
+                                    if let Err(e) = muxer.write_sample(&output_sample, &mut output)
+                                    {
+                                        tracing::error!("Camera WriteSample failed: {e}");
+                                    }
                                     Ok(())
                                 },
                             );

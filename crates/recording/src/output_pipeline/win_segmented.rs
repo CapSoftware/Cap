@@ -520,11 +520,20 @@ impl WindowsSegmentedMuxer {
                                 Ok(Some((frame.texture().clone(), frame_time)))
                             },
                             |output_sample| {
-                                let mut output = output_clone.lock().unwrap();
+                                let mut output = match output_clone.lock() {
+                                    Ok(guard) => guard,
+                                    Err(e) => {
+                                        error!("Failed to lock output mutex: {e}");
+                                        return Err(windows::core::Error::new(
+                                            windows::core::HRESULT(0x80004005u32 as i32),
+                                            format!("Mutex poisoned: {e}"),
+                                        ));
+                                    }
+                                };
 
-                                let _ = muxer
-                                    .write_sample(&output_sample, &mut output)
-                                    .map_err(|e| format!("WriteSample: {e}"));
+                                if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
+                                    warn!("WriteSample failed: {e}");
+                                }
 
                                 Ok(())
                             },

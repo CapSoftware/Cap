@@ -292,12 +292,16 @@ async fn run_camera_encoding_benchmark(
 
                 let encode_start = Instant::now();
                 let timestamp = Duration::from_micros(converted.frame.pts().unwrap_or(0) as u64);
-                if let Ok(()) =
-                    encoder.queue_preconverted_frame(converted.frame, timestamp, &mut output)
-                {
-                    let encode_duration = encode_start.elapsed();
-                    let pipeline_latency = converted.submit_time.elapsed();
-                    metrics.record_frame_encoded(encode_duration, pipeline_latency);
+                match encoder.queue_preconverted_frame(converted.frame, timestamp, &mut output) {
+                    Ok(()) => {
+                        let encode_duration = encode_start.elapsed();
+                        let pipeline_latency = converted.submit_time.elapsed();
+                        metrics.record_frame_encoded(encode_duration, pipeline_latency);
+                    }
+                    Err(e) => {
+                        warn!("Encode error during drain: {}", e);
+                        metrics.record_dropped_output();
+                    }
                 }
             } else {
                 break;

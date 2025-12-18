@@ -288,8 +288,12 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(600.0, 600.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 600.0)) {
+                        warn!("Failed to set Setup window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Setup window on Windows: {}", e);
+                    }
                 }
 
                 window
@@ -458,8 +462,12 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(600.0, 465.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 465.0)) {
+                        warn!("Failed to set Settings window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Settings window on Windows: {}", e);
+                    }
                 }
 
                 window
@@ -483,8 +491,12 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(1275.0, 800.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(1275.0, 800.0)) {
+                        warn!("Failed to set Editor window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Editor window on Windows: {}", e);
+                    }
                 }
 
                 window
@@ -508,8 +520,15 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(1240.0, 800.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(1240.0, 800.0)) {
+                        warn!(
+                            "Failed to set ScreenshotEditor window size on Windows: {}",
+                            e
+                        );
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center ScreenshotEditor window on Windows: {}", e);
+                    }
                 }
 
                 window
@@ -534,8 +553,12 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(950.0, 850.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(950.0, 850.0)) {
+                        warn!("Failed to set Upgrade window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Upgrade window on Windows: {}", e);
+                    }
                 }
 
                 window
@@ -560,8 +583,12 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 {
                     use tauri::LogicalSize;
-                    let _ = window.set_size(LogicalSize::new(580.0, 340.0));
-                    let _ = window.center();
+                    if let Err(e) = window.set_size(LogicalSize::new(580.0, 340.0)) {
+                        warn!("Failed to set ModeSelect window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center ModeSelect window on Windows: {}", e);
+                    }
                 }
 
                 window

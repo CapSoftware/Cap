@@ -12,8 +12,24 @@ fn copy_frame_data(
     row_length: usize,
     height: usize,
 ) {
+    debug_assert!(height > 0, "height must be positive");
+    debug_assert!(
+        src_bytes.len()
+            >= (height - 1)
+                .saturating_mul(src_stride)
+                .saturating_add(row_length),
+        "source buffer too small"
+    );
+    debug_assert!(
+        dest_bytes.len()
+            >= (height - 1)
+                .saturating_mul(dest_stride)
+                .saturating_add(row_length),
+        "destination buffer too small"
+    );
+
     if src_stride == row_length && dest_stride == row_length {
-        let total_bytes = row_length * height;
+        let total_bytes = row_length.saturating_mul(height);
         unsafe {
             std::ptr::copy_nonoverlapping(src_bytes.as_ptr(), dest_bytes.as_mut_ptr(), total_bytes);
         }

@@ -149,8 +149,12 @@ impl FfmpegDecoder {
         std::thread::spawn(move || {
             let hw_device_type = if cfg!(target_os = "macos") {
                 Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX)
-            } else {
+            } else if cfg!(target_os = "linux") {
+                Some(AVHWDeviceType::AV_HWDEVICE_TYPE_VAAPI)
+            } else if cfg!(target_os = "windows") {
                 Some(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2)
+            } else {
+                None
             };
 
             let mut this = match cap_video_decode::FFmpegDecoder::new(path.clone(), hw_device_type)
