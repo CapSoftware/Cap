@@ -171,8 +171,7 @@ pub fn pixel_to_pixel_format(pixel: avformat::Pixel) -> Result<cv::PixelFormat, 
                 "Unhandled pixel format encountered - no mapping to cv::PixelFormat available"
             );
             Err(format!(
-                "Unsupported pixel format: {:?}. Supported formats: NV12, YUV420P, RGBA, BGRA",
-                other
+                "Unsupported pixel format: {other:?}. Supported formats: NV12, YUV420P, RGBA, BGRA"
             ))
         }
     }
