@@ -53,6 +53,7 @@ mod windows_impl {
         pub rendering_status: RenderingStatus,
         pub available_encoders: Vec<String>,
         pub graphics_capture_supported: bool,
+        #[serde(rename = "d3D11VideoProcessorAvailable")]
         pub d3d11_video_processor_available: bool,
     }
 
@@ -255,7 +256,20 @@ mod windows_impl {
             1080,
         );
 
-        cap_frame_converter::D3D11Converter::new(test_config).is_ok()
+        match cap_frame_converter::D3D11Converter::new(test_config) {
+            Ok(converter) => {
+                tracing::debug!(
+                    "D3D11 video processor check passed: {} ({})",
+                    converter.gpu_info().description,
+                    converter.gpu_info().vendor_name()
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!("D3D11 video processor check failed: {e:?}");
+                false
+            }
+        }
     }
 }
 

@@ -14,7 +14,6 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, HMODULE},
         Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAP_READ, D3D11_MAP_WRITE,
@@ -335,17 +334,97 @@ fn get_gpu_info(device: &ID3D11Device) -> Result<GpuInfo, ConvertError> {
 }
 
 impl D3D11Converter {
-    pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
-        let input_dxgi = pixel_to_dxgi(config.input_format)?;
-        let output_dxgi = pixel_to_dxgi(config.output_format)?;
+    fn create_device_on_best_adapter() -> Result<(ID3D11Device, ID3D11DeviceContext), ConvertError>
+    {
+        unsafe {
+            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| {
+                ConvertError::HardwareUnavailable(format!("Failed to create DXGI factory: {e:?}"))
+            })?;
 
-        let (device, context) = unsafe {
+            let mut best_adapter: Option<(IDXGIAdapter, String, u64)> = None;
+            let mut adapter_index = 0u32;
+
+            loop {
+                let adapter: IDXGIAdapter = match factory.EnumAdapters(adapter_index) {
+                    Ok(a) => a,
+                    Err(_) => break,
+                };
+
+                if let Ok(desc) = adapter.GetDesc() {
+                    let description = String::from_utf16_lossy(
+                        &desc
+                            .Description
+                            .iter()
+                            .take_while(|&&c| c != 0)
+                            .copied()
+                            .collect::<Vec<_>>(),
+                    );
+
+                    let is_software = desc.VendorId == 0x1414
+                        && (description.contains("Basic Render")
+                            || description.contains("WARP")
+                            || description.contains("Microsoft Basic"));
+
+                    if !is_software {
+                        let vendor = GpuVendor::from_id(desc.VendorId);
+                        let is_discrete = matches!(
+                            vendor,
+                            GpuVendor::Nvidia
+                                | GpuVendor::Amd
+                                | GpuVendor::Qualcomm
+                                | GpuVendor::Arm
+                        );
+
+                        let vram = desc.DedicatedVideoMemory as u64;
+
+                        let should_use = match &best_adapter {
+                            None => true,
+                            Some((_, _, best_vram)) => {
+                                if is_discrete {
+                                    vram > *best_vram
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+
+                        if should_use {
+                            tracing::debug!(
+                                "D3D11: Candidate adapter {}: {} (Vendor: 0x{:04X}, VRAM: {} MB, Discrete: {})",
+                                adapter_index,
+                                description,
+                                desc.VendorId,
+                                vram / (1024 * 1024),
+                                is_discrete
+                            );
+                            best_adapter = Some((adapter, description, vram));
+                        }
+                    } else {
+                        tracing::debug!(
+                            "D3D11: Skipping software adapter {}: {}",
+                            adapter_index,
+                            description
+                        );
+                    }
+                }
+
+                adapter_index += 1;
+            }
+
+            let (adapter, adapter_name, _) = best_adapter.ok_or_else(|| {
+                ConvertError::HardwareUnavailable(
+                    "No suitable hardware GPU adapter found".to_string(),
+                )
+            })?;
+
+            tracing::info!("D3D11: Creating device on adapter: {}", adapter_name);
+
             let mut device = None;
             let mut context = None;
 
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                Some(&adapter),
+                windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 None,
@@ -356,7 +435,8 @@ impl D3D11Converter {
             )
             .map_err(|e| {
                 ConvertError::HardwareUnavailable(format!(
-                    "D3D11CreateDevice failed (no hardware GPU available?): {e:?}"
+                    "D3D11CreateDevice failed on {}: {e:?}",
+                    adapter_name
                 ))
             })?;
 
@@ -367,8 +447,15 @@ impl D3D11Converter {
                 ConvertError::HardwareUnavailable("D3D11 context was null".to_string())
             })?;
 
-            (device, context)
-        };
+            Ok((device, context))
+        }
+    }
+
+    pub fn new(config: ConversionConfig) -> Result<Self, ConvertError> {
+        let input_dxgi = pixel_to_dxgi(config.input_format)?;
+        let output_dxgi = pixel_to_dxgi(config.output_format)?;
+
+        let (device, context) = Self::create_device_on_best_adapter()?;
 
         let gpu_info = get_gpu_info(&device)?;
 
