@@ -874,7 +874,7 @@ async fn create_segment_pipeline(
         start_time,
         fragmented,
         #[cfg(windows)]
-        encoder_preferences,
+        encoder_preferences.clone(),
     )
     .instrument(error_span!("screen-out"))
     .await
@@ -912,14 +912,20 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<WindowsSegmentedCameraMuxer>(WindowsSegmentedCameraMuxerConfig::default())
+                .build::<WindowsSegmentedCameraMuxer>(WindowsSegmentedCameraMuxerConfig {
+                    encoder_preferences: encoder_preferences.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig::default())
+                .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
+                    encoder_preferences: encoder_preferences.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         };

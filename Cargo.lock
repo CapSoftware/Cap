@@ -7726,6 +7726,7 @@ dependencies = [
  "scap-ffmpeg",
  "scap-targets",
  "thiserror 1.0.69",
+ "tracing",
  "windows 0.60.0",
  "windows-numerics 0.2.0",
  "workspace-hack",

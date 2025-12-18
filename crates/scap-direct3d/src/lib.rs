@@ -22,19 +22,20 @@ use windows::{
     Win32::{
         Foundation::HMODULE,
         Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+            Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice,
-                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ,
+                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
+                ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
                 Common::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
                     DXGI_SAMPLE_DESC,
                 },
-                IDXGIDevice,
+                DXGI_ERROR_UNSUPPORTED, IDXGIDevice,
             },
         },
         System::WinRT::Direct3D11::{
@@ -157,6 +158,43 @@ pub fn is_supported() -> windows::core::Result<bool> {
     )? && GraphicsCaptureSession::IsSupported()?)
 }
 
+fn create_d3d_device_with_type(
+    driver_type: D3D_DRIVER_TYPE,
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    device: *mut Option<ID3D11Device>,
+) -> windows::core::Result<()> {
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            driver_type,
+            HMODULE::default(),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(device),
+            None,
+            None,
+        )
+    }
+}
+
+fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
+    let mut device = None;
+    let flags = D3D11_CREATE_DEVICE_FLAG::default();
+
+    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+
+    match result {
+        Ok(()) => Ok((device.unwrap(), false)),
+        Err(e) if e.code() == DXGI_ERROR_UNSUPPORTED => {
+            tracing::info!("Hardware D3D11 device unavailable, attempting WARP fallback");
+            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device)?;
+            Ok((device.unwrap(), true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct Settings {
     pub is_border_required: Option<bool>,
@@ -192,6 +230,12 @@ impl Settings {
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum NewCapturerError {
+    #[error("Screen capture requires Windows 10 version 1903 (build 18362) or later")]
+    WindowsVersionTooOld,
+    #[error(
+        "Windows Graphics Capture API is disabled or unavailable. This may be due to group policy or missing system components."
+    )]
+    GraphicsCaptureDisabled,
     #[error("NotSupported")]
     NotSupported,
     #[error("BorderNotSupported")]
@@ -232,6 +276,7 @@ pub struct Capturer {
     frame_pool: Direct3D11CaptureFramePool,
     frame_arrived_token: i64,
     stop_flag: Arc<AtomicBool>,
+    is_using_warp: bool,
 }
 
 impl Capturer {
@@ -240,10 +285,20 @@ impl Capturer {
         settings: Settings,
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-        mut d3d_device: Option<ID3D11Device>,
+        d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
-        if !is_supported()? {
-            return Err(NewCapturerError::NotSupported);
+        let api_present = ApiInformation::IsApiContractPresentByMajor(
+            &HSTRING::from("Windows.Foundation.UniversalApiContract"),
+            8,
+        )
+        .unwrap_or(false);
+
+        if !api_present {
+            return Err(NewCapturerError::WindowsVersionTooOld);
+        }
+
+        if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
+            return Err(NewCapturerError::GraphicsCaptureDisabled);
         }
 
         if settings.is_border_required.is_some() && !Settings::can_is_border_required()? {
@@ -260,24 +315,13 @@ impl Capturer {
             return Err(NewCapturerError::UpdateIntervalNotSupported);
         }
 
-        if d3d_device.is_none() {
-            unsafe {
-                D3D11CreateDevice(
-                    None,
-                    D3D_DRIVER_TYPE_HARDWARE,
-                    HMODULE::default(),
-                    Default::default(),
-                    None,
-                    D3D11_SDK_VERSION,
-                    Some(&mut d3d_device),
-                    None,
-                    None,
-                )
-            }
-            .map_err(NewCapturerError::CreateDevice)?;
-        }
+        let (d3d_device, is_using_warp) = if let Some(device) = d3d_device {
+            (device, false)
+        } else {
+            create_d3d_device_with_warp_fallback().map_err(NewCapturerError::CreateDevice)?
+        };
 
-        let (d3d_device, d3d_context) = d3d_device
+        let (d3d_device, d3d_context) = Some(d3d_device)
             .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
             .transpose()
             .map_err(NewCapturerError::Context)?
@@ -433,6 +477,12 @@ impl Capturer {
         )
         .map_err(NewCapturerError::RegisterClosed)?;
 
+        if is_using_warp {
+            tracing::warn!(
+                "Hardware GPU unavailable, using WARP software rasterizer for screen capture"
+            );
+        }
+
         Ok(Capturer {
             settings,
             d3d_device,
@@ -441,7 +491,12 @@ impl Capturer {
             frame_pool,
             frame_arrived_token,
             stop_flag,
+            is_using_warp,
         })
+    }
+
+    pub fn is_using_software_rendering(&self) -> bool {
+        self.is_using_warp
     }
 
     pub fn settings(&self) -> &Settings {
