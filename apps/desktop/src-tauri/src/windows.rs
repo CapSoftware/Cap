@@ -217,7 +217,7 @@ impl CapWindowDef {
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
-            Self::ModeSelect => (900.0, 500.0),
+            Self::ModeSelect => (580.0, 340.0),
             _ => return None,
         })
     }
@@ -501,14 +501,15 @@ impl CapWindow {
             }
             Self::ModeSelect => {
                 // Hide main window when mode select window opens
-                if let Some(main) = CapWindowDef::Main.get(app) {
+                if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                self.window_builder(app, "/mode-select")
-                    .inner_size(900.0, 500.0)
-                    .min_inner_size(900.0, 500.0)
-                    .resizable(true)
+                let mut builder = self
+                    .window_builder(app, "/mode-select")
+                    .inner_size(580.0, 340.0)
+                    .min_inner_size(580.0, 340.0)
+                    .resizable(false)
                     .maximized(false)
                     .maximizable(false)
                     .center()
@@ -682,6 +683,43 @@ impl CapWindow {
                 let width = 320.0;
                 let height = 150.0;
 
+                let title = CapWindowId::RecordingControls.title();
+                let should_protect = should_protect_window(app, &title);
+
+                let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
+                let pos_y =
+                    (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0;
+
+                debug!(
+                    "InProgressRecording window: monitor size={:?}, scale={}, pos=({}, {})",
+                    monitor.size(),
+                    monitor.scale_factor(),
+                    pos_x,
+                    pos_y
+                );
+
+                #[cfg(target_os = "macos")]
+                let window = {
+                    self.window_builder(app, "/in-progress-recording")
+                        .maximized(false)
+                        .resizable(false)
+                        .fullscreen(false)
+                        .shadow(false)
+                        .always_on_top(true)
+                        .transparent(true)
+                        .visible_on_all_workspaces(true)
+                        .content_protected(should_protect)
+                        .inner_size(width, height)
+                        .position(pos_x, pos_y)
+                        .skip_taskbar(true)
+                        .initialization_script(format!(
+                            "window.COUNTDOWN = {};",
+                            countdown.unwrap_or_default()
+                        ))
+                        .build()?
+                };
+
+                #[cfg(windows)]
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -691,6 +729,7 @@ impl CapWindow {
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
+                    .content_protected(should_protect)
                     .inner_size(width, height)
                     .position(
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
@@ -702,6 +741,11 @@ impl CapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                }
 
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 

@@ -508,6 +508,7 @@ async function AuthorizedContent({
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
 			processing: metadata.aiProcessing || false,
+			generationSkipped: metadata.aiGenerationSkipped || false,
 		};
 	} else if (metadata.aiProcessing) {
 		initialAiData = {
@@ -515,15 +516,24 @@ async function AuthorizedContent({
 			summary: null,
 			chapters: null,
 			processing: true,
+			generationSkipped: false,
+		};
+	} else if (metadata.aiGenerationSkipped) {
+		initialAiData = {
+			title: null,
+			summary: null,
+			chapters: null,
+			processing: false,
+			generationSkipped: true,
 		};
 	}
 
 	if (
 		video.transcriptionStatus === "COMPLETE" &&
 		!currentMetadata.aiProcessing &&
+		!currentMetadata.aiGenerationSkipped &&
 		!currentMetadata.summary &&
 		!currentMetadata.chapters &&
-		// !currentMetadata.generationError &&
 		aiGenerationEnabled
 	) {
 		try {

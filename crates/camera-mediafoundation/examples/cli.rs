@@ -21,7 +21,7 @@ mod windows {
 
             let device_sources = DeviceSourcesIterator::new().unwrap();
 
-            if device_sources.len() == 0 {
+            if device_sources.is_empty() {
                 warn!("No devices found");
                 return;
             }

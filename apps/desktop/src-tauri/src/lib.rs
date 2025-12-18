@@ -24,6 +24,7 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod recovery;
 mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
@@ -483,8 +484,7 @@ async fn set_camera_input(
                     Err(e) => {
                         if attempts >= 3 {
                             break Err(format!(
-                                "Failed to initialize camera after {} attempts: {}",
-                                attempts, e
+                                "Failed to initialize camera after {attempts} attempts: {e}"
                             ));
                         }
                         warn!(
@@ -809,7 +809,7 @@ pub struct RecordingInfo {
 enum CurrentRecordingTarget {
     Window {
         id: WindowId,
-        bounds: LogicalBounds,
+        bounds: Option<LogicalBounds>,
     },
     Screen {
         id: DisplayId,
@@ -841,33 +841,55 @@ struct CurrentRecording {
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
+    tracing::debug!("get_current_recording called");
     let state = state.read().await;
 
     let (mode, capture_target, status) = match &state.recording_state {
-        RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
-        RecordingState::Active(inner) => (
-            inner.mode(),
-            inner.capture_target(),
-            RecordingStatus::Recording,
-        ),
+        RecordingState::None => {
+            tracing::debug!("get_current_recording: state is None");
+            return Ok(JsonValue::new(&None));
+        }
+        RecordingState::Pending { mode, target } => {
+            tracing::debug!("get_current_recording: state is Pending");
+            (*mode, target, RecordingStatus::Pending)
+        }
+        RecordingState::Active(inner) => {
+            tracing::debug!("get_current_recording: state is Active");
+            (
+                inner.mode(),
+                inner.capture_target(),
+                RecordingStatus::Recording,
+            )
+        }
     };
 
     let target = match capture_target {
-        ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: id.clone() },
-        ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-            id: id.clone(),
-            bounds: scap_targets::Window::from_id(id)
-                .ok_or(())?
-                .display_relative_logical_bounds()
-                .ok_or(())?,
-        },
-        ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-            screen: screen.clone(),
-            bounds: *bounds,
-        },
+        ScreenCaptureTarget::Display { id } => {
+            tracing::debug!("get_current_recording: target is Display");
+            CurrentRecordingTarget::Screen { id: id.clone() }
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let bounds =
+                scap_targets::Window::from_id(id).and_then(|w| w.display_relative_logical_bounds());
+            tracing::debug!(
+                "get_current_recording: target is Window, bounds={:?}",
+                bounds
+            );
+            CurrentRecordingTarget::Window {
+                id: id.clone(),
+                bounds,
+            }
+        }
+        ScreenCaptureTarget::Area { screen, bounds } => {
+            tracing::debug!("get_current_recording: target is Area");
+            CurrentRecordingTarget::Area {
+                screen: screen.clone(),
+                bounds: *bounds,
+            }
+        }
     };
 
+    tracing::debug!("get_current_recording: returning Some(CurrentRecording)");
     Ok(JsonValue::new(&Some(CurrentRecording {
         target,
         mode,
@@ -2164,7 +2186,7 @@ async fn editor_delete_project(
 #[specta::specta]
 #[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: CapWindow) -> Result<(), String> {
-    let _ = window.show(&app).await;
+    window.show(&app).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2313,6 +2335,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            recording_settings::set_recording_mode,
             upload_logs,
             recording::start_recording,
             recording::stop_recording,
@@ -2402,6 +2425,9 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::focus_window,
             editor_delete_project,
             format_project_name,
+            recovery::find_incomplete_recordings,
+            recovery::recover_recording,
+            recovery::discard_incomplete_recording,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2672,6 +2698,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 async move {
                     if !permissions.screen_recording.permitted()
                         || !permissions.accessibility.permitted()
+                        || !permissions.microphone.permitted()
+                        || !permissions.camera.permitted()
                         || GeneralSettingsStore::get(&app)
                             .ok()
                             .flatten()
@@ -2833,8 +2861,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
 
                                 #[cfg(target_os = "windows")]
-                                if !has_open_editor_window(&app) {
-                                    reopen_main_window(&app);
+                                if !has_open_editor_window(app) {
+                                    reopen_main_window(app);
                                 }
 
                                 return;

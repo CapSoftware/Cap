@@ -1,12 +1,40 @@
-use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, watch};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
+
+use cap_rendering::RenderedFrame;
 
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_frame_ws},
+    frame_ws::{WSFrame, create_watch_frame_ws},
 };
+
+fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static str> {
+    let expected_stride = frame
+        .width
+        .checked_mul(4)
+        .ok_or("overflow computing expected_stride")?;
+
+    if frame.padded_bytes_per_row == expected_stride {
+        Ok((frame.data, expected_stride))
+    } else {
+        let capacity = expected_stride
+            .checked_mul(frame.height)
+            .ok_or("overflow computing buffer capacity")?;
+        let mut stripped = Vec::with_capacity(capacity as usize);
+        for row in 0..frame.height {
+            let start = row
+                .checked_mul(frame.padded_bytes_per_row)
+                .ok_or("overflow computing row start")? as usize;
+            let end = start + expected_stride as usize;
+            stripped.extend_from_slice(&frame.data[start..end]);
+        }
+
+        Ok((stripped, expected_stride))
+    }
+}
 
 pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
@@ -21,19 +49,26 @@ type PendingReceiver = tokio::sync::watch::Receiver<Option<PendingResult>>;
 pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
-    let (frame_tx, _) = broadcast::channel(4);
+    let (frame_tx, frame_rx) = watch::channel(None);
 
-    let (ws_port, ws_shutdown_token) = create_frame_ws(frame_tx.clone()).await;
+    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
     let inner = create_editor_instance_impl(
         &app,
         path,
         Box::new(move |frame| {
-            let _ = frame_tx.send(WSFrame {
-                data: frame.data,
-                width: frame.width,
-                height: frame.height,
-                stride: frame.padded_bytes_per_row,
-            });
+            let width = frame.width;
+            let height = frame.height;
+            if let Ok((data, stride)) = strip_frame_padding(frame)
+                && let Err(e) = frame_tx.send(Some(WSFrame {
+                    data,
+                    width,
+                    height,
+                    stride,
+                    created_at: Instant::now(),
+                }))
+            {
+                debug!("Frame receiver dropped during prewarm: {e}");
+            }
         }),
     )
     .await?;
@@ -176,19 +211,26 @@ impl EditorInstances {
                     }
                 }
 
-                let (frame_tx, _) = broadcast::channel(4);
+                let (frame_tx, frame_rx) = watch::channel(None);
 
-                let (ws_port, ws_shutdown_token) = create_frame_ws(frame_tx.clone()).await;
+                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
                 let instance = create_editor_instance_impl(
                     window.app_handle(),
                     path,
                     Box::new(move |frame| {
-                        let _ = frame_tx.send(WSFrame {
-                            data: frame.data,
-                            width: frame.width,
-                            height: frame.height,
-                            stride: frame.padded_bytes_per_row,
-                        });
+                        let width = frame.width;
+                        let height = frame.height;
+                        if let Ok((data, stride)) = strip_frame_padding(frame)
+                            && let Err(e) = frame_tx.send(Some(WSFrame {
+                                data,
+                                width,
+                                height,
+                                stride,
+                                created_at: Instant::now(),
+                            }))
+                        {
+                            debug!("Frame receiver dropped in get_or_create: {e}");
+                        }
                     }),
                 )
                 .await?;

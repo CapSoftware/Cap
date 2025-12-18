@@ -1,5 +1,5 @@
-use scap_targets::Window;
-use scap_targets::WindowId;
+#[cfg(target_os = "macos")]
+use scap_targets::{Window, WindowId};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -62,6 +62,7 @@ impl WindowExclusion {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
     if exclusions.is_empty() {
         return Vec::new();
@@ -72,12 +73,7 @@ pub fn resolve_window_ids(exclusions: &[WindowExclusion]) -> Vec<WindowId> {
         .filter_map(|window| {
             let owner_name = window.owner_name();
             let window_title = window.name();
-
-            #[cfg(target_os = "macos")]
             let bundle_identifier = window.raw_handle().bundle_identifier();
-
-            #[cfg(not(target_os = "macos"))]
-            let bundle_identifier = None::<&str>;
 
             exclusions
                 .iter()

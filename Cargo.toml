@@ -30,13 +30,16 @@ specta = { version = "=2.0.0-rc.20", features = [
     "chrono",
 ] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
     "input-native",
     "serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = "25.0.0"
+wgpu = { version = "25.0.0", features = ["wgpu-core"] }
+wgpu-hal = "25.0.0"
+wgpu-core = "25.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
 sentry = { version = "0.42.0", features = [
@@ -52,12 +55,15 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "macos_12_7",
     "cv",
     "cf",
+    "cg",
     "core_audio",
     "sc",
     "av",
     "blocks",
     "async",
     "dispatch",
+    "io_surface",
+    "mtl",
 ], default-features = false }
 objc2 = "0.6.3"
 

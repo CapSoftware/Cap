@@ -1,12 +1,11 @@
-import { Router, useCurrentMatches } from "@solidjs/router";
-import { FileRoutes } from "@solidjs/start/router";
+import { Route, Router, useCurrentMatches } from "@solidjs/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import {
 	getCurrentWebviewWindow,
 	type WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { message } from "@tauri-apps/plugin-dialog";
-import { createEffect, onCleanup, onMount, Suspense } from "solid-js";
+import { createEffect, lazy, onCleanup, onMount, Suspense } from "solid-js";
 import { Toaster } from "solid-toast";
 
 import "@cap/ui-solid/main.css";
@@ -19,10 +18,64 @@ import { initAnonymousUser } from "./utils/analytics";
 import { type AppTheme, commands } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
 
+const WindowChromeLayout = lazy(() => import("./routes/(window-chrome)"));
+const MainPage = lazy(() => import("./routes/(window-chrome)/(main)"));
+const NewMainPage = lazy(() => import("./routes/(window-chrome)/new-main"));
+const SetupPage = lazy(() => import("./routes/(window-chrome)/setup"));
+const SettingsLayout = lazy(() => import("./routes/(window-chrome)/settings"));
+const SettingsGeneralPage = lazy(
+	() => import("./routes/(window-chrome)/settings/general"),
+);
+const SettingsRecordingsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/recordings"),
+);
+const SettingsScreenshotsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/screenshots"),
+);
+const SettingsHotkeysPage = lazy(
+	() => import("./routes/(window-chrome)/settings/hotkeys"),
+);
+const SettingsChangelogPage = lazy(
+	() => import("./routes/(window-chrome)/settings/changelog"),
+);
+const SettingsFeedbackPage = lazy(
+	() => import("./routes/(window-chrome)/settings/feedback"),
+);
+const SettingsExperimentalPage = lazy(
+	() => import("./routes/(window-chrome)/settings/experimental"),
+);
+const SettingsLicensePage = lazy(
+	() => import("./routes/(window-chrome)/settings/license"),
+);
+const SettingsIntegrationsPage = lazy(
+	() => import("./routes/(window-chrome)/settings/integrations"),
+);
+const SettingsS3ConfigPage = lazy(
+	() => import("./routes/(window-chrome)/settings/integrations/s3-config"),
+);
+const UpgradePage = lazy(() => import("./routes/(window-chrome)/upgrade"));
+const UpdatePage = lazy(() => import("./routes/(window-chrome)/update"));
+const CameraPage = lazy(() => import("./routes/camera"));
+const CaptureAreaPage = lazy(() => import("./routes/capture-area"));
+const DebugPage = lazy(() => import("./routes/debug"));
+const EditorPage = lazy(() => import("./routes/editor"));
+const InProgressRecordingPage = lazy(
+	() => import("./routes/in-progress-recording"),
+);
+const ModeSelectPage = lazy(() => import("./routes/mode-select"));
+const NotificationsPage = lazy(() => import("./routes/notifications"));
+const RecordingsOverlayPage = lazy(() => import("./routes/recordings-overlay"));
+const ScreenshotEditorPage = lazy(() => import("./routes/screenshot-editor"));
+const TargetSelectOverlayPage = lazy(
+	() => import("./routes/target-select-overlay"),
+);
+const WindowCaptureOccluderPage = lazy(
+	() => import("./routes/window-capture-occluder"),
+);
+
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
-			experimental_prefetchInRender: true,
 			refetchOnWindowFocus: false,
 			refetchOnReconnect: false,
 		},
@@ -98,7 +151,55 @@ function Inner() {
 						);
 					}}
 				>
-					<FileRoutes />
+					<Route path="/" component={WindowChromeLayout}>
+						<Route path="/" component={MainPage} />
+						<Route path="/new-main" component={NewMainPage} />
+						<Route path="/setup" component={SetupPage} />
+						<Route path="/settings" component={SettingsLayout}>
+							<Route path="/" component={SettingsGeneralPage} />
+							<Route path="/general" component={SettingsGeneralPage} />
+							<Route path="/recordings" component={SettingsRecordingsPage} />
+							<Route path="/screenshots" component={SettingsScreenshotsPage} />
+							<Route path="/hotkeys" component={SettingsHotkeysPage} />
+							<Route path="/changelog" component={SettingsChangelogPage} />
+							<Route path="/feedback" component={SettingsFeedbackPage} />
+							<Route
+								path="/experimental"
+								component={SettingsExperimentalPage}
+							/>
+							<Route path="/license" component={SettingsLicensePage} />
+							<Route
+								path="/integrations"
+								component={SettingsIntegrationsPage}
+							/>
+							<Route
+								path="/integrations/s3-config"
+								component={SettingsS3ConfigPage}
+							/>
+						</Route>
+						<Route path="/upgrade" component={UpgradePage} />
+						<Route path="/update" component={UpdatePage} />
+					</Route>
+					<Route path="/camera" component={CameraPage} />
+					<Route path="/capture-area" component={CaptureAreaPage} />
+					<Route path="/debug" component={DebugPage} />
+					<Route path="/editor" component={EditorPage} />
+					<Route
+						path="/in-progress-recording"
+						component={InProgressRecordingPage}
+					/>
+					<Route path="/mode-select" component={ModeSelectPage} />
+					<Route path="/notifications" component={NotificationsPage} />
+					<Route path="/recordings-overlay" component={RecordingsOverlayPage} />
+					<Route path="/screenshot-editor" component={ScreenshotEditorPage} />
+					<Route
+						path="/target-select-overlay"
+						component={TargetSelectOverlayPage}
+					/>
+					<Route
+						path="/window-capture-occluder"
+						component={WindowCaptureOccluderPage}
+					/>
 				</Router>
 			</CapErrorBoundary>
 		</>

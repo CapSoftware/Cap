@@ -188,10 +188,10 @@ export function useScreenshotExport() {
 			if (!ctx) throw new Error("Could not get canvas context");
 
 			const frame = latestFrame();
-			if (frame) {
+			if (frame?.bitmap) {
 				canvas.width = frame.width;
-				canvas.height = frame.data.height;
-				ctx.putImageData(frame.data, 0, 0);
+				canvas.height = frame.height;
+				ctx.drawImage(frame.bitmap, 0, 0);
 			} else {
 				const img = new Image();
 				img.src = convertFileSrc(editorCtx.path);

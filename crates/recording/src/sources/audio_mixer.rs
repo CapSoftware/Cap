@@ -251,7 +251,8 @@ impl AudioMixer {
                     let buffer_last_elapsed = buffer_last_timestamp.duration_since(self.timestamps);
 
                     if timestamp_elapsed > buffer_last_elapsed {
-                        let elapsed_since_last_frame = timestamp_elapsed - buffer_last_elapsed;
+                        let elapsed_since_last_frame =
+                            timestamp_elapsed.saturating_sub(buffer_last_elapsed);
 
                         if let Some(diff) =
                             elapsed_since_last_frame.checked_sub(buffer_last_duration)
@@ -342,7 +343,8 @@ impl AudioMixer {
 
                         frame.set_rate(source.info.rate() as u32);
 
-                        let timestamp = start_timestamp + (elapsed_since_start - remaining);
+                        let timestamp =
+                            start_timestamp + elapsed_since_start.saturating_sub(remaining);
                         source.buffer_last = Some((timestamp, frame_duration));
                         source.buffer.push_front(AudioFrame::new(frame, timestamp));
 

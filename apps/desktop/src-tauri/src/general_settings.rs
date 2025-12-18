@@ -124,6 +124,8 @@ pub struct GeneralSettingsStore {
     pub instant_mode_max_resolution: u32,
     #[serde(default)]
     pub default_project_name_template: Option<String>,
+    #[serde(default)]
+    pub crash_recovery_recording: bool,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -132,7 +134,7 @@ fn default_enable_native_camera_preview() -> bool {
 }
 
 fn default_enable_new_recording_flow() -> bool {
-    true
+    false
 }
 
 fn no(_: &bool) -> bool {
@@ -190,6 +192,7 @@ impl Default for GeneralSettingsStore {
             delete_instant_recordings_after_upload: false,
             instant_mode_max_resolution: 1920,
             default_project_name_template: None,
+            crash_recovery_recording: false,
         }
     }
 }
@@ -256,7 +259,7 @@ pub fn init(app: &AppHandle) {
     };
 
     if !store.recording_picker_preference_set {
-        store.enable_new_recording_flow = true;
+        store.enable_new_recording_flow = false;
         store.recording_picker_preference_set = true;
     }
 

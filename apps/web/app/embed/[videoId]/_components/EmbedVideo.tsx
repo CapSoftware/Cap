@@ -92,7 +92,6 @@ export const EmbedVideo = forwardRef<
 			}
 		}, [transcriptContent, transcriptError]);
 
-		// Handle subtitle URL creation
 		useEffect(() => {
 			if (
 				data.transcriptionStatus === "COMPLETE" &&
@@ -102,51 +101,38 @@ export const EmbedVideo = forwardRef<
 				const vttContent = formatTranscriptAsVTT(transcriptData);
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
-
-				// Clean up previous URL
-				if (subtitleUrl) {
-					URL.revokeObjectURL(subtitleUrl);
-				}
-
-				setSubtitleUrl(newUrl);
-
+				setSubtitleUrl((prev) => {
+					if (prev) URL.revokeObjectURL(prev);
+					return newUrl;
+				});
 				return () => {
 					URL.revokeObjectURL(newUrl);
 				};
-			} else {
-				// Clean up if no longer needed
-				if (subtitleUrl) {
-					URL.revokeObjectURL(subtitleUrl);
-					setSubtitleUrl(null);
-				}
 			}
-		}, [data.transcriptionStatus, transcriptData, subtitleUrl]);
+			setSubtitleUrl((prev) => {
+				if (prev) URL.revokeObjectURL(prev);
+				return null;
+			});
+		}, [data.transcriptionStatus, transcriptData]);
 
-		// Handle chapters URL creation
 		useEffect(() => {
 			if (chapters?.length > 0) {
 				const vttContent = formatChaptersAsVTT(chapters);
 				const blob = new Blob([vttContent], { type: "text/vtt" });
 				const newUrl = URL.createObjectURL(blob);
-
-				// Clean up previous URL
-				if (chaptersUrl) {
-					URL.revokeObjectURL(chaptersUrl);
-				}
-
-				setChaptersUrl(newUrl);
-
+				setChaptersUrl((prev) => {
+					if (prev) URL.revokeObjectURL(prev);
+					return newUrl;
+				});
 				return () => {
 					URL.revokeObjectURL(newUrl);
 				};
-			} else {
-				// Clean up if no longer needed
-				if (chaptersUrl) {
-					URL.revokeObjectURL(chaptersUrl);
-					setChaptersUrl(null);
-				}
 			}
-		}, [chapters, chaptersUrl]);
+			setChaptersUrl((prev) => {
+				if (prev) URL.revokeObjectURL(prev);
+				return null;
+			});
+		}, [chapters]);
 
 		const isMp4Source =
 			data.source.type === "desktopMP4" || data.source.type === "webMP4";
