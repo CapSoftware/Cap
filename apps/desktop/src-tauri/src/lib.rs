@@ -2830,8 +2830,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowDef::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowDef::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowDef::ScreenshotEditor { id } => {
@@ -2842,8 +2842,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowDef::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowDef::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowDef::Settings => {

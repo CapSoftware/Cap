@@ -683,7 +683,7 @@ impl CapWindow {
                 let height = 150.0;
 
                 let title = CapWindowDef::RecordingControls.title();
-                let should_protect = should_protect_window(app, &title);
+                let should_protect = should_protect_window(app, title);
 
                 let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
                 let pos_y =
@@ -928,7 +928,7 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
         if let Ok(id) = CapWindowDef::from_str(&label) {
             let title = id.title();
             window
-                .set_content_protected(should_protect_window(&app, &title))
+                .set_content_protected(should_protect_window(&app, title))
                 .map_err(|e| e.to_string())?;
         }
     }
