@@ -3,9 +3,12 @@ use crate::{
     mft::EncoderDevice,
     video::{NewVideoProcessorError, VideoProcessor},
 };
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 use windows::{
     Foundation::TimeSpan,
@@ -36,6 +39,89 @@ use windows::{
 };
 
 const MAX_CONSECUTIVE_EMPTY_SAMPLES: u8 = 20;
+const MAX_INPUT_WITHOUT_OUTPUT: u32 = 30;
+const MAX_PROCESS_INPUT_FAILURES: u32 = 5;
+const ENCODER_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone)]
+pub struct EncoderHealthStatus {
+    pub inputs_without_output: u32,
+    pub consecutive_process_failures: u32,
+    pub total_frames_encoded: u64,
+    pub is_healthy: bool,
+    pub failure_reason: Option<EncoderFailureReason>,
+}
+
+#[derive(Debug, Clone)]
+pub enum EncoderFailureReason {
+    Stalled,
+    ConsecutiveProcessFailures,
+    Timeout,
+    TooManyEmptySamples,
+}
+
+struct EncoderHealthMonitor {
+    inputs_without_output: u32,
+    consecutive_process_failures: u32,
+    total_frames_encoded: u64,
+    last_output_time: Instant,
+}
+
+impl EncoderHealthMonitor {
+    fn new() -> Self {
+        Self {
+            inputs_without_output: 0,
+            consecutive_process_failures: 0,
+            total_frames_encoded: 0,
+            last_output_time: Instant::now(),
+        }
+    }
+
+    fn record_input(&mut self) {
+        self.inputs_without_output += 1;
+    }
+
+    fn record_output(&mut self) {
+        self.inputs_without_output = 0;
+        self.consecutive_process_failures = 0;
+        self.total_frames_encoded += 1;
+        self.last_output_time = Instant::now();
+    }
+
+    fn record_process_failure(&mut self) {
+        self.consecutive_process_failures += 1;
+    }
+
+    fn reset_process_failures(&mut self) {
+        self.consecutive_process_failures = 0;
+    }
+
+    fn check_health(&self) -> EncoderHealthStatus {
+        let mut is_healthy = true;
+        let mut failure_reason = None;
+
+        if self.inputs_without_output > MAX_INPUT_WITHOUT_OUTPUT {
+            is_healthy = false;
+            failure_reason = Some(EncoderFailureReason::Stalled);
+        } else if self.consecutive_process_failures >= MAX_PROCESS_INPUT_FAILURES {
+            is_healthy = false;
+            failure_reason = Some(EncoderFailureReason::ConsecutiveProcessFailures);
+        } else if self.last_output_time.elapsed() > ENCODER_OPERATION_TIMEOUT
+            && self.total_frames_encoded > 0
+        {
+            is_healthy = false;
+            failure_reason = Some(EncoderFailureReason::Timeout);
+        }
+
+        EncoderHealthStatus {
+            inputs_without_output: self.inputs_without_output,
+            consecutive_process_failures: self.consecutive_process_failures,
+            total_frames_encoded: self.total_frames_encoded,
+            is_healthy,
+            failure_reason,
+        }
+    }
+}
 
 pub struct VideoEncoderOutputSample {
     sample: IMFSample,
@@ -96,6 +182,36 @@ pub enum HandleNeedsInputError {
     SetSampleTime(windows::core::Error),
     #[error("ProcessInput: {0}")]
     ProcessInput(windows::core::Error),
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum EncoderRuntimeError {
+    #[error("Windows error: {0}")]
+    Windows(windows::core::Error),
+    #[error(
+        "Encoder unhealthy: {reason:?} (inputs_without_output={inputs_without_output}, process_failures={process_failures}, frames_encoded={frames_encoded})"
+    )]
+    EncoderUnhealthy {
+        reason: EncoderFailureReason,
+        inputs_without_output: u32,
+        process_failures: u32,
+        frames_encoded: u64,
+    },
+}
+
+impl EncoderRuntimeError {
+    pub fn should_fallback(&self) -> bool {
+        match self {
+            EncoderRuntimeError::Windows(_) => false,
+            EncoderRuntimeError::EncoderUnhealthy { .. } => true,
+        }
+    }
+}
+
+impl From<windows::core::Error> for EncoderRuntimeError {
+    fn from(err: windows::core::Error) -> Self {
+        EncoderRuntimeError::Windows(err)
+    }
 }
 
 unsafe impl Send for H264Encoder {}
@@ -385,12 +501,35 @@ impl H264Encoder {
         &self.output_type
     }
 
+    pub fn validate(&self) -> Result<(), NewVideoEncoderError> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0)
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
+
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
+        }
+        Ok(())
+    }
+
     pub fn run(
         &mut self,
         should_stop: Arc<AtomicBool>,
         mut get_frame: impl FnMut() -> windows::core::Result<Option<(ID3D11Texture2D, TimeSpan)>>,
         mut on_sample: impl FnMut(IMFSample) -> windows::core::Result<()>,
-    ) -> windows::core::Result<()> {
+    ) -> Result<EncoderHealthStatus, EncoderRuntimeError> {
+        let mut health_monitor = EncoderHealthMonitor::new();
+
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -399,33 +538,72 @@ impl H264Encoder {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
-            let mut consecutive_empty_samples = 0;
+            let mut consecutive_empty_samples: u8 = 0;
             let mut should_exit = false;
             while !should_exit {
+                let health_status = health_monitor.check_health();
+                if !health_status.is_healthy {
+                    if let Some(reason) = health_status.failure_reason {
+                        let _ = self.cleanup_encoder();
+                        return Err(EncoderRuntimeError::EncoderUnhealthy {
+                            reason,
+                            inputs_without_output: health_status.inputs_without_output,
+                            process_failures: health_status.consecutive_process_failures,
+                            frames_encoded: health_status.total_frames_encoded,
+                        });
+                    }
+                }
+
                 let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
+                        health_monitor.record_input();
                         should_exit = true;
                         if !should_stop.load(Ordering::SeqCst)
                             && let Some((texture, timestamp)) = get_frame()?
                         {
-                            self.video_processor.process_texture(&texture)?;
-                            let input_buffer = {
-                                MFCreateDXGISurfaceBuffer(
+                            let process_result = (|| -> windows::core::Result<()> {
+                                self.video_processor.process_texture(&texture)?;
+                                let input_buffer = MFCreateDXGISurfaceBuffer(
                                     &ID3D11Texture2D::IID,
                                     self.video_processor.output_texture(),
                                     0,
                                     false,
-                                )?
-                            };
-                            let mf_sample = MFCreateSample()?;
-                            mf_sample.AddBuffer(&input_buffer)?;
-                            mf_sample.SetSampleTime(timestamp.Duration)?;
-                            self.transform
-                                .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
-                            should_exit = false;
+                                )?;
+                                let mf_sample = MFCreateSample()?;
+                                mf_sample.AddBuffer(&input_buffer)?;
+                                mf_sample.SetSampleTime(timestamp.Duration)?;
+                                self.transform
+                                    .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
+                                Ok(())
+                            })();
+
+                            match process_result {
+                                Ok(()) => {
+                                    health_monitor.reset_process_failures();
+                                    should_exit = false;
+                                }
+                                Err(_) => {
+                                    health_monitor.record_process_failure();
+                                    let health_status = health_monitor.check_health();
+                                    if !health_status.is_healthy {
+                                        if let Some(reason) = health_status.failure_reason {
+                                            let _ = self.cleanup_encoder();
+                                            return Err(EncoderRuntimeError::EncoderUnhealthy {
+                                                reason,
+                                                inputs_without_output: health_status
+                                                    .inputs_without_output,
+                                                process_failures: health_status
+                                                    .consecutive_process_failures,
+                                                frames_encoded: health_status.total_frames_encoded,
+                                            });
+                                        }
+                                    }
+                                    should_exit = false;
+                                }
+                            }
                         }
                     }
                     MediaFoundation::METransformHaveOutput => {
@@ -435,25 +613,24 @@ impl H264Encoder {
                             ..Default::default()
                         };
 
-                        // ProcessOutput may succeed but not populate pSample in some edge cases
-                        // (e.g., hardware encoder transient failures, specific MFT implementations).
-                        // This is a known contract violation by certain Media Foundation Transforms.
-                        // We handle this gracefully by skipping the frame instead of panicking.
                         let mut output_buffers = [output_buffer];
                         self.transform
                             .ProcessOutput(0, &mut output_buffers, &mut status)?;
 
-                        // Use the sample directly without cloning to prevent memory leaks
                         if let Some(sample) = output_buffers[0].pSample.take() {
                             consecutive_empty_samples = 0;
+                            health_monitor.record_output();
                             on_sample(sample)?;
                         } else {
                             consecutive_empty_samples += 1;
                             if consecutive_empty_samples > MAX_CONSECUTIVE_EMPTY_SAMPLES {
-                                return Err(windows::core::Error::new(
-                                    windows::core::HRESULT(0),
-                                    "Too many consecutive empty samples",
-                                ));
+                                let _ = self.cleanup_encoder();
+                                return Err(EncoderRuntimeError::EncoderUnhealthy {
+                                    reason: EncoderFailureReason::TooManyEmptySamples,
+                                    inputs_without_output: health_monitor.inputs_without_output,
+                                    process_failures: health_monitor.consecutive_process_failures,
+                                    frames_encoded: health_monitor.total_frames_encoded,
+                                });
                             }
                         }
                     }
@@ -471,7 +648,19 @@ impl H264Encoder {
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
         }
 
-        Ok(())
+        Ok(health_monitor.check_health())
+    }
+
+    fn cleanup_encoder(&mut self) -> windows::core::Result<()> {
+        unsafe {
+            let _ = self
+                .transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
+            let _ = self
+                .transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+            self.transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
+        }
     }
 }
 

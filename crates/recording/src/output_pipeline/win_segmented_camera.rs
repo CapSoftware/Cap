@@ -430,6 +430,12 @@ impl WindowsSegmentedCameraMuxer {
                         bitrate_multiplier,
                     ) {
                         Ok(encoder) => {
+                            if let Err(e) = encoder.validate() {
+                                return fallback(Some(format!(
+                                    "Camera hardware encoder validation failed: {e}"
+                                )));
+                            }
+
                             let muxer = {
                                 let mut output_guard = match output_clone.lock() {
                                     Ok(guard) => guard,
@@ -491,38 +497,56 @@ impl WindowsSegmentedCameraMuxer {
 
                         let mut first_timestamp: Option<Duration> = None;
 
-                        encoder
-                            .run(
-                                Arc::new(AtomicBool::default()),
-                                || {
-                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                        trace!("No more camera frames available for segment");
-                                        return Ok(None);
-                                    };
+                        let result = encoder.run(
+                            Arc::new(AtomicBool::default()),
+                            || {
+                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                    trace!("No more camera frames available for segment");
+                                    return Ok(None);
+                                };
 
-                                    let relative = if let Some(first) = first_timestamp {
-                                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                                    } else {
-                                        first_timestamp = Some(timestamp);
-                                        Duration::ZERO
-                                    };
+                                let relative = if let Some(first) = first_timestamp {
+                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                } else {
+                                    first_timestamp = Some(timestamp);
+                                    Duration::ZERO
+                                };
 
-                                    let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
-                                    Ok(Some((texture, duration_to_timespan(relative))))
-                                },
-                                |output_sample| {
-                                    let mut output = output_clone.lock().unwrap();
-                                    muxer
-                                        .write_sample(&output_sample, &mut output)
-                                        .map_err(|e| {
-                                            windows::core::Error::new(
-                                                windows::core::HRESULT(-1),
-                                                format!("WriteSample: {e}"),
-                                            )
-                                        })
-                                },
-                            )
-                            .context("run camera encoder for segment")
+                                let texture = upload_mf_buffer_to_texture(&d3d_device, &frame)?;
+                                Ok(Some((texture, duration_to_timespan(relative))))
+                            },
+                            |output_sample| {
+                                let mut output = output_clone.lock().unwrap();
+                                muxer
+                                    .write_sample(&output_sample, &mut output)
+                                    .map_err(|e| {
+                                        windows::core::Error::new(
+                                            windows::core::HRESULT(-1),
+                                            format!("WriteSample: {e}"),
+                                        )
+                                    })
+                            },
+                        );
+
+                        match result {
+                            Ok(health_status) => {
+                                info!(
+                                    "Camera segment encoder finished (hardware): {} frames encoded",
+                                    health_status.total_frames_encoded
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                if e.should_fallback() {
+                                    error!(
+                                        "Camera hardware encoder failed with recoverable error, marking for software fallback: {}",
+                                        e
+                                    );
+                                    encoder_preferences.force_software_only();
+                                }
+                                Err(anyhow!("Camera hardware encoder error: {}", e))
+                            }
+                        }
                     }
                     either::Right(mut encoder) => {
                         info!(

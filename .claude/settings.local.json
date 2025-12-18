@@ -44,7 +44,8 @@
 			"WebFetch(domain:docs.rs)",
 			"WebFetch(domain:gix.github.io)",
 			"Bash(cargo clean:*)",
-			"Bash(cargo test:*)"
+			"Bash(cargo test:*)",
+			"Bash(powershell -Command \"[System.Environment]::OSVersion.Version.ToString()\")"
 		],
 		"deny": [],
 		"ask": []

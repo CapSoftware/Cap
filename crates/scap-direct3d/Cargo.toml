@@ -30,6 +30,7 @@ windows = { workspace = true, features = [
     "Storage_Search",
     "Storage_Streams",
     "Win32_System_SystemInformation",
+    "Win32_System_LibraryLoader",
 ] }
 
 [dev-dependencies]

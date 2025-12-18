@@ -424,6 +424,12 @@ impl WindowsSegmentedMuxer {
                         bitrate_multiplier,
                     ) {
                         Ok(encoder) => {
+                            if let Err(e) = encoder.validate() {
+                                return fallback(Some(format!(
+                                    "Hardware encoder validation failed: {e}"
+                                )));
+                            }
+
                             let width = match u32::try_from(output_size.Width) {
                                 Ok(width) if width > 0 => width,
                                 _ => {
@@ -495,36 +501,54 @@ impl WindowsSegmentedMuxer {
                     either::Left((mut encoder, mut muxer)) => {
                         trace!("Running native encoder for segment");
                         let mut first_timestamp: Option<Duration> = None;
-                        encoder
-                            .run(
-                                Arc::new(AtomicBool::default()),
-                                || {
-                                    let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                        trace!("No more frames available for segment");
-                                        return Ok(None);
-                                    };
+                        let result = encoder.run(
+                            Arc::new(AtomicBool::default()),
+                            || {
+                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
+                                    trace!("No more frames available for segment");
+                                    return Ok(None);
+                                };
 
-                                    let relative = if let Some(first) = first_timestamp {
-                                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                                    } else {
-                                        first_timestamp = Some(timestamp);
-                                        Duration::ZERO
-                                    };
-                                    let frame_time = duration_to_timespan(relative);
+                                let relative = if let Some(first) = first_timestamp {
+                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                                } else {
+                                    first_timestamp = Some(timestamp);
+                                    Duration::ZERO
+                                };
+                                let frame_time = duration_to_timespan(relative);
 
-                                    Ok(Some((frame.texture().clone(), frame_time)))
-                                },
-                                |output_sample| {
-                                    let mut output = output_clone.lock().unwrap();
+                                Ok(Some((frame.texture().clone(), frame_time)))
+                            },
+                            |output_sample| {
+                                let mut output = output_clone.lock().unwrap();
 
-                                    let _ = muxer
-                                        .write_sample(&output_sample, &mut output)
-                                        .map_err(|e| format!("WriteSample: {e}"));
+                                let _ = muxer
+                                    .write_sample(&output_sample, &mut output)
+                                    .map_err(|e| format!("WriteSample: {e}"));
 
-                                    Ok(())
-                                },
-                            )
-                            .context("run native encoder for segment")
+                                Ok(())
+                            },
+                        );
+
+                        match result {
+                            Ok(health_status) => {
+                                debug!(
+                                    "Hardware encoder completed for segment: {} frames encoded",
+                                    health_status.total_frames_encoded
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                if e.should_fallback() {
+                                    error!(
+                                        "Hardware encoder failed with recoverable error, marking for software fallback: {}",
+                                        e
+                                    );
+                                    encoder_preferences.force_software_only();
+                                }
+                                Err(anyhow!("Hardware encoder error: {}", e))
+                            }
+                        }
                     }
                     either::Right(mut encoder) => {
                         while let Ok(Some((frame, time))) = video_rx.recv() {
