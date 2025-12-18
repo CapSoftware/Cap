@@ -27,6 +27,7 @@ import {
 import { createStore, produce, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Mode from "~/components/Mode";
+import { RecoveryToast } from "~/components/RecoveryToast";
 import Tooltip from "~/components/Tooltip";
 import { Input } from "~/routes/editor/ui";
 import { authStore, generalSettingsStore } from "~/store";
@@ -1124,8 +1125,23 @@ function Page() {
 									}
 									onSelect={async (recording) => {
 										if (recording.mode === "studio") {
+											let projectPath = recording.path;
+
+											const needsRecovery =
+												recording.status.status === "InProgress" ||
+												recording.status.status === "NeedsRemux";
+
+											if (needsRecovery) {
+												try {
+													projectPath =
+														await commands.recoverRecording(projectPath);
+												} catch (e) {
+													console.error("Failed to recover recording:", e);
+												}
+											}
+
 											await commands.showWindow({
-												Editor: { project_path: recording.path },
+												Editor: { project_path: projectPath },
 											});
 										} else {
 											if (recording.sharing?.link) {
@@ -1181,6 +1197,7 @@ function Page() {
 					</Show>
 				</Show>
 			</div>
+			<RecoveryToast />
 		</div>
 	);
 }

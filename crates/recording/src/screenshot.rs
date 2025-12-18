@@ -1,5 +1,7 @@
 use crate::sources::screen_capture::ScreenCaptureTarget;
-use anyhow::{Context, anyhow};
+#[cfg(target_os = "macos")]
+use anyhow::Context;
+use anyhow::anyhow;
 use image::RgbImage;
 #[cfg(target_os = "macos")]
 use scap_ffmpeg::AsFFmpeg;
@@ -29,11 +31,11 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SRCCOPY, SelectObject,
+    BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HDC, ReleaseDC, SRCCOPY, SelectObject,
 };
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{PW_RENDERFULLCONTENT, PrintWindow};
+use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
 
 #[cfg(target_os = "windows")]
 const WINDOWS_CAPTURE_UNSUPPORTED: &str =
@@ -210,11 +212,11 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
 
 #[cfg(target_os = "windows")]
 fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
-    static DEVICE: OnceLock<ID3D11Device> = OnceLock::new();
+    static DEVICE: OnceLock<Option<ID3D11Device>> = OnceLock::new();
 
-    DEVICE.get_or_try_init(|| {
+    let device = DEVICE.get_or_init(|| {
         let mut device = None;
-        unsafe {
+        let result = unsafe {
             D3D11CreateDevice(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
@@ -226,11 +228,18 @@ fn shared_d3d_device() -> anyhow::Result<&'static ID3D11Device> {
                 None,
                 None,
             )
-        }
-        .map_err(|e| anyhow!("Failed to create D3D11 device: {e:?}"))?;
+        };
 
-        device.ok_or_else(|| anyhow!("D3D11 device unavailable"))
-    })
+        if result.is_err() {
+            return None;
+        }
+
+        device
+    });
+
+    device
+        .as_ref()
+        .ok_or_else(|| anyhow!("D3D11 device unavailable"))
 }
 
 #[cfg(target_os = "windows")]
@@ -332,23 +341,23 @@ fn capture_bitmap_with(
         return Err(unsupported_error());
     }
 
-    if base_dc.0 == 0 {
+    if base_dc.0.is_null() {
         return Err(unsupported_error());
     }
 
     let mem_dc = unsafe { CreateCompatibleDC(Some(base_dc)) };
-    if mem_dc.0 == 0 {
+    if mem_dc.0.is_null() {
         return Err(unsupported_error());
     }
 
-    let mut info = BITMAPINFO {
+    let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
             biWidth: width,
             biHeight: -height,
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB as u32,
+            biCompression: 0,
             biSizeImage: 0,
             biXPelsPerMeter: 0,
             biYPelsPerMeter: 0,
@@ -359,13 +368,17 @@ fn capture_bitmap_with(
     };
 
     let mut data = std::ptr::null_mut();
-    let bitmap = unsafe { CreateDIBSection(mem_dc, &mut info, DIB_RGB_COLORS, &mut data, None, 0) };
-    if bitmap.0 == 0 || data.is_null() {
-        unsafe {
-            DeleteDC(mem_dc);
+    let bitmap =
+        unsafe { CreateDIBSection(Some(mem_dc), &info, DIB_RGB_COLORS, &mut data, None, 0) };
+    let bitmap = match bitmap {
+        Ok(b) if !b.0.is_null() && !data.is_null() => b,
+        _ => {
+            unsafe {
+                let _ = DeleteDC(mem_dc);
+            }
+            return Err(unsupported_error());
         }
-        return Err(unsupported_error());
-    }
+    };
 
     let old_obj = unsafe { SelectObject(mem_dc, bitmap.into()) };
 
@@ -387,8 +400,8 @@ fn capture_bitmap_with(
 
     unsafe {
         SelectObject(mem_dc, old_obj);
-        DeleteObject(bitmap.into());
-        DeleteDC(mem_dc);
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(mem_dc);
     }
 
     result
@@ -397,8 +410,7 @@ fn capture_bitmap_with(
 #[cfg(target_os = "windows")]
 fn bgra_to_rgb(buffer: Vec<u8>, width: usize, height: usize) -> anyhow::Result<RgbImage> {
     let stride = width.checked_mul(4).ok_or_else(unsupported_error)?;
-    rgb_from_rgba(&buffer, width, height, stride, ChannelOrder::Bgra)
-        .ok_or_else(|| unsupported_error())
+    rgb_from_rgba(&buffer, width, height, stride, ChannelOrder::Bgra).ok_or_else(unsupported_error)
 }
 
 #[cfg(target_os = "windows")]
@@ -415,21 +427,20 @@ fn capture_display_bounds(
 
     let screen_dc = unsafe { GetDC(None) };
     let result = capture_bitmap_with(screen_dc, width, height, |mem_dc| {
-        let res = unsafe {
+        unsafe {
             BitBlt(
                 mem_dc,
                 0,
                 0,
                 width,
                 height,
-                screen_dc,
+                Some(screen_dc),
                 src_x,
                 src_y,
                 SRCCOPY | CAPTUREBLT,
             )
-        };
-
-        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+        }
+        .map_err(|_| unsupported_error())
     });
     unsafe {
         ReleaseDC(None, screen_dc);
@@ -443,40 +454,43 @@ fn capture_display_bounds(
 
 #[cfg(target_os = "windows")]
 fn capture_window_bitmap(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<Vec<u8>> {
-    let window_dc = unsafe { GetDC(hwnd) };
+    let window_dc = unsafe { GetDC(Some(hwnd)) };
     let result = capture_bitmap_with(window_dc, width, height, |mem_dc| {
-        let res = unsafe {
+        unsafe {
             BitBlt(
                 mem_dc,
                 0,
                 0,
                 width,
                 height,
-                window_dc,
+                Some(window_dc),
                 0,
                 0,
                 SRCCOPY | CAPTUREBLT,
             )
-        };
-
-        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+        }
+        .map_err(|_| unsupported_error())
     });
     unsafe {
-        ReleaseDC(hwnd, window_dc);
+        ReleaseDC(Some(hwnd), window_dc);
     }
     result
 }
 
 #[cfg(target_os = "windows")]
 fn capture_window_print(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<Vec<u8>> {
-    let window_dc = unsafe { GetDC(hwnd) };
+    let window_dc = unsafe { GetDC(Some(hwnd)) };
     let result = capture_bitmap_with(window_dc, width, height, |mem_dc| {
-        let res = unsafe { PrintWindow(hwnd, mem_dc, PW_RENDERFULLCONTENT.0 as u32) };
+        let res = unsafe { PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(2)) };
 
-        res.as_bool().then_some(()).ok_or_else(unsupported_error)
+        if res.as_bool() {
+            Ok(())
+        } else {
+            Err(unsupported_error())
+        }
     });
     unsafe {
-        ReleaseDC(hwnd, window_dc);
+        ReleaseDC(Some(hwnd), window_dc);
     }
     result
 }
@@ -485,22 +499,22 @@ fn capture_window_print(hwnd: HWND, width: i32, height: i32) -> anyhow::Result<V
 fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<RgbImage> {
     match target {
         ScreenCaptureTarget::Display { id } => {
-            let display = scap_targets::Display::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let display = scap_targets::Display::from_id(&id).ok_or_else(unsupported_error)?;
             let bounds = display
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let image = capture_display_bounds(bounds)?;
             debug!("Windows GDI display capture");
             Ok(image)
         }
         ScreenCaptureTarget::Window { id } => {
-            let window = scap_targets::Window::from_id(&id).ok_or_else(|| unsupported_error())?;
+            let window = scap_targets::Window::from_id(&id).ok_or_else(unsupported_error)?;
             let bounds = window
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let width = bounds.size().width().round() as i32;
             let height = bounds.size().height().round() as i32;
@@ -519,12 +533,11 @@ fn capture_screenshot_fallback(target: ScreenCaptureTarget) -> anyhow::Result<Rg
             Ok(image)
         }
         ScreenCaptureTarget::Area { screen, .. } => {
-            let display =
-                scap_targets::Display::from_id(&screen).ok_or_else(|| unsupported_error())?;
+            let display = scap_targets::Display::from_id(&screen).ok_or_else(unsupported_error)?;
             let bounds = display
                 .raw_handle()
                 .physical_bounds()
-                .ok_or_else(|| unsupported_error())?;
+                .ok_or_else(unsupported_error)?;
 
             let image = capture_display_bounds(bounds)?;
             debug!("Windows GDI area capture");
@@ -596,7 +609,7 @@ fn try_fast_capture(target: &ScreenCaptureTarget) -> Option<RgbImage> {
     let res = rx.recv_timeout(Duration::from_millis(500));
     let _ = capturer.stop();
 
-    let image = res.ok()??;
+    let image = res.ok()?.ok()?;
     debug!("Windows fast capture completed in {:?}", start.elapsed());
     Some(image)
 }
@@ -627,7 +640,7 @@ pub async fn capture_screenshot(target: ScreenCaptureTarget) -> anyhow::Result<R
     }
 
     #[cfg(target_os = "windows")]
-    let mut cropped_in_capture = false;
+    let cropped_in_capture;
 
     let (tx, rx) = oneshot::channel::<anyhow::Result<RgbImage>>();
     let tx = Arc::new(Mutex::new(Some(tx)));

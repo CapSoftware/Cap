@@ -12,6 +12,15 @@ use std::{
 use windows::Win32::Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*};
 use windows_core::GUID;
 
+const MF_VIDEO_FORMAT_L8: GUID = GUID::from_u128(0x00000050_0000_0010_8000_00aa00389b71);
+const MF_VIDEO_FORMAT_L16: GUID = GUID::from_u128(0x00000051_0000_0010_8000_00aa00389b71);
+// FOURCCMap GUID for 'NV21' - identical for both DirectShow MEDIASUBTYPE and Media Foundation
+const MEDIASUBTYPE_NV21: GUID = GUID::from_u128(0x3132564e_0000_0010_8000_00aa00389b71);
+const MF_VIDEO_FORMAT_RGB565: GUID = GUID::from_u128(0x00000017_0000_0010_8000_00aa00389b71);
+const MF_VIDEO_FORMAT_P010: GUID = GUID::from_u128(0x30313050_0000_0010_8000_00aa00389b71);
+
+const MEDIASUBTYPE_Y800: GUID = GUID::from_u128(0x30303859_0000_0010_8000_00aa00389b71);
+
 #[derive(Clone)]
 pub struct VideoDeviceInfo {
     id: OsString,
@@ -221,22 +230,24 @@ pub enum FrameInner {
     DirectShow(IMediaSample),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PixelFormat {
-    /// Packed
     ARGB,
-    /// Packed
     RGB24,
-    /// Packed
     RGB32,
-    /// Planar (3)
     YUV420P,
-    /// Planar (2)
     NV12,
-    /// Packed
+    NV21,
     YUYV422,
-    /// Packed
     UYVY422,
+    MJPEG,
+    YV12,
+    BGR24,
+    GRAY8,
+    GRAY16,
+    RGB565,
+    P010,
+    H264,
 }
 
 #[derive(Clone)]
@@ -464,6 +475,14 @@ impl MFPixelFormat {
                 t if t == MFVideoFormat_UYVY => PixelFormat::UYVY422,
                 t if t == MFVideoFormat_ARGB32 => PixelFormat::ARGB,
                 t if t == MFVideoFormat_NV12 => PixelFormat::NV12,
+                t if t == MFVideoFormat_MJPG => PixelFormat::MJPEG,
+                t if t == MFVideoFormat_YV12 => PixelFormat::YV12,
+                t if t == MF_VIDEO_FORMAT_L8 => PixelFormat::GRAY8,
+                t if t == MF_VIDEO_FORMAT_L16 => PixelFormat::GRAY16,
+                t if t == MEDIASUBTYPE_NV21 => PixelFormat::NV21,
+                t if t == MF_VIDEO_FORMAT_RGB565 => PixelFormat::RGB565,
+                t if t == MF_VIDEO_FORMAT_P010 => PixelFormat::P010,
+                t if t == MFVideoFormat_H264 => PixelFormat::H264,
                 _ => return None,
             })
         };
@@ -510,6 +529,11 @@ impl DSPixelFormat {
                 t if t == MEDIASUBTYPE_UYVY => PixelFormat::UYVY422,
                 t if t == MEDIASUBTYPE_ARGB32 => PixelFormat::ARGB,
                 t if t == MEDIASUBTYPE_NV12 => PixelFormat::NV12,
+                t if t == MEDIASUBTYPE_MJPG => PixelFormat::MJPEG,
+                t if t == MEDIASUBTYPE_YV12 => PixelFormat::YV12,
+                t if t == MEDIASUBTYPE_Y800 || t == MEDIASUBTYPE_RGB8 => PixelFormat::GRAY8,
+                t if t == MEDIASUBTYPE_NV21 => PixelFormat::NV21,
+                t if t == MEDIASUBTYPE_RGB565 => PixelFormat::RGB565,
                 _ => return None,
             })
         };

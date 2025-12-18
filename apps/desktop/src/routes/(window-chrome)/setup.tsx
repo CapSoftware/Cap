@@ -39,6 +39,17 @@ const permissions = [
 		description:
 			"During recording, Cap collects mouse activity locally to generate automatic zoom in segments.",
 	},
+	{
+		name: "Microphone",
+		key: "microphone" as const,
+		description: "This permission is required to record audio in your Caps.",
+	},
+	{
+		name: "Camera",
+		key: "camera" as const,
+		description:
+			"This permission is required to record your camera in your Caps.",
+	},
 ] as const;
 
 export default function () {
@@ -83,7 +94,6 @@ export default function () {
 	);
 
 	const handleContinue = () => {
-		// Just proceed to the main window without saving mode to store
 		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
 			getCurrentWindow().close();
 		});

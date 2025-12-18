@@ -24,10 +24,12 @@ mod posthog;
 mod presets;
 mod recording;
 mod recording_settings;
+mod recovery;
 mod screenshot_editor;
 mod target_select_overlay;
 mod thumbnails;
 mod tray;
+mod update_project_names;
 mod upload;
 mod web_api;
 mod window_exclusion;
@@ -456,12 +458,17 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
+            {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = Some(id.clone());
+                app.camera_in_use = true;
+                app.camera_cleanup_done = false;
+            }
+
             let mut attempts = 0;
-            loop {
+            let init_result: Result<(), String> = loop {
                 attempts += 1;
 
-                // We first ask the actor to set the input
-                // This returns a future that resolves when the camera is actually ready
                 let request = camera_feed
                     .ask(feeds::camera::SetInput { id: id.clone() })
                     .await
@@ -473,12 +480,11 @@ async fn set_camera_input(
                 };
 
                 match result {
-                    Ok(_) => break,
+                    Ok(_) => break Ok(()),
                     Err(e) => {
                         if attempts >= 3 {
-                            return Err(format!(
-                                "Failed to initialize camera after {} attempts: {}",
-                                attempts, e
+                            break Err(format!(
+                                "Failed to initialize camera after {attempts} attempts: {e}"
                             ));
                         }
                         warn!(
@@ -488,6 +494,13 @@ async fn set_camera_input(
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
                 }
+            };
+
+            if let Err(e) = init_result {
+                let app = &mut *state.write().await;
+                app.selected_camera_id = None;
+                app.camera_in_use = false;
+                return Err(e);
             }
 
             CapWindow::Camera
@@ -796,7 +809,7 @@ pub struct RecordingInfo {
 enum CurrentRecordingTarget {
     Window {
         id: WindowId,
-        bounds: LogicalBounds,
+        bounds: Option<LogicalBounds>,
     },
     Screen {
         id: DisplayId,
@@ -828,33 +841,55 @@ struct CurrentRecording {
 async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
+    tracing::debug!("get_current_recording called");
     let state = state.read().await;
 
     let (mode, capture_target, status) = match &state.recording_state {
-        RecordingState::None => return Ok(JsonValue::new(&None)),
-        RecordingState::Pending { mode, target } => (*mode, target, RecordingStatus::Pending),
-        RecordingState::Active(inner) => (
-            inner.mode(),
-            inner.capture_target(),
-            RecordingStatus::Recording,
-        ),
+        RecordingState::None => {
+            tracing::debug!("get_current_recording: state is None");
+            return Ok(JsonValue::new(&None));
+        }
+        RecordingState::Pending { mode, target } => {
+            tracing::debug!("get_current_recording: state is Pending");
+            (*mode, target, RecordingStatus::Pending)
+        }
+        RecordingState::Active(inner) => {
+            tracing::debug!("get_current_recording: state is Active");
+            (
+                inner.mode(),
+                inner.capture_target(),
+                RecordingStatus::Recording,
+            )
+        }
     };
 
     let target = match capture_target {
-        ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: id.clone() },
-        ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-            id: id.clone(),
-            bounds: scap_targets::Window::from_id(id)
-                .ok_or(())?
-                .display_relative_logical_bounds()
-                .ok_or(())?,
-        },
-        ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-            screen: screen.clone(),
-            bounds: *bounds,
-        },
+        ScreenCaptureTarget::Display { id } => {
+            tracing::debug!("get_current_recording: target is Display");
+            CurrentRecordingTarget::Screen { id: id.clone() }
+        }
+        ScreenCaptureTarget::Window { id } => {
+            let bounds =
+                scap_targets::Window::from_id(id).and_then(|w| w.display_relative_logical_bounds());
+            tracing::debug!(
+                "get_current_recording: target is Window, bounds={:?}",
+                bounds
+            );
+            CurrentRecordingTarget::Window {
+                id: id.clone(),
+                bounds,
+            }
+        }
+        ScreenCaptureTarget::Area { screen, bounds } => {
+            tracing::debug!("get_current_recording: target is Area");
+            CurrentRecordingTarget::Area {
+                screen: screen.clone(),
+                bounds: *bounds,
+            }
+        }
     };
 
+    tracing::debug!("get_current_recording: returning Some(CurrentRecording)");
     Ok(JsonValue::new(&Some(CurrentRecording {
         target,
         mode,
@@ -1279,7 +1314,7 @@ struct SerializedEditorInstance {
 #[specta::specta]
 #[instrument(skip(window))]
 async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstance, String> {
-    let CapWindowDef::Editor { id } = CapWindowDef::from_str(window.label()).unwrap() else {
+    let Ok(CapWindowDef::Editor { id }) = CapWindowDef::from_str(window.label()) else {
         return Err("Invalid window".to_string());
     };
 
@@ -2151,7 +2186,7 @@ async fn editor_delete_project(
 #[specta::specta]
 #[instrument(skip(app))]
 async fn show_window(app: AppHandle, window: CapWindow) -> Result<(), String> {
-    let _ = window.show(&app).await;
+    window.show(&app).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2300,6 +2335,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .commands(tauri_specta::collect_commands![
             set_mic_input,
             set_camera_input,
+            recording_settings::set_recording_mode,
             upload_logs,
             recording::start_recording,
             recording::stop_recording,
@@ -2387,7 +2423,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
             target_select_overlay::focus_window,
-            editor_delete_project
+            editor_delete_project,
+            format_project_name,
+            recovery::find_incomplete_recordings,
+            recovery::recover_recording,
+            recovery::discard_incomplete_recording,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2532,6 +2572,11 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let app = app.handle().clone();
+
+            if let Err(err) = update_project_names::migrate_if_needed(&app) {
+                tracing::error!("Failed to migrate project file names: {}", err);
+            }
+
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
@@ -2653,6 +2698,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                 async move {
                     if !permissions.screen_recording.permitted()
                         || !permissions.accessibility.permitted()
+                        || !permissions.microphone.permitted()
+                        || !permissions.camera.permitted()
                         || GeneralSettingsStore::get(&app)
                             .ok()
                             .flatten()
@@ -2757,7 +2804,13 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
-                                    if !app_state.is_recording_active_or_pending() {
+                                    let camera_window_open =
+                                        CapWindowDef::Camera.get(&app).is_some();
+
+                                    if !app_state.is_recording_active_or_pending()
+                                        && !camera_window_open
+                                        && !app_state.camera_in_use
+                                    {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         let _ = app_state
@@ -2767,7 +2820,6 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
                                         app_state.selected_mic_label = None;
                                         app_state.selected_camera_id = None;
-                                        app_state.camera_in_use = false;
                                     }
                                 });
                             }
@@ -2778,8 +2830,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(EditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowDef::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowDef::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowDef::ScreenshotEditor { id } => {
@@ -2790,8 +2842,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 tokio::spawn(ScreenshotEditorInstances::remove(window.clone()));
 
                                 #[cfg(target_os = "windows")]
-                                if CapWindowDef::Settings.get(&app).is_none() {
-                                    reopen_main_window(&app);
+                                if CapWindowDef::Settings.get(app).is_none() {
+                                    reopen_main_window(app);
                                 }
                             }
                             CapWindowDef::Settings => {
@@ -2809,8 +2861,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
                                 }
 
                                 #[cfg(target_os = "windows")]
-                                if !has_open_editor_window(&app) {
-                                    reopen_main_window(&app);
+                                if !has_open_editor_window(app) {
+                                    reopen_main_window(app);
                                 }
 
                                 return;
@@ -2945,9 +2997,12 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
 
 #[cfg(target_os = "windows")]
 fn has_open_editor_window(app: &AppHandle) -> bool {
-    app.webview_windows()
-        .keys()
-        .any(|label| matches!(CapWindow::from_str(label), Ok(CapWindow::Editor { .. })))
+    app.webview_windows().keys().any(|label| {
+        matches!(
+            CapWindowDef::from_str(label),
+            Ok(CapWindowDef::Editor { .. })
+        )
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -3164,6 +3219,24 @@ async fn write_clipboard_string(
     writer
         .set_text(text)
         .map_err(|e| format!("Failed to write text to clipboard: {e}"))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn format_project_name(
+    template: Option<String>,
+    target_name: String,
+    target_kind: String,
+    recording_mode: RecordingMode,
+    datetime: Option<chrono::DateTime<chrono::Local>>,
+) -> String {
+    recording::format_project_name(
+        template.as_deref(),
+        target_name.as_str(),
+        target_kind.as_str(),
+        recording_mode,
+        datetime,
+    )
 }
 
 trait EventExt: tauri_specta::Event {

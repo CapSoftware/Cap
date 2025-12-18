@@ -27,23 +27,23 @@ tauri = { workspace = true, features = [
     "devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
-tauri-plugin-dialog = "2.4.0"
-tauri-plugin-fs = "2.4.2"
-tauri-plugin-global-shortcut = "2.3.0"
-tauri-plugin-http = "2.5.2"
-tauri-plugin-notification = "2.3.1"
-tauri-plugin-os = "2.3.1"
+tauri-plugin-dialog = "2.4.2"
+tauri-plugin-fs = "2.4.4"
+tauri-plugin-global-shortcut = "2.3.1"
+tauri-plugin-http = "2.5.4"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-os = "2.3.2"
 tauri-plugin-process = "2.3.0"
-tauri-plugin-shell = "2.3.1"
-tauri-plugin-single-instance = { version = "2.3.4", features = ["deep-link"] }
-tauri-plugin-store = "2.4.0"
+tauri-plugin-shell = "2.3.3"
+tauri-plugin-single-instance = { version = "2.3.6", features = ["deep-link"] }
+tauri-plugin-store = "2.4.1"
 tauri-plugin-updater = "2.9.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
-tauri-plugin-window-state = "2.4.0"
-tauri-plugin-positioner = "2.3.0"
-tauri-plugin-deep-link = "2.4.3"
-tauri-plugin-clipboard-manager = "2.3.0"
-tauri-plugin-opener = "2.5.0"
+tauri-plugin-window-state = "2.4.1"
+tauri-plugin-positioner = "2.3.1"
+tauri-plugin-deep-link = "2.4.5"
+tauri-plugin-clipboard-manager = "2.3.2"
+tauri-plugin-opener = "2.5.2"
 
 serde = { workspace = true }
 serde_json = "1.0.111"
@@ -60,6 +60,7 @@ tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
+regex = "1.10.4"
 rodio = "0.19.0"
 png = "0.17.13"
 device_query = "4.0.1"
@@ -106,6 +107,8 @@ tauri-plugin-sentry = "0.5.0"
 thiserror.workspace = true
 bytes = "1.10.1"
 async-stream = "0.3.6"
+lz4_flex = "0.11"
+sanitize-filename = "0.6.0"
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 tracing-opentelemetry = "0.32.0"
 opentelemetry = "0.31.0"
@@ -113,6 +116,7 @@ opentelemetry-otlp = "0.31.0"                                                 #{
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 posthog-rs = "0.3.7"
 workspace-hack = { version = "0.1", path = "../../../crates/workspace-hack" }
+aho-corasick.workspace = true
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

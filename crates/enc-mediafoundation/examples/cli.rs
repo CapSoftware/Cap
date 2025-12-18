@@ -143,8 +143,7 @@ mod win {
                         .run(
                             should_stop_encoder,
                             || Ok(frame_rx.recv().ok().flatten()),
-                            |sample| {
-                                dbg!(sample);
+                            |_sample| {
                                 Ok(())
                                 // sample_writer.write(stream_index, &output_sample).unwrap()
                             },

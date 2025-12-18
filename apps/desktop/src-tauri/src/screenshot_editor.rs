@@ -15,6 +15,7 @@ use relative_path::RelativePathBuf;
 use serde::Serialize;
 use specta::Type;
 use std::str::FromStr;
+use std::time::Instant;
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 use tauri::{
     Manager, Runtime, Window,
@@ -30,6 +31,7 @@ pub struct ScreenshotEditorInstance {
     pub ws_shutdown_token: CancellationToken,
     pub config_tx: watch::Sender<ProjectConfiguration>,
     pub path: PathBuf,
+    pub pretty_name: String,
 }
 
 impl ScreenshotEditorInstance {
@@ -140,8 +142,31 @@ impl ScreenshotEditorInstances {
                         let rgba_img: image::RgbaImage = rgb_img.convert();
                         (rgba_img.into_raw(), width, height)
                     } else {
-                        let img =
-                            image::open(&path).map_err(|e| format!("Failed to open image: {e}"))?;
+                        let image_path = if path.is_dir() {
+                            let original = path.join("original.png");
+                            if original.exists() {
+                                original
+                            } else {
+                                std::fs::read_dir(&path)
+                                    .ok()
+                                    .and_then(|dir| {
+                                        dir.flatten()
+                                            .find(|e| {
+                                                e.path().extension().and_then(|s| s.to_str())
+                                                    == Some("png")
+                                            })
+                                            .map(|e| e.path())
+                                    })
+                                    .ok_or_else(|| {
+                                        format!("No PNG file found in directory: {path:?}")
+                                    })?
+                            }
+                        } else {
+                            path.clone()
+                        };
+
+                        let img = image::open(&image_path)
+                            .map_err(|e| format!("Failed to open image: {e}"))?;
                         let (w, h) = img.dimensions();
 
                         if w > MAX_DIMENSION || h > MAX_DIMENSION {
@@ -156,15 +181,22 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                // Try to load existing meta if in a .cap directory
-                let (recording_meta, loaded_config) = if let Some(parent) = path.parent() {
+                let cap_dir = if path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                    Some(path.clone())
+                } else if let Some(parent) = path.parent() {
                     if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
-                        let meta = RecordingMeta::load_for_project(parent).ok();
-                        let config = ProjectConfiguration::load(parent).ok();
-                        (meta, config)
+                        Some(parent.to_path_buf())
                     } else {
-                        (None, None)
+                        None
                     }
+                } else {
+                    None
+                };
+
+                let (recording_meta, loaded_config) = if let Some(cap_dir) = &cap_dir {
+                    let meta = RecordingMeta::load_for_project(cap_dir).ok();
+                    let config = ProjectConfiguration::load(cap_dir).ok();
+                    (meta, config)
                 } else {
                     (None, None)
                 };
@@ -200,13 +232,14 @@ impl ScreenshotEditorInstances {
                     }
                 };
 
-                let (instance, adapter, device, queue) =
+                let (instance, adapter, device, queue, is_software_adapter) =
                     if let Some(shared) = gpu_context::get_shared_gpu().await {
                         (
                             shared.instance.clone(),
                             shared.adapter.clone(),
                             shared.device.clone(),
                             shared.queue.clone(),
+                            shared.is_software_adapter,
                         )
                     } else {
                         let instance =
@@ -230,7 +263,7 @@ impl ScreenshotEditorInstances {
                             })
                             .await
                             .map_err(|e| e.to_string())?;
-                        (instance, adapter, Arc::new(device), Arc::new(queue))
+                        (instance, adapter, Arc::new(device), Arc::new(queue), false)
                     };
 
                 let options = cap_rendering::RenderOptions {
@@ -253,6 +286,7 @@ impl ScreenshotEditorInstances {
                     meta: studio_meta,
                     recording_meta: recording_meta.clone(),
                     background_textures: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+                    is_software_adapter,
                 };
 
                 let (config_tx, mut config_rx) = watch::channel(loaded_config.unwrap_or_default());
@@ -264,6 +298,7 @@ impl ScreenshotEditorInstances {
                     ws_shutdown_token,
                     config_tx,
                     path: path.clone(),
+                    pretty_name: recording_meta.pretty_name.clone(),
                 });
 
                 // Spawn render loop
@@ -271,7 +306,11 @@ impl ScreenshotEditorInstances {
 
                 tokio::spawn(async move {
                     let mut frame_renderer = FrameRenderer::new(&constants);
-                    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+                    let mut layers = RendererLayers::new_with_options(
+                        &constants.device,
+                        &constants.queue,
+                        constants.is_software_adapter,
+                    );
                     let shutdown_token = render_shutdown_token;
 
                     // Initial render
@@ -321,6 +360,7 @@ impl ScreenshotEditorInstances {
                                     width: frame.width,
                                     height: frame.height,
                                     stride: frame.padded_bytes_per_row,
+                                    created_at: Instant::now(),
                                 }));
                             }
                             Err(e) => {
@@ -375,6 +415,7 @@ pub struct SerializedScreenshotEditorInstance {
     pub frames_socket_url: String,
     pub path: PathBuf,
     pub config: Option<ProjectConfiguration>,
+    pub pretty_name: String,
 }
 
 #[tauri::command]
@@ -404,6 +445,7 @@ pub async fn create_screenshot_editor_instance(
         frames_socket_url: format!("ws://localhost:{}", instance.ws_port),
         path: instance.path.clone(),
         config: Some(config),
+        pretty_name: instance.pretty_name.clone(),
     })
 }
 
@@ -429,15 +471,12 @@ pub async fn update_screenshot_config(
     if parent.extension().and_then(|s| s.to_str()) == Some("cap") {
         let path = parent.to_path_buf();
         if let Err(e) = config.write(&path) {
-            eprintln!("Failed to save screenshot config: {}", e);
+            eprintln!("Failed to save screenshot config: {e}");
         } else {
-            println!("Saved screenshot config to {:?}", path);
+            println!("Saved screenshot config to {path:?}");
         }
     } else {
-        println!(
-            "Not saving config: parent {:?} is not a .cap directory",
-            parent
-        );
+        println!("Not saving config: parent {parent:?} is not a .cap directory");
     }
     Ok(())
 }

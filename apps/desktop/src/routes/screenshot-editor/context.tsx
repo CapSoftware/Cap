@@ -1,10 +1,21 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { debounce } from "@solid-primitives/scheduled";
+import { makePersisted } from "@solid-primitives/storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { createEffect, createResource, createSignal, on } from "solid-js";
+import {
+	createEffect,
+	createResource,
+	createSignal,
+	on,
+	onCleanup,
+} from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+	createImageDataWS,
+	createLazySignal,
+	type FrameData,
+} from "~/utils/socket";
 import {
 	type Annotation,
 	type AnnotationType,
@@ -24,7 +35,11 @@ export type CurrentDialog =
 	| { type: "createPreset" }
 	| { type: "renamePreset"; presetIndex: number }
 	| { type: "deletePreset"; presetIndex: number }
-	| { type: "crop"; position: XY<number>; size: XY<number> };
+	| {
+			type: "crop";
+			originalSize: XY<number>;
+			currentCrop: { position: XY<number>; size: XY<number> } | null;
+	  };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
@@ -54,7 +69,7 @@ const DEFAULT_CURSOR: CursorConfiguration = {
 	hideWhenIdle: false,
 	hideWhenIdleDelay: 2,
 	size: 100,
-	type: "pointer",
+	type: "auto",
 	animationStyle: "mellow",
 	tension: 120,
 	mass: 1.1,
@@ -105,14 +120,23 @@ function createScreenshotEditorContext() {
 		"select",
 	);
 
+	const [layersPanelOpen, setLayersPanelOpen] = makePersisted(
+		createSignal(false),
+		{ name: "screenshotEditorLayersPanelOpen" },
+	);
+	const [focusAnnotationId, setFocusAnnotationId] = createSignal<string | null>(
+		null,
+	);
+
+	const [activePopover, setActivePopover] = createSignal<
+		"background" | "padding" | "rounding" | "shadow" | "border" | null
+	>(null);
+
 	const [dialog, setDialog] = createSignal<DialogState>({
 		open: false,
 	});
 
-	const [latestFrame, setLatestFrame] = createLazySignal<{
-		width: number;
-		data: ImageData;
-	}>();
+	const [latestFrame, setLatestFrame] = createLazySignal<FrameData>();
 
 	const [editorInstance] = createResource(async () => {
 		const instance = await commands.createScreenshotEditorInstance();
@@ -124,35 +148,56 @@ function createScreenshotEditorContext() {
 			}
 		}
 
-		// Load initial frame from disk in case WS fails or is slow
 		if (instance.path) {
 			const img = new Image();
 			img.crossOrigin = "anonymous";
 			img.src = convertFileSrc(instance.path);
-			img.onload = () => {
-				const canvas = document.createElement("canvas");
-				canvas.width = img.naturalWidth;
-				canvas.height = img.naturalHeight;
-				const ctx = canvas.getContext("2d");
-				if (ctx) {
-					ctx.drawImage(img, 0, 0);
-					const data = ctx.getImageData(
-						0,
-						0,
-						img.naturalWidth,
-						img.naturalHeight,
-					);
-					setLatestFrame({ width: img.naturalWidth, data });
+			img.onload = async () => {
+				try {
+					const bitmap = await createImageBitmap(img);
+					const existing = latestFrame();
+					if (existing?.bitmap) {
+						existing.bitmap.close();
+					}
+					setLatestFrame({
+						width: img.naturalWidth,
+						height: img.naturalHeight,
+						bitmap,
+					});
+				} catch (e: unknown) {
+					console.error("Failed to create ImageBitmap from fallback image:", e);
 				}
+			};
+			img.onerror = (event) => {
+				console.error("Failed to load screenshot image:", {
+					path: instance.path,
+					src: img.src,
+					event,
+				});
 			};
 		}
 
-		const [_ws, _isConnected] = createImageDataWS(
+		const [_ws, _isConnected, _isWorkerReady] = createImageDataWS(
 			instance.framesSocketUrl,
 			setLatestFrame,
 		);
 
 		return instance;
+	});
+
+	createEffect(
+		on(latestFrame, (current, previous) => {
+			if (previous?.bitmap && previous.bitmap !== current?.bitmap) {
+				previous.bitmap.close();
+			}
+		}),
+	);
+
+	onCleanup(() => {
+		const frame = latestFrame();
+		if (frame?.bitmap) {
+			frame.bitmap.close();
+		}
 	});
 
 	const saveConfig = debounce((config: ProjectConfiguration) => {
@@ -296,6 +341,9 @@ function createScreenshotEditorContext() {
 		get path() {
 			return editorInstance()?.path ?? "";
 		},
+		get prettyName() {
+			return editorInstance()?.prettyName ?? "Screenshot";
+		},
 		project,
 		setProject,
 		annotations,
@@ -304,6 +352,12 @@ function createScreenshotEditorContext() {
 		setSelectedAnnotationId,
 		activeTool,
 		setActiveTool,
+		layersPanelOpen,
+		setLayersPanelOpen,
+		focusAnnotationId,
+		setFocusAnnotationId,
+		activePopover,
+		setActivePopover,
 		projectHistory,
 		dialog,
 		setDialog,

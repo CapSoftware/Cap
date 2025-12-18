@@ -7,7 +7,6 @@ use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
-    f64,
     ops::Deref,
     path::PathBuf,
     str::FromStr,
@@ -218,7 +217,7 @@ impl CapWindowDef {
             Self::Settings => (600.0, 450.0),
             Self::Camera => (200.0, 200.0),
             Self::Upgrade => (950.0, 850.0),
-            Self::ModeSelect => (900.0, 500.0),
+            Self::ModeSelect => (580.0, 340.0),
             _ => return None,
         })
     }
@@ -259,8 +258,6 @@ pub enum CapWindow {
 
 impl CapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        use std::fmt::Write;
-
         if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
             let window_id = {
@@ -346,7 +343,7 @@ impl CapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     if new_recording_flow {
-                        _ = window.run_on_main_thread({
+                        let _ = window.run_on_main_thread({
                             let window = window.clone();
                             move || window.objc2_nswindow().setLevel(50)
                         });
@@ -400,7 +397,7 @@ impl CapWindow {
 
                 #[cfg(windows)]
                 {
-                    builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
+                    builder = builder.inner_size(100.0, 100.0).position(0.0, 0.0);
                 }
 
                 let window = builder.build()?;
@@ -463,6 +460,9 @@ impl CapWindow {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
                 };
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
+                    let _ = camera.close();
+                };
 
                 self.window_builder(app, "/editor")
                     .maximizable(true)
@@ -473,6 +473,9 @@ impl CapWindow {
             Self::ScreenshotEditor { path: _ } => {
                 if let Some(main) = CapWindowDef::Main.get(app) {
                     let _ = main.close();
+                };
+                if let Some(camera) = CapWindowDef::Camera.get(app) {
+                    let _ = camera.close();
                 };
 
                 self.window_builder(app, "/screenshot-editor")
@@ -503,9 +506,9 @@ impl CapWindow {
                 }
 
                 self.window_builder(app, "/mode-select")
-                    .inner_size(900.0, 500.0)
-                    .min_inner_size(900.0, 500.0)
-                    .resizable(true)
+                    .inner_size(580.0, 340.0)
+                    .min_inner_size(580.0, 340.0)
+                    .resizable(false)
                     .maximized(false)
                     .maximizable(false)
                     .center()
@@ -679,15 +682,53 @@ impl CapWindow {
                 let width = 320.0;
                 let height = 150.0;
 
+                let title = CapWindowDef::RecordingControls.title();
+                let should_protect = should_protect_window(app, title);
+
+                let pos_x = ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0;
+                let pos_y =
+                    (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0;
+
+                debug!(
+                    "InProgressRecording window: monitor size={:?}, scale={}, pos=({}, {})",
+                    monitor.size(),
+                    monitor.scale_factor(),
+                    pos_x,
+                    pos_y
+                );
+
+                #[cfg(target_os = "macos")]
+                let window = {
+                    self.window_builder(app, "/in-progress-recording")
+                        .maximized(false)
+                        .resizable(false)
+                        .fullscreen(false)
+                        .shadow(false)
+                        .always_on_top(true)
+                        .transparent(true)
+                        .visible_on_all_workspaces(true)
+                        .content_protected(should_protect)
+                        .inner_size(width, height)
+                        .position(pos_x, pos_y)
+                        .skip_taskbar(true)
+                        .initialization_script(format!(
+                            "window.COUNTDOWN = {};",
+                            countdown.unwrap_or_default()
+                        ))
+                        .build()?
+                };
+
+                #[cfg(windows)]
                 let window = self
                     .window_builder(app, "/in-progress-recording")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .shadow(!cfg!(windows))
+                    .shadow(false)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
+                    .content_protected(should_protect)
                     .inner_size(width, height)
                     .position(
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
@@ -699,6 +740,8 @@ impl CapWindow {
                         countdown.unwrap_or_default()
                     ))
                     .build()?;
+
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }
@@ -885,7 +928,7 @@ pub fn refresh_window_content_protection(app: AppHandle<Wry>) -> Result<(), Stri
         if let Ok(id) = CapWindowDef::from_str(&label) {
             let title = id.title();
             window
-                .set_content_protected(should_protect_window(&app, &title))
+                .set_content_protected(should_protect_window(&app, title))
                 .map_err(|e| e.to_string())?;
         }
     }

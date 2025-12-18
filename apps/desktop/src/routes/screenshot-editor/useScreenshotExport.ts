@@ -8,8 +8,8 @@ import { getArrowHeadPoints } from "./arrow";
 import { type Annotation, useScreenshotEditorContext } from "./context";
 
 export function useScreenshotExport() {
-	const { path, latestFrame, annotations, dialog, setDialog, project } =
-		useScreenshotEditorContext();
+	const editorCtx = useScreenshotEditorContext();
+	const { latestFrame, annotations, dialog, setDialog, project } = editorCtx;
 	const [isExporting, setIsExporting] = createSignal(false);
 
 	const drawAnnotations = (
@@ -188,14 +188,13 @@ export function useScreenshotExport() {
 			if (!ctx) throw new Error("Could not get canvas context");
 
 			const frame = latestFrame();
-			if (frame) {
+			if (frame?.bitmap) {
 				canvas.width = frame.width;
-				canvas.height = frame.data.height;
-				ctx.putImageData(frame.data, 0, 0);
+				canvas.height = frame.height;
+				ctx.drawImage(frame.bitmap, 0, 0);
 			} else {
-				// Fallback to loading file
 				const img = new Image();
-				img.src = convertFileSrc(path);
+				img.src = convertFileSrc(editorCtx.path);
 				await new Promise((resolve, reject) => {
 					img.onload = resolve;
 					img.onerror = reject;
@@ -284,7 +283,7 @@ export function useScreenshotExport() {
 			if (destination === "file") {
 				const savePath = await save({
 					filters: [{ name: "PNG Image", extensions: ["png"] }],
-					defaultPath: "screenshot.png",
+					defaultPath: `${editorCtx.prettyName}.png`,
 				});
 				if (savePath) {
 					await writeFile(savePath, uint8Array);

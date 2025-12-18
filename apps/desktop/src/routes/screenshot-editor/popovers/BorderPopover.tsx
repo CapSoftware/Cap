@@ -10,14 +10,20 @@ import { useScreenshotEditorContext } from "../context";
 import { EditorButton, Field, Slider } from "../ui";
 
 export function BorderPopover() {
-	const { project, setProject } = useScreenshotEditorContext();
+	const { project, setProject, activePopover, setActivePopover } =
+		useScreenshotEditorContext();
 
 	return (
-		<Popover placement="bottom-start">
+		<Popover
+			placement="bottom-start"
+			open={activePopover() === "border"}
+			onOpenChange={(open) => setActivePopover(open ? "border" : null)}
+		>
 			<Popover.Trigger
 				as={EditorButton}
 				leftIcon={<IconCapSquare class="size-4" />}
 				tooltipText="Border"
+				kbd={["E"]}
 			/>
 			<Popover.Portal>
 				<Popover.Content class="z-50 w-[280px] overflow-hidden rounded-xl border border-gray-3 bg-gray-1 shadow-xl animate-in fade-in zoom-in-95 p-4">

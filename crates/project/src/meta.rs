@@ -20,7 +20,6 @@ pub struct VideoMeta {
     pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
-    /// unix time of the first frame
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
 }
@@ -33,7 +32,6 @@ fn legacy_static_video_fps() -> u32 {
 pub struct AudioMeta {
     #[specta(type = String)]
     pub path: RelativePathBuf,
-    /// unix time of the first frame
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time: Option<f64>,
 }
@@ -55,7 +53,7 @@ impl Default for Platform {
         #[cfg(windows)]
         return Self::Windows;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(not(windows))]
         return Self::MacOS;
     }
 }
@@ -64,7 +62,6 @@ impl Default for Platform {
 pub struct RecordingMeta {
     #[serde(default)]
     pub platform: Option<Platform>,
-    // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
     pub pretty_name: String,
@@ -92,19 +89,14 @@ pub struct VideoUploadInfo {
 #[serde(tag = "state")]
 pub enum UploadMeta {
     MultipartUpload {
-        // Cap web identifier
         video_id: String,
-        // Data for resuming
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         recording_dir: PathBuf,
     },
     SinglePartUpload {
-        // Cap web identifier
         video_id: String,
-        // Path of the Cap file
         recording_dir: PathBuf,
-        // Path to video and screenshot files for resuming
         file_path: PathBuf,
         screenshot_path: PathBuf,
     },
@@ -126,17 +118,9 @@ impl specta::Flatten for RecordingMetaInner {}
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum InstantRecordingMeta {
-    InProgress {
-        // This field means nothing and is just because this enum is untagged.
-        recording: bool,
-    },
-    Failed {
-        error: String,
-    },
-    Complete {
-        fps: u32,
-        sample_rate: Option<u32>,
-    },
+    InProgress { recording: bool },
+    Failed { error: String },
+    Complete { fps: u32, sample_rate: Option<u32> },
 }
 
 impl RecordingMeta {
@@ -162,7 +146,6 @@ impl RecordingMeta {
     pub fn project_config(&self) -> ProjectConfiguration {
         let mut config = ProjectConfiguration::load(&self.project_path).unwrap_or_default();
 
-        // Try to load captions from captions.json if it exists
         let captions_path = self.project_path.join("captions.json");
         debug!("Checking for captions at: {:?}", captions_path);
 
@@ -288,6 +271,7 @@ pub struct MultipleSegments {
 #[serde(tag = "status")]
 pub enum StudioRecordingStatus {
     InProgress,
+    NeedsRemux,
     Failed { error: String },
     Complete,
 }
@@ -295,13 +279,12 @@ pub enum StudioRecordingStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum Cursors {
-    // needed for backwards compat as i wasn't strict enough with feature flagging 🤦
     Old(HashMap<String, String>),
     Correct(HashMap<String, CursorMeta>),
 }
 
 impl Cursors {
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         match self {
             Cursors::Old(map) => map.is_empty(),
             Cursors::Correct(map) => map.is_empty(),
@@ -388,7 +371,6 @@ impl MultipleSegment {
 
         let full_path = meta.path(cursor_path);
 
-        // Try to load the cursor data
         let mut data = match CursorEvents::load_from_file(&full_path) {
             Ok(data) => data,
             Err(e) => {
@@ -459,26 +441,25 @@ mod test {
 
         test_meta_deserialize(
             r#"{
-		          "pretty_name": "Cap 2024-11-26 at 22.16.36",
-		          "sharing": null,
-		          "display": {
-		            "path": "content/display.mp4"
-		          },
-		          "camera": {
-		            "path": "content/camera.mp4"
-		          },
-		          "audio": {
-		            "path": "content/audio-input.mp3"
-		          },
-		          "segments": [],
-		          "cursor": "cursor.json"
-		        }"#,
+	          "pretty_name": "Cap 2024-11-26 at 22.16.36",
+	          "sharing": null,
+	          "display": {
+	            "path": "content/display.mp4"
+	          },
+	          "camera": {
+	            "path": "content/camera.mp4"
+	          },
+	          "audio": {
+	            "path": "content/audio-input.mp3"
+	          },
+	          "segments": [],
+	          "cursor": "cursor.json"
+	        }"#,
         );
     }
 
     #[test]
     fn multi_segment() {
-        // single segment
         test_meta_deserialize(
             r#"{
               "pretty_name": "Cap 2024-11-26 at 22.29.30",
@@ -505,36 +486,35 @@ mod test {
             }"#,
         );
 
-        // multi segment, no cursor
         test_meta_deserialize(
             r#"{
-		          "pretty_name": "Cap 2024-11-26 at 22.32.26",
-		          "sharing": null,
-		          "segments": [
-		            {
-		              "display": {
-		                "path": "content/segments/segment-0/display.mp4"
-		              },
-		              "camera": {
-		                "path": "content/segments/segment-0/camera.mp4"
-		              },
-		              "audio": {
-		                "path": "content/segments/segment-0/audio-input.mp3"
-		              }
-		            },
-		            {
-		              "display": {
-		                "path": "content/segments/segment-1/display.mp4"
-		              },
-		              "camera": {
-		                "path": "content/segments/segment-1/camera.mp4"
-		              },
-		              "audio": {
-		                "path": "content/segments/segment-1/audio-input.mp3"
-		              }
-		            }
-		          ]
-		        }"#,
+	          "pretty_name": "Cap 2024-11-26 at 22.32.26",
+	          "sharing": null,
+	          "segments": [
+	            {
+	              "display": {
+	                "path": "content/segments/segment-0/display.mp4"
+	              },
+	              "camera": {
+	                "path": "content/segments/segment-0/camera.mp4"
+	              },
+	              "audio": {
+	                "path": "content/segments/segment-0/audio-input.mp3"
+	              }
+	            },
+	            {
+	              "display": {
+	                "path": "content/segments/segment-1/display.mp4"
+	              },
+	              "camera": {
+	                "path": "content/segments/segment-1/camera.mp4"
+	              },
+	              "audio": {
+	                "path": "content/segments/segment-1/audio-input.mp3"
+	              }
+	            }
+	          ]
+	        }"#,
         );
     }
 }

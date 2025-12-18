@@ -8,7 +8,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
-    FutureExt, SinkExt, StreamExt,
+    FutureExt, StreamExt,
     channel::{mpsc, oneshot},
 };
 use scap_ffmpeg::*;
@@ -25,7 +25,6 @@ use tracing::*;
 
 // const WINDOW_DURATION: Duration = Duration::from_secs(3);
 // const LOG_INTERVAL: Duration = Duration::from_secs(5);
-const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
 
 #[derive(Debug)]
 pub struct Direct3DCapture;
@@ -109,7 +108,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 settings,
                 d3d_device: self.d3d_device.clone(),
             },
-            self.system_audio.then(|| SystemAudioSourceConfig),
+            self.system_audio.then_some(SystemAudioSourceConfig),
         ))
     }
 }
@@ -203,7 +202,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 {
                     let mut error_tx = error_tx.clone();
                     move || {
-                        let _ = error_tx.send(anyhow!("closed"));
+                        drop(error_tx.try_send(anyhow!("closed")));
 
                         Ok(())
                     }

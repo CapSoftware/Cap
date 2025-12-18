@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use cap_recording::FFmpegVideoFrame;
 use flume::Sender;
 use tokio_util::sync::CancellationToken;
@@ -62,6 +64,7 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                     width: frame.width(),
                     height: frame.height(),
                     stride: frame.stride(0) as u32,
+                    created_at: Instant::now(),
                 })
                 .ok();
         }

@@ -1,5 +1,12 @@
 import { createElementBounds } from "@solid-primitives/bounds";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	on,
+	onCleanup,
+	Show,
+} from "solid-js";
 import IconCapZoomIn from "~icons/cap/zoom-in";
 import IconCapZoomOut from "~icons/cap/zoom-out";
 import { ASPECT_RATIOS } from "../editor/projectConfig";
@@ -17,7 +24,13 @@ const gridStyle = {
 };
 
 export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
-	const { project, latestFrame, annotations } = useScreenshotEditorContext();
+	const {
+		project,
+		latestFrame,
+		annotations,
+		focusAnnotationId,
+		setFocusAnnotationId,
+	} = useScreenshotEditorContext();
 	let canvasRef: HTMLCanvasElement | undefined;
 
 	const [canvasContainerRef, setCanvasContainerRef] =
@@ -26,16 +39,74 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	const [pan, setPan] = createSignal({ x: 0, y: 0 });
 
+	const [previousBitmap, setPreviousBitmap] = createSignal<ImageBitmap | null>(
+		null,
+	);
+
+	createEffect(() => {
+		const frame = latestFrame();
+		const currentBitmap = frame?.bitmap ?? null;
+		const prevBitmap = previousBitmap();
+
+		if (prevBitmap && prevBitmap !== currentBitmap) {
+			prevBitmap.close();
+		}
+
+		setPreviousBitmap(currentBitmap);
+	});
+
+	onCleanup(() => {
+		const bitmap = previousBitmap();
+		if (bitmap) {
+			bitmap.close();
+			setPreviousBitmap(null);
+		}
+	});
+
+	const zoomIn = () => {
+		props.setZoom(Math.min(3, props.zoom + 0.1));
+		setPan({ x: 0, y: 0 });
+	};
+
+	const zoomOut = () => {
+		props.setZoom(Math.max(0.1, props.zoom - 0.1));
+		setPan({ x: 0, y: 0 });
+	};
+
+	createEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement;
+			if (
+				target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.isContentEditable
+			) {
+				return;
+			}
+
+			if (!e.metaKey && !e.ctrlKey) return;
+
+			if (e.key === "-") {
+				e.preventDefault();
+				zoomOut();
+			} else if (e.key === "=" || e.key === "+") {
+				e.preventDefault();
+				zoomIn();
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+	});
+
 	const handleWheel = (e: WheelEvent) => {
 		e.preventDefault();
 		if (e.ctrlKey) {
-			// Zoom
 			const delta = -e.deltaY;
 			const zoomStep = 0.005;
 			const newZoom = Math.max(0.1, Math.min(3, props.zoom + delta * zoomStep));
 			props.setZoom(newZoom);
 		} else {
-			// Pan
 			setPan((p) => ({
 				x: p.x - e.deltaX,
 				y: p.y - e.deltaY,
@@ -45,10 +116,10 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 	createEffect(() => {
 		const frame = latestFrame();
-		if (frame && canvasRef) {
+		if (frame?.bitmap && canvasRef) {
 			const ctx = canvasRef.getContext("2d");
 			if (ctx) {
-				ctx.putImageData(frame.data, 0, 0);
+				ctx.drawImage(frame.bitmap, 0, 0);
 				const crop = project.background.crop;
 				if (crop) {
 					const width = canvasRef.width;
@@ -92,7 +163,8 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 				<div class="absolute left-4 bottom-4 z-10 flex items-center gap-2 bg-gray-1 dark:bg-gray-3 rounded-lg shadow-sm p-1 border border-gray-4">
 					<EditorButton
 						tooltipText="Zoom Out"
-						onClick={() => props.setZoom(Math.max(0.1, props.zoom - 0.1))}
+						kbd={["meta", "-"]}
+						onClick={zoomOut}
 					>
 						<IconCapZoomOut class="size-4" />
 					</EditorButton>
@@ -107,7 +179,8 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 					/>
 					<EditorButton
 						tooltipText="Zoom In"
-						onClick={() => props.setZoom(Math.min(3, props.zoom + 0.1))}
+						kbd={["meta", "+"]}
+						onClick={zoomIn}
 					>
 						<IconCapZoomIn class="size-4" />
 					</EditorButton>
@@ -123,13 +196,14 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 							if (!f)
 								return {
 									width: 0,
-									data: { width: 0, height: 0 } as ImageData,
+									height: 0,
+									bitmap: null,
 								};
 							return f;
 						};
 
 						const frameWidth = () => frame().width;
-						const frameHeight = () => frame().data.height;
+						const frameHeight = () => frame().height;
 
 						const imageRect = createMemo(() => {
 							const crop = project.background.crop;
@@ -266,6 +340,35 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 						const canvasLeft = () => -bounds().x * cssScale();
 						const canvasTop = () => -bounds().y * cssScale();
 
+						createEffect(
+							on(focusAnnotationId, (annId) => {
+								if (!annId) return;
+
+								const ann = annotations.find((a) => a.id === annId);
+								if (!ann) {
+									setFocusAnnotationId(null);
+									return;
+								}
+
+								const annCenterX = ann.x + ann.width / 2;
+								const annCenterY = ann.y + ann.height / 2;
+
+								const boundsData = bounds();
+								const sizeData = size();
+								const scale = fitScale() * props.zoom;
+
+								const annScreenX =
+									(annCenterX - boundsData.x) * scale -
+									(sizeData.width * props.zoom) / 2;
+								const annScreenY =
+									(annCenterY - boundsData.y) * scale -
+									(sizeData.height * props.zoom) / 2;
+
+								setPan({ x: -annScreenX, y: -annScreenY });
+								setFocusAnnotationId(null);
+							}),
+						);
+
 						let maskCanvasRef: HTMLCanvasElement | undefined;
 
 						const blurRegion = (
@@ -325,10 +428,10 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 
 							if (
 								maskCanvasRef.width !== frameData.width ||
-								maskCanvasRef.height !== frameData.data.height
+								maskCanvasRef.height !== frameData.height
 							) {
 								maskCanvasRef.width = frameData.width;
-								maskCanvasRef.height = frameData.data.height;
+								maskCanvasRef.height = frameData.height;
 							}
 
 							ctx.clearRect(0, 0, maskCanvasRef.width, maskCanvasRef.height);
@@ -432,7 +535,7 @@ export function Preview(props: { zoom: number; setZoom: (z: number) => void }) {
 										transform: `translate(${pan().x}px, ${pan().y}px)`,
 										"will-change": "transform",
 									}}
-									class="shadow-lg block"
+									class="block"
 								>
 									<canvas
 										ref={canvasRef}

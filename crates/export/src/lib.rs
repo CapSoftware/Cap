@@ -5,7 +5,6 @@ use cap_editor::SegmentMedia;
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
-use tracing::error;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {

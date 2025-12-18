@@ -11,7 +11,7 @@ use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
     Win32::{
-        Foundation::{E_FAIL, E_NOTIMPL},
+        Foundation::E_NOTIMPL,
         Graphics::{
             Direct3D11::{ID3D11Device, ID3D11Texture2D},
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
@@ -101,6 +101,7 @@ pub enum HandleNeedsInputError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
+    #[allow(clippy::too_many_arguments)]
     fn new_with_scaled_output_with_flags(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
@@ -210,7 +211,10 @@ impl H264Encoder {
         unsafe {
             let temp = media_device_manager.clone();
             transform
-                .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, std::mem::transmute(temp))
+                .ProcessMessage(
+                    MFT_MESSAGE_SET_D3D_MANAGER,
+                    std::mem::transmute::<IMFDXGIDeviceManager, usize>(temp),
+                )
                 .map_err(NewVideoEncoderError::EncoderTransform)?;
         };
 
@@ -239,10 +243,10 @@ impl H264Encoder {
             let mut count = 0;
             loop {
                 let result = transform.GetInputAvailableType(input_stream_id, count);
-                if let Err(error) = &result {
-                    if error.code() == MF_E_NO_MORE_TYPES {
-                        break Ok(None);
-                    }
+                if let Err(error) = &result
+                    && error.code() == MF_E_NO_MORE_TYPES
+                {
+                    break Ok(None);
                 }
 
                 let input_type = result?;
@@ -261,11 +265,11 @@ impl H264Encoder {
                     &input_type,
                     MFT_SET_TYPE_TEST_ONLY.0 as u32,
                 );
-                if let Err(error) = &result {
-                    if error.code() == MF_E_INVALIDMEDIATYPE {
-                        count += 1;
-                        continue;
-                    }
+                if let Err(error) = &result
+                    && error.code() == MF_E_INVALIDMEDIATYPE
+                {
+                    count += 1;
+                    continue;
                 }
                 result?;
                 break Ok(Some(input_type));
@@ -404,24 +408,24 @@ impl H264Encoder {
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
                         should_exit = true;
-                        if !should_stop.load(Ordering::SeqCst) {
-                            if let Some((texture, timestamp)) = get_frame()? {
-                                self.video_processor.process_texture(&texture)?;
-                                let input_buffer = {
-                                    MFCreateDXGISurfaceBuffer(
-                                        &ID3D11Texture2D::IID,
-                                        self.video_processor.output_texture(),
-                                        0,
-                                        false,
-                                    )?
-                                };
-                                let mf_sample = MFCreateSample()?;
-                                mf_sample.AddBuffer(&input_buffer)?;
-                                mf_sample.SetSampleTime(timestamp.Duration)?;
-                                self.transform
-                                    .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
-                                should_exit = false;
-                            }
+                        if !should_stop.load(Ordering::SeqCst)
+                            && let Some((texture, timestamp)) = get_frame()?
+                        {
+                            self.video_processor.process_texture(&texture)?;
+                            let input_buffer = {
+                                MFCreateDXGISurfaceBuffer(
+                                    &ID3D11Texture2D::IID,
+                                    self.video_processor.output_texture(),
+                                    0,
+                                    false,
+                                )?
+                            };
+                            let mf_sample = MFCreateSample()?;
+                            mf_sample.AddBuffer(&input_buffer)?;
+                            mf_sample.SetSampleTime(timestamp.Duration)?;
+                            self.transform
+                                .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
+                            should_exit = false;
                         }
                     }
                     MediaFoundation::METransformHaveOutput => {

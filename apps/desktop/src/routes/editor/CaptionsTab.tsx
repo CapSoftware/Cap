@@ -126,7 +126,8 @@ function RgbInput(props: { value: string; onChange: (value: string) => void }) {
 				}}
 			/>
 			<TextInput
-				class="w-20 p-1.5 border text-gray-400 rounded-lg bg-gray-50"
+				// class="w-20 p-1.5 border text-gray-400 rounded-lg bg-gray-50"
+				class="w-[5rem] p-[0.375rem] border border-gray-3 text-gray-12 rounded-[0.5rem] bg-gray-2"
 				value={text()}
 				onFocus={() => {
 					prevColor = props.value;
@@ -215,7 +216,7 @@ export function CaptionsTab() {
 			if (downloadedModelNames.length > 0) {
 				const modelToPrewarm = downloadedModelNames[0];
 				const modelPath = await join(modelsPath, `${modelToPrewarm}.bin`);
-				commands.prewarmWhisperx(modelPath).catch(() => {});
+				commands.prewarmWhisperx(modelPath).catch(() => { });
 			}
 
 			const savedModel = localStorage.getItem("selectedTranscriptionModel");
@@ -434,7 +435,7 @@ export function CaptionsTab() {
 				<div class="space-y-6 transition-all duration-200">
 					<div class="space-y-4">
 						<div class="space-y-2">
-							<label class="text-xs text-gray-500">Transcription Model</label>
+							<label class="text-xs text-gray-11">Transcription Model</label>
 							<div class="grid grid-cols-2 gap-3">
 								<For each={MODEL_OPTIONS}>
 									{(model) => {
@@ -447,26 +448,28 @@ export function CaptionsTab() {
 												class={cx(
 													"flex flex-col text-left p-3 rounded-lg border transition-all relative",
 													isSelected()
-														? "border-blue-500 bg-blue-50/50 ring-1 ring-blue-500"
-														: "border-gray-200 hover:border-gray-300 bg-white",
+														? "border-blue-8 bg-blue-3/40"
+														: "border-gray-3 hover:border-gray-5 bg-gray-2",
 												)}
 												onClick={() => {
 													setSelectedModel(model.name);
 												}}
 											>
 												<div class="flex items-center justify-between w-full mb-1">
-													<span class="font-medium text-sm">{model.label}</span>
+													<span class="font-medium text-sm text-gray-12">
+														{model.label}
+													</span>
 													<Show when={isDownloaded()}>
-														<div class="text-green-500" title="Downloaded">
+														<div class="text-green-9" title="Downloaded">
 															<IconLucideCheck class="size-4" />
 														</div>
 													</Show>
 												</div>
-												<span class="text-xs text-gray-500 mb-2">
+												<span class="text-xs text-gray-11 mb-2">
 													{model.description}
 												</span>
 												<div class="flex items-center justify-between mt-auto">
-													<span class="text-[10px] px-1.5 py-0.5 bg-gray-100 rounded text-gray-500">
+													<span class="text-[10px] px-1.5 py-0.5 bg-gray-3 rounded text-gray-11">
 														{model.size}
 													</span>
 												</div>
@@ -499,7 +502,7 @@ export function CaptionsTab() {
 									</MenuItem>
 								)}
 							>
-								<KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-200 w-full text-gray-700 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors">
+								<KSelect.Trigger class="flex flex-row items-center h-9 px-3 gap-2 border rounded-lg border-gray-3 bg-gray-2 w-full text-gray-12 text-sm hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
 									<KSelect.Value<string> class="flex-1 text-left truncate">
 										{(state) => {
 											const language = LANGUAGE_OPTIONS.find(
@@ -557,9 +560,9 @@ export function CaptionsTab() {
 											</Show>
 										</Button>
 										<Show when={isDownloading()}>
-											<div class="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
+											<div class="w-full bg-gray-3 rounded-full h-1.5 overflow-hidden">
 												<div
-													class="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+													class="bg-blue-9 h-1.5 rounded-full transition-all duration-300"
 													style={{ width: `${downloadProgress()}%` }}
 												/>
 											</div>
@@ -593,7 +596,7 @@ export function CaptionsTab() {
 						<Field name="Font Settings" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Font Family</span>
+									<span class="text-gray-11 text-sm">Font Family</span>
 									<KSelect<string>
 										options={fontOptions.map((f) => f.value)}
 										value={getSetting("font")}
@@ -617,7 +620,7 @@ export function CaptionsTab() {
 											</MenuItem>
 										)}
 									>
-										<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg shadow px-3 py-2 bg-white border border-gray-300">
+										<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
 											<KSelect.Value<string>>
 												{(state) =>
 													fontOptions.find(
@@ -644,7 +647,7 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Size</span>
+									<span class="text-gray-11 text-sm">Size</span>
 									<Slider
 										value={[getSetting("size")]}
 										onChange={(v) => updateCaptionSetting("size", v[0])}
@@ -656,7 +659,7 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Font Color</span>
+									<span class="text-gray-11 text-sm">Font Color</span>
 									<RgbInput
 										value={getSetting("color")}
 										onChange={(value) => updateCaptionSetting("color", value)}
@@ -668,7 +671,7 @@ export function CaptionsTab() {
 						<Field name="Background Settings" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Background Color</span>
+									<span class="text-gray-11 text-sm">Background Color</span>
 									<RgbInput
 										value={getSetting("backgroundColor")}
 										onChange={(value) =>
@@ -678,7 +681,7 @@ export function CaptionsTab() {
 								</div>
 
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Background Opacity</span>
+									<span class="text-gray-11 text-sm">Background Opacity</span>
 									<Slider
 										value={[getSetting("backgroundOpacity")]}
 										onChange={(v) =>
@@ -717,7 +720,7 @@ export function CaptionsTab() {
 									</MenuItem>
 								)}
 							>
-								<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg shadow px-3 py-2 bg-white border border-gray-300">
+								<KSelect.Trigger class="w-full flex items-center justify-between rounded-lg px-3 py-2 bg-gray-2 border border-gray-3 text-gray-12 hover:border-gray-4 hover:bg-gray-3 focus:border-blue-9 focus:ring-1 focus:ring-blue-9 transition-colors">
 									<KSelect.Value<string>>
 										{(state) => (
 											<span>
@@ -749,7 +752,7 @@ export function CaptionsTab() {
 						<Field name="Animation" icon={<IconCapMessageBubble />}>
 							<div class="space-y-3">
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Highlight Color</span>
+									<span class="text-gray-11 text-sm">Highlight Color</span>
 									<RgbInput
 										value={getSetting("highlightColor")}
 										onChange={(value) =>
@@ -758,7 +761,7 @@ export function CaptionsTab() {
 									/>
 								</div>
 								<div class="flex flex-col gap-2">
-									<span class="text-gray-500 text-sm">Fade Duration</span>
+									<span class="text-gray-11 text-sm">Fade Duration</span>
 									<Slider
 										value={[getSetting("fadeDuration") * 100]}
 										onChange={(v) =>
@@ -769,7 +772,7 @@ export function CaptionsTab() {
 										step={1}
 										disabled={!hasCaptions()}
 									/>
-									<span class="text-xs text-gray-400 text-right">
+									<span class="text-xs text-gray-11 text-right">
 										{(getSetting("fadeDuration") * 1000).toFixed(0)}ms
 									</span>
 								</div>
@@ -792,7 +795,7 @@ export function CaptionsTab() {
 
 								<Show when={getSetting("outline")}>
 									<div class="flex flex-col gap-2">
-										<span class="text-gray-500 text-sm">Outline Color</span>
+										<span class="text-gray-11 text-sm">Outline Color</span>
 										<RgbInput
 											value={getSetting("outlineColor")}
 											onChange={(value) =>
@@ -832,11 +835,11 @@ export function CaptionsTab() {
 								<div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
 									<For each={project.captions?.segments}>
 										{(segment) => (
-											<div class="bg-gray-50 dark:bg-gray-100 border border-gray-200 rounded-lg p-4 space-y-4">
+											<div class="bg-gray-2 border border-gray-3 rounded-lg p-4 space-y-4">
 												<div class="flex flex-col space-y-4">
 													<div class="flex space-x-4">
 														<div class="flex-1">
-															<label class="text-xs text-gray-400 dark:text-gray-500">
+															<label class="text-xs text-gray-11">
 																Start Time
 															</label>
 															<Input
@@ -853,7 +856,7 @@ export function CaptionsTab() {
 															/>
 														</div>
 														<div class="flex-1">
-															<label class="text-xs text-gray-400 dark:text-gray-500">
+															<label class="text-xs text-gray-11">
 																End Time
 															</label>
 															<Input
@@ -872,10 +875,10 @@ export function CaptionsTab() {
 													</div>
 
 													<div class="space-y-2">
-														<label class="text-xs text-gray-400 dark:text-gray-500">
+														<label class="text-xs text-gray-11">
 															Caption Text
 														</label>
-														<div class="w-full px-3 py-2 bg-white dark:bg-gray-50 border border-gray-200 rounded-lg text-sm focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-colors">
+														<div class="w-full px-3 py-2 bg-gray-2 border border-gray-3 rounded-lg text-sm focus-within:border-blue-9 focus-within:ring-1 focus-within:ring-blue-9 transition-colors">
 															<textarea
 																class="w-full resize-none outline-none bg-transparent text-(--text-primary)"
 																value={segment.text}
@@ -894,7 +897,7 @@ export function CaptionsTab() {
 															variant="destructive"
 															size="sm"
 															onClick={() => deleteSegment(segment.id)}
-															class="text-gray-50 dark:text-gray-500 inline-flex items-center gap-1.5"
+															class="text-gray-11 inline-flex items-center gap-1.5"
 														>
 															<IconDelete />
 															Delete

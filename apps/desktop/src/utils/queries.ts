@@ -7,7 +7,7 @@ import {
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createEffect, createMemo } from "solid-js";
+import { createEffect, createMemo, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import {
@@ -76,6 +76,7 @@ export const listDisplaysWithThumbnails = queryOptions({
 const getCurrentRecording = queryOptions({
 	queryKey: ["currentRecording"] as const,
 	queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
+	staleTime: 0,
 });
 
 export const listRecordings = queryOptions({
@@ -160,6 +161,13 @@ export function createOptionsQuery() {
 			organizationId: _state.organizationId,
 		});
 	});
+
+	const storeListenerCleanup = recordingSettingsStore.listen((data) => {
+		if (data?.mode && data.mode !== _state.mode) {
+			_setState("mode", data.mode);
+		}
+	});
+	onCleanup(() => storeListenerCleanup.then((c) => c()));
 
 	const [state, setState] = makePersisted([_state, _setState], {
 		name: PERSIST_KEY,
