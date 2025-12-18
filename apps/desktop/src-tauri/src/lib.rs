@@ -422,6 +422,12 @@ async fn upload_logs(app_handle: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+fn get_system_diagnostics() -> cap_recording::diagnostics::SystemDiagnostics {
+    cap_recording::diagnostics::collect_diagnostics()
+}
+
+#[tauri::command]
+#[specta::specta]
 #[instrument(skip(app_handle, state))]
 #[allow(unused_mut)]
 async fn set_camera_input(
@@ -2337,6 +2343,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             set_camera_input,
             recording_settings::set_recording_mode,
             upload_logs,
+            get_system_diagnostics,
             recording::start_recording,
             recording::stop_recording,
             recording::pause_recording,

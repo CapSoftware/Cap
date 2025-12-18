@@ -17,6 +17,9 @@ async setRecordingMode(mode: RecordingMode) : Promise<null> {
 async uploadLogs() : Promise<null> {
     return await TAURI_INVOKE("upload_logs");
 },
+async getSystemDiagnostics() : Promise<SystemDiagnostics> {
+    return await TAURI_INVOKE("get_system_diagnostics");
+},
 async startRecording(inputs: StartRecordingInputs) : Promise<RecordingAction> {
     return await TAURI_INVOKE("start_recording", { inputs });
 },
@@ -420,6 +423,7 @@ quality: number | null;
  * Whether to prioritize speed over quality (default: false)
  */
 fast: boolean | null }
+export type GpuInfoDiag = { vendor: string; description: string; dedicatedVideoMemoryMb: number }
 export type HapticPattern = "alignment" | "levelChange" | "generic"
 export type HapticPerformanceTime = "default" | "now" | "drawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
@@ -494,6 +498,7 @@ export type StartRecordingInputs = { capture_target: ScreenCaptureTarget; captur
 export type StereoMode = "stereo" | "monoL" | "monoR"
 export type StudioRecordingMeta = { segment: SingleSegment } | { inner: MultipleSegments }
 export type StudioRecordingStatus = { status: "InProgress" } | { status: "NeedsRemux" } | { status: "Failed"; error: string } | { status: "Complete" }
+export type SystemDiagnostics = { windowsVersion: WindowsVersionInfo | null; gpuInfo: GpuInfoDiag | null; availableEncoders: string[]; graphicsCaptureSupported: boolean; d3D11VideoProcessorAvailable: boolean }
 export type TargetUnderCursor = { display_id: DisplayId | null; window: WindowUnderCursor | null }
 export type TextSegment = { start: number; end: number; enabled?: boolean; content?: string; center?: XY<number>; size?: XY<number>; fontFamily?: string; fontSize?: number; fontWeight?: number; italic?: boolean; color?: string; fadeDuration?: number }
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[]; sceneSegments?: SceneSegment[]; maskSegments?: MaskSegment[]; textSegments?: TextSegment[] }
@@ -510,6 +515,7 @@ export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
 export type WindowExclusion = { bundleIdentifier?: string | null; ownerName?: string | null; windowTitle?: string | null }
 export type WindowId = string
 export type WindowUnderCursor = { id: WindowId; app_name: string; bounds: LogicalBounds }
+export type WindowsVersionInfo = { major: number; minor: number; build: number; displayName: string; meetsRequirements: boolean; isWindows11: boolean }
 export type XY<T> = { x: T; y: T }
 export type ZoomMode = "auto" | { manual: { x: number; y: number } }
 export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode }
