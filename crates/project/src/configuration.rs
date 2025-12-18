@@ -604,6 +604,8 @@ pub struct MaskSegment {
     pub pixelation: f64,
     #[serde(default)]
     pub darkness: f64,
+    #[serde(default = "MaskSegment::default_fade_duration")]
+    pub fade_duration: f64,
     #[serde(default)]
     pub keyframes: MaskKeyframes,
 }
@@ -615,6 +617,10 @@ impl MaskSegment {
 
     fn default_opacity() -> f64 {
         1.0
+    }
+
+    fn default_fade_duration() -> f64 {
+        0.15
     }
 }
 
@@ -641,6 +647,8 @@ pub struct TextSegment {
     pub italic: bool,
     #[serde(default = "TextSegment::default_color")]
     pub color: String,
+    #[serde(default = "TextSegment::default_fade_duration")]
+    pub fade_duration: f64,
 }
 
 impl TextSegment {
@@ -674,6 +682,10 @@ impl TextSegment {
 
     fn default_color() -> String {
         "#ffffff".to_string()
+    }
+
+    fn default_fade_duration() -> f64 {
+        0.15
     }
 }
 
@@ -778,6 +790,8 @@ pub struct CaptionSettings {
     pub position: String,
     pub bold: bool,
     pub italic: bool,
+    #[serde(alias = "fontWeight", default = "CaptionSettings::default_font_weight")]
+    pub font_weight: u32,
     pub outline: bool,
     #[serde(alias = "outlineColor")]
     pub outline_color: String,
@@ -810,6 +824,10 @@ impl CaptionSettings {
         "#FFFFFF".to_string()
     }
 
+    fn default_font_weight() -> u32 {
+        700
+    }
+
     fn default_fade_duration() -> f32 {
         0.15
     }
@@ -835,7 +853,8 @@ impl Default for CaptionSettings {
             position: "bottom-center".to_string(),
             bold: false,
             italic: false,
-            outline: true,
+            font_weight: Self::default_font_weight(),
+            outline: false,
             outline_color: "#000000".to_string(),
             export_with_subtitles: false,
             highlight_color: Self::default_highlight_color(),
