@@ -435,8 +435,7 @@ impl D3D11Converter {
             )
             .map_err(|e| {
                 ConvertError::HardwareUnavailable(format!(
-                    "D3D11CreateDevice failed on {}: {e:?}",
-                    adapter_name
+                    "D3D11CreateDevice failed on {adapter_name}: {e:?}"
                 ))
             })?;
 

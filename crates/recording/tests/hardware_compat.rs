@@ -187,7 +187,7 @@ fn test_gpu_detection() {
                 println!("  -> Microsoft WARP: Software rendering/encoding");
             }
             cap_frame_converter::GpuVendor::Unknown(id) => {
-                println!("  -> Unknown GPU vendor (0x{:04X}): Software fallback", id);
+                println!("  -> Unknown GPU vendor (0x{id:04X}): Software fallback");
             }
         }
     } else {
@@ -200,7 +200,7 @@ fn test_graphics_capture_support() {
     test_utils::init_tracing();
 
     let supported = scap_direct3d::is_supported().unwrap_or(false);
-    println!("Windows Graphics Capture API supported: {}", supported);
+    println!("Windows Graphics Capture API supported: {supported}");
 
     if !supported {
         let version = scap_direct3d::WindowsVersion::detect();
@@ -232,7 +232,7 @@ fn test_camera_enumeration() {
         println!("Device ID: {}", camera.device_id());
 
         if let Some(model_id) = camera.model_id() {
-            println!("Model ID: {}", model_id);
+            println!("Model ID: {model_id}");
         }
 
         if let Some(formats) = camera.formats() {
@@ -251,7 +251,7 @@ fn test_camera_enumeration() {
             for (resolution, frame_rates) in format_summary.iter() {
                 let rates: Vec<String> = frame_rates
                     .iter()
-                    .map(|(_, _, fps)| format!("{:.1}fps", fps))
+                    .map(|(_, _, fps)| format!("{fps:.1}fps"))
                     .collect();
                 println!("  {}: {}", resolution, rates.join(", "));
             }
@@ -289,14 +289,14 @@ fn test_encoder_availability_matrix() {
     for (name, description) in h264_encoders {
         let available = ffmpeg::encoder::find_by_name(name).is_some();
         let status = if available { "✓" } else { "✗" };
-        println!("  {} {} ({})", status, description, name);
+        println!("  {status} {description} ({name})");
     }
 
     println!("\n=== HEVC/H.265 Encoder Availability ===");
     for (name, description) in hevc_encoders {
         let available = ffmpeg::encoder::find_by_name(name).is_some();
         let status = if available { "✓" } else { "✗" };
-        println!("  {} {} ({})", status, description, name);
+        println!("  {status} {description} ({name})");
     }
 
     let gpu = cap_frame_converter::detect_primary_gpu();
@@ -374,11 +374,11 @@ fn test_d3d11_converter_capability() {
                 };
                 println!("  ✓ {}: {} ({:?})", name, hw, result.backend);
                 if let Some(reason) = result.fallback_reason {
-                    println!("    Fallback: {}", reason);
+                    println!("    Fallback: {reason}");
                 }
             }
             Err(e) => {
-                println!("  ✗ {}: Failed - {}", name, e);
+                println!("  ✗ {name}: Failed - {e}");
             }
         }
     }
@@ -402,7 +402,7 @@ fn test_supported_pixel_formats() {
     for (format, name) in formats {
         let supported = cap_frame_converter::is_format_supported(format);
         let status = if supported { "✓" } else { "✗" };
-        println!("  {} {}", status, name);
+        println!("  {status} {name}");
     }
 }
 
@@ -560,14 +560,14 @@ fn test_camera_capture_basic() {
             std::thread::sleep(Duration::from_secs(2));
 
             let frames = frame_count.load(std::sync::atomic::Ordering::Relaxed);
-            println!("Captured {} frames in 2 seconds", frames);
+            println!("Captured {frames} frames in 2 seconds");
 
             let _ = handle.stop_capturing();
 
             assert!(frames > 0, "Should have captured at least one frame");
         }
         Err(e) => {
-            println!("Failed to start capture: {:?}", e);
+            println!("Failed to start capture: {e:?}");
         }
     }
 }
@@ -678,7 +678,7 @@ fn test_hardware_compatibility_summary() {
     } else {
         "? Unknown".to_string()
     };
-    println!("║ Windows: {:<52} ║", windows_status);
+    println!("║ Windows: {windows_status:<52} ║");
 
     let gpu_status = if let Some(g) = gpu {
         format!(
@@ -689,21 +689,21 @@ fn test_hardware_compatibility_summary() {
     } else {
         "⚠ No GPU (WARP software rendering)".to_string()
     };
-    println!("║ GPU: {:<56} ║", gpu_status);
+    println!("║ GPU: {gpu_status:<56} ║");
 
     let capture_status = if diagnostics.graphics_capture_supported {
         "✓ Available"
     } else {
         "✗ Unavailable"
     };
-    println!("║ Screen Capture: {:<45} ║", capture_status);
+    println!("║ Screen Capture: {capture_status:<45} ║");
 
     let d3d11_status = if diagnostics.d3d11_video_processor_available {
         "✓ GPU accelerated"
     } else {
         "⚠ CPU fallback (swscale)"
     };
-    println!("║ Frame Conversion: {:<43} ║", d3d11_status);
+    println!("║ Frame Conversion: {d3d11_status:<43} ║");
 
     let hw_encoders: Vec<&str> = diagnostics
         .available_encoders
@@ -716,11 +716,11 @@ fn test_hardware_compatibility_summary() {
     } else {
         "⚠ Software only (libx264)".to_string()
     };
-    println!("║ Encoding: {:<51} ║", encoder_status);
+    println!("║ Encoding: {encoder_status:<51} ║");
 
     let cameras: Vec<cap_camera::CameraInfo> = cap_camera::list_cameras().collect();
     let camera_status = format!("{} camera(s) detected", cameras.len());
-    println!("║ Cameras: {:<52} ║", camera_status);
+    println!("║ Cameras: {camera_status:<52} ║");
 
     println!("╠════════════════════════════════════════════════════════════════╣");
 
@@ -792,10 +792,7 @@ fn test_frame_conversion_performance() {
     let avg_ms = elapsed.as_secs_f64() * 1000.0 / test_iterations as f64;
     let fps_capacity = 1000.0 / avg_ms;
 
-    println!(
-        "Performance: {:.2}ms/frame avg ({:.1} fps capacity)",
-        avg_ms, fps_capacity
-    );
+    println!("Performance: {avg_ms:.2}ms/frame avg ({fps_capacity:.1} fps capacity)");
 
     let target_fps = 60.0;
     let target_ms = 1000.0 / target_fps;
@@ -902,7 +899,7 @@ fn test_minimum_requirements_check() {
         .collect();
 
     if !hw_encoders.is_empty() {
-        println!("  ✓ Hardware video encoder ({:?})", hw_encoders);
+        println!("  ✓ Hardware video encoder ({hw_encoders:?})");
     } else {
         println!("  ⚠ No hardware encoders (will use CPU encoding)");
         warnings.push("CPU encoding may impact system performance");
@@ -921,7 +918,7 @@ fn test_minimum_requirements_check() {
     } else if requirements_met {
         println!("⚠ Requirements met with warnings:");
         for warning in &warnings {
-            println!("  - {}", warning);
+            println!("  - {warning}");
         }
     } else {
         println!("✗ Missing required components - Cap may not function correctly");

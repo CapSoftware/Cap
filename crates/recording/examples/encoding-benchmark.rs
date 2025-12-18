@@ -192,7 +192,7 @@ fn benchmark_conversion_formats(config: &BenchmarkConfig) {
     println!("\n=== Format Conversion Benchmarks ===\n");
 
     for (input, output, name) in formats {
-        println!("Testing: {}", name);
+        println!("Testing: {name}");
 
         let mut cfg = config.clone();
         cfg.duration_secs = 5;
@@ -406,7 +406,7 @@ fn main() {
         "encode" => benchmark_encode_times(&config),
         "workers" => benchmark_worker_counts(&config),
         "resolutions" => benchmark_resolutions(&config),
-        "full" | _ => {
+        _ => {
             benchmark_conversion_formats(&config);
             benchmark_encode_times(&config);
             benchmark_worker_counts(&config);
