@@ -43,7 +43,8 @@
 			"WebFetch(domain:github.com)",
 			"WebFetch(domain:docs.rs)",
 			"WebFetch(domain:gix.github.io)",
-			"Bash(cargo clean:*)"
+			"Bash(cargo clean:*)",
+			"Bash(cargo test:*)"
 		],
 		"deny": [],
 		"ask": []
