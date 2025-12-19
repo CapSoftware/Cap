@@ -40,7 +40,7 @@ pub mod yuv_converter;
 mod zoom;
 
 pub use coord::*;
-pub use decoder::{DecodedFrame, PixelFormat};
+pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 

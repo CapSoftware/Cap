@@ -77,19 +77,19 @@ app.get(
 );
 
 function getDeploymentOrigin() {
+	const webUrl = serverEnv().WEB_URL;
 	const vercelEnv = serverEnv().VERCEL_ENV;
-	if (!vercelEnv) return serverEnv().WEB_URL;
 
-	const vercelHosts = {
-		prod: serverEnv().VERCEL_PROJECT_PRODUCTION_URL_HOST,
-		branch: serverEnv().VERCEL_BRANCH_URL_HOST,
-	};
+	if (!vercelEnv || vercelEnv === "production") {
+		return webUrl;
+	}
 
-	if (vercelEnv === "production" && vercelHosts.prod)
-		return `https://${vercelHosts.prod}`;
+	if (vercelEnv === "preview") {
+		const branchHost = serverEnv().VERCEL_BRANCH_URL_HOST;
+		if (branchHost?.endsWith(".vercel.app")) {
+			return `https://${branchHost}`;
+		}
+	}
 
-	if (vercelEnv === "preview" && vercelHosts.branch)
-		return `https://${vercelHosts.branch}`;
-
-	return serverEnv().WEB_URL;
+	return webUrl;
 }

@@ -1,6 +1,7 @@
 pub mod benchmark;
 mod capture_pipeline;
 pub mod cursor;
+pub mod diagnostics;
 pub mod feeds;
 pub mod fragmentation;
 pub mod instant_recording;
