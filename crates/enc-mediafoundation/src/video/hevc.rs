@@ -427,10 +427,7 @@ impl HevcEncoder {
                         }
                     }
                     _ => {
-                        eprintln!(
-                            "[cap-enc-mediafoundation] Ignoring unknown media event type: {}",
-                            event_type.0
-                        );
+                        tracing::warn!("Ignoring unknown media event type: {}", event_type.0);
                     }
                 }
             }

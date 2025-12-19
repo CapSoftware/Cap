@@ -48,7 +48,9 @@
 			"Bash(powershell -Command \"[System.Environment]::OSVersion.Version.ToString()\")",
 			"Bash(cargo build:*)",
 			"Bash(gh api:*)",
-			"Bash(curl:*)"
+			"Bash(curl:*)",
+			"Bash(node -e:*)",
+			"Bash(findstr:*)"
 		],
 		"deny": [],
 		"ask": []

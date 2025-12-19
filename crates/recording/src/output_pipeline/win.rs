@@ -285,7 +285,10 @@ impl Muxer for WindowsMuxer {
                                 Ok(Some((frame.texture().clone(), frame_time)))
                             },
                             |output_sample| {
-                                let mut output = output.lock().unwrap();
+                                let Ok(mut output) = output.lock() else {
+                                    tracing::error!("Failed to lock output mutex - poisoned");
+                                    return Ok(());
+                                };
 
                                 if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
                                     tracing::error!("WriteSample failed: {e}");

@@ -516,7 +516,12 @@ impl WindowsSegmentedCameraMuxer {
                                 Ok(Some((texture, duration_to_timespan(relative))))
                             },
                             |output_sample| {
-                                let mut output = output_clone.lock().unwrap();
+                                let mut output = output_clone.lock().map_err(|e| {
+                                    windows::core::Error::new(
+                                        windows::core::HRESULT(-1),
+                                        format!("Mutex poisoned: {e}"),
+                                    )
+                                })?;
                                 muxer
                                     .write_sample(&output_sample, &mut output)
                                     .map_err(|e| {
