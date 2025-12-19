@@ -420,7 +420,7 @@ impl HevcEncoder {
                             consecutive_empty_samples += 1;
                             if consecutive_empty_samples > MAX_CONSECUTIVE_EMPTY_SAMPLES {
                                 return Err(windows::core::Error::new(
-                                    windows::core::HRESULT(0),
+                                    windows::core::HRESULT(-1),
                                     "Too many consecutive empty samples",
                                 ));
                             }

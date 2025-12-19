@@ -815,7 +815,7 @@ impl FrameConverter for D3D11Converter {
                 .fetch_add(elapsed_ns, Ordering::Relaxed);
 
             let frame_count = count + 1;
-            if frame_count > 0 && frame_count % 300 == 0 {
+            if frame_count % 300 == 0 {
                 let total_ns = self.total_conversion_time_ns.load(Ordering::Relaxed);
                 let avg_ms = (total_ns as f64 / frame_count as f64) / 1_000_000.0;
                 tracing::debug!(

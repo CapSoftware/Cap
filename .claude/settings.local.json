@@ -46,7 +46,9 @@
 			"Bash(cargo clean:*)",
 			"Bash(cargo test:*)",
 			"Bash(powershell -Command \"[System.Environment]::OSVersion.Version.ToString()\")",
-			"Bash(cargo build:*)"
+			"Bash(cargo build:*)",
+			"Bash(gh api:*)",
+			"Bash(curl:*)"
 		],
 		"deny": [],
 		"ask": []
