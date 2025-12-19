@@ -237,10 +237,10 @@ impl Muxer for MacOSSegmentedMuxer {
                 }
             }
 
-            if let Ok(mut output) = state.output.lock() {
-                if let Err(e) = output.write_trailer() {
-                    warn!("Failed to write trailer for segment {current_index}: {e}");
-                }
+            if let Ok(mut output) = state.output.lock()
+                && let Err(e) = output.write_trailer()
+            {
+                warn!("Failed to write trailer for segment {current_index}: {e}");
             }
 
             fragmentation::sync_file(&segment_path);
@@ -421,10 +421,10 @@ impl MacOSSegmentedMuxer {
                     }
                 }
 
-                if let Ok(mut output) = output_clone.lock() {
-                    if let Err(e) = encoder.flush(&mut output) {
-                        warn!("Failed to flush encoder: {e}");
-                    }
+                if let Ok(mut output) = output_clone.lock()
+                    && let Err(e) = encoder.flush(&mut output)
+                {
+                    warn!("Failed to flush encoder: {e}");
                 }
 
                 drop(encoder);
@@ -493,10 +493,10 @@ impl MacOSSegmentedMuxer {
                     }
                 }
 
-                if let Ok(mut output) = output.lock() {
-                    if let Err(e) = output.write_trailer() {
-                        warn!("Failed to write trailer for segment {current_index}: {e}");
-                    }
+                if let Ok(mut output) = output.lock()
+                    && let Err(e) = output.write_trailer()
+                {
+                    warn!("Failed to write trailer for segment {current_index}: {e}");
                 }
 
                 fragmentation::sync_file(&path_for_sync);
