@@ -281,6 +281,10 @@ impl FFmpegDecoder {
     pub fn start_time(&self) -> i64 {
         self.start_time
     }
+
+    pub fn is_hardware_accelerated(&self) -> bool {
+        self.hw_device.is_some()
+    }
 }
 
 unsafe impl Send for FFmpegDecoder {}

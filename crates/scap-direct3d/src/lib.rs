@@ -1,11 +1,13 @@
-// a whole bunch of credit to https://github.com/NiiightmareXD/windows-capture
-
 #![cfg(windows)]
+
+mod windows_version;
+
+pub use windows_version::WindowsVersion;
 
 use std::{
     sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::RecvError,
     },
     time::Duration,
@@ -22,10 +24,10 @@ use windows::{
     Win32::{
         Foundation::HMODULE,
         Graphics::{
-            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
+            Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
             Direct3D11::{
                 D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ_WRITE,
+                D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ,
                 D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
                 ID3D11DeviceContext, ID3D11Texture2D,
@@ -35,7 +37,7 @@ use windows::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
                     DXGI_SAMPLE_DESC,
                 },
-                IDXGIDevice,
+                DXGI_ERROR_UNSUPPORTED, IDXGIDevice,
             },
         },
         System::WinRT::Direct3D11::{
@@ -69,11 +71,131 @@ impl PixelFormat {
     }
 }
 
+const STAGING_POOL_SIZE: usize = 3;
+
+struct PooledStagingTexture {
+    texture: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+pub struct StagingTexturePool {
+    textures: Mutex<Vec<PooledStagingTexture>>,
+    d3d_device: ID3D11Device,
+    pixel_format: PixelFormat,
+    next_index: AtomicUsize,
+}
+
+impl StagingTexturePool {
+    fn new(d3d_device: ID3D11Device, pixel_format: PixelFormat) -> Self {
+        Self {
+            textures: Mutex::new(Vec::with_capacity(STAGING_POOL_SIZE)),
+            d3d_device,
+            pixel_format,
+            next_index: AtomicUsize::new(0),
+        }
+    }
+
+    fn get_or_create_texture(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> windows::core::Result<ID3D11Texture2D> {
+        let mut textures = self.textures.lock().unwrap();
+
+        let index = self.next_index.fetch_add(1, Ordering::Relaxed) % STAGING_POOL_SIZE;
+
+        if let Some(pooled) = textures.get(index)
+            && pooled.width == width
+            && pooled.height == height
+        {
+            return Ok(pooled.texture.clone());
+        }
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: self.pixel_format.as_dxgi(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+
+        let mut texture = None;
+        unsafe {
+            self.d3d_device
+                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+        };
+
+        let texture = texture.unwrap();
+
+        if index < textures.len() {
+            textures[index] = PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            };
+        } else {
+            textures.push(PooledStagingTexture {
+                texture: texture.clone(),
+                width,
+                height,
+            });
+        }
+
+        Ok(texture)
+    }
+}
+
 pub fn is_supported() -> windows::core::Result<bool> {
     Ok(ApiInformation::IsApiContractPresentByMajor(
         &HSTRING::from("Windows.Foundation.UniversalApiContract"),
         8,
     )? && GraphicsCaptureSession::IsSupported()?)
+}
+
+fn create_d3d_device_with_type(
+    driver_type: D3D_DRIVER_TYPE,
+    flags: D3D11_CREATE_DEVICE_FLAG,
+    device: *mut Option<ID3D11Device>,
+) -> windows::core::Result<()> {
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            driver_type,
+            HMODULE::default(),
+            flags,
+            None,
+            D3D11_SDK_VERSION,
+            Some(device),
+            None,
+            None,
+        )
+    }
+}
+
+fn create_d3d_device_with_warp_fallback() -> windows::core::Result<(ID3D11Device, bool)> {
+    let mut device = None;
+    let flags = D3D11_CREATE_DEVICE_FLAG::default();
+
+    let result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+
+    match result {
+        Ok(()) => Ok((device.unwrap(), false)),
+        Err(e) if e.code() == DXGI_ERROR_UNSUPPORTED => {
+            tracing::info!("Hardware D3D11 device unavailable, attempting WARP fallback");
+            create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device)?;
+            Ok((device.unwrap(), true))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -83,6 +205,7 @@ pub struct Settings {
     pub min_update_interval: Option<Duration>,
     pub pixel_format: PixelFormat,
     pub crop: Option<D3D11_BOX>,
+    pub fps: Option<u32>,
 }
 
 impl Settings {
@@ -110,6 +233,12 @@ impl Settings {
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum NewCapturerError {
+    #[error("Screen capture requires Windows 10 version 1903 (build 18362) or later")]
+    WindowsVersionTooOld,
+    #[error(
+        "Windows Graphics Capture API is disabled or unavailable. This may be due to group policy or missing system components."
+    )]
+    GraphicsCaptureDisabled,
     #[error("NotSupported")]
     NotSupported,
     #[error("BorderNotSupported")]
@@ -150,6 +279,7 @@ pub struct Capturer {
     frame_pool: Direct3D11CaptureFramePool,
     frame_arrived_token: i64,
     stop_flag: Arc<AtomicBool>,
+    is_using_warp: bool,
 }
 
 impl Capturer {
@@ -158,10 +288,37 @@ impl Capturer {
         settings: Settings,
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-        mut d3d_device: Option<ID3D11Device>,
+        d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
-        if !is_supported()? {
-            return Err(NewCapturerError::NotSupported);
+        if let Some(version) = WindowsVersion::detect() {
+            tracing::debug!(
+                version = %version.display_name(),
+                meets_requirements = version.meets_minimum_requirements(),
+                "Initializing screen capture"
+            );
+
+            if !version.meets_minimum_requirements() {
+                tracing::error!(
+                    version = %version.display_name(),
+                    required = "Windows 10 version 1903 (build 18362)",
+                    "Windows version does not meet minimum requirements"
+                );
+                return Err(NewCapturerError::WindowsVersionTooOld);
+            }
+        }
+
+        let api_present = ApiInformation::IsApiContractPresentByMajor(
+            &HSTRING::from("Windows.Foundation.UniversalApiContract"),
+            8,
+        )
+        .unwrap_or(false);
+
+        if !api_present {
+            return Err(NewCapturerError::WindowsVersionTooOld);
+        }
+
+        if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
+            return Err(NewCapturerError::GraphicsCaptureDisabled);
         }
 
         if settings.is_border_required.is_some() && !Settings::can_is_border_required()? {
@@ -178,28 +335,22 @@ impl Capturer {
             return Err(NewCapturerError::UpdateIntervalNotSupported);
         }
 
-        if d3d_device.is_none() {
-            unsafe {
-                D3D11CreateDevice(
-                    None,
-                    D3D_DRIVER_TYPE_HARDWARE,
-                    HMODULE::default(),
-                    Default::default(),
-                    None,
-                    D3D11_SDK_VERSION,
-                    Some(&mut d3d_device),
-                    None,
-                    None,
-                )
-            }
-            .map_err(NewCapturerError::CreateDevice)?;
-        }
+        let (d3d_device, is_using_warp) = if let Some(device) = d3d_device {
+            (device, false)
+        } else {
+            create_d3d_device_with_warp_fallback().map_err(NewCapturerError::CreateDevice)?
+        };
 
-        let (d3d_device, d3d_context) = d3d_device
+        let (d3d_device, d3d_context) = Some(d3d_device)
             .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
             .transpose()
             .map_err(NewCapturerError::Context)?
             .unwrap();
+
+        let staging_pool = Arc::new(StagingTexturePool::new(
+            d3d_device.clone(),
+            settings.pixel_format,
+        ));
 
         let item = item.clone();
         let settings = settings.clone();
@@ -212,10 +363,15 @@ impl Capturer {
         })()
         .map_err(NewCapturerError::Direct3DDevice)?;
 
+        let frame_pool_size = settings
+            .fps
+            .map(|fps| ((fps as f32 / 30.0 * 2.0).ceil() as i32).clamp(2, 4))
+            .unwrap_or(2);
+
         let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             &direct3d_device,
             settings.pixel_format.as_directx(),
-            1,
+            frame_pool_size,
             item.Size().map_err(NewCapturerError::ItemSize)?,
         )
         .map_err(NewCapturerError::FramePool)?;
@@ -273,6 +429,7 @@ impl Capturer {
                     let d3d_context = d3d_context.clone();
                     let d3d_device = d3d_device.clone();
                     let stop_flag = stop_flag.clone();
+                    let staging_pool = staging_pool.clone();
 
                     move |frame_pool, _| {
                         if stop_flag.load(Ordering::Relaxed) {
@@ -312,6 +469,7 @@ impl Capturer {
                                 texture: cropped_texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
+                                staging_pool: staging_pool.clone(),
                             }
                         } else {
                             Frame {
@@ -322,6 +480,7 @@ impl Capturer {
                                 texture,
                                 d3d_context: d3d_context.clone(),
                                 d3d_device: d3d_device.clone(),
+                                staging_pool: staging_pool.clone(),
                             }
                         };
 
@@ -338,6 +497,12 @@ impl Capturer {
         )
         .map_err(NewCapturerError::RegisterClosed)?;
 
+        if is_using_warp {
+            tracing::warn!(
+                "Hardware GPU unavailable, using WARP software rasterizer for screen capture"
+            );
+        }
+
         Ok(Capturer {
             settings,
             d3d_device,
@@ -346,7 +511,12 @@ impl Capturer {
             frame_pool,
             frame_arrived_token,
             stop_flag,
+            is_using_warp,
         })
+    }
+
+    pub fn is_using_software_rendering(&self) -> bool {
+        self.is_using_warp
     }
 
     pub fn settings(&self) -> &Settings {
@@ -407,6 +577,7 @@ pub struct Frame {
     texture: ID3D11Texture2D,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
+    staging_pool: Arc<StagingTexturePool>,
 }
 
 impl std::fmt::Debug for Frame {
@@ -447,49 +618,29 @@ impl Frame {
         &self.d3d_context
     }
 
-    pub fn as_buffer<'a>(&'a self) -> windows::core::Result<FrameBuffer<'a>> {
-        let texture_desc = D3D11_TEXTURE2D_DESC {
-            Width: self.width,
-            Height: self.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: self.pixel_format.as_dxgi(),
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32 | D3D11_CPU_ACCESS_WRITE.0 as u32,
-            MiscFlags: 0,
-        };
+    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'_>> {
+        let staging_texture = self
+            .staging_pool
+            .get_or_create_texture(self.width, self.height)?;
 
-        let mut texture = None;
         unsafe {
-            self.d3d_device
-                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
-        };
-
-        let texture = texture.unwrap();
-
-        // Copies GPU only texture to CPU-mappable texture
-        unsafe {
-            self.d3d_context.CopyResource(&texture, &self.texture);
+            self.d3d_context
+                .CopyResource(&staging_texture, &self.texture);
         };
 
         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
             self.d3d_context.Map(
-                &texture,
+                &staging_texture,
                 0,
-                D3D11_MAP_READ_WRITE,
+                D3D11_MAP_READ,
                 0,
                 Some(&mut mapped_resource),
             )?;
         };
 
         let data = unsafe {
-            std::slice::from_raw_parts_mut(
+            std::slice::from_raw_parts(
                 mapped_resource.pData.cast(),
                 (self.height * mapped_resource.RowPitch) as usize,
             )
@@ -501,21 +652,31 @@ impl Frame {
             height: self.height,
             stride: mapped_resource.RowPitch,
             pixel_format: self.pixel_format,
-            resource: mapped_resource,
+            staging_texture,
+            d3d_context: self.d3d_context.clone(),
         })
     }
 }
 
 pub struct FrameBuffer<'a> {
-    data: &'a mut [u8],
+    data: &'a [u8],
     width: u32,
     height: u32,
     stride: u32,
-    resource: D3D11_MAPPED_SUBRESOURCE,
     pixel_format: PixelFormat,
+    staging_texture: ID3D11Texture2D,
+    d3d_context: ID3D11DeviceContext,
 }
 
-impl<'a> FrameBuffer<'a> {
+impl Drop for FrameBuffer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.d3d_context.Unmap(&self.staging_texture, 0);
+        }
+    }
+}
+
+impl FrameBuffer<'_> {
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -530,10 +691,6 @@ impl<'a> FrameBuffer<'a> {
 
     pub fn data(&self) -> &[u8] {
         self.data
-    }
-
-    pub fn inner(&self) -> &D3D11_MAPPED_SUBRESOURCE {
-        &self.resource
     }
 
     pub fn pixel_format(&self) -> PixelFormat {

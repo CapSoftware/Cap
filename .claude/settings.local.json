@@ -42,7 +42,15 @@
 			"Bash(cargo tree:*)",
 			"WebFetch(domain:github.com)",
 			"WebFetch(domain:docs.rs)",
-			"WebFetch(domain:gix.github.io)"
+			"WebFetch(domain:gix.github.io)",
+			"Bash(cargo clean:*)",
+			"Bash(cargo test:*)",
+			"Bash(powershell -Command \"[System.Environment]::OSVersion.Version.ToString()\")",
+			"Bash(cargo build:*)",
+			"Bash(gh api:*)",
+			"Bash(curl:*)",
+			"Bash(node -e:*)",
+			"Bash(findstr:*)"
 		],
 		"deny": [],
 		"ask": []

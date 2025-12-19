@@ -265,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(5);
             stress_test_recording(cycles, config.duration_secs).await?;
         }
-        "full" | _ => {
+        _ => {
             println!("Mode: Full benchmark suite\n");
 
             println!("--- Screen Recording ---");

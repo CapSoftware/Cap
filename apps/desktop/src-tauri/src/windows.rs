@@ -272,15 +272,32 @@ impl ShowCapWindow {
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
-            Self::Setup => self
-                .window_builder(app, "/setup")
-                .resizable(false)
-                .maximized(false)
-                .center()
-                .focused(true)
-                .maximizable(false)
-                .shadow(true)
-                .build()?,
+            Self::Setup => {
+                let window = self
+                    .window_builder(app, "/setup")
+                    .inner_size(600.0, 600.0)
+                    .min_inner_size(600.0, 600.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .center()
+                    .focused(true)
+                    .maximizable(false)
+                    .shadow(true)
+                    .build()?;
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 600.0)) {
+                        warn!("Failed to set Setup window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Setup window on Windows: {}", e);
+                    }
+                }
+
+                window
+            }
             Self::Main { init_target_mode } => {
                 if !permissions::do_permissions_check(false).necessary_granted() {
                     return Box::pin(Self::Setup.show(app)).await;
@@ -417,7 +434,6 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window and target select overlays when settings window opens
                 for (label, window) in app.webview_windows() {
                     if let Ok(id) = CapWindowId::from_str(&label)
                         && matches!(
@@ -431,14 +447,30 @@ impl ShowCapWindow {
                     }
                 }
 
-                self.window_builder(
-                    app,
-                    format!("/settings/{}", page.clone().unwrap_or_default()),
-                )
-                .resizable(true)
-                .maximized(false)
-                .center()
-                .build()?
+                let window = self
+                    .window_builder(
+                        app,
+                        format!("/settings/{}", page.clone().unwrap_or_default()),
+                    )
+                    .inner_size(600.0, 465.0)
+                    .min_inner_size(600.0, 465.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .center()
+                    .build()?;
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(600.0, 465.0)) {
+                        warn!("Failed to set Settings window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Settings window on Windows: {}", e);
+                    }
+                }
+
+                window
             }
             Self::Editor { .. } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
@@ -448,11 +480,26 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
-                self.window_builder(app, "/editor")
+                let window = self
+                    .window_builder(app, "/editor")
                     .maximizable(true)
-                    .inner_size(1240.0, 800.0)
+                    .inner_size(1275.0, 800.0)
+                    .min_inner_size(1275.0, 800.0)
                     .center()
-                    .build()?
+                    .build()?;
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(1275.0, 800.0)) {
+                        warn!("Failed to set Editor window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Editor window on Windows: {}", e);
+                    }
+                }
+
+                window
             }
             Self::ScreenshotEditor { path: _ } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
@@ -462,35 +509,66 @@ impl ShowCapWindow {
                     let _ = camera.close();
                 };
 
-                self.window_builder(app, "/screenshot-editor")
+                let window = self
+                    .window_builder(app, "/screenshot-editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
+                    .min_inner_size(800.0, 600.0)
                     .center()
-                    .build()?
+                    .build()?;
+
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(1240.0, 800.0)) {
+                        warn!(
+                            "Failed to set ScreenshotEditor window size on Windows: {}",
+                            e
+                        );
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center ScreenshotEditor window on Windows: {}", e);
+                    }
+                }
+
+                window
             }
             Self::Upgrade => {
-                // Hide main window when upgrade window opens
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                let mut builder = self
+                let window = self
                     .window_builder(app, "/upgrade")
+                    .inner_size(950.0, 850.0)
+                    .min_inner_size(950.0, 850.0)
                     .resizable(false)
                     .focused(true)
                     .always_on_top(true)
                     .maximized(false)
                     .shadow(true)
-                    .center();
+                    .center()
+                    .build()?;
 
-                builder.build()?
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(950.0, 850.0)) {
+                        warn!("Failed to set Upgrade window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center Upgrade window on Windows: {}", e);
+                    }
+                }
+
+                window
             }
             Self::ModeSelect => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.hide();
                 }
 
-                let mut builder = self
+                let window = self
                     .window_builder(app, "/mode-select")
                     .inner_size(580.0, 340.0)
                     .min_inner_size(580.0, 340.0)
@@ -499,9 +577,21 @@ impl ShowCapWindow {
                     .maximizable(false)
                     .center()
                     .focused(true)
-                    .shadow(true);
+                    .shadow(true)
+                    .build()?;
 
-                builder.build()?
+                #[cfg(windows)]
+                {
+                    use tauri::LogicalSize;
+                    if let Err(e) = window.set_size(LogicalSize::new(580.0, 340.0)) {
+                        warn!("Failed to set ModeSelect window size on Windows: {}", e);
+                    }
+                    if let Err(e) = window.center() {
+                        warn!("Failed to center ModeSelect window on Windows: {}", e);
+                    }
+                }
+
+                window
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
