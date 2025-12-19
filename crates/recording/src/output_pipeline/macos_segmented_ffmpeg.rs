@@ -386,7 +386,9 @@ impl MacOSSegmentedMuxer {
                     }
                     Err(e) => {
                         error!("Encoder setup failed: {:#}", e);
-                        let _ = ready_tx.send(Err(anyhow!("{e}")));
+                        if let Err(send_err) = ready_tx.send(Err(anyhow!("{e}"))) {
+                            error!("failed to send ready_tx error: {send_err}");
+                        }
                         return Err(anyhow!("{e}"));
                     }
                 };
