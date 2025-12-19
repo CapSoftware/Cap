@@ -592,10 +592,10 @@ impl WindowsSegmentedCameraMuxer {
                             }
                         }
 
-                        if let Ok(mut output_guard) = output_clone.lock() {
-                            if let Err(e) = encoder.flush(&mut output_guard) {
-                                warn!("Failed to flush software encoder: {e}");
-                            }
+                        if let Ok(mut output_guard) = output_clone.lock()
+                            && let Err(e) = encoder.flush(&mut output_guard)
+                        {
+                            warn!("Failed to flush software encoder: {e}");
                         }
 
                         Ok(())
