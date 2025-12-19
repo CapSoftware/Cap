@@ -105,10 +105,11 @@ impl StagingTexturePool {
 
         let index = self.next_index.fetch_add(1, Ordering::Relaxed) % STAGING_POOL_SIZE;
 
-        if let Some(pooled) = textures.get(index) {
-            if pooled.width == width && pooled.height == height {
-                return Ok(pooled.texture.clone());
-            }
+        if let Some(pooled) = textures.get(index)
+            && pooled.width == width
+            && pooled.height == height
+        {
+            return Ok(pooled.texture.clone());
         }
 
         let texture_desc = D3D11_TEXTURE2D_DESC {

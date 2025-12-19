@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-use tracing::{debug, info, warn};
+#[cfg(target_os = "windows")]
+use tracing::warn;
+use tracing::{debug, info};
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
