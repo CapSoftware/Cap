@@ -39,7 +39,7 @@ fn get_memory_usage() -> Option<MemoryStats> {
     };
 
     let (footprint_mb, dirty_mb) = Command::new("footprint")
-        .arg(&pid.to_string())
+        .arg(pid.to_string())
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -128,7 +128,9 @@ struct MemoryStats {
     resident_mb: f64,
     virtual_mb: f64,
     footprint_mb: Option<f64>,
+    #[allow(dead_code)]
     dirty_mb: Option<f64>,
+    #[allow(dead_code)]
     compressed_mb: Option<f64>,
 }
 
@@ -203,7 +205,7 @@ impl MemoryTracker {
             let current = stats.primary_metric();
             let delta = current - prev_memory;
             let delta_str = if delta.abs() > 0.5 {
-                format!("{:+.1}", delta)
+                format!("{delta:+.1}")
             } else {
                 "~0".to_string()
             };
@@ -219,10 +221,10 @@ impl MemoryTracker {
         }
 
         println!("\n=== Summary ===");
-        println!("Duration: {:.1}s", duration_secs);
+        println!("Duration: {duration_secs:.1}s");
         println!("Start RSS: {:.1} MB", first.1.primary_metric());
         println!("End RSS: {:.1} MB", last.1.primary_metric());
-        println!("Total growth: {:.1} MB", memory_growth);
+        println!("Total growth: {memory_growth:.1} MB");
         println!(
             "Growth rate: {:.2} MB/s ({:.1} MB/10s)",
             growth_rate,
@@ -266,10 +268,10 @@ async fn run_memory_test(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Cap Memory Leak Detector ===\n");
     println!("Configuration:");
-    println!("  Duration: {}s", duration_secs);
-    println!("  Camera: {}", include_camera);
-    println!("  Microphone: {}", include_mic);
-    println!("  Fragmented MP4: {}", fragmented);
+    println!("  Duration: {duration_secs}s");
+    println!("  Camera: {include_camera}");
+    println!("  Microphone: {include_mic}");
+    println!("  Fragmented MP4: {fragmented}");
     println!();
 
     let mut memory_tracker = MemoryTracker::new();
@@ -310,7 +312,7 @@ async fn run_memory_test(
 
     if include_mic {
         if let Some((mic_name, _, _)) = MicrophoneFeed::default_device() {
-            println!("Using microphone: {}", mic_name);
+            println!("Using microphone: {mic_name}");
 
             let error_sender = flume::unbounded().0;
             let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_sender));
@@ -373,7 +375,7 @@ async fn run_memory_test(
 
     memory_tracker.sample();
 
-    println!("Stop took: {:?}", stop_duration);
+    println!("Stop took: {stop_duration:?}");
     println!("Output path: {}", result.project_path.display());
 
     memory_tracker.print_report();
@@ -493,16 +495,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Second: Testing WITH fragmented MP4...\n");
             run_memory_test(60, include_camera, include_mic, true).await?;
         }
-        "help" | _ => {
+        _ => {
             println!("Cap Memory Leak Detector");
             println!();
             println!("Usage: memory-leak-detector [OPTIONS]");
             println!();
             println!("Options:");
-            println!(
-                "  --duration <secs>   Test duration (default: {})",
-                DEFAULT_DURATION_SECS
-            );
+            println!("  --duration <secs>   Test duration (default: {DEFAULT_DURATION_SECS})");
             println!("  --mode <mode>       Test mode:");
             println!("      full            Full recording pipeline with fragmented MP4 (default)");
             println!("      screen-only     Screen recording only (no camera/mic)");
