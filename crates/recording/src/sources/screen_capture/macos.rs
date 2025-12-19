@@ -174,7 +174,10 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
                     match &frame {
                         scap_screencapturekit::Frame::Screen(frame) => {
-                            if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
+                            let Some(image_buf) = frame.image_buf() else {
+                                return;
+                            };
+                            if image_buf.height() == 0 || image_buf.width() == 0 {
                                 return;
                             }
 
