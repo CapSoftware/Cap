@@ -477,7 +477,7 @@ async fn setup_camera(
 
             let _ = native_recipient
                 .tell(NewNativeFrame(NativeCameraFrame {
-                    sample_buf: frame.native().sample_buf().retained(),
+                    sample_buf: frame.native().sample_buf().clone(),
                     timestamp,
                 }))
                 .try_send();

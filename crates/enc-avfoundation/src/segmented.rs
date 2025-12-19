@@ -1,4 +1,4 @@
-use crate::{FinishError, InitError, MP4Encoder, QueueFrameError};
+use crate::{FinishError, InitError, MP4Encoder, QueueFrameError, wait_for_writer_finished};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::arc;
 use ffmpeg::frame;
@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use tracing::warn;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -55,6 +56,7 @@ pub struct SegmentInfo {
     pub index: u32,
     pub duration: Duration,
     pub file_size: Option<u64>,
+    pub is_failed: bool,
 }
 
 #[derive(Serialize)]
@@ -65,6 +67,8 @@ struct FragmentEntry {
     is_complete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     file_size: Option<u64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    is_failed: bool,
 }
 
 const MANIFEST_VERSION: u32 = 2;
@@ -127,7 +131,7 @@ impl SegmentedMP4Encoder {
         if let Some(encoder) = &mut self.current_encoder {
             encoder.queue_video_frame(frame, timestamp)
         } else {
-            Err(QueueFrameError::Failed)
+            Err(QueueFrameError::NoEncoder)
         }
     }
 
@@ -139,7 +143,7 @@ impl SegmentedMP4Encoder {
         if let Some(encoder) = &mut self.current_encoder {
             encoder.queue_audio_frame(frame, timestamp)
         } else {
-            Err(QueueFrameError::Failed)
+            Err(QueueFrameError::NoEncoder)
         }
     }
 
@@ -147,13 +151,30 @@ impl SegmentedMP4Encoder {
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
         let completed_segment_path = self.current_segment_path();
+        let current_index = self.current_index;
 
         if let Some(mut encoder) = self.current_encoder.take() {
-            if let Err(e) = encoder.finish(Some(timestamp)) {
-                tracing::warn!("Failed to finish encoder during rotation: {e}");
-            }
-
-            sync_file(&completed_segment_path);
+            let finish_failed = match encoder.finish_nowait(Some(timestamp)) {
+                Ok(writer) => {
+                    let path_for_sync = completed_segment_path.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = wait_for_writer_finished(&writer) {
+                            warn!(
+                                "Background writer finalization failed for segment {current_index}: {e}"
+                            );
+                        }
+                        sync_file(&path_for_sync);
+                    });
+                    false
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to finish encoder during rotation for segment {}: {e}",
+                        current_index
+                    );
+                    true
+                }
+            };
 
             let file_size = std::fs::metadata(&completed_segment_path)
                 .ok()
@@ -161,12 +182,20 @@ impl SegmentedMP4Encoder {
 
             self.completed_segments.push(SegmentInfo {
                 path: completed_segment_path,
-                index: self.current_index,
+                index: current_index,
                 duration: segment_duration,
                 file_size,
+                is_failed: finish_failed,
             });
 
             self.write_manifest();
+
+            if finish_failed {
+                tracing::warn!(
+                    "Segment {} marked as failed in manifest, continuing with new segment",
+                    current_index
+                );
+            }
         }
 
         self.current_index += 1;
@@ -180,7 +209,13 @@ impl SegmentedMP4Encoder {
                 self.audio_config,
                 self.output_height,
             )
-            .map_err(|_| QueueFrameError::Failed)?,
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to create new encoder for segment {}: {e}",
+                    self.current_index
+                );
+                QueueFrameError::Failed
+            })?,
         );
 
         self.write_in_progress_manifest();
@@ -208,8 +243,9 @@ impl SegmentedMP4Encoder {
                         .into_owned(),
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
-                    is_complete: true,
+                    is_complete: !s.is_failed,
                     file_size: s.file_size,
+                    is_failed: s.is_failed,
                 })
                 .collect(),
             total_duration: None,
@@ -238,8 +274,9 @@ impl SegmentedMP4Encoder {
                     .into_owned(),
                 index: s.index,
                 duration: s.duration.as_secs_f64(),
-                is_complete: true,
+                is_complete: !s.is_failed,
                 file_size: s.file_size,
+                is_failed: s.is_failed,
             })
             .collect();
 
@@ -254,6 +291,7 @@ impl SegmentedMP4Encoder {
             duration: 0.0,
             is_complete: false,
             file_size: None,
+            is_failed: false,
         });
 
         let manifest = Manifest {
@@ -287,22 +325,50 @@ impl SegmentedMP4Encoder {
     pub fn finish(&mut self, timestamp: Option<Duration>) -> Result<(), FinishError> {
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
+        let current_index = self.current_index;
 
         if let Some(mut encoder) = self.current_encoder.take() {
-            encoder.finish(timestamp)?;
+            match encoder.finish_nowait(timestamp) {
+                Ok(writer) => {
+                    let path_for_sync = segment_path.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = wait_for_writer_finished(&writer) {
+                            warn!(
+                                "Background writer finalization failed for segment {current_index}: {e}"
+                            );
+                        }
+                        sync_file(&path_for_sync);
+                    });
 
-            sync_file(&segment_path);
+                    if let Some(start) = segment_start {
+                        let final_duration = timestamp.unwrap_or(start).saturating_sub(start);
+                        let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
 
-            if let Some(start) = segment_start {
-                let final_duration = timestamp.unwrap_or(start).saturating_sub(start);
-                let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+                        self.completed_segments.push(SegmentInfo {
+                            path: segment_path,
+                            index: current_index,
+                            duration: final_duration,
+                            file_size,
+                            is_failed: false,
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to finish final segment {current_index}: {e}");
 
-                self.completed_segments.push(SegmentInfo {
-                    path: segment_path,
-                    index: self.current_index,
-                    duration: final_duration,
-                    file_size,
-                });
+                    if let Some(start) = segment_start {
+                        let final_duration = timestamp.unwrap_or(start).saturating_sub(start);
+                        let file_size = std::fs::metadata(&segment_path).ok().map(|m| m.len());
+
+                        self.completed_segments.push(SegmentInfo {
+                            path: segment_path,
+                            index: current_index,
+                            duration: final_duration,
+                            file_size,
+                            is_failed: true,
+                        });
+                    }
+                }
             }
         }
 
@@ -313,6 +379,17 @@ impl SegmentedMP4Encoder {
 
     fn finalize_manifest(&self) {
         let total_duration: Duration = self.completed_segments.iter().map(|s| s.duration).sum();
+        let has_failed_segments = self.completed_segments.iter().any(|s| s.is_failed);
+
+        if has_failed_segments {
+            tracing::warn!(
+                "Recording completed with {} failed segment(s)",
+                self.completed_segments
+                    .iter()
+                    .filter(|s| s.is_failed)
+                    .count()
+            );
+        }
 
         let manifest = Manifest {
             version: MANIFEST_VERSION,
@@ -328,8 +405,9 @@ impl SegmentedMP4Encoder {
                         .into_owned(),
                     index: s.index,
                     duration: s.duration.as_secs_f64(),
-                    is_complete: true,
+                    is_complete: !s.is_failed,
                     file_size: s.file_size,
+                    is_failed: s.is_failed,
                 })
                 .collect(),
             total_duration: Some(total_duration.as_secs_f64()),

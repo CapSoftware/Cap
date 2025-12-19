@@ -51,3 +51,4 @@ tauri.windows.conf.json
 .cursor
 .env*.local
 .docs/
+.claude/
