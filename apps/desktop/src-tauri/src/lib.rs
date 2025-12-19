@@ -1232,7 +1232,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
         Command::new("explorer")
             .args(["/select,", path_str])
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("Failed to open folder: {e}"))?;
     }
 
     #[cfg(target_os = "macos")]
@@ -1254,7 +1254,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
                     .ok_or("Invalid path")?,
             )
             .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
+            .map_err(|e| format!("Failed to open folder: {e}"))?;
     }
 
     Ok(())
