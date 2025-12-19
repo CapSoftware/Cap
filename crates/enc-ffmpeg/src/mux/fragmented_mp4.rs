@@ -25,6 +25,8 @@ pub enum InitError {
     VideoInit(H264EncoderError),
     #[error("Audio/{0}")]
     AudioInit(Box<dyn std::error::Error>),
+    #[error("Failed to create output directory: {0}")]
+    CreateDirectory(std::io::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -52,7 +54,7 @@ impl FragmentedMP4File {
         output_path.set_extension("mp4");
 
         if let Some(parent) = output_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(InitError::CreateDirectory)?;
         }
 
         let mut output = format::output_as(&output_path, "mp4").map_err(InitError::Ffmpeg)?;
@@ -161,6 +163,8 @@ impl FragmentedMP4File {
 
 impl Drop for FragmentedMP4File {
     fn drop(&mut self) {
-        let _ = self.finish();
+        if let Err(e) = self.finish() {
+            error!("Failed to finish FragmentedMP4File in Drop: {e}");
+        }
     }
 }

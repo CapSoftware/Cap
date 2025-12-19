@@ -137,6 +137,7 @@ pub struct MacOSSegmentedMuxer {
     current_index: u32,
     segment_start_time: Option<Duration>,
     completed_segments: Vec<SegmentInfo>,
+    pending_segments: Arc<Mutex<Vec<SegmentInfo>>>,
 
     current_state: Option<SegmentState>,
 
@@ -184,6 +185,7 @@ impl Muxer for MacOSSegmentedMuxer {
             current_index: 0,
             segment_start_time: None,
             completed_segments: Vec::new(),
+            pending_segments: Arc::new(Mutex::new(Vec::new())),
             current_state: None,
             video_config,
             pause: PauseTracker::new(pause_flag),
@@ -200,6 +202,8 @@ impl Muxer for MacOSSegmentedMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.collect_pending_segments();
+
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
         let current_index = self.current_index;
@@ -209,43 +213,37 @@ impl Muxer for MacOSSegmentedMuxer {
                 trace!("Screen encoder channel already closed during finish: {e}");
             }
 
-            let output = state.output.clone();
-            let encoder_handle = state.encoder_handle.take();
-            let path_for_sync = segment_path.clone();
-
-            std::thread::spawn(move || {
-                if let Some(handle) = encoder_handle {
-                    let timeout = Duration::from_secs(5);
-                    let start = std::time::Instant::now();
-                    loop {
-                        if handle.is_finished() {
-                            if let Err(panic_payload) = handle.join() {
-                                warn!(
-                                    "Screen encoder thread panicked during finish: {:?}",
-                                    panic_payload
-                                );
-                            }
-                            break;
-                        }
-                        if start.elapsed() > timeout {
+            if let Some(handle) = state.encoder_handle.take() {
+                let timeout = Duration::from_secs(5);
+                let start = std::time::Instant::now();
+                loop {
+                    if handle.is_finished() {
+                        if let Err(panic_payload) = handle.join() {
                             warn!(
-                                "Screen encoder thread did not finish within {:?}, abandoning",
-                                timeout
+                                "Screen encoder thread panicked during finish: {:?}",
+                                panic_payload
                             );
-                            break;
                         }
-                        std::thread::sleep(Duration::from_millis(50));
+                        break;
                     }
-                }
-
-                if let Ok(mut output) = output.lock() {
-                    if let Err(e) = output.write_trailer() {
-                        warn!("Failed to write trailer for segment {current_index}: {e}");
+                    if start.elapsed() > timeout {
+                        warn!(
+                            "Screen encoder thread did not finish within {:?}, abandoning",
+                            timeout
+                        );
+                        break;
                     }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
+            }
 
-                fragmentation::sync_file(&path_for_sync);
-            });
+            if let Ok(mut output) = state.output.lock() {
+                if let Err(e) = output.write_trailer() {
+                    warn!("Failed to write trailer for segment {current_index}: {e}");
+                }
+            }
+
+            fragmentation::sync_file(&segment_path);
 
             if let Some(start) = segment_start {
                 let final_duration = timestamp.saturating_sub(start);
@@ -338,6 +336,15 @@ impl MacOSSegmentedMuxer {
         }
     }
 
+    fn collect_pending_segments(&mut self) {
+        if let Ok(mut pending) = self.pending_segments.lock() {
+            for segment in pending.drain(..) {
+                self.completed_segments.push(segment);
+            }
+            self.completed_segments.sort_by_key(|s| s.index);
+        }
+    }
+
     fn create_segment(&mut self) -> anyhow::Result<()> {
         let segment_path = self.current_segment_path();
 
@@ -427,7 +434,10 @@ impl MacOSSegmentedMuxer {
             .recv()
             .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        output
+            .lock()
+            .map_err(|_| anyhow!("output mutex poisoned when writing header"))?
+            .write_header()?;
 
         self.current_state = Some(SegmentState {
             video_tx,
@@ -439,6 +449,8 @@ impl MacOSSegmentedMuxer {
     }
 
     fn rotate_segment(&mut self, timestamp: Duration) -> anyhow::Result<()> {
+        self.collect_pending_segments();
+
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
         let completed_segment_path = self.current_segment_path();
@@ -452,6 +464,7 @@ impl MacOSSegmentedMuxer {
             let output = state.output.clone();
             let encoder_handle = state.encoder_handle.take();
             let path_for_sync = completed_segment_path.clone();
+            let pending_segments = self.pending_segments.clone();
 
             std::thread::spawn(move || {
                 if let Some(handle) = encoder_handle {
@@ -485,17 +498,17 @@ impl MacOSSegmentedMuxer {
                 }
 
                 fragmentation::sync_file(&path_for_sync);
-            });
 
-            let file_size = std::fs::metadata(&completed_segment_path)
-                .ok()
-                .map(|m| m.len());
+                let file_size = std::fs::metadata(&path_for_sync).ok().map(|m| m.len());
 
-            self.completed_segments.push(SegmentInfo {
-                path: completed_segment_path,
-                index: current_index,
-                duration: segment_duration,
-                file_size,
+                if let Ok(mut pending) = pending_segments.lock() {
+                    pending.push(SegmentInfo {
+                        path: path_for_sync,
+                        index: current_index,
+                        duration: segment_duration,
+                        file_size,
+                    });
+                }
             });
 
             self.write_manifest();
