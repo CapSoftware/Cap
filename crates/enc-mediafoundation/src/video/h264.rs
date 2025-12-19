@@ -542,16 +542,16 @@ impl H264Encoder {
             let mut should_exit = false;
             while !should_exit {
                 let health_status = health_monitor.check_health();
-                if !health_status.is_healthy {
-                    if let Some(reason) = health_status.failure_reason {
-                        let _ = self.cleanup_encoder();
-                        return Err(EncoderRuntimeError::EncoderUnhealthy {
-                            reason,
-                            inputs_without_output: health_status.inputs_without_output,
-                            process_failures: health_status.consecutive_process_failures,
-                            frames_encoded: health_status.total_frames_encoded,
-                        });
-                    }
+                if !health_status.is_healthy
+                    && let Some(reason) = health_status.failure_reason
+                {
+                    let _ = self.cleanup_encoder();
+                    return Err(EncoderRuntimeError::EncoderUnhealthy {
+                        reason,
+                        inputs_without_output: health_status.inputs_without_output,
+                        process_failures: health_status.consecutive_process_failures,
+                        frames_encoded: health_status.total_frames_encoded,
+                    });
                 }
 
                 let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
@@ -588,18 +588,18 @@ impl H264Encoder {
                                 Err(_) => {
                                     health_monitor.record_process_failure();
                                     let health_status = health_monitor.check_health();
-                                    if !health_status.is_healthy {
-                                        if let Some(reason) = health_status.failure_reason {
-                                            let _ = self.cleanup_encoder();
-                                            return Err(EncoderRuntimeError::EncoderUnhealthy {
-                                                reason,
-                                                inputs_without_output: health_status
-                                                    .inputs_without_output,
-                                                process_failures: health_status
-                                                    .consecutive_process_failures,
-                                                frames_encoded: health_status.total_frames_encoded,
-                                            });
-                                        }
+                                    if !health_status.is_healthy
+                                        && let Some(reason) = health_status.failure_reason
+                                    {
+                                        let _ = self.cleanup_encoder();
+                                        return Err(EncoderRuntimeError::EncoderUnhealthy {
+                                            reason,
+                                            inputs_without_output: health_status
+                                                .inputs_without_output,
+                                            process_failures: health_status
+                                                .consecutive_process_failures,
+                                            frames_encoded: health_status.total_frames_encoded,
+                                        });
                                     }
                                     should_exit = false;
                                 }
