@@ -99,15 +99,13 @@ pub(super) fn start_capturing_impl(
     let queue = dispatch::Queue::new();
     let delegate =
         CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
-            let Some(image_buf) = data.sample_buf.image_buf() else {
+            if data.sample_buf.image_buf().is_none() {
                 return;
             };
 
             callback(CapturedFrame {
-                native: NativeCapturedFrame(image_buf.retained(), data.sample_buf.retained()),
-                // reference_time: Instant::now(),
+                native: NativeCapturedFrame(data.sample_buf.retained()),
                 timestamp: data.timestamp,
-                // capture_begin_time: Some(data.capture_begin_time),
             });
         })));
 
@@ -202,14 +200,14 @@ impl Debug for AVFoundationError {
 }
 
 #[derive(Debug, Clone)]
-pub struct NativeCapturedFrame(arc::R<cv::ImageBuf>, arc::R<cm::SampleBuf>);
+pub struct NativeCapturedFrame(arc::R<cm::SampleBuf>);
 
 impl NativeCapturedFrame {
-    pub fn image_buf(&self) -> &arc::R<cv::ImageBuf> {
-        &self.0
+    pub fn image_buf(&self) -> Option<arc::R<cv::ImageBuf>> {
+        self.0.image_buf().map(|b| b.retained())
     }
 
     pub fn sample_buf(&self) -> &arc::R<cm::SampleBuf> {
-        &self.1
+        &self.0
     }
 }
