@@ -44,7 +44,7 @@ impl Default for FragmentedAVFoundationMp4MuxerConfig {
 
 #[cfg(target_os = "macos")]
 impl FragmentedAVFoundationMp4Muxer {
-    const MAX_QUEUE_RETRIES: u32 = 500;
+    const MAX_QUEUE_RETRIES: u32 = 1500;
 }
 
 #[cfg(target_os = "macos")]
@@ -190,7 +190,7 @@ impl Default for FragmentedAVFoundationCameraMuxerConfig {
 
 #[cfg(target_os = "macos")]
 impl FragmentedAVFoundationCameraMuxer {
-    const MAX_QUEUE_RETRIES: u32 = 500;
+    const MAX_QUEUE_RETRIES: u32 = 1500;
 }
 
 #[cfg(target_os = "macos")]
