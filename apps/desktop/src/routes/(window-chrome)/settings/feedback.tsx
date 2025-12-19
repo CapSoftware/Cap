@@ -132,7 +132,7 @@ export default function FeedbackTab() {
 						>
 							{(diag) => (
 								<div class="space-y-3 text-sm">
-									<Show when={diag().windowsVersion}>
+									<Show when={diag().macosVersion}>
 										{(ver) => (
 											<div class="space-y-1">
 												<p class="text-gray-11 font-medium">Operating System</p>
@@ -143,44 +143,20 @@ export default function FeedbackTab() {
 										)}
 									</Show>
 
-									<Show when={diag().gpuInfo}>
-										{(gpu) => (
-											<div class="space-y-1">
-												<p class="text-gray-11 font-medium">Graphics</p>
-												<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
-													{gpu().description} ({gpu().vendor},{" "}
-													{gpu().dedicatedVideoMemoryMb} MB VRAM)
-												</p>
-											</div>
-										)}
-									</Show>
-
 									<div class="space-y-1">
 										<p class="text-gray-11 font-medium">Capture Support</p>
 										<div class="flex gap-2 flex-wrap">
 											<span
 												class={`px-2 py-1 rounded text-xs ${
-													diag().graphicsCaptureSupported
+													diag().screenCaptureSupported
 														? "bg-green-500/20 text-green-400"
 														: "bg-red-500/20 text-red-400"
 												}`}
 											>
-												Graphics Capture:{" "}
-												{diag().graphicsCaptureSupported
+												Screen Capture:{" "}
+												{diag().screenCaptureSupported
 													? "Supported"
 													: "Not Supported"}
-											</span>
-											<span
-												class={`px-2 py-1 rounded text-xs ${
-													diag().d3D11VideoProcessorAvailable
-														? "bg-green-500/20 text-green-400"
-														: "bg-yellow-500/20 text-yellow-400"
-												}`}
-											>
-												D3D11 Video:{" "}
-												{diag().d3D11VideoProcessorAvailable
-													? "Available"
-													: "Unavailable"}
 											</span>
 										</div>
 									</div>
