@@ -1,4 +1,3 @@
-import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import type { licenseContract } from "@cap/web-api-contract";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
@@ -13,6 +12,7 @@ import {
 } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { createLicenseQuery } from "~/utils/queries";
+import { createRive } from "~/utils/rive";
 import { commands } from "~/utils/tauri";
 import { licenseApiClient } from "~/utils/web-api";
 import PricingRive from "../../../assets/rive/pricing.riv";

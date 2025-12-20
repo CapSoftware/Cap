@@ -1,4 +1,3 @@
-import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
@@ -6,6 +5,7 @@ import { type Accessor, createSignal, Show } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
+import { createRive } from "~/utils/rive";
 import { commands } from "~/utils/tauri";
 import { apiClient, licenseApiClient, protectedHeaders } from "~/utils/web-api";
 import PricingRive from "../../assets/rive/pricing.riv";
