@@ -542,8 +542,10 @@ impl CaptionsLayer {
             _ => Family::SansSerif,
         };
 
-        let weight = if caption_data.settings.bold {
+        let weight = if caption_data.settings.font_weight >= 700 {
             Weight::BOLD
+        } else if caption_data.settings.font_weight >= 500 {
+            Weight::MEDIUM
         } else {
             Weight::NORMAL
         };

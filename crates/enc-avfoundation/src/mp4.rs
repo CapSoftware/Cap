@@ -1,7 +1,7 @@
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::frame;
-use std::{ops::Sub, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 use tracing::*;
 
 // before pausing at all, subtract 0.
@@ -16,12 +16,11 @@ pub struct MP4Encoder {
     asset_writer: arc::R<av::AssetWriter>,
     video_input: arc::R<av::AssetWriterInput>,
     audio_input: Option<arc::R<av::AssetWriterInput>>,
-    most_recent_frame: Option<(arc::R<cm::SampleBuf>, Duration)>,
+    last_frame_timestamp: Option<Duration>,
     pause_timestamp: Option<Duration>,
     timestamp_offset: Duration,
     is_writing: bool,
     is_paused: bool,
-    // elapsed_duration: cm::Time,
     video_frames_appended: usize,
     audio_frames_appended: usize,
     last_timestamp: Option<Duration>,
@@ -53,10 +52,14 @@ pub enum QueueFrameError {
     AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
+    #[error("WriterFailed/{0}")]
+    WriterFailed(arc::R<ns::Error>),
     #[error("Construct/{0}")]
     Construct(cidre::os::Error),
     #[error("NotReadyForMore")]
     NotReadyForMore,
+    #[error("NoEncoder")]
+    NoEncoder,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -200,7 +203,7 @@ impl MP4Encoder {
             audio_input,
             asset_writer,
             video_input,
-            most_recent_frame: None,
+            last_frame_timestamp: None,
             pause_timestamp: None,
             timestamp_offset: Duration::ZERO,
             is_writing: false,
@@ -234,7 +237,7 @@ impl MP4Encoder {
                 .start_session_at_src_time(cm::Time::new(timestamp.as_millis() as i64, 1_000));
         }
 
-        self.most_recent_frame = Some((frame.clone(), timestamp));
+        self.last_frame_timestamp = Some(timestamp);
 
         if let Some(pause_timestamp) = self.pause_timestamp
             && let Some(gap) = timestamp.checked_sub(pause_timestamp)
@@ -272,9 +275,10 @@ impl MP4Encoder {
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = cm::Time::new(pts_duration.as_millis() as i64, 1_000);
-        let frame = frame.copy_with_new_timing(&[timing]).unwrap();
+        let new_frame = frame.copy_with_new_timing(&[timing]).unwrap();
+        drop(frame);
 
-        append_sample_buf(&mut self.video_input, &self.asset_writer, &frame)?;
+        append_sample_buf(&mut self.video_input, &self.asset_writer, &new_frame)?;
 
         self.video_frames_appended += 1;
         self.last_timestamp = Some(timestamp);
@@ -294,7 +298,7 @@ impl MP4Encoder {
         }
 
         let Some(audio_input) = &mut self.audio_input else {
-            return Err(QueueFrameError::Failed);
+            return Err(QueueFrameError::NoEncoder);
         };
 
         if let Some(pause_timestamp) = self.pause_timestamp
@@ -449,6 +453,23 @@ impl MP4Encoder {
     }
 
     pub fn finish(&mut self, timestamp: Option<Duration>) -> Result<(), FinishError> {
+        let writer = self.finish_start(timestamp)?;
+        wait_for_writer_finished(&writer)?;
+        info!("Finished writing");
+        Ok(())
+    }
+
+    pub fn finish_nowait(
+        &mut self,
+        timestamp: Option<Duration>,
+    ) -> Result<arc::R<av::AssetWriter>, FinishError> {
+        self.finish_start(timestamp)
+    }
+
+    fn finish_start(
+        &mut self,
+        timestamp: Option<Duration>,
+    ) -> Result<arc::R<av::AssetWriter>, FinishError> {
         if !self.is_writing {
             return Err(FinishError::NotWriting);
         }
@@ -462,7 +483,7 @@ impl MP4Encoder {
             });
         }
 
-        let Some(mut most_recent_frame) = self.most_recent_frame.take() else {
+        let Some(last_frame_ts) = self.last_frame_timestamp.take() else {
             warn!("Encoder attempted to finish with no frame");
             return Err(FinishError::NoFrames);
         };
@@ -470,25 +491,14 @@ impl MP4Encoder {
         self.is_paused = false;
         self.pause_timestamp = None;
 
-        // We extend the video to the provided timestamp if possible
-        if let Some(timestamp) = finish_timestamp
-            && let Some(diff) = timestamp.checked_sub(most_recent_frame.1)
-            && diff > Duration::from_millis(500)
-        {
-            match self.queue_video_frame(most_recent_frame.0.clone(), timestamp) {
-                Ok(()) => {
-                    most_recent_frame = (most_recent_frame.0, timestamp);
-                }
-                Err(e) => {
-                    error!("Failed to queue final video frame: {e}");
-                }
-            }
-        }
+        let end_timestamp = finish_timestamp.unwrap_or(last_frame_ts);
 
         self.is_writing = false;
 
         self.asset_writer.end_session_at_src_time(cm::Time::new(
-            most_recent_frame.1.sub(self.timestamp_offset).as_millis() as i64,
+            end_timestamp
+                .saturating_sub(self.timestamp_offset)
+                .as_millis() as i64,
             1000,
         ));
         self.video_input.mark_as_finished();
@@ -501,11 +511,7 @@ impl MP4Encoder {
         debug!("Appended {} video frames", self.video_frames_appended);
         debug!("Appended {} audio frames", self.audio_frames_appended);
 
-        wait_for_writer_finished(&self.asset_writer).map_err(|_| FinishError::Failed)?;
-
-        info!("Finished writing");
-
-        Ok(())
+        Ok(self.asset_writer.clone())
     }
 }
 
@@ -644,7 +650,10 @@ fn append_sample_buf(
         Ok(true) => {}
         Ok(false) => {
             if writer.status() == av::asset::writer::Status::Failed {
-                return Err(QueueFrameError::Failed);
+                return Err(match writer.error() {
+                    Some(err) => QueueFrameError::WriterFailed(err),
+                    None => QueueFrameError::Failed,
+                });
             }
             if writer.status() == av::asset::writer::Status::Writing {
                 return Err(QueueFrameError::NotReadyForMore);
@@ -656,13 +665,50 @@ fn append_sample_buf(
     Ok(())
 }
 
-fn wait_for_writer_finished(writer: &av::AssetWriter) -> Result<(), ()> {
+const WRITER_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const WRITER_LOG_INTERVAL: Duration = Duration::from_secs(2);
+
+pub fn wait_for_writer_finished(writer: &av::AssetWriter) -> Result<(), FinishError> {
     use av::asset::writer::Status;
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let mut last_log = start;
+
     loop {
-        match writer.status() {
-            Status::Completed | Status::Cancelled => return Ok(()),
-            Status::Failed | Status::Unknown => return Err(()),
-            Status::Writing => std::thread::sleep(Duration::from_millis(2)),
+        let status = writer.status();
+        let elapsed = start.elapsed();
+
+        match status {
+            Status::Completed | Status::Cancelled => {
+                if elapsed > Duration::from_millis(100) {
+                    info!("Writer finished after {:?}", elapsed);
+                }
+                return Ok(());
+            }
+            Status::Failed | Status::Unknown => {
+                if let Some(err) = writer.error() {
+                    error!("Writer failed with error: {:?}", err);
+                }
+                return Err(FinishError::Failed);
+            }
+            Status::Writing => {
+                if elapsed >= WRITER_FINISH_TIMEOUT {
+                    error!(
+                        "Writer timeout after {:?} - still in Writing state",
+                        elapsed
+                    );
+                    return Err(FinishError::Failed);
+                }
+
+                if last_log.elapsed() >= WRITER_LOG_INTERVAL {
+                    warn!("Writer still finalizing after {:?}...", elapsed);
+                    last_log = Instant::now();
+                }
+
+                std::thread::sleep(WRITER_POLL_INTERVAL);
+            }
         }
     }
 }

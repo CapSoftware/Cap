@@ -3,10 +3,9 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import {
-	batch,
 	createRoot,
 	createSignal,
-	For,
+	Index,
 	type JSX,
 	onMount,
 	Show,
@@ -216,6 +215,57 @@ export function Timeline() {
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
 
+	let pendingZoomDelta = 0;
+	let pendingZoomOrigin: number | null = null;
+	let zoomRafId: number | null = null;
+
+	let pendingScrollDelta = 0;
+	let scrollRafId: number | null = null;
+
+	function flushPendingZoom() {
+		if (pendingZoomDelta === 0 || pendingZoomOrigin === null) {
+			zoomRafId = null;
+			return;
+		}
+
+		const newZoom = transform().zoom + pendingZoomDelta;
+		transform().updateZoom(newZoom, pendingZoomOrigin);
+
+		pendingZoomDelta = 0;
+		pendingZoomOrigin = null;
+		zoomRafId = null;
+	}
+
+	function flushPendingScroll() {
+		if (pendingScrollDelta === 0) {
+			scrollRafId = null;
+			return;
+		}
+
+		const newPosition = transform().position + pendingScrollDelta;
+		transform().setPosition(newPosition);
+
+		pendingScrollDelta = 0;
+		scrollRafId = null;
+	}
+
+	function scheduleZoomUpdate(delta: number, origin: number) {
+		pendingZoomDelta += delta;
+		pendingZoomOrigin = origin;
+
+		if (zoomRafId === null) {
+			zoomRafId = requestAnimationFrame(flushPendingZoom);
+		}
+	}
+
+	function scheduleScrollUpdate(delta: number) {
+		pendingScrollDelta += delta;
+
+		if (scrollRafId === null) {
+			scrollRafId = requestAnimationFrame(flushPendingScroll);
+		}
+	}
+
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
@@ -396,39 +446,22 @@ export function Timeline() {
 					setEditorState("previewTime", null);
 				}}
 				onWheel={(e) => {
-					// pinch zoom or ctrl + scroll
 					if (e.ctrlKey) {
-						batch(() => {
-							const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
-
-							const newZoom = transform().zoom + zoomDelta;
-
-							transform().updateZoom(
-								newZoom,
-								editorState.previewTime ?? editorState.playbackTime,
-							);
-						});
-					}
-					// scroll
-					else {
+						const zoomDelta = (e.deltaY * Math.sqrt(transform().zoom)) / 30;
+						const origin = editorState.previewTime ?? editorState.playbackTime;
+						scheduleZoomUpdate(zoomDelta, origin);
+					} else {
 						let delta: number = 0;
 
-						// Prioritize horizontal scrolling for touchpads
-						// For touchpads, both deltaX and deltaY can be used
-						// If deltaX is significant, use it (horizontal scrolling)
 						if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5) {
 							delta = e.deltaX;
-						}
-						// Otherwise use platform-specific defaults
-						else if (platform() === "macos") {
+						} else if (platform() === "macos") {
 							delta = e.shiftKey ? e.deltaX : e.deltaY;
 						} else {
 							delta = e.deltaY;
 						}
 
-						const newPosition = transform().position + secsPerPixel() * delta;
-
-						transform().setPosition(newPosition);
+						scheduleScrollUpdate(secsPerPixel() * delta);
 					}
 				}}
 			>
@@ -564,40 +597,44 @@ function TimelineMarkings() {
 	const { secsPerPixel, markingResolution } = useTimelineContext();
 	const transform = () => editorState.timeline.transform;
 
-	const timelineMarkings = () => {
-		const diff = transform().position % markingResolution();
+	const markingCount = () =>
+		Math.ceil(2 + (transform().zoom + 5) / markingResolution());
 
-		return Array.from(
-			{ length: 2 + (transform().zoom + 5) / markingResolution() },
-			(_, i) => transform().position - diff + (i + 0) * markingResolution(),
-		);
-	};
+	const markingOffset = () => transform().position % markingResolution();
+
+	const getMarkingTime = (index: number) =>
+		transform().position - markingOffset() + index * markingResolution();
 
 	return (
 		<div
 			class="relative flex-1 h-4 text-xs text-gray-9"
 			style={{ "margin-left": `${TRACK_GUTTER}px` }}
 		>
-			<For each={timelineMarkings()}>
-				{(second) => (
-					<Show when={second > 0}>
+			<Index each={Array.from({ length: markingCount() })}>
+				{(_, index) => {
+					const second = () => getMarkingTime(index);
+					const isVisible = () => second() > 0;
+					const showLabel = () => second() % 1 === 0;
+					const translateX = () =>
+						(second() - transform().position) / secsPerPixel() - 1;
+
+					return (
 						<div
 							class="absolute left-0 bottom-1 w-1 h-1 text-center bg-current rounded-full"
 							style={{
-								transform: `translateX(${
-									(second - transform().position) / secsPerPixel() - 1
-								}px)`,
+								transform: `translateX(${translateX()}px)`,
+								visibility: isVisible() ? "visible" : "hidden",
 							}}
 						>
-							<Show when={second % 1 === 0}>
+							<Show when={showLabel()}>
 								<div class="absolute -top-[1.125rem] -translate-x-1/2">
-									{formatTime(second)}
+									{formatTime(second())}
 								</div>
 							</Show>
 						</div>
-					</Show>
-				)}
-			</For>
+					);
+				}}
+			</Index>
 		</div>
 	);
 }

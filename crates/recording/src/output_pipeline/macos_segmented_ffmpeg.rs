@@ -13,11 +13,6 @@ use std::{
     time::Duration,
 };
 use tracing::*;
-use windows::{
-    Foundation::TimeSpan,
-    Graphics::SizeInt32,
-    Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::Common::DXGI_FORMAT},
-};
 
 #[derive(Debug, Clone)]
 pub struct SegmentInfo {
@@ -49,7 +44,7 @@ struct Manifest {
 }
 
 struct SegmentState {
-    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
+    video_tx: SyncSender<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     encoder_handle: Option<JoinHandle<anyhow::Result<()>>>,
 }
@@ -136,39 +131,36 @@ impl PauseTracker {
     }
 }
 
-pub struct WindowsSegmentedMuxer {
+pub struct MacOSSegmentedMuxer {
     base_path: PathBuf,
     segment_duration: Duration,
     current_index: u32,
     segment_start_time: Option<Duration>,
     completed_segments: Vec<SegmentInfo>,
+    pending_segments: Arc<Mutex<Vec<SegmentInfo>>>,
 
     current_state: Option<SegmentState>,
 
     video_config: VideoInfo,
-    pixel_format: DXGI_FORMAT,
-    d3d_device: ID3D11Device,
-    frame_rate: u32,
-    bitrate_multiplier: f32,
-    output_size: Option<SizeInt32>,
-    encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 
     pause: PauseTracker,
     frame_drops: FrameDropTracker,
 }
 
-pub struct WindowsSegmentedMuxerConfig {
-    pub pixel_format: DXGI_FORMAT,
-    pub d3d_device: ID3D11Device,
-    pub frame_rate: u32,
-    pub bitrate_multiplier: f32,
-    pub output_size: Option<SizeInt32>,
-    pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+pub struct MacOSSegmentedMuxerConfig {
     pub segment_duration: Duration,
 }
 
-impl Muxer for WindowsSegmentedMuxer {
-    type Config = WindowsSegmentedMuxerConfig;
+impl Default for MacOSSegmentedMuxerConfig {
+    fn default() -> Self {
+        Self {
+            segment_duration: Duration::from_secs(3),
+        }
+    }
+}
+
+impl Muxer for MacOSSegmentedMuxer {
+    type Config = MacOSSegmentedMuxerConfig;
 
     async fn setup(
         config: Self::Config,
@@ -193,14 +185,9 @@ impl Muxer for WindowsSegmentedMuxer {
             current_index: 0,
             segment_start_time: None,
             completed_segments: Vec::new(),
+            pending_segments: Arc::new(Mutex::new(Vec::new())),
             current_state: None,
             video_config,
-            pixel_format: config.pixel_format,
-            d3d_device: config.d3d_device,
-            frame_rate: config.frame_rate,
-            bitrate_multiplier: config.bitrate_multiplier,
-            output_size: config.output_size,
-            encoder_preferences: config.encoder_preferences,
             pause: PauseTracker::new(pause_flag),
             frame_drops: FrameDropTracker::new(),
         })
@@ -215,8 +202,11 @@ impl Muxer for WindowsSegmentedMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        self.collect_pending_segments();
+
         let segment_path = self.current_segment_path();
         let segment_start = self.segment_start_time;
+        let current_index = self.current_index;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
@@ -247,11 +237,11 @@ impl Muxer for WindowsSegmentedMuxer {
                 }
             }
 
-            let mut output = state
-                .output
-                .lock()
-                .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+            if let Ok(mut output) = state.output.lock()
+                && let Err(e) = output.write_trailer()
+            {
+                warn!("Failed to write trailer for segment {current_index}: {e}");
+            }
 
             fragmentation::sync_file(&segment_path);
 
@@ -261,7 +251,7 @@ impl Muxer for WindowsSegmentedMuxer {
 
                 self.completed_segments.push(SegmentInfo {
                     path: segment_path,
-                    index: self.current_index,
+                    index: current_index,
                     duration: final_duration,
                     file_size,
                 });
@@ -274,7 +264,7 @@ impl Muxer for WindowsSegmentedMuxer {
     }
 }
 
-impl WindowsSegmentedMuxer {
+impl MacOSSegmentedMuxer {
     fn current_segment_path(&self) -> PathBuf {
         self.base_path
             .join(format!("fragment_{:03}.mp4", self.current_index))
@@ -346,143 +336,47 @@ impl WindowsSegmentedMuxer {
         }
     }
 
+    fn collect_pending_segments(&mut self) {
+        if let Ok(mut pending) = self.pending_segments.lock() {
+            for segment in pending.drain(..) {
+                self.completed_segments.push(segment);
+            }
+            self.completed_segments.sort_by_key(|s| s.index);
+        }
+    }
+
     fn create_segment(&mut self) -> anyhow::Result<()> {
         let segment_path = self.current_segment_path();
-        let input_size = SizeInt32 {
-            Width: self.video_config.width as i32,
-            Height: self.video_config.height as i32,
-        };
-        let output_size = self.output_size.unwrap_or(input_size);
 
-        let queue_depth = ((self.frame_rate as f32 / 30.0 * 5.0).ceil() as usize).clamp(3, 12);
         let (video_tx, video_rx) =
-            sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(queue_depth);
+            sync_channel::<Option<(cidre::arc::R<cidre::cm::SampleBuf>, Duration)>>(8);
         let (ready_tx, ready_rx) = sync_channel::<anyhow::Result<()>>(1);
         let output = ffmpeg::format::output(&segment_path)?;
         let output = Arc::new(Mutex::new(output));
 
-        let d3d_device = self.d3d_device.clone();
-        let pixel_format = self.pixel_format;
-        let frame_rate = self.frame_rate;
-        let bitrate_multiplier = self.bitrate_multiplier;
         let video_config = self.video_config;
-        let encoder_preferences = self.encoder_preferences.clone();
         let output_clone = output.clone();
 
         let encoder_handle = std::thread::Builder::new()
             .name(format!("segment-encoder-{}", self.current_index))
             .spawn(move || {
-                cap_mediafoundation_utils::thread_init();
-
                 let encoder = (|| {
-                    let fallback = |reason: Option<String>| {
-                        encoder_preferences.force_software_only();
-                        if let Some(reason) = reason.as_ref() {
-                            error!("Falling back to software H264 encoder: {reason}");
-                        } else {
-                            info!("Falling back to software H264 encoder");
+                    let mut output_guard = match output_clone.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            return Err(anyhow!(
+                                "MacOSSegmentedEncoder: failed to lock output mutex: {}",
+                                poisoned
+                            ));
                         }
-
-                        let fallback_width = if output_size.Width > 0 {
-                            output_size.Width as u32
-                        } else {
-                            video_config.width
-                        };
-                        let fallback_height = if output_size.Height > 0 {
-                            output_size.Height as u32
-                        } else {
-                            video_config.height
-                        };
-
-                        let mut output_guard = match output_clone.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => {
-                                return Err(anyhow!(
-                                    "ScreenSoftwareEncoder: failed to lock output mutex: {}",
-                                    poisoned
-                                ));
-                            }
-                        };
-
-                        cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
-                            .with_output_size(fallback_width, fallback_height)
-                            .and_then(|builder| builder.build(&mut output_guard))
-                            .map(either::Right)
-                            .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
                     };
 
-                    if encoder_preferences.should_force_software() {
-                        return fallback(None);
-                    }
-
-                    match cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                        &d3d_device,
-                        pixel_format,
-                        input_size,
-                        output_size,
-                        frame_rate,
-                        bitrate_multiplier,
-                    ) {
-                        Ok(encoder) => {
-                            if let Err(e) = encoder.validate() {
-                                return fallback(Some(format!(
-                                    "Hardware encoder validation failed: {e}"
-                                )));
-                            }
-
-                            let width = match u32::try_from(output_size.Width) {
-                                Ok(width) if width > 0 => width,
-                                _ => {
-                                    return fallback(Some(format!(
-                                        "Invalid output width: {}",
-                                        output_size.Width
-                                    )));
-                                }
-                            };
-
-                            let height = match u32::try_from(output_size.Height) {
-                                Ok(height) if height > 0 => height,
-                                _ => {
-                                    return fallback(Some(format!(
-                                        "Invalid output height: {}",
-                                        output_size.Height
-                                    )));
-                                }
-                            };
-
-                            let muxer = {
-                                let mut output_guard = match output_clone.lock() {
-                                    Ok(guard) => guard,
-                                    Err(poisoned) => {
-                                        return fallback(Some(format!(
-                                            "Failed to lock output mutex: {poisoned}"
-                                        )));
-                                    }
-                                };
-
-                                cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                    &mut output_guard,
-                                    cap_mediafoundation_ffmpeg::MuxerConfig {
-                                        width,
-                                        height,
-                                        fps: frame_rate,
-                                        bitrate: encoder.bitrate(),
-                                        fragmented: false,
-                                        frag_duration_us: 0,
-                                    },
-                                )
-                            };
-
-                            match muxer {
-                                Ok(muxer) => Ok(either::Left((encoder, muxer))),
-                                Err(err) => fallback(Some(err.to_string())),
-                            }
-                        }
-                        Err(err) => fallback(Some(err.to_string())),
-                    }
+                    cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
+                        .build(&mut output_guard)
+                        .map_err(|e| anyhow!("MacOSSegmentedEncoder/{e}"))
                 })();
 
-                let encoder = match encoder {
+                let mut encoder = match encoder {
                     Ok(encoder) => {
                         if ready_tx.send(Ok(())).is_err() {
                             error!("Failed to send ready signal - receiver dropped");
@@ -492,101 +386,60 @@ impl WindowsSegmentedMuxer {
                     }
                     Err(e) => {
                         error!("Encoder setup failed: {:#}", e);
-                        let _ = ready_tx.send(Err(anyhow!("{e}")));
+                        if let Err(send_err) = ready_tx.send(Err(anyhow!("{e}"))) {
+                            error!("failed to send ready_tx error: {send_err}");
+                        }
                         return Err(anyhow!("{e}"));
                     }
                 };
 
-                match encoder {
-                    either::Left((mut encoder, mut muxer)) => {
-                        trace!("Running native encoder for segment");
-                        let mut first_timestamp: Option<Duration> = None;
-                        let result = encoder.run(
-                            Arc::new(AtomicBool::default()),
-                            || {
-                                let Ok(Some((frame, timestamp))) = video_rx.recv() else {
-                                    trace!("No more frames available for segment");
-                                    return Ok(None);
-                                };
+                let mut first_timestamp: Option<Duration> = None;
 
-                                let relative = if let Some(first) = first_timestamp {
-                                    timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
-                                } else {
-                                    first_timestamp = Some(timestamp);
-                                    Duration::ZERO
-                                };
-                                let frame_time = duration_to_timespan(relative);
+                while let Ok(Some((sample_buf, timestamp))) = video_rx.recv() {
+                    let Ok(mut output) = output_clone.lock() else {
+                        continue;
+                    };
 
-                                Ok(Some((frame.texture().clone(), frame_time)))
-                            },
-                            |output_sample| {
-                                let mut output = match output_clone.lock() {
-                                    Ok(guard) => guard,
-                                    Err(e) => {
-                                        error!("Failed to lock output mutex: {e}");
-                                        return Err(windows::core::Error::new(
-                                            windows::core::HRESULT(0x80004005u32 as i32),
-                                            format!("Mutex poisoned: {e}"),
-                                        ));
-                                    }
-                                };
+                    let relative = if let Some(first) = first_timestamp {
+                        timestamp.checked_sub(first).unwrap_or(Duration::ZERO)
+                    } else {
+                        first_timestamp = Some(timestamp);
+                        Duration::ZERO
+                    };
 
-                                if let Err(e) = muxer.write_sample(&output_sample, &mut output) {
-                                    warn!("WriteSample failed: {e}");
-                                }
+                    let frame = sample_buf_to_ffmpeg_frame(&sample_buf);
 
-                                Ok(())
-                            },
-                        );
-
-                        match result {
-                            Ok(health_status) => {
-                                debug!(
-                                    "Hardware encoder completed for segment: {} frames encoded",
-                                    health_status.total_frames_encoded
-                                );
-                                Ok(())
-                            }
-                            Err(e) => {
-                                if e.should_fallback() {
-                                    error!(
-                                        "Hardware encoder failed with recoverable error, marking for software fallback: {}",
-                                        e
-                                    );
-                                    encoder_preferences.force_software_only();
-                                }
-                                Err(anyhow!("Hardware encoder error: {}", e))
+                    match frame {
+                        Ok(frame) => {
+                            if let Err(e) = encoder.queue_frame(frame, relative, &mut output) {
+                                warn!("Failed to encode frame: {e}");
                             }
                         }
-                    }
-                    either::Right(mut encoder) => {
-                        while let Ok(Some((frame, time))) = video_rx.recv() {
-                            let Ok(mut output) = output_clone.lock() else {
-                                continue;
-                            };
-
-                            use scap_ffmpeg::AsFFmpeg;
-
-                            frame
-                                .as_ffmpeg()
-                                .context("frame as_ffmpeg")
-                                .and_then(|frame| {
-                                    encoder
-                                        .queue_frame(frame, time, &mut output)
-                                        .context("queue_frame")
-                                })?;
+                        Err(e) => {
+                            warn!("Failed to convert frame: {e:?}");
                         }
-
-                        Ok(())
                     }
                 }
+
+                if let Ok(mut output) = output_clone.lock()
+                    && let Err(e) = encoder.flush(&mut output)
+                {
+                    warn!("Failed to flush encoder: {e}");
+                }
+
+                drop(encoder);
+
+                Ok(())
             })?;
 
         ready_rx
             .recv()
             .map_err(|_| anyhow!("Encoder thread ended unexpectedly"))??;
 
-        output.lock().unwrap().write_header()?;
+        output
+            .lock()
+            .map_err(|_| anyhow!("output mutex poisoned when writing header"))?
+            .write_header()?;
 
         self.current_state = Some(SegmentState {
             video_tx,
@@ -598,56 +451,66 @@ impl WindowsSegmentedMuxer {
     }
 
     fn rotate_segment(&mut self, timestamp: Duration) -> anyhow::Result<()> {
+        self.collect_pending_segments();
+
         let segment_start = self.segment_start_time.unwrap_or(Duration::ZERO);
         let segment_duration = timestamp.saturating_sub(segment_start);
         let completed_segment_path = self.current_segment_path();
+        let current_index = self.current_index;
 
         if let Some(mut state) = self.current_state.take() {
             if let Err(e) = state.video_tx.send(None) {
                 trace!("Screen encoder channel already closed during rotation: {e}");
             }
 
-            if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
-                let start = std::time::Instant::now();
-                loop {
-                    if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "Screen encoder thread panicked during rotation: {:?}",
-                                panic_payload
-                            );
+            let output = state.output.clone();
+            let encoder_handle = state.encoder_handle.take();
+            let path_for_sync = completed_segment_path.clone();
+            let pending_segments = self.pending_segments.clone();
+
+            std::thread::spawn(move || {
+                if let Some(handle) = encoder_handle {
+                    let timeout = Duration::from_secs(5);
+                    let start = std::time::Instant::now();
+                    loop {
+                        if handle.is_finished() {
+                            if let Err(panic_payload) = handle.join() {
+                                warn!(
+                                    "Screen encoder thread panicked during rotation: {:?}",
+                                    panic_payload
+                                );
+                            }
+                            break;
                         }
-                        break;
+                        if start.elapsed() > timeout {
+                            warn!(
+                                "Screen encoder thread did not finish within {:?} during rotation, abandoning",
+                                timeout
+                            );
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
                     }
-                    if start.elapsed() > timeout {
-                        warn!(
-                            "Screen encoder thread did not finish within {:?} during rotation, abandoning",
-                            timeout
-                        );
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
                 }
-            }
 
-            let mut output = state
-                .output
-                .lock()
-                .map_err(|_| anyhow!("Failed to lock output"))?;
-            output.write_trailer()?;
+                if let Ok(mut output) = output.lock()
+                    && let Err(e) = output.write_trailer()
+                {
+                    warn!("Failed to write trailer for segment {current_index}: {e}");
+                }
 
-            fragmentation::sync_file(&completed_segment_path);
+                fragmentation::sync_file(&path_for_sync);
 
-            let file_size = std::fs::metadata(&completed_segment_path)
-                .ok()
-                .map(|m| m.len());
+                let file_size = std::fs::metadata(&path_for_sync).ok().map(|m| m.len());
 
-            self.completed_segments.push(SegmentInfo {
-                path: completed_segment_path,
-                index: self.current_index,
-                duration: segment_duration,
-                file_size,
+                if let Ok(mut pending) = pending_segments.lock() {
+                    pending.push(SegmentInfo {
+                        path: path_for_sync,
+                        index: current_index,
+                        duration: segment_duration,
+                        file_size,
+                    });
+                }
             });
 
             self.write_manifest();
@@ -716,7 +579,7 @@ impl WindowsSegmentedMuxer {
     }
 }
 
-impl VideoMuxer for WindowsSegmentedMuxer {
+impl VideoMuxer for MacOSSegmentedMuxer {
     type VideoFrame = screen_capture::VideoFrame;
 
     fn send_video_frame(
@@ -748,7 +611,7 @@ impl VideoMuxer for WindowsSegmentedMuxer {
         if let Some(state) = &self.current_state
             && let Err(e) = state
                 .video_tx
-                .try_send(Some((frame.frame, adjusted_timestamp)))
+                .try_send(Some((frame.sample_buf, adjusted_timestamp)))
         {
             match e {
                 std::sync::mpsc::TrySendError::Full(_) => {
@@ -764,22 +627,120 @@ impl VideoMuxer for WindowsSegmentedMuxer {
     }
 }
 
-impl AudioMuxer for WindowsSegmentedMuxer {
+impl AudioMuxer for MacOSSegmentedMuxer {
     fn send_audio_frame(&mut self, _frame: AudioFrame, _timestamp: Duration) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
-fn duration_to_timespan(duration: Duration) -> TimeSpan {
-    const TICKS_PER_SEC: u64 = 10_000_000;
-    const NANOS_PER_TICK: u32 = 100;
+fn sample_buf_to_ffmpeg_frame(
+    sample_buf: &cidre::cm::SampleBuf,
+) -> Result<ffmpeg::frame::Video, SampleBufConversionError> {
+    use cidre::cv::{self, pixel_buffer::LockFlags};
 
-    let secs_ticks = duration.as_secs().saturating_mul(TICKS_PER_SEC);
-    let nanos_ticks = (duration.subsec_nanos() / NANOS_PER_TICK) as u64;
-    let total_ticks = secs_ticks.saturating_add(nanos_ticks);
-    let clamped = total_ticks.min(i64::MAX as u64);
+    let Some(image_buf_ref) = sample_buf.image_buf() else {
+        return Err(SampleBufConversionError::NoImageBuffer);
+    };
+    let mut image_buf = image_buf_ref.retained();
 
-    TimeSpan {
-        Duration: clamped as i64,
+    let width = image_buf.width();
+    let height = image_buf.height();
+    let pixel_format = image_buf.pixel_format();
+    let plane0_stride = image_buf.plane_bytes_per_row(0);
+    let plane1_stride = image_buf.plane_bytes_per_row(1);
+
+    let bytes_lock = BaseAddrLockGuard::lock(image_buf.as_mut(), LockFlags::READ_ONLY)
+        .map_err(SampleBufConversionError::BaseAddrLock)?;
+
+    Ok(match pixel_format {
+        cv::PixelFormat::_420V => {
+            let mut ff_frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width as u32, height as u32);
+
+            let src_stride = plane0_stride;
+            let dest_stride = ff_frame.stride(0);
+
+            let src_bytes = bytes_lock.plane_data(0);
+            let dest_bytes = &mut ff_frame.data_mut(0);
+
+            for y in 0..height {
+                let row_width = width;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            let src_stride = plane1_stride;
+            let dest_stride = ff_frame.stride(1);
+
+            let src_bytes = bytes_lock.plane_data(1);
+            let dest_bytes = &mut ff_frame.data_mut(1);
+
+            for y in 0..height / 2 {
+                let row_width = width;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            ff_frame
+        }
+        cv::PixelFormat::_32_BGRA => {
+            let mut ff_frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width as u32, height as u32);
+
+            let src_stride = plane0_stride;
+            let dest_stride = ff_frame.stride(0);
+
+            let src_bytes = bytes_lock.plane_data(0);
+            let dest_bytes = &mut ff_frame.data_mut(0);
+
+            for y in 0..height {
+                let row_width = width * 4;
+                let src_row = &src_bytes[y * src_stride..y * src_stride + row_width];
+                let dest_row = &mut dest_bytes[y * dest_stride..y * dest_stride + row_width];
+
+                dest_row.copy_from_slice(src_row);
+            }
+
+            ff_frame
+        }
+        format => return Err(SampleBufConversionError::UnsupportedFormat(format)),
+    })
+}
+
+#[derive(Debug)]
+pub enum SampleBufConversionError {
+    UnsupportedFormat(cidre::cv::PixelFormat),
+    BaseAddrLock(cidre::os::Error),
+    NoImageBuffer,
+}
+
+struct BaseAddrLockGuard<'a>(
+    &'a mut cidre::cv::ImageBuf,
+    cidre::cv::pixel_buffer::LockFlags,
+);
+
+impl<'a> BaseAddrLockGuard<'a> {
+    fn lock(
+        image_buf: &'a mut cidre::cv::ImageBuf,
+        flags: cidre::cv::pixel_buffer::LockFlags,
+    ) -> cidre::os::Result<Self> {
+        unsafe { image_buf.lock_base_addr(flags) }.result()?;
+        Ok(Self(image_buf, flags))
+    }
+
+    fn plane_data(&self, index: usize) -> &[u8] {
+        let base_addr = self.0.plane_base_address(index);
+        let plane_size = self.0.plane_bytes_per_row(index);
+        unsafe { std::slice::from_raw_parts(base_addr, plane_size * self.0.plane_height(index)) }
+    }
+}
+
+impl Drop for BaseAddrLockGuard<'_> {
+    fn drop(&mut self) {
+        let _ = unsafe { self.0.unlock_lock_base_addr(self.1) };
     }
 }

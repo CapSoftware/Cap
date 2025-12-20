@@ -18,7 +18,7 @@ use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 use crate::{DecodedFrame, PixelFormat};
 
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
-use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
+use super::{DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -253,7 +253,7 @@ impl AVAssetReaderDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
-        ready_tx: oneshot::Sender<Result<(), String>>,
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
     ) {
         let handle = tokio::runtime::Handle::current();
 
@@ -265,14 +265,11 @@ impl AVAssetReaderDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
-        ready_tx: oneshot::Sender<Result<(), String>>,
+        ready_tx: oneshot::Sender<Result<DecoderInitResult, String>>,
         tokio_handle: tokio::runtime::Handle,
     ) {
         let mut this = match AVAssetReaderDecoder::new(path, tokio_handle) {
-            Ok(v) => {
-                ready_tx.send(Ok(())).ok();
-                v
-            }
+            Ok(v) => v,
             Err(e) => {
                 ready_tx.send(Err(e)).ok();
                 return;
@@ -281,6 +278,13 @@ impl AVAssetReaderDecoder {
 
         let video_width = this.inner.width();
         let video_height = this.inner.height();
+
+        let init_result = DecoderInitResult {
+            width: video_width,
+            height: video_height,
+            decoder_type: DecoderType::AVAssetReader,
+        };
+        ready_tx.send(Ok(init_result)).ok();
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
 

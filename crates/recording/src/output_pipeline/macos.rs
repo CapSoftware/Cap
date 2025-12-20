@@ -35,7 +35,7 @@ pub struct AVFoundationMp4Muxer(
 );
 
 impl AVFoundationMp4Muxer {
-    const MAX_QUEUE_RETRIES: u32 = 500;
+    const MAX_QUEUE_RETRIES: u32 = 1500;
 }
 
 #[derive(Default)]
@@ -146,7 +146,7 @@ pub struct AVFoundationCameraMuxer(
 );
 
 impl AVFoundationCameraMuxer {
-    const MAX_QUEUE_RETRIES: u32 = 500;
+    const MAX_QUEUE_RETRIES: u32 = 1500;
 }
 
 #[derive(Default)]

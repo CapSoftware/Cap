@@ -13,5 +13,8 @@ thiserror.workspace = true
 tracing.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+cap-frame-converter = { path = "../frame-converter" }
+
 [lints]
 workspace = true

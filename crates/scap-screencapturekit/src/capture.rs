@@ -25,14 +25,11 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
             let sample_buf = sample_buf.retained();
             let frame = match kind {
                 sc::OutputType::Screen => {
-                    let Some(image_buf) = sample_buf.image_buf().map(|v| v.retained()) else {
+                    if sample_buf.image_buf().is_none() {
                         return;
-                    };
+                    }
 
-                    Frame::Screen(VideoFrame {
-                        sample_buf,
-                        image_buf,
-                    })
+                    Frame::Screen(VideoFrame { sample_buf })
                 }
                 sc::OutputType::Audio => Frame::Audio(AudioFrame { sample_buf }),
                 sc::OutputType::Mic => Frame::Mic(AudioFrame { sample_buf }),
@@ -97,7 +94,6 @@ impl Capturer {
 
 pub struct VideoFrame {
     sample_buf: arc::R<cm::SampleBuf>,
-    image_buf: arc::R<cv::ImageBuf>,
 }
 
 unsafe impl Send for VideoFrame {}
@@ -111,12 +107,8 @@ impl VideoFrame {
         self.sample_buf.as_mut()
     }
 
-    pub fn image_buf(&self) -> &cv::ImageBuf {
-        self.image_buf.as_ref()
-    }
-
-    pub fn image_buf_mut(&mut self) -> &mut cv::ImageBuf {
-        self.image_buf.as_mut()
+    pub fn image_buf(&self) -> Option<&cv::ImageBuf> {
+        self.sample_buf.image_buf()
     }
 }
 

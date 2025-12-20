@@ -83,7 +83,7 @@ import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 
-const WINDOW_SIZE = { width: 290, height: 310 } as const;
+const WINDOW_SIZE = { width: 310, height: 320 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {

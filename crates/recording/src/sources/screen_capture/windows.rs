@@ -99,6 +99,8 @@ impl ScreenCaptureConfig<Direct3DCapture> {
                 Some(Duration::from_secs_f64(1.0 / self.config.fps as f64));
         }
 
+        settings.fps = Some(self.config.fps);
+
         // Store the display ID instead of GraphicsCaptureItem to avoid COM threading issues
         // The GraphicsCaptureItem will be created on the capture thread
         Ok((

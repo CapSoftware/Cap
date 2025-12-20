@@ -53,11 +53,12 @@ impl TextLayer {
         let mut text_area_data = Vec::with_capacity(texts.len());
 
         for text in texts {
+            let alpha = text.color[3].clamp(0.0, 1.0) * text.opacity.clamp(0.0, 1.0);
             let color = Color::rgba(
                 (text.color[0].clamp(0.0, 1.0) * 255.0) as u8,
                 (text.color[1].clamp(0.0, 1.0) * 255.0) as u8,
                 (text.color[2].clamp(0.0, 1.0) * 255.0) as u8,
-                (text.color[3].clamp(0.0, 1.0) * 255.0) as u8,
+                (alpha * 255.0) as u8,
             );
 
             let width = (text.bounds[2] - text.bounds[0]).max(1.0);
