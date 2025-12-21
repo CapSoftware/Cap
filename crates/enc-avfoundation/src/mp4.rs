@@ -79,6 +79,15 @@ impl MP4Encoder {
         audio_config: Option<AudioInfo>,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
+        info!(
+            width = video_config.width,
+            height = video_config.height,
+            pixel_format = ?video_config.pixel_format,
+            frame_rate = ?video_config.frame_rate,
+            output_height = ?output_height,
+            has_audio = audio_config.is_some(),
+            "Initializing AVFoundation MP4 encoder (VideoToolbox hardware encoding)"
+        );
         debug!("{video_config:#?}");
         debug!("{audio_config:#?}");
 
@@ -122,11 +131,23 @@ impl MP4Encoder {
 
             debug!("recording bitrate: {bitrate}");
 
+            let keyframe_interval = (fps * 2.0) as i32;
+
             output_settings.insert(
                 av::video_settings_keys::compression_props(),
                 ns::Dictionary::with_keys_values(
-                    &[unsafe { AVVideoAverageBitRateKey }],
-                    &[ns::Number::with_f32(bitrate).as_id_ref()],
+                    &[
+                        unsafe { AVVideoAverageBitRateKey },
+                        unsafe { AVVideoAllowFrameReorderingKey },
+                        unsafe { AVVideoExpectedSourceFrameRateKey },
+                        unsafe { AVVideoMaxKeyFrameIntervalKey },
+                    ],
+                    &[
+                        ns::Number::with_f32(bitrate).as_id_ref(),
+                        ns::Number::with_bool(false).as_id_ref(),
+                        ns::Number::with_f32(fps).as_id_ref(),
+                        ns::Number::with_i32(keyframe_interval).as_id_ref(),
+                    ],
                 )
                 .as_id_ref(),
             );
@@ -524,6 +545,9 @@ impl Drop for MP4Encoder {
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
     static AVVideoAverageBitRateKey: &'static ns::String;
+    static AVVideoAllowFrameReorderingKey: &'static ns::String;
+    static AVVideoExpectedSourceFrameRateKey: &'static ns::String;
+    static AVVideoMaxKeyFrameIntervalKey: &'static ns::String;
     static AVVideoTransferFunctionKey: &'static ns::String;
     static AVVideoColorPrimariesKey: &'static ns::String;
     static AVVideoYCbCrMatrixKey: &'static ns::String;
