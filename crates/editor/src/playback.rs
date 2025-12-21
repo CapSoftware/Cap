@@ -30,11 +30,11 @@ use crate::{
     segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 180;
-const PARALLEL_DECODE_TASKS: usize = 20;
-const MAX_PREFETCH_AHEAD: u32 = 240;
-const PREFETCH_BEHIND: u32 = 60;
-const FRAME_CACHE_SIZE: usize = 150;
+const PREFETCH_BUFFER_SIZE: usize = 30;
+const PARALLEL_DECODE_TASKS: usize = 8;
+const MAX_PREFETCH_AHEAD: u32 = 90;
+const PREFETCH_BEHIND: u32 = 15;
+const FRAME_CACHE_SIZE: usize = 30;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -333,12 +333,16 @@ impl Playback {
                 f64::MAX
             };
 
+            let (audio_playhead_tx, audio_playhead_rx) =
+                watch::channel(self.start_frame_number as f64 / fps as f64);
+
             AudioPlayback {
                 segments: get_audio_segments(&self.segment_medias),
                 stop_rx: stop_rx.clone(),
                 start_frame_number: self.start_frame_number,
                 project: self.project.clone(),
                 fps,
+                playhead_rx: audio_playhead_rx,
             }
             .spawn();
 
@@ -627,6 +631,7 @@ impl Playback {
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
+                let _ = audio_playhead_tx.send(frame_number as f64 / fps_f64);
 
                 let expected_frame = self.start_frame_number
                     + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
@@ -646,6 +651,7 @@ impl Playback {
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
+                        let _ = audio_playhead_tx.send(frame_number as f64 / fps_f64);
                     }
                 }
             }
@@ -676,6 +682,7 @@ struct AudioPlayback {
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
     fps: u32,
+    playhead_rx: watch::Receiver<f64>,
 }
 
 impl AudioPlayback {
@@ -761,7 +768,7 @@ impl AudioPlayback {
             project,
             segments,
             fps,
-            ..
+            playhead_rx,
         } = self;
 
         let mut base_output_info = AudioInfo::from_stream_config(&supported_config);
@@ -915,6 +922,9 @@ impl AudioPlayback {
 
             let project_for_stream = project.clone();
             let headroom_for_stream = headroom_samples;
+            let mut playhead_rx_for_stream = playhead_rx.clone();
+            let mut last_video_playhead = playhead;
+            const SYNC_THRESHOLD_SECS: f64 = 0.15;
 
             let stream_result = device.build_output_stream(
                 &config,
@@ -922,6 +932,20 @@ impl AudioPlayback {
                     let _latency_secs = latency_corrector.update_from_callback(info);
 
                     let project = project_for_stream.borrow();
+
+                    if playhead_rx_for_stream.has_changed().unwrap_or(false) {
+                        let video_playhead = *playhead_rx_for_stream.borrow_and_update();
+                        let audio_playhead = audio_renderer.current_playhead();
+                        let drift = (video_playhead - audio_playhead).abs();
+
+                        if drift > SYNC_THRESHOLD_SECS
+                            || (video_playhead - last_video_playhead).abs() > SYNC_THRESHOLD_SECS
+                        {
+                            audio_renderer
+                                .set_playhead(video_playhead + initial_compensation_secs, &project);
+                        }
+                        last_video_playhead = video_playhead;
+                    }
 
                     let playback_samples = buffer.len();
                     let min_headroom = headroom_for_stream.max(playback_samples * 2);
