@@ -13,8 +13,8 @@ use crate::{
 
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{
-    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, FragmentedAVFoundationCameraMuxer,
-    FragmentedAVFoundationCameraMuxerConfig,
+    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
+    MacOSFragmentedM4SCameraMuxerConfig,
 };
 
 #[cfg(windows)]
@@ -843,11 +843,13 @@ async fn create_segment_pipeline(
     let (display, crop) =
         target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
 
+    let max_fps = if fragmented { 60 } else { 120 };
+
     let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         display,
         crop,
         !custom_cursor_capture,
-        120,
+        max_fps,
         start_time.system_time(),
         base_inputs.capture_system_audio,
         #[cfg(windows)]
@@ -887,8 +889,8 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<FragmentedAVFoundationCameraMuxer>(
-                    FragmentedAVFoundationCameraMuxerConfig::default(),
+                .build::<MacOSFragmentedM4SCameraMuxer>(
+                    MacOSFragmentedM4SCameraMuxerConfig::default(),
                 )
                 .instrument(error_span!("camera-out"))
                 .await

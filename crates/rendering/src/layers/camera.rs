@@ -14,7 +14,7 @@ pub struct CameraLayer {
     bind_groups: [Option<wgpu::BindGroup>; 2],
     pipeline: CompositeVideoFramePipeline,
     hidden: bool,
-    last_frame_ptr: usize,
+    last_recording_time: Option<f32>,
     yuv_converter: YuvToRgbaConverter,
 }
 
@@ -50,7 +50,7 @@ impl CameraLayer {
             bind_groups: [bind_group_0, bind_group_1],
             pipeline,
             hidden: false,
-            last_frame_ptr: 0,
+            last_recording_time: None,
             yuv_converter,
         }
     }
@@ -59,19 +59,22 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame)>,
+        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame, f32)>,
     ) {
         self.hidden = data.is_none();
 
-        let Some((uniforms, frame_size, camera_frame)) = data else {
+        let Some((uniforms, frame_size, camera_frame, recording_time)) = data else {
             return;
         };
 
         let frame_data = camera_frame.data();
-        let frame_ptr = frame_data.as_ptr() as usize;
         let format = camera_frame.format();
 
-        if frame_ptr != self.last_frame_ptr {
+        let is_same_frame = self
+            .last_recording_time
+            .is_some_and(|last| (last - recording_time).abs() < 0.001);
+
+        if !is_same_frame {
             let next_texture = 1 - self.current_texture;
 
             if self.frame_textures[next_texture].width() != frame_size.x
@@ -118,6 +121,35 @@ impl CameraLayer {
                     );
                 }
                 PixelFormat::Nv12 => {
+                    #[cfg(target_os = "macos")]
+                    let iosurface_result = camera_frame.iosurface_backing().map(|image_buf| {
+                        self.yuv_converter
+                            .convert_nv12_from_iosurface(device, queue, image_buf)
+                    });
+
+                    #[cfg(target_os = "macos")]
+                    if let Some(Ok(_)) = iosurface_result {
+                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
+                    } else if let (Some(y_data), Some(uv_data)) =
+                        (camera_frame.y_plane(), camera_frame.uv_plane())
+                        && self
+                            .yuv_converter
+                            .convert_nv12(
+                                device,
+                                queue,
+                                y_data,
+                                uv_data,
+                                frame_size.x,
+                                frame_size.y,
+                                camera_frame.y_stride(),
+                                camera_frame.uv_stride(),
+                            )
+                            .is_ok()
+                    {
+                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
                     if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                         && self
@@ -162,7 +194,7 @@ impl CameraLayer {
                 }
             }
 
-            self.last_frame_ptr = frame_ptr;
+            self.last_recording_time = Some(recording_time);
             self.current_texture = next_texture;
         }
 

@@ -207,9 +207,45 @@ impl DecodedFrame {
         }
     }
 
+    pub fn new_with_arc(data: Arc<Vec<u8>>, width: u32, height: u32) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            format: PixelFormat::Rgba,
+            y_stride: width * 4,
+            uv_stride: 0,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
+        }
+    }
+
     pub fn new_nv12(data: Vec<u8>, width: u32, height: u32, y_stride: u32, uv_stride: u32) -> Self {
         Self {
             data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
+        }
+    }
+
+    pub fn new_nv12_with_arc(
+        data: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data,
             width,
             height,
             format: PixelFormat::Nv12,
@@ -243,6 +279,27 @@ impl DecodedFrame {
         }
     }
 
+    pub fn new_yuv420p_with_arc(
+        data: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+    ) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            format: PixelFormat::Yuv420p,
+            y_stride,
+            uv_stride,
+            #[cfg(target_os = "macos")]
+            iosurface_backing: None,
+            #[cfg(target_os = "windows")]
+            d3d11_texture_backing: None,
+        }
+    }
+
     #[cfg(target_os = "macos")]
     pub fn new_nv12_with_iosurface(
         data: Vec<u8>,
@@ -254,6 +311,45 @@ impl DecodedFrame {
     ) -> Self {
         Self {
             data: Arc::new(data),
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new_nv12_with_iosurface_arc(
+        data: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        image_buf: R<cv::ImageBuf>,
+    ) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            format: PixelFormat::Nv12,
+            y_stride,
+            uv_stride,
+            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn new_nv12_zero_copy(
+        width: u32,
+        height: u32,
+        y_stride: u32,
+        uv_stride: u32,
+        image_buf: R<cv::ImageBuf>,
+    ) -> Self {
+        Self {
+            data: Arc::new(Vec::new()),
             width,
             height,
             format: PixelFormat::Nv12,
@@ -451,7 +547,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 750;
+pub const FRAME_CACHE_SIZE: usize = 60;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {

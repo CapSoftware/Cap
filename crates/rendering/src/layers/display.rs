@@ -91,7 +91,7 @@ impl DisplayLayer {
 
         let skipped = self
             .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < f32::EPSILON);
+            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
 
         if !skipped {
             let next_texture = 1 - self.current_texture;

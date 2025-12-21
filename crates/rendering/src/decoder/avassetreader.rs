@@ -21,47 +21,46 @@ use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::{DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
+struct FrameData {
+    data: Arc<Vec<u8>>,
+    y_stride: u32,
+    uv_stride: u32,
+}
+
+#[derive(Clone)]
 struct ProcessedFrame {
     _number: u32,
-    data: Arc<Vec<u8>>,
     width: u32,
     height: u32,
     format: PixelFormat,
-    y_stride: u32,
-    uv_stride: u32,
-    image_buf: Option<R<cv::ImageBuf>>,
+    frame_data: FrameData,
 }
 
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
+        let FrameData {
+            data,
+            y_stride,
+            uv_stride,
+        } = &self.frame_data;
+
         match self.format {
-            PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
-            PixelFormat::Nv12 => {
-                if let Some(image_buf) = &self.image_buf {
-                    DecodedFrame::new_nv12_with_iosurface(
-                        (*self.data).clone(),
-                        self.width,
-                        self.height,
-                        self.y_stride,
-                        self.uv_stride,
-                        image_buf.retained(),
-                    )
-                } else {
-                    DecodedFrame::new_nv12(
-                        (*self.data).clone(),
-                        self.width,
-                        self.height,
-                        self.y_stride,
-                        self.uv_stride,
-                    )
-                }
+            PixelFormat::Rgba => {
+                DecodedFrame::new_with_arc(Arc::clone(data), self.width, self.height)
             }
-            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
-                (*self.data).clone(),
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::clone(data),
                 self.width,
                 self.height,
-                self.y_stride,
-                self.uv_stride,
+                *y_stride,
+                *uv_stride,
+            ),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
+                Arc::clone(data),
+                self.width,
+                self.height,
+                *y_stride,
+                *uv_stride,
             ),
         }
     }
@@ -205,22 +204,18 @@ impl CachedFrame {
     fn new(processor: &ImageBufProcessor, mut image_buf: R<cv::ImageBuf>, number: u32) -> Self {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
-        let (data, format, y_stride, uv_stride) = processor.extract_raw(&mut image_buf);
 
-        let retain_iosurface = format == PixelFormat::Nv12 && image_buf.io_surf().is_some();
+        let (data, format, y_stride, uv_stride) = processor.extract_raw(&mut image_buf);
 
         let frame = ProcessedFrame {
             _number: number,
-            data: Arc::new(data),
             width,
             height,
             format,
-            y_stride,
-            uv_stride,
-            image_buf: if retain_iosurface {
-                Some(image_buf)
-            } else {
-                None
+            frame_data: FrameData {
+                data: Arc::new(data),
+                y_stride,
+                uv_stride,
             },
         };
         Self(frame)
@@ -291,191 +286,238 @@ impl AVAssetReaderDecoder {
         #[allow(unused)]
         let mut last_active_frame = None::<u32>;
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
+        let first_ever_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
+        let mut backward_stale_count: u32 = 0;
 
         let mut frames = this.inner.frames();
         let processor = ImageBufProcessor::new();
 
+        struct PendingRequest {
+            frame: u32,
+            sender: oneshot::Sender<DecodedFrame>,
+        }
+
         while let Ok(r) = rx.recv() {
+            let mut pending_requests: Vec<PendingRequest> = Vec::with_capacity(8);
+
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
-                    if sender.is_closed() {
-                        continue;
+                    let frame = (requested_time * fps as f32).floor() as u32;
+                    if !sender.is_closed() {
+                        pending_requests.push(PendingRequest { frame, sender });
                     }
+                }
+            }
 
-                    let requested_frame = (requested_time * fps as f32).floor() as u32;
-
-                    const BACKWARD_SEEK_TOLERANCE: u32 = 120;
-                    let cache_frame_min_early = cache.keys().next().copied();
-                    let cache_frame_max_early = cache.keys().next_back().copied();
-
-                    if let (Some(c_min), Some(_c_max)) =
-                        (cache_frame_min_early, cache_frame_max_early)
-                    {
-                        let is_backward_within_tolerance = requested_frame < c_min
-                            && requested_frame + BACKWARD_SEEK_TOLERANCE >= c_min;
-                        if is_backward_within_tolerance
-                            && let Some(closest_frame) = cache.get(&c_min)
-                        {
-                            let data = closest_frame.data().clone();
-                            if sender.send(data.to_decoded_frame()).is_err() {
-                                debug!("frame receiver dropped before send");
-                            }
-                            *last_sent_frame.borrow_mut() = Some(data);
-                            continue;
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        let frame = (requested_time * fps as f32).floor() as u32;
+                        if !sender.is_closed() {
+                            pending_requests.push(PendingRequest { frame, sender });
                         }
                     }
+                }
+            }
 
-                    let mut sender = if let Some(cached) = cache.get(&requested_frame) {
-                        let data = cached.data().clone();
-                        if sender.send(data.to_decoded_frame()).is_err() {
+            pending_requests.sort_by_key(|r| r.frame);
+
+            let mut i = 0;
+            while i < pending_requests.len() {
+                let request = &pending_requests[i];
+                if let Some(cached) = cache.get(&request.frame) {
+                    let data = cached.data().clone();
+                    let req = pending_requests.remove(i);
+                    if req.sender.send(data.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
+                    }
+                    *last_sent_frame.borrow_mut() = Some(data);
+                } else {
+                    i += 1;
+                }
+            }
+
+            if pending_requests.is_empty() {
+                continue;
+            }
+
+            let min_requested_frame = pending_requests.iter().map(|r| r.frame).min().unwrap();
+            let max_requested_frame = pending_requests.iter().map(|r| r.frame).max().unwrap();
+            let requested_frame = min_requested_frame;
+            let requested_time = requested_frame as f32 / fps as f32;
+
+            const BACKWARD_SEEK_TOLERANCE: u32 = 120;
+            const MAX_STALE_FRAMES: u32 = 3;
+            let cache_frame_min_early = cache.keys().next().copied();
+            let cache_frame_max_early = cache.keys().next_back().copied();
+
+            if let (Some(c_min), Some(_c_max)) = (cache_frame_min_early, cache_frame_max_early) {
+                let is_backward_within_tolerance =
+                    requested_frame < c_min && requested_frame + BACKWARD_SEEK_TOLERANCE >= c_min;
+                if is_backward_within_tolerance
+                    && backward_stale_count < MAX_STALE_FRAMES
+                    && let Some(closest_frame) = cache.get(&c_min)
+                {
+                    backward_stale_count += 1;
+                    let data = closest_frame.data().clone();
+                    *last_sent_frame.borrow_mut() = Some(data.clone());
+                    for req in pending_requests.drain(..) {
+                        if req.sender.send(data.to_decoded_frame()).is_err() {
                             debug!("frame receiver dropped before send");
                         }
-                        *last_sent_frame.borrow_mut() = Some(data);
-                        continue;
-                    } else {
-                        let last_sent_frame = last_sent_frame.clone();
-                        Some(move |data: ProcessedFrame| {
+                    }
+                    continue;
+                }
+            }
+
+            let cache_min = min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+            let cache_max = max_requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+
+            let cache_frame_min = cache.keys().next().copied();
+            let cache_frame_max = cache.keys().next_back().copied();
+
+            let needs_reset = if let (Some(c_min), Some(c_max)) = (cache_frame_min, cache_frame_max)
+            {
+                let is_backward_seek_beyond_tolerance =
+                    requested_frame + BACKWARD_SEEK_TOLERANCE < c_min;
+                let is_forward_seek_beyond_cache =
+                    requested_frame > c_max + FRAME_CACHE_SIZE as u32 / 4;
+                let stale_limit_exceeded =
+                    backward_stale_count >= MAX_STALE_FRAMES && requested_frame < c_min;
+                is_backward_seek_beyond_tolerance
+                    || is_forward_seek_beyond_cache
+                    || stale_limit_exceeded
+            } else {
+                true
+            };
+
+            if needs_reset {
+                this.reset(requested_time);
+                frames = this.inner.frames();
+                *last_sent_frame.borrow_mut() = None;
+                backward_stale_count = 0;
+                cache.retain(|&f, _| f >= cache_min && f <= cache_max);
+            }
+
+            last_active_frame = Some(requested_frame);
+
+            let mut exit = false;
+
+            for frame in &mut frames {
+                let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                    continue;
+                };
+
+                let current_frame =
+                    pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
+
+                let Some(frame) = frame.image_buf() else {
+                    continue;
+                };
+
+                let cache_frame = CachedFrame::new(&processor, frame.retained(), current_frame);
+
+                if first_ever_frame.borrow().is_none() {
+                    *first_ever_frame.borrow_mut() = Some(cache_frame.data().clone());
+                }
+
+                this.is_done = false;
+
+                let exceeds_cache_bounds = current_frame > cache_max;
+                let too_small_for_cache_bounds = current_frame < cache_min;
+
+                if !too_small_for_cache_bounds {
+                    if cache.len() >= FRAME_CACHE_SIZE {
+                        if let Some(last_active) = &last_active_frame {
+                            let frame_to_remove = if requested_frame > *last_active {
+                                *cache.keys().next().unwrap()
+                            } else if requested_frame < *last_active {
+                                *cache.keys().next_back().unwrap()
+                            } else {
+                                let min = *cache.keys().min().unwrap();
+                                let max = *cache.keys().max().unwrap();
+                                if current_frame > max { min } else { max }
+                            };
+                            cache.remove(&frame_to_remove);
+                        } else {
+                            cache.clear()
+                        }
+                    }
+
+                    cache.insert(current_frame, cache_frame.clone());
+                    backward_stale_count = 0;
+
+                    let mut remaining_requests = Vec::with_capacity(pending_requests.len());
+                    for req in pending_requests.drain(..) {
+                        if req.frame == current_frame {
+                            let data = cache_frame.data().clone();
                             *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if sender.send(data.to_decoded_frame()).is_err() {
+                            if req.sender.send(data.to_decoded_frame()).is_err() {
                                 debug!("frame receiver dropped before send");
                             }
-                        })
-                    };
-
-                    let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                    let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
-
-                    let cache_frame_min = cache.keys().next().copied();
-                    let cache_frame_max = cache.keys().next_back().copied();
-
-                    let needs_reset =
-                        if let (Some(c_min), Some(c_max)) = (cache_frame_min, cache_frame_max) {
-                            let is_backward_seek_beyond_tolerance =
-                                requested_frame + BACKWARD_SEEK_TOLERANCE < c_min;
-                            let is_forward_seek_beyond_cache =
-                                requested_frame > c_max + FRAME_CACHE_SIZE as u32 / 4;
-                            is_backward_seek_beyond_tolerance || is_forward_seek_beyond_cache
-                        } else {
-                            true
-                        };
-
-                    if needs_reset {
-                        this.reset(requested_time);
-                        frames = this.inner.frames();
-                        *last_sent_frame.borrow_mut() = None;
-                        cache.retain(|&f, _| f >= cache_min && f <= cache_max);
-                    }
-
-                    last_active_frame = Some(requested_frame);
-
-                    let mut exit = false;
-
-                    for frame in &mut frames {
-                        let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
-                            continue;
-                        };
-
-                        let current_frame = pts_to_frame(
-                            frame.pts().value,
-                            Rational::new(1, frame.pts().scale),
-                            fps,
-                        );
-
-                        let Some(frame) = frame.image_buf() else {
-                            continue;
-                        };
-
-                        let cache_frame =
-                            CachedFrame::new(&processor, frame.retained(), current_frame);
-
-                        this.is_done = false;
-
-                        if let Some(most_recent_prev_frame) =
-                            cache.iter().rev().find(|v| *v.0 < requested_frame)
-                            && let Some(sender) = sender.take()
-                        {
-                            (sender)(most_recent_prev_frame.1.data().clone());
-                        }
-
-                        let exceeds_cache_bounds = current_frame > cache_max;
-                        let too_small_for_cache_bounds = current_frame < cache_min;
-
-                        if !too_small_for_cache_bounds {
-                            if cache.len() >= FRAME_CACHE_SIZE {
-                                if let Some(last_active_frame) = &last_active_frame {
-                                    let frame = if requested_frame > *last_active_frame {
-                                        *cache.keys().next().unwrap()
-                                    } else if requested_frame < *last_active_frame {
-                                        *cache.keys().next_back().unwrap()
-                                    } else {
-                                        let min = *cache.keys().min().unwrap();
-                                        let max = *cache.keys().max().unwrap();
-
-                                        if current_frame > max { min } else { max }
-                                    };
-
-                                    cache.remove(&frame);
-                                } else {
-                                    cache.clear()
+                        } else if req.frame < current_frame {
+                            let prev_frame_data = last_sent_frame.borrow().clone();
+                            if let Some(data) = prev_frame_data {
+                                if req.sender.send(data.to_decoded_frame()).is_err() {
+                                    debug!("frame receiver dropped before send");
+                                }
+                            } else {
+                                let data = cache_frame.data().clone();
+                                if req.sender.send(data.to_decoded_frame()).is_err() {
+                                    debug!("frame receiver dropped before send");
                                 }
                             }
-
-                            cache.insert(current_frame, cache_frame.clone());
-
-                            if current_frame == requested_frame
-                                && let Some(sender) = sender.take()
-                            {
-                                (sender)(cache_frame.data().clone());
-                                break;
-                            }
-                        }
-
-                        if current_frame > requested_frame && sender.is_some() {
-                            // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
-                            let last_sent_frame = last_sent_frame.borrow().clone();
-
-                            if let Some((sender, last_sent_frame)) =
-                                last_sent_frame.and_then(|l| Some((sender.take()?, l)))
-                            {
-                                // info!(
-                                //     "sending previous frame {} for {requested_frame}",
-                                //     last_sent_frame.0
-                                // );
-
-                                (sender)(last_sent_frame);
-                            } else if let Some(sender) = sender.take() {
-                                (sender)(cache_frame.data().clone());
-                            }
-                        }
-
-                        exit = exit || exceeds_cache_bounds;
-
-                        if exit {
-                            break;
+                        } else {
+                            remaining_requests.push(req);
                         }
                     }
+                    pending_requests = remaining_requests;
+                }
 
-                    this.is_done = true;
+                *last_sent_frame.borrow_mut() = Some(cache_frame.data().clone());
 
-                    let last_sent_frame = last_sent_frame.borrow().clone();
-                    if let Some(sender) = sender.take() {
-                        if let Some(last_sent_frame) = last_sent_frame {
-                            (sender)(last_sent_frame);
-                        } else {
-                            let black_frame_data =
-                                vec![0u8; (video_width * video_height * 4) as usize];
-                            let black_frame = ProcessedFrame {
-                                _number: requested_frame,
-                                data: Arc::new(black_frame_data),
-                                width: video_width,
-                                height: video_height,
-                                format: PixelFormat::Rgba,
-                                y_stride: video_width * 4,
-                                uv_stride: 0,
-                                image_buf: None,
-                            };
-                            (sender)(black_frame);
-                        }
+                exit = exit || exceeds_cache_bounds;
+
+                if pending_requests.is_empty() || exit {
+                    break;
+                }
+            }
+
+            this.is_done = true;
+
+            for req in pending_requests.drain(..) {
+                let prev_data = last_sent_frame.borrow().clone();
+                if let Some(data) = prev_data {
+                    if req.sender.send(data.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
+                    }
+                } else if let Some(first_frame) = first_ever_frame.borrow().clone() {
+                    debug!(
+                        "Returning first decoded frame as fallback for request {}",
+                        req.frame
+                    );
+                    if req.sender.send(first_frame.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
+                    }
+                } else {
+                    debug!(
+                        "No frames available for request {}, returning black frame",
+                        req.frame
+                    );
+                    let black_frame_data = vec![0u8; (video_width * video_height * 4) as usize];
+                    let black_frame = ProcessedFrame {
+                        _number: req.frame,
+                        width: video_width,
+                        height: video_height,
+                        format: PixelFormat::Rgba,
+                        frame_data: FrameData {
+                            data: Arc::new(black_frame_data),
+                            y_stride: video_width * 4,
+                            uv_stride: 0,
+                        },
+                    };
+                    if req.sender.send(black_frame.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
                     }
                 }
             }

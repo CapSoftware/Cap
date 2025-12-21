@@ -1699,6 +1699,7 @@ impl RendererLayers {
                     uniforms.camera?,
                     constants.options.camera_size?,
                     segment_frames.camera_frame.as_ref()?,
+                    segment_frames.recording_time,
                 ))
             })(),
         );
@@ -1711,6 +1712,7 @@ impl RendererLayers {
                     uniforms.camera_only?,
                     constants.options.camera_size?,
                     segment_frames.camera_frame.as_ref()?,
+                    segment_frames.recording_time,
                 ))
             })(),
         );
