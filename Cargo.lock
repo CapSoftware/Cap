@@ -1546,6 +1546,8 @@ dependencies = [
  "indexmap 2.11.4",
  "inquire",
  "kameo",
+ "libc",
+ "libproc",
  "objc",
  "objc2-app-kit",
  "relative-path",
@@ -4869,6 +4871,17 @@ name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+
+[[package]]
+name = "libproc"
+version = "0.14.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e78a09b56be5adbcad5aa1197371688dc6bb249a26da3bca2011ee2fb987ebfb"
+dependencies = [
+ "bindgen 0.70.1",
+ "errno",
+ "libc",
+]
 
 [[package]]
 name = "libredox"
