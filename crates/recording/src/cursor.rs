@@ -100,9 +100,10 @@ pub fn spawn_cursor_recorder(
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
+        let mut last_cursor_id = "default".to_string();
 
         loop {
-            let sleep = tokio::time::sleep(Duration::from_millis(10));
+            let sleep = tokio::time::sleep(Duration::from_millis(16));
             let Either::Right(_) =
                 futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
             else {
@@ -112,68 +113,70 @@ pub fn spawn_cursor_recorder(
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let cursor_data = get_cursor_data();
-            let cursor_id = if let Some(data) = cursor_data {
-                let mut hasher = DefaultHasher::default();
-                data.image.hash(&mut hasher);
-                let id = hasher.finish();
+            let position = cap_cursor_capture::RawCursorPosition::get();
+            let position_changed = position != last_position;
 
-                if let Some(existing_id) = response.cursors.get(&id) {
-                    existing_id.id.to_string()
-                } else {
-                    let cursor_id = response.next_cursor_id.to_string();
-                    let file_name = format!("cursor_{cursor_id}.png");
-                    let cursor_path = cursors_dir.join(&file_name);
+            let cursor_id = if position_changed {
+                last_position = position;
+                if let Some(data) = get_cursor_data() {
+                    let mut hasher = DefaultHasher::default();
+                    data.image.hash(&mut hasher);
+                    let id = hasher.finish();
 
-                    if let Ok(image) = image::load_from_memory(&data.image) {
-                        let rgba_image = image.into_rgba8();
+                    let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
+                        existing_id.id.to_string()
+                    } else {
+                        let cursor_id = response.next_cursor_id.to_string();
+                        let file_name = format!("cursor_{cursor_id}.png");
+                        let cursor_path = cursors_dir.join(&file_name);
 
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            error!("Failed to save cursor image: {}", e);
-                        } else {
-                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
-                            response.cursors.insert(
-                                id,
-                                Cursor {
-                                    file_name,
-                                    id: response.next_cursor_id,
-                                    hotspot: data.hotspot,
-                                    shape: data.shape,
-                                },
-                            );
-                            response.next_cursor_id += 1;
+                        if let Ok(image) = image::load_from_memory(&data.image) {
+                            let rgba_image = image.into_rgba8();
+
+                            if let Err(e) = rgba_image.save(&cursor_path) {
+                                error!("Failed to save cursor image: {}", e);
+                            } else {
+                                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                                response.cursors.insert(
+                                    id,
+                                    Cursor {
+                                        file_name,
+                                        id: response.next_cursor_id,
+                                        hotspot: data.hotspot,
+                                        shape: data.shape,
+                                    },
+                                );
+                                response.next_cursor_id += 1;
+                            }
                         }
-                    }
 
+                        cursor_id
+                    };
+                    last_cursor_id = cursor_id.clone();
                     cursor_id
+                } else {
+                    last_cursor_id.clone()
                 }
             } else {
-                "default".to_string()
+                last_cursor_id.clone()
             };
 
-            let position = cap_cursor_capture::RawCursorPosition::get();
-
-            let position = (position != last_position).then(|| {
-                last_position = position;
-
+            if position_changed {
                 let cropped_norm_pos = position
-                    .relative_to_display(display)?
-                    .normalize()?
-                    .with_crop(crop_bounds);
+                    .relative_to_display(display)
+                    .and_then(|p| p.normalize())
+                    .map(|p| p.with_crop(crop_bounds));
 
-                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
-            });
-
-            if let Some((x, y)) = position.flatten() {
-                let mouse_event = CursorMoveEvent {
-                    active_modifiers: vec![],
-                    cursor_id: cursor_id.clone(),
-                    time_ms: elapsed,
-                    x,
-                    y,
-                };
-
-                response.moves.push(mouse_event);
+                if let Some(pos) = cropped_norm_pos {
+                    let mouse_event = CursorMoveEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id.clone(),
+                        time_ms: elapsed,
+                        x: pos.x(),
+                        y: pos.y(),
+                    };
+                    response.moves.push(mouse_event);
+                }
             }
 
             for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {

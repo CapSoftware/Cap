@@ -455,7 +455,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         let mut first_tx = Some(first_tx);
         let mut frame_count = 0u64;
-
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
@@ -487,9 +486,20 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         if was_cancelled {
             info!("mux-video cancelled, draining remaining frames from channel");
+            let drain_start = std::time::Instant::now();
+            let drain_timeout = Duration::from_secs(2);
+            let max_drain_frames = 30u64;
             let mut drained = 0u64;
+            let mut skipped = 0u64;
+
             while let Some(frame) = video_rx.next().await {
                 frame_count += 1;
+
+                if drain_start.elapsed() > drain_timeout || drained >= max_drain_frames {
+                    skipped += 1;
+                    continue;
+                }
+
                 drained += 1;
 
                 let timestamp = frame.timestamp();
@@ -506,14 +516,16 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     Ok(()) => {}
                     Err(e) => {
                         warn!("Error processing drained frame: {e}");
-                        break;
+                        skipped += 1;
                     }
                 }
             }
-            if drained > 0 {
+            if drained > 0 || skipped > 0 {
                 info!(
-                    "mux-video drained {} additional frames after cancellation",
-                    drained
+                    "mux-video drain complete: {} frames processed, {} skipped in {:?}",
+                    drained,
+                    skipped,
+                    drain_start.elapsed()
                 );
             }
         }

@@ -6,7 +6,7 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::output_pipeline::{MacOSSegmentedMuxer, MacOSSegmentedMuxerConfig};
+use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
@@ -86,7 +86,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<MacOSSegmentedMuxer>(MacOSSegmentedMuxerConfig::default())
+                .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig::default())
                 .await
         } else {
             OutputPipeline::builder(output_path.clone())
