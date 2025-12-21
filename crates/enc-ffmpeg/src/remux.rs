@@ -364,3 +364,146 @@ pub fn get_video_fps(path: &Path) -> Option<u32> {
     }
     Some((rate.numerator() as f64 / rate.denominator() as f64).round() as u32)
 }
+
+pub fn probe_m4s_can_decode_with_init(
+    init_path: &Path,
+    segment_path: &Path,
+) -> Result<bool, String> {
+    let temp_path = segment_path.with_extension("probe_temp.mp4");
+
+    let init_data = std::fs::read(init_path)
+        .map_err(|e| format!("Failed to read init segment {}: {e}", init_path.display()))?;
+    let segment_data = std::fs::read(segment_path)
+        .map_err(|e| format!("Failed to read segment {}: {e}", segment_path.display()))?;
+
+    {
+        let mut temp_file = std::fs::File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temp file: {e}"))?;
+        temp_file
+            .write_all(&init_data)
+            .map_err(|e| format!("Failed to write init data: {e}"))?;
+        temp_file
+            .write_all(&segment_data)
+            .map_err(|e| format!("Failed to write segment data: {e}"))?;
+        temp_file
+            .sync_all()
+            .map_err(|e| format!("Failed to sync temp file: {e}"))?;
+    }
+
+    let result = probe_video_can_decode(&temp_path);
+
+    let _ = std::fs::remove_file(&temp_path);
+
+    result
+}
+
+pub fn concatenate_m4s_segments_with_init(
+    init_path: &Path,
+    segments: &[PathBuf],
+    output: &Path,
+) -> Result<(), RemuxError> {
+    if segments.is_empty() {
+        return Err(RemuxError::NoFragments);
+    }
+
+    if !init_path.exists() {
+        return Err(RemuxError::FragmentNotFound(init_path.to_path_buf()));
+    }
+
+    for segment in segments {
+        if !segment.exists() {
+            return Err(RemuxError::FragmentNotFound(segment.clone()));
+        }
+    }
+
+    let combined_path = output.with_extension("combined_fmp4.mp4");
+
+    {
+        let init_data = std::fs::read(init_path)?;
+        let mut combined_file = std::fs::File::create(&combined_path)?;
+        combined_file.write_all(&init_data)?;
+
+        for segment in segments {
+            let segment_data = std::fs::read(segment)?;
+            combined_file.write_all(&segment_data)?;
+        }
+        combined_file.sync_all()?;
+    }
+
+    let result = remux_to_regular_mp4(&combined_path, output);
+
+    let _ = std::fs::remove_file(&combined_path);
+
+    result
+}
+
+fn remux_to_regular_mp4(input_path: &Path, output_path: &Path) -> Result<(), RemuxError> {
+    let mut ictx = avformat::input(input_path)?;
+    let mut octx = avformat::output(output_path)?;
+
+    let mut stream_mapping: Vec<Option<usize>> = Vec::new();
+    let mut output_stream_index = 0usize;
+
+    for input_stream in ictx.streams() {
+        let codec_params = input_stream.parameters();
+        let medium = codec_params.medium();
+
+        if medium == ffmpeg::media::Type::Video || medium == ffmpeg::media::Type::Audio {
+            stream_mapping.push(Some(output_stream_index));
+            output_stream_index += 1;
+
+            let mut output_stream = octx.add_stream(None)?;
+            output_stream.set_parameters(codec_params);
+            unsafe {
+                (*output_stream.as_mut_ptr()).time_base = (*input_stream.as_ptr()).time_base;
+            }
+        } else {
+            stream_mapping.push(None);
+        }
+    }
+
+    octx.write_header()?;
+
+    let mut last_dts: Vec<i64> = vec![i64::MIN; output_stream_index];
+    let mut dts_offset: Vec<i64> = vec![0; output_stream_index];
+
+    for (input_stream, packet) in ictx.packets() {
+        let input_stream_index = input_stream.index();
+
+        if let Some(Some(output_index)) = stream_mapping.get(input_stream_index) {
+            let output_index = *output_index;
+            let mut packet = packet;
+            let input_time_base = input_stream.time_base();
+            let output_time_base = octx.stream(output_index).unwrap().time_base();
+
+            packet.rescale_ts(input_time_base, output_time_base);
+
+            let current_dts = packet.dts().unwrap_or(0);
+
+            if last_dts[output_index] != i64::MIN && current_dts <= last_dts[output_index] {
+                dts_offset[output_index] = last_dts[output_index] - current_dts + 1;
+            }
+
+            let adjusted_dts = current_dts + dts_offset[output_index];
+            let adjusted_pts = packet.pts().map(|pts| pts + dts_offset[output_index]);
+
+            unsafe {
+                (*packet.as_mut_ptr()).dts = adjusted_dts;
+                if let Some(pts) = adjusted_pts {
+                    (*packet.as_mut_ptr()).pts = pts;
+                }
+            }
+
+            last_dts[output_index] = adjusted_dts;
+
+            packet.set_stream(output_index);
+            packet.set_position(-1);
+
+            packet.write_interleaved(&mut octx)?;
+        }
+    }
+
+    octx.write_trailer()?;
+
+    Ok(())
+}
