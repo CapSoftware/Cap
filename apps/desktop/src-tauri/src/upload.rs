@@ -125,7 +125,7 @@ pub async fn upload_video(
         app.clone(),
         PresignedS3PutRequest {
             video_id: video_id.clone(),
-            subpath: "screenshot.jpg".to_string(),
+            subpath: "thumbnail.jpg".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
@@ -1098,7 +1098,7 @@ async fn upload_screenshot_file(
         app.clone(),
         PresignedS3PutRequest {
             video_id: video_id.to_string(),
-            subpath: "screenshot.jpg".to_string(),
+            subpath: "thumbnail.jpg".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
