@@ -155,16 +155,18 @@ impl Mp4ExportSettings {
 
                     if frame_count == 0 {
                         first_frame = Some(frame.clone());
-                        if let Some(audio) = &mut audio_renderer {
-                            audio.set_playhead(0.0, &project);
-                        }
+                    }
+
+                    let video_playhead = frame_number as f64 / fps as f64;
+                    if let Some(audio) = &mut audio_renderer {
+                        audio.set_playhead(video_playhead, &project);
                     }
 
                     let audio_frame = audio_renderer
                         .as_mut()
                         .and_then(|audio| audio.render_frame(audio_samples_per_frame, &project))
                         .map(|mut frame| {
-                            let pts = ((frame_number * frame.rate()) as f64 / fps as f64) as i64;
+                            let pts = ((frame_count * frame.rate()) as f64 / fps as f64) as i64;
                             frame.set_pts(Some(pts));
                             frame
                         });
