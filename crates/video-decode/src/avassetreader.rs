@@ -93,13 +93,11 @@ impl KeyframeIndex {
             .keyframes
             .binary_search_by_key(&target_frame, |(frame, _)| *frame);
 
-        let idx = match pos {
-            Ok(i) => i,
-            Err(0) => 0,
-            Err(i) => i - 1,
-        };
-
-        Some(self.keyframes[idx])
+        match pos {
+            Ok(i) => Some(self.keyframes[i]),
+            Err(0) => None,
+            Err(i) => Some(self.keyframes[i - 1]),
+        }
     }
 
     pub fn nearest_keyframe_after(&self, target_frame: u32) -> Option<(u32, f64)> {
@@ -267,23 +265,19 @@ impl AVAssetReaderDecoder {
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
-        let _reset_start = std::time::Instant::now();
-
         self.reader.cancel_reading();
 
-        let (seek_time, _keyframe_frame) = if let Some(ref keyframe_index) = self.keyframe_index {
+        let seek_time = if let Some(ref keyframe_index) = self.keyframe_index {
             let fps = keyframe_index.fps();
             let target_frame = (requested_time as f64 * fps).round() as u32;
 
-            if let Some((kf_frame, keyframe_time)) =
-                keyframe_index.nearest_keyframe_before(target_frame)
-            {
-                (keyframe_time as f32, Some(kf_frame))
+            if let Some((_, keyframe_time)) = keyframe_index.nearest_keyframe_before(target_frame) {
+                keyframe_time as f32
             } else {
-                (requested_time, None)
+                requested_time
             }
         } else {
-            (requested_time, None)
+            requested_time
         };
 
         (self.track_output, self.reader) = Self::get_reader_track_output(

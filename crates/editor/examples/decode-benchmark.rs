@@ -312,7 +312,7 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
 
     println!("[1/5] Benchmarking decoder creation...");
     results.decoder_creation_ms =
-        benchmark_decoder_creation(&config.video_path, config.fps, 3).await;
+        benchmark_decoder_creation(&config.video_path, config.fps, config.iterations).await;
     if results.decoder_creation_ms < 0.0 {
         eprintln!("Failed to benchmark decoder creation");
         return results;

@@ -323,9 +323,21 @@ impl DecoderInstance {
     }
 
     fn reset(&mut self, requested_time: f32) {
-        let _ = self.inner.reset(requested_time);
-        self.is_done = false;
-        self.frames_iter_valid = true;
+        match self.inner.reset(requested_time) {
+            Ok(()) => {
+                self.is_done = false;
+                self.frames_iter_valid = true;
+            }
+            Err(e) => {
+                tracing::error!(
+                    requested_time = requested_time,
+                    error = %e,
+                    "Failed to reset decoder, marking as invalid"
+                );
+                self.is_done = true;
+                self.frames_iter_valid = false;
+            }
+        }
     }
 
     fn current_position(&self) -> f32 {
@@ -558,8 +570,17 @@ impl AVAssetReaderDecoder {
                 let mut frames = decoder.inner.frames();
 
                 for frame in &mut frames {
-                    let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
-                        continue;
+                    let frame = match frame {
+                        Ok(f) => f,
+                        Err(e) => {
+                            tracing::error!(
+                                decoder_idx = decoder_idx,
+                                frames_iterated = frames_iterated,
+                                error = %e,
+                                "Failed to read frame, skipping"
+                            );
+                            continue;
+                        }
                     };
                     frames_iterated += 1;
 

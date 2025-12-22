@@ -399,7 +399,9 @@ pub fn probe_m4s_can_decode_with_init(
 
     let result = probe_video_can_decode(&temp_path);
 
-    let _ = std::fs::remove_file(&temp_path);
+    if let Err(e) = std::fs::remove_file(&temp_path) {
+        tracing::warn!("failed to remove temp file {}: {}", temp_path.display(), e);
+    }
 
     result
 }
