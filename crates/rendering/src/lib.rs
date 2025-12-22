@@ -1780,12 +1780,6 @@ impl RendererLayers {
         }
 
         let should_render = uniforms.scene.should_render_screen();
-        tracing::trace!(
-            should_render_screen = should_render,
-            screen_opacity = uniforms.scene.screen_opacity,
-            screen_blur = uniforms.scene.screen_blur,
-            "RendererLayers::render - checking should_render_screen"
-        );
 
         if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);

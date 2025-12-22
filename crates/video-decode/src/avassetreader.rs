@@ -297,16 +297,6 @@ impl AVAssetReaderDecoder {
 
         self.current_position_secs = seek_time;
 
-        let elapsed = reset_start.elapsed();
-        tracing::info!(
-            requested_time = requested_time,
-            seek_time = seek_time,
-            keyframe_frame = ?keyframe_frame,
-            reset_ms = elapsed.as_millis(),
-            has_keyframe_index = self.keyframe_index.is_some(),
-            "AVAssetReader reset completed"
-        );
-
         Ok(())
     }
 

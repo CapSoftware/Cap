@@ -219,15 +219,6 @@ impl ScrubDetector {
         self.last_request_time = now;
         self.last_frame = frame;
 
-        if was_scrubbing != self.is_scrubbing {
-            tracing::debug!(
-                is_scrubbing = self.is_scrubbing,
-                request_rate = self.request_rate,
-                frame_delta = frame_delta,
-                "Scrub state changed"
-            );
-        }
-
         self.is_scrubbing
     }
 

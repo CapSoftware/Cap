@@ -419,12 +419,6 @@ impl AVAssetReaderDecoder {
         let decoder_idx = best_id.min(self.decoders.len().saturating_sub(1));
 
         if needs_reset && decoder_idx < self.decoders.len() {
-            tracing::debug!(
-                decoder_idx = decoder_idx,
-                requested_time = requested_time,
-                distance = distance,
-                "Resetting decoder for seek"
-            );
             self.decoders[decoder_idx].reset(requested_time);
             self.pool_manager
                 .update_decoder_position(best_id, self.decoders[decoder_idx].current_position());
@@ -492,12 +486,6 @@ impl AVAssetReaderDecoder {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     let frame = (requested_time * fps as f32).floor() as u32;
-                    debug!(
-                        decoder = _name,
-                        requested_time = requested_time,
-                        frame = frame,
-                        "GetFrame request received"
-                    );
                     if !sender.is_closed() {
                         pending_requests.push(PendingRequest { frame, sender });
                     }
@@ -529,9 +517,7 @@ impl AVAssetReaderDecoder {
                 if let Some(cached) = cache.get(&request.frame) {
                     let data = cached.data().clone();
                     let req = pending_requests.remove(i);
-                    if req.sender.send(data.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
+                    if req.sender.send(data.to_decoded_frame()).is_err() {}
                     *last_sent_frame.borrow_mut() = Some(data);
                 } else {
                     i += 1;
@@ -623,24 +609,16 @@ impl AVAssetReaderDecoder {
                             if req.frame == current_frame {
                                 let data = cache_frame.data().clone();
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                if req.sender.send(data.to_decoded_frame()).is_err() {
-                                    debug!("frame receiver dropped before send");
-                                }
+                                if req.sender.send(data.to_decoded_frame()).is_err() {}
                             } else if req.frame < current_frame {
                                 if let Some(cached) = cache.get(&req.frame) {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    if req.sender.send(data.to_decoded_frame()).is_err() {
-                                        debug!("frame receiver dropped before send");
-                                    }
+                                    if req.sender.send(data.to_decoded_frame()).is_err() {}
                                 } else if is_scrubbing {
                                     let data = cache_frame.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    if req.sender.send(data.to_decoded_frame()).is_err() {
-                                        debug!(
-                                            "frame receiver dropped before send (scrub fallback)"
-                                        );
-                                    }
+                                    if req.sender.send(data.to_decoded_frame()).is_err() {}
                                 }
                             } else {
                                 remaining_requests.push(req);
@@ -669,42 +647,14 @@ impl AVAssetReaderDecoder {
                 this.pool_manager.update_decoder_position(decoder_idx, pos);
             }
 
-            if !pending_requests.is_empty() {
-                debug!(
-                    decoder = _name,
-                    pending_count = pending_requests.len(),
-                    frames_iterated = frames_iterated,
-                    cache_size = cache.len(),
-                    is_scrubbing = is_scrubbing,
-                    "Handling unfulfilled requests after frame iteration"
-                );
-            }
-
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
-                    if req.sender.send(data.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
+                    if req.sender.send(data.to_decoded_frame()).is_err() {}
                 } else if let Some(last) = last_sent_frame.borrow().clone() {
-                    debug!(
-                        decoder = _name,
-                        requested_frame = req.frame,
-                        is_scrubbing = is_scrubbing,
-                        "Sending last known frame as fallback"
-                    );
-                    if req.sender.send(last.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
+                    if req.sender.send(last.to_decoded_frame()).is_err() {}
                 } else if let Some(first) = first_ever_frame.borrow().clone() {
-                    debug!(
-                        decoder = _name,
-                        requested_frame = req.frame,
-                        "Sending first ever frame as fallback"
-                    );
-                    if req.sender.send(first.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
+                    if req.sender.send(first.to_decoded_frame()).is_err() {}
                 } else {
                     debug!(
                         decoder = _name,
