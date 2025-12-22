@@ -18,6 +18,7 @@ use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 use crate::{DecodedFrame, PixelFormat};
 
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
+use super::multi_position::{DecoderPoolManager, MultiPositionDecoderConfig, ScrubDetector};
 use super::{DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 struct SendableImageBuf(R<cv::ImageBuf>);
@@ -296,21 +297,141 @@ impl CachedFrame {
     }
 }
 
-pub struct AVAssetReaderDecoder {
+struct DecoderInstance {
     inner: cap_video_decode::AVAssetReaderDecoder,
     is_done: bool,
+    frames_iter_valid: bool,
 }
 
-impl AVAssetReaderDecoder {
-    fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
+impl DecoderInstance {
+    fn new(
+        path: PathBuf,
+        tokio_handle: TokioHandle,
+        start_time: f32,
+        keyframe_index: Option<cap_video_decode::avassetreader::KeyframeIndex>,
+    ) -> Result<Self, String> {
         Ok(Self {
-            inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
+            inner: cap_video_decode::AVAssetReaderDecoder::new_with_keyframe_index(
+                path,
+                tokio_handle,
+                start_time,
+                keyframe_index,
+            )?,
             is_done: false,
+            frames_iter_valid: true,
         })
     }
 
     fn reset(&mut self, requested_time: f32) {
         let _ = self.inner.reset(requested_time);
+        self.is_done = false;
+        self.frames_iter_valid = true;
+    }
+
+    fn current_position(&self) -> f32 {
+        self.inner.current_position_secs()
+    }
+}
+
+pub struct AVAssetReaderDecoder {
+    decoders: Vec<DecoderInstance>,
+    pool_manager: DecoderPoolManager,
+    active_decoder_idx: usize,
+    scrub_detector: ScrubDetector,
+}
+
+impl AVAssetReaderDecoder {
+    fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
+        let mut primary_decoder =
+            cap_video_decode::AVAssetReaderDecoder::new(path.clone(), tokio_handle.clone())?;
+
+        let keyframe_index = primary_decoder.take_keyframe_index();
+        let keyframe_index_arc: Option<Arc<cap_video_decode::avassetreader::KeyframeIndex>> = None;
+
+        let fps = keyframe_index
+            .as_ref()
+            .map(|kf| kf.fps() as u32)
+            .unwrap_or(30);
+        let duration_secs = keyframe_index
+            .as_ref()
+            .map(|kf| kf.duration_secs())
+            .unwrap_or(0.0);
+
+        let config = MultiPositionDecoderConfig {
+            path: path.clone(),
+            tokio_handle: tokio_handle.clone(),
+            keyframe_index: keyframe_index_arc,
+            fps,
+            duration_secs,
+        };
+
+        let pool_manager = DecoderPoolManager::new(config);
+
+        let primary_instance = DecoderInstance {
+            inner: primary_decoder,
+            is_done: false,
+            frames_iter_valid: true,
+        };
+
+        let mut decoders = vec![primary_instance];
+
+        let initial_positions = pool_manager.positions();
+        for pos in initial_positions.iter().skip(1) {
+            let start_time = pos.position_secs;
+            match DecoderInstance::new(path.clone(), tokio_handle.clone(), start_time, None) {
+                Ok(instance) => {
+                    decoders.push(instance);
+                    tracing::info!(
+                        position_secs = start_time,
+                        decoder_index = decoders.len() - 1,
+                        "Created additional decoder instance for multi-position pool"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        position_secs = start_time,
+                        error = %e,
+                        "Failed to create additional decoder instance, continuing with fewer decoders"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            decoder_count = decoders.len(),
+            fps = fps,
+            duration_secs = duration_secs,
+            "Initialized multi-position decoder pool"
+        );
+
+        Ok(Self {
+            decoders,
+            pool_manager,
+            active_decoder_idx: 0,
+            scrub_detector: ScrubDetector::new(),
+        })
+    }
+
+    fn select_best_decoder(&mut self, requested_time: f32) -> (usize, bool) {
+        let (best_id, distance, needs_reset) =
+            self.pool_manager.find_best_decoder_for_time(requested_time);
+
+        let decoder_idx = best_id.min(self.decoders.len().saturating_sub(1));
+
+        if needs_reset && decoder_idx < self.decoders.len() {
+            tracing::debug!(
+                decoder_idx = decoder_idx,
+                requested_time = requested_time,
+                distance = distance,
+                "Resetting decoder for seek"
+            );
+            self.decoders[decoder_idx].reset(requested_time);
+            self.pool_manager
+                .update_decoder_position(best_id, self.decoders[decoder_idx].current_position());
+        }
+
+        self.active_decoder_idx = decoder_idx;
+        (decoder_idx, needs_reset)
     }
 
     pub fn spawn(
@@ -341,8 +462,8 @@ impl AVAssetReaderDecoder {
             }
         };
 
-        let video_width = this.inner.width();
-        let video_height = this.inner.height();
+        let video_width = this.decoders[0].inner.width();
+        let video_height = this.decoders[0].inner.height();
 
         let init_result = DecoderInitResult {
             width: video_width,
@@ -358,7 +479,6 @@ impl AVAssetReaderDecoder {
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
         let first_ever_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
-        let mut frames = this.inner.frames();
         let processor = ImageBufProcessor::new();
 
         struct PendingRequest {
@@ -397,6 +517,12 @@ impl AVAssetReaderDecoder {
 
             pending_requests.sort_by_key(|r| r.frame);
 
+            let is_scrubbing = if let Some(first_req) = pending_requests.first() {
+                this.scrub_detector.record_request(first_req.frame)
+            } else {
+                false
+            };
+
             let mut i = 0;
             while i < pending_requests.len() {
                 let request = &pending_requests[i];
@@ -421,35 +547,16 @@ impl AVAssetReaderDecoder {
             let requested_frame = min_requested_frame;
             let requested_time = requested_frame as f32 / fps as f32;
 
-            const BACKWARD_SEEK_TOLERANCE: u32 = 120;
+            let (decoder_idx, was_reset) = this.select_best_decoder(requested_time);
 
             let cache_min = min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-            let cache_max = max_requested_frame + FRAME_CACHE_SIZE as u32 / 2;
-
-            let cache_frame_min = cache.keys().next().copied();
-            let cache_frame_max = cache.keys().next_back().copied();
-
-            let needs_reset = if let (Some(c_min), Some(c_max)) = (cache_frame_min, cache_frame_max)
-            {
-                let is_backward_seek_beyond_tolerance =
-                    requested_frame + BACKWARD_SEEK_TOLERANCE < c_min;
-                let is_forward_seek_beyond_cache =
-                    requested_frame > c_max + FRAME_CACHE_SIZE as u32 / 4;
-                is_backward_seek_beyond_tolerance || is_forward_seek_beyond_cache
+            let cache_max = if is_scrubbing {
+                max_requested_frame + FRAME_CACHE_SIZE as u32 / 4
             } else {
-                true
+                max_requested_frame + FRAME_CACHE_SIZE as u32 / 2
             };
 
-            if needs_reset {
-                debug!(
-                    decoder = _name,
-                    requested_frame = requested_frame,
-                    cache_min = ?cache_frame_min,
-                    cache_max = ?cache_frame_max,
-                    "Triggering decoder reset"
-                );
-                this.reset(requested_time);
-                frames = this.inner.frames();
+            if was_reset {
                 *last_sent_frame.borrow_mut() = None;
                 cache.retain(|&f, _| f >= cache_min && f <= cache_max);
             }
@@ -458,84 +565,109 @@ impl AVAssetReaderDecoder {
 
             let mut exit = false;
             let mut frames_iterated = 0u32;
+            let mut last_decoded_position: Option<f32> = None;
 
-            for frame in &mut frames {
-                let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
-                    continue;
-                };
-                frames_iterated += 1;
+            {
+                let decoder = &mut this.decoders[decoder_idx];
+                let mut frames = decoder.inner.frames();
 
-                let current_frame =
-                    pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
+                for frame in &mut frames {
+                    let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
+                        continue;
+                    };
+                    frames_iterated += 1;
 
-                let Some(frame) = frame.image_buf() else {
-                    continue;
-                };
+                    let current_frame =
+                        pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
 
-                let cache_frame = CachedFrame::new(&processor, frame.retained(), current_frame);
+                    let position_secs = current_frame as f32 / fps as f32;
+                    last_decoded_position = Some(position_secs);
 
-                if first_ever_frame.borrow().is_none() {
-                    *first_ever_frame.borrow_mut() = Some(cache_frame.data().clone());
-                }
+                    let Some(frame) = frame.image_buf() else {
+                        continue;
+                    };
 
-                this.is_done = false;
+                    let cache_frame = CachedFrame::new(&processor, frame.retained(), current_frame);
 
-                let exceeds_cache_bounds = current_frame > cache_max;
-                let too_small_for_cache_bounds = current_frame < cache_min;
-
-                if !too_small_for_cache_bounds {
-                    if cache.len() >= FRAME_CACHE_SIZE {
-                        if let Some(last_active) = &last_active_frame {
-                            let frame_to_remove = if requested_frame > *last_active {
-                                *cache.keys().next().unwrap()
-                            } else if requested_frame < *last_active {
-                                *cache.keys().next_back().unwrap()
-                            } else {
-                                let min = *cache.keys().min().unwrap();
-                                let max = *cache.keys().max().unwrap();
-                                if current_frame > max { min } else { max }
-                            };
-                            cache.remove(&frame_to_remove);
-                        } else {
-                            cache.clear()
-                        }
+                    if first_ever_frame.borrow().is_none() {
+                        *first_ever_frame.borrow_mut() = Some(cache_frame.data().clone());
                     }
 
-                    cache.insert(current_frame, cache_frame.clone());
+                    decoder.is_done = false;
 
-                    let mut remaining_requests = Vec::with_capacity(pending_requests.len());
-                    for req in pending_requests.drain(..) {
-                        if req.frame == current_frame {
-                            let data = cache_frame.data().clone();
-                            *last_sent_frame.borrow_mut() = Some(data.clone());
-                            if req.sender.send(data.to_decoded_frame()).is_err() {
-                                debug!("frame receiver dropped before send");
+                    let exceeds_cache_bounds = current_frame > cache_max;
+                    let too_small_for_cache_bounds = current_frame < cache_min;
+
+                    if !too_small_for_cache_bounds {
+                        if cache.len() >= FRAME_CACHE_SIZE {
+                            if let Some(last_active) = &last_active_frame {
+                                let frame_to_remove = if requested_frame > *last_active {
+                                    *cache.keys().next().unwrap()
+                                } else if requested_frame < *last_active {
+                                    *cache.keys().next_back().unwrap()
+                                } else {
+                                    let min = *cache.keys().min().unwrap();
+                                    let max = *cache.keys().max().unwrap();
+                                    if current_frame > max { min } else { max }
+                                };
+                                cache.remove(&frame_to_remove);
+                            } else {
+                                cache.clear()
                             }
-                        } else if req.frame < current_frame {
-                            if let Some(cached) = cache.get(&req.frame) {
-                                let data = cached.data().clone();
+                        }
+
+                        cache.insert(current_frame, cache_frame.clone());
+
+                        let mut remaining_requests = Vec::with_capacity(pending_requests.len());
+                        for req in pending_requests.drain(..) {
+                            if req.frame == current_frame {
+                                let data = cache_frame.data().clone();
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
                                 if req.sender.send(data.to_decoded_frame()).is_err() {
                                     debug!("frame receiver dropped before send");
                                 }
+                            } else if req.frame < current_frame {
+                                if let Some(cached) = cache.get(&req.frame) {
+                                    let data = cached.data().clone();
+                                    *last_sent_frame.borrow_mut() = Some(data.clone());
+                                    if req.sender.send(data.to_decoded_frame()).is_err() {
+                                        debug!("frame receiver dropped before send");
+                                    }
+                                } else if is_scrubbing {
+                                    let data = cache_frame.data().clone();
+                                    *last_sent_frame.borrow_mut() = Some(data.clone());
+                                    if req.sender.send(data.to_decoded_frame()).is_err() {
+                                        debug!(
+                                            "frame receiver dropped before send (scrub fallback)"
+                                        );
+                                    }
+                                }
+                            } else {
+                                remaining_requests.push(req);
                             }
-                        } else {
-                            remaining_requests.push(req);
                         }
+                        pending_requests = remaining_requests;
                     }
-                    pending_requests = remaining_requests;
+
+                    *last_sent_frame.borrow_mut() = Some(cache_frame.data().clone());
+
+                    exit = exit || exceeds_cache_bounds;
+
+                    if is_scrubbing && frames_iterated > 3 {
+                        break;
+                    }
+
+                    if pending_requests.is_empty() || exit {
+                        break;
+                    }
                 }
 
-                *last_sent_frame.borrow_mut() = Some(cache_frame.data().clone());
-
-                exit = exit || exceeds_cache_bounds;
-
-                if pending_requests.is_empty() || exit {
-                    break;
-                }
+                decoder.is_done = true;
             }
 
-            this.is_done = true;
+            if let Some(pos) = last_decoded_position {
+                this.pool_manager.update_decoder_position(decoder_idx, pos);
+            }
 
             if !pending_requests.is_empty() {
                 debug!(
@@ -543,6 +675,7 @@ impl AVAssetReaderDecoder {
                     pending_count = pending_requests.len(),
                     frames_iterated = frames_iterated,
                     cache_size = cache.len(),
+                    is_scrubbing = is_scrubbing,
                     "Handling unfulfilled requests after frame iteration"
                 );
             }
@@ -557,6 +690,7 @@ impl AVAssetReaderDecoder {
                     debug!(
                         decoder = _name,
                         requested_frame = req.frame,
+                        is_scrubbing = is_scrubbing,
                         "Sending last known frame as fallback"
                     );
                     if req.sender.send(last.to_decoded_frame()).is_err() {

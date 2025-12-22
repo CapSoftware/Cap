@@ -13,6 +13,7 @@ use tokio::runtime::Handle as TokioHandle;
 pub struct KeyframeIndex {
     keyframes: Vec<(u32, f64)>,
     fps: f64,
+    duration_secs: f64,
 }
 
 impl KeyframeIndex {
@@ -35,6 +36,15 @@ impl KeyframeIndex {
                 30.0
             } else {
                 rate.numerator() as f64 / rate.denominator() as f64
+            }
+        };
+
+        let duration_secs = {
+            let duration = video_stream.duration();
+            if duration > 0 {
+                duration as f64 * time_base.numerator() as f64 / time_base.denominator() as f64
+            } else {
+                0.0
             }
         };
 
@@ -62,11 +72,16 @@ impl KeyframeIndex {
             path = %path.display(),
             keyframe_count = keyframes.len(),
             fps = fps,
+            duration_secs = duration_secs,
             build_ms = elapsed.as_millis(),
             "Built keyframe index"
         );
 
-        Ok(Self { keyframes, fps })
+        Ok(Self {
+            keyframes,
+            fps,
+            duration_secs,
+        })
     }
 
     pub fn nearest_keyframe_before(&self, target_frame: u32) -> Option<(u32, f64)> {
@@ -87,12 +102,68 @@ impl KeyframeIndex {
         Some(self.keyframes[idx])
     }
 
+    pub fn nearest_keyframe_after(&self, target_frame: u32) -> Option<(u32, f64)> {
+        if self.keyframes.is_empty() {
+            return None;
+        }
+
+        let pos = self
+            .keyframes
+            .binary_search_by_key(&target_frame, |(frame, _)| *frame);
+
+        let idx = match pos {
+            Ok(i) => {
+                if i + 1 < self.keyframes.len() {
+                    i + 1
+                } else {
+                    i
+                }
+            }
+            Err(i) => {
+                if i < self.keyframes.len() {
+                    i
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        Some(self.keyframes[idx])
+    }
+
+    pub fn get_strategic_positions(&self, num_positions: usize) -> Vec<f64> {
+        if self.keyframes.is_empty() || num_positions == 0 {
+            return vec![0.0];
+        }
+
+        let total_keyframes = self.keyframes.len();
+        if total_keyframes <= num_positions {
+            return self.keyframes.iter().map(|(_, time)| *time).collect();
+        }
+
+        let step = total_keyframes / num_positions;
+        self.keyframes
+            .iter()
+            .step_by(step.max(1))
+            .take(num_positions)
+            .map(|(_, time)| *time)
+            .collect()
+    }
+
     pub fn fps(&self) -> f64 {
         self.fps
     }
 
+    pub fn duration_secs(&self) -> f64 {
+        self.duration_secs
+    }
+
     pub fn keyframe_count(&self) -> usize {
         self.keyframes.len()
+    }
+
+    pub fn keyframes(&self) -> &[(u32, f64)] {
+        &self.keyframes
     }
 }
 
@@ -105,10 +176,19 @@ pub struct AVAssetReaderDecoder {
     width: u32,
     height: u32,
     keyframe_index: Option<KeyframeIndex>,
+    current_position_secs: f32,
 }
 
 impl AVAssetReaderDecoder {
     pub fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
+        Self::new_at_position(path, tokio_handle, 0.0)
+    }
+
+    pub fn new_at_position(
+        path: PathBuf,
+        tokio_handle: TokioHandle,
+        start_time: f32,
+    ) -> Result<Self, String> {
         let keyframe_index = match KeyframeIndex::build(&path) {
             Ok(index) => Some(index),
             Err(e) => {
@@ -121,6 +201,15 @@ impl AVAssetReaderDecoder {
             }
         };
 
+        Self::new_with_keyframe_index(path, tokio_handle, start_time, keyframe_index)
+    }
+
+    pub fn new_with_keyframe_index(
+        path: PathBuf,
+        tokio_handle: TokioHandle,
+        start_time: f32,
+        keyframe_index: Option<KeyframeIndex>,
+    ) -> Result<Self, String> {
         let (pixel_format, width, height) = {
             let input = ffmpeg::format::input(&path).unwrap();
 
@@ -143,8 +232,26 @@ impl AVAssetReaderDecoder {
             )
         };
 
-        let (track_output, reader) =
-            Self::get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format, width, height)?;
+        let seek_time = if let Some(ref kf_index) = keyframe_index {
+            let fps = kf_index.fps();
+            let target_frame = (start_time as f64 * fps).round() as u32;
+            if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
+                keyframe_time as f32
+            } else {
+                start_time
+            }
+        } else {
+            start_time
+        };
+
+        let (track_output, reader) = Self::get_reader_track_output(
+            &path,
+            seek_time,
+            &tokio_handle,
+            pixel_format,
+            width,
+            height,
+        )?;
 
         Ok(Self {
             path,
@@ -155,6 +262,7 @@ impl AVAssetReaderDecoder {
             width,
             height,
             keyframe_index,
+            current_position_secs: seek_time,
         })
     }
 
@@ -187,6 +295,8 @@ impl AVAssetReaderDecoder {
             self.height,
         )?;
 
+        self.current_position_secs = seek_time;
+
         let elapsed = reset_start.elapsed();
         tracing::info!(
             requested_time = requested_time,
@@ -198,6 +308,26 @@ impl AVAssetReaderDecoder {
         );
 
         Ok(())
+    }
+
+    pub fn current_position_secs(&self) -> f32 {
+        self.current_position_secs
+    }
+
+    pub fn update_position(&mut self, position_secs: f32) {
+        self.current_position_secs = position_secs;
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    pub fn pixel_format(&self) -> cv::PixelFormat {
+        self.pixel_format
+    }
+
+    pub fn take_keyframe_index(&mut self) -> Option<KeyframeIndex> {
+        self.keyframe_index.take()
     }
 
     pub fn keyframe_index(&self) -> Option<&KeyframeIndex> {
