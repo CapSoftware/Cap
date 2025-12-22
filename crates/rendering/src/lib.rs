@@ -1694,27 +1694,25 @@ impl RendererLayers {
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                    segment_frames.recording_time,
-                ))
-            })(),
+            uniforms.camera,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera_only?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                    segment_frames.recording_time,
-                ))
-            })(),
+            uniforms.camera_only,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.text.prepare(
