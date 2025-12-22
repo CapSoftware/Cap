@@ -44,15 +44,7 @@ import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-	Dialog,
-	DialogContent,
-	EditorButton,
-	Input,
-	Slider,
-	Subfield,
-} from "./ui";
-import { formatTime } from "./utils";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
@@ -208,10 +200,10 @@ function Inner() {
 	);
 
 	return (
-		<>
+		<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
 			<Header />
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
 				data-tauri-drag-region
 			>
 				<div
@@ -257,7 +249,7 @@ function Inner() {
 				</div>
 				<Dialogs />
 			</div>
-		</>
+		</div>
 	);
 }
 
@@ -422,61 +414,28 @@ function Dialogs() {
 							})()}
 						>
 							{(dialog) => {
-								const {
-									setProject: setState,
-									editorInstance,
-									editorState,
-									totalDuration,
-									project,
-								} = useEditorContext();
+								const { setProject: setState, editorInstance } =
+									useEditorContext();
 								const display = editorInstance.recordings.segments[0].display;
 
 								let cropperRef: CropperRef | undefined;
-								let videoRef: HTMLVideoElement | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
-								const [previewTime, setPreviewTime] = createSignal(
-									editorState.playbackTime,
-								);
-								const [videoLoaded, setVideoLoaded] = createSignal(false);
 
-								const currentSegment = createMemo(() => {
-									const time = previewTime();
-									let elapsed = 0;
-									for (const seg of project.timeline?.segments ?? []) {
-										const segDuration = (seg.end - seg.start) / seg.timescale;
-										if (time < elapsed + segDuration) {
-											return {
-												index: seg.recordingSegment ?? 0,
-												localTime: seg.start / seg.timescale + (time - elapsed),
-											};
-										}
-										elapsed += segDuration;
+								const [frameDataUrl, setFrameDataUrl] = createSignal<
+									string | null
+								>(null);
+
+								const playerCanvas = document.getElementById(
+									"canvas",
+								) as HTMLCanvasElement | null;
+								if (playerCanvas) {
+									try {
+										setFrameDataUrl(playerCanvas.toDataURL("image/png"));
+									} catch {
+										setFrameDataUrl(null);
 									}
-									return { index: 0, localTime: 0 };
-								});
-
-								const videoSrc = createMemo(() =>
-									convertFileSrc(
-										`${editorInstance.path}/content/segments/segment-${currentSegment().index}/display.mp4`,
-									),
-								);
-
-								createEffect(
-									on(
-										() => currentSegment().index,
-										() => {
-											setVideoLoaded(false);
-										},
-										{ defer: true },
-									),
-								);
-
-								createEffect(() => {
-									if (videoRef && videoLoaded()) {
-										videoRef.currentTime = currentSegment().localTime;
-									}
-								});
+								}
 
 								const initialBounds = {
 									x: dialog().position.x,
@@ -638,59 +597,18 @@ function Dialogs() {
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
-														<div class="relative">
-															<img
-																class="shadow pointer-events-none max-h-[70vh]"
-																alt="screenshot"
-																src={convertFileSrc(
+														<img
+															class="shadow pointer-events-none max-h-[70vh]"
+															alt="Current frame"
+															src={
+																frameDataUrl() ??
+																convertFileSrc(
 																	`${editorInstance.path}/screenshots/display.jpg`,
-																)}
-																style={{
-																	opacity: videoLoaded() ? 0 : 1,
-																	transition: "opacity 150ms ease-out",
-																}}
-															/>
-															<video
-																ref={videoRef}
-																src={videoSrc()}
-																class="absolute inset-0 w-full h-full object-contain shadow pointer-events-none"
-																preload="auto"
-																muted
-																onLoadedData={() => setVideoLoaded(true)}
-																onError={() => setVideoLoaded(false)}
-																style={{
-																	opacity: videoLoaded() ? 1 : 0,
-																	transition: "opacity 150ms ease-out",
-																}}
-															/>
-															<Show when={!videoLoaded()}>
-																<div class="absolute bottom-2 right-2 flex items-center gap-1.5 bg-gray-500/80 rounded-full px-2 py-1">
-																	<IconLucideLoaderCircle class="size-3 text-white animate-spin" />
-																	<span class="text-[10px] text-white font-medium">
-																		Loading
-																	</span>
-																</div>
-															</Show>
-														</div>
+																)
+															}
+														/>
 													</Cropper>
 												</div>
-											</div>
-											<div class="flex items-center gap-3 mt-4 px-2">
-												<span class="text-gray-11 text-sm tabular-nums min-w-[3rem]">
-													{formatTime(previewTime())}
-												</span>
-												<Slider
-													class="flex-1"
-													minValue={0}
-													maxValue={totalDuration()}
-													step={1 / FPS}
-													value={[previewTime()]}
-													onChange={([v]) => setPreviewTime(v)}
-													aria-label="Video timeline"
-												/>
-												<span class="text-gray-11 text-sm tabular-nums min-w-[3rem] text-right">
-													{formatTime(totalDuration())}
-												</span>
 											</div>
 										</Dialog.Content>
 										<Dialog.Footer>
