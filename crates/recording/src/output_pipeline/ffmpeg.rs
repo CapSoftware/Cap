@@ -1,5 +1,5 @@
 use crate::{
-    TaskPool,
+    SharedPauseState, TaskPool,
     output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
 };
 use anyhow::{Context, anyhow};
@@ -197,16 +197,21 @@ impl AudioMuxer for FragmentedAudioMuxer {
     }
 }
 
-pub struct SegmentedAudioMuxer(SegmentedAudioEncoder);
+pub struct SegmentedAudioMuxer {
+    encoder: SegmentedAudioEncoder,
+    pause: Option<SharedPauseState>,
+}
 
 pub struct SegmentedAudioMuxerConfig {
     pub segment_duration: Duration,
+    pub shared_pause_state: Option<SharedPauseState>,
 }
 
 impl Default for SegmentedAudioMuxerConfig {
     fn default() -> Self {
         Self {
             segment_duration: Duration::from_secs(3),
+            shared_pause_state: None,
         }
     }
 }
@@ -228,14 +233,19 @@ impl Muxer for SegmentedAudioMuxer {
         let audio_config =
             audio_config.ok_or_else(|| anyhow!("No audio configuration provided"))?;
 
-        Ok(Self(
-            SegmentedAudioEncoder::init(output_path, audio_config, config.segment_duration)
-                .map_err(|e| anyhow!("Failed to initialize segmented audio encoder: {e}"))?,
-        ))
+        Ok(Self {
+            encoder: SegmentedAudioEncoder::init(
+                output_path,
+                audio_config,
+                config.segment_duration,
+            )
+            .map_err(|e| anyhow!("Failed to initialize segmented audio encoder: {e}"))?,
+            pause: config.shared_pause_state,
+        })
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        self.0
+        self.encoder
             .finish_with_timestamp(timestamp)
             .map_err(Into::into)
             .map(|_| Ok(()))
@@ -244,8 +254,17 @@ impl Muxer for SegmentedAudioMuxer {
 
 impl AudioMuxer for SegmentedAudioMuxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
-        self.0
-            .queue_frame(frame.inner, timestamp)
+        let adjusted_timestamp = if let Some(pause) = &self.pause {
+            match pause.adjust(timestamp)? {
+                Some(ts) => ts,
+                None => return Ok(()),
+            }
+        } else {
+            timestamp
+        };
+
+        self.encoder
+            .queue_frame(frame.inner, adjusted_timestamp)
             .map_err(|e| anyhow!("Failed to queue audio frame: {e}"))
     }
 }

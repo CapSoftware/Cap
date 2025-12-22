@@ -65,6 +65,12 @@ impl PerformanceCounterTimestamp {
         }
     }
 
+    pub fn signed_duration_since_secs(&self, other: Self) -> f64 {
+        let freq = perf_freq() as f64;
+        let diff = self.0 as f64 - other.0 as f64;
+        diff / freq
+    }
+
     pub fn now() -> Self {
         let mut value = 0;
         unsafe { QueryPerformanceCounter(&mut value).unwrap() };

@@ -766,6 +766,11 @@ impl RecoveryManager {
     fn build_recovered_meta(
         recording: &IncompleteRecording,
     ) -> Result<StudioRecordingMeta, RecoveryError> {
+        let original_segments = match recording.meta.studio_meta() {
+            Some(StudioRecordingMeta::MultipleSegments { inner, .. }) => Some(&inner.segments),
+            _ => None,
+        };
+
         let segments: Vec<MultipleSegment> = recording
             .recoverable_segments
             .iter()
@@ -773,6 +778,9 @@ impl RecoveryManager {
                 let segment_index = seg.index;
                 let segment_base = format!("content/segments/segment-{segment_index}");
                 let segment_dir = recording.project_path.join(&segment_base);
+
+                let original_segment =
+                    original_segments.and_then(|segs| segs.get(segment_index as usize));
 
                 let display_path = segment_dir.join("display.mp4");
                 let fps = get_video_fps(&display_path).unwrap_or(30);
@@ -786,13 +794,18 @@ impl RecoveryManager {
                     display: VideoMeta {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
-                        start_time: None,
+                        start_time: original_segment.and_then(|s| s.display.start_time),
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/camera.mp4")),
-                            fps: 30,
-                            start_time: None,
+                            fps: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .map(|c| c.fps)
+                                .unwrap_or(30),
+                            start_time: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .and_then(|c| c.start_time),
                         })
                     } else {
                         None
@@ -800,7 +813,9 @@ impl RecoveryManager {
                     mic: if mic_path.exists() {
                         Some(AudioMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/audio-input.ogg")),
-                            start_time: None,
+                            start_time: original_segment
+                                .and_then(|s| s.mic.as_ref())
+                                .and_then(|m| m.start_time),
                         })
                     } else {
                         None
@@ -808,7 +823,9 @@ impl RecoveryManager {
                     system_audio: if system_audio_path.exists() {
                         Some(AudioMeta {
                             path: RelativePathBuf::from(format!("{segment_base}/system_audio.ogg")),
-                            start_time: None,
+                            start_time: original_segment
+                                .and_then(|s| s.system_audio.as_ref())
+                                .and_then(|a| a.start_time),
                         })
                     } else {
                         None

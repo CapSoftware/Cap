@@ -45,6 +45,31 @@ impl Timestamp {
         }
     }
 
+    pub fn signed_duration_since_secs(&self, start: Timestamps) -> f64 {
+        match self {
+            Self::Instant(instant) => {
+                if let Some(duration) = instant.checked_duration_since(start.instant) {
+                    duration.as_secs_f64()
+                } else {
+                    let reverse = start.instant.duration_since(*instant);
+                    -(reverse.as_secs_f64())
+                }
+            }
+            Self::SystemTime(time) => match time.duration_since(start.system_time) {
+                Ok(duration) => duration.as_secs_f64(),
+                Err(e) => -(e.duration().as_secs_f64()),
+            },
+            #[cfg(windows)]
+            Self::PerformanceCounter(counter) => {
+                counter.signed_duration_since_secs(start.performance_counter)
+            }
+            #[cfg(target_os = "macos")]
+            Self::MachAbsoluteTime(time) => {
+                time.signed_duration_since_secs(start.mach_absolute_time)
+            }
+        }
+    }
+
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
         #[cfg(windows)]
         {

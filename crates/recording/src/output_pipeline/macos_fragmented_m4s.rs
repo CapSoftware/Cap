@@ -1,6 +1,6 @@
 use crate::{
-    AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer, output_pipeline::NativeCameraFrame,
-    screen_capture,
+    AudioFrame, AudioMuxer, Muxer, SharedPauseState, TaskPool, VideoMuxer,
+    output_pipeline::NativeCameraFrame, screen_capture,
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
@@ -10,7 +10,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::AtomicBool,
         mpsc::{SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -23,55 +23,6 @@ fn get_muxer_buffer_size() -> usize {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3)
-}
-
-struct PauseTracker {
-    flag: Arc<AtomicBool>,
-    paused_at: Option<Duration>,
-    offset: Duration,
-}
-
-impl PauseTracker {
-    fn new(flag: Arc<AtomicBool>) -> Self {
-        Self {
-            flag,
-            paused_at: None,
-            offset: Duration::ZERO,
-        }
-    }
-
-    fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Relaxed) {
-            if self.paused_at.is_none() {
-                self.paused_at = Some(timestamp);
-            }
-            return Ok(None);
-        }
-
-        if let Some(start) = self.paused_at.take() {
-            let delta = timestamp.checked_sub(start).ok_or_else(|| {
-                anyhow!(
-                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
-                )
-            })?;
-
-            self.offset = self.offset.checked_add(delta).ok_or_else(|| {
-                anyhow!(
-                    "Pause offset overflow (offset={:?}, delta={delta:?})",
-                    self.offset
-                )
-            })?;
-        }
-
-        let adjusted = timestamp.checked_sub(self.offset).ok_or_else(|| {
-            anyhow!(
-                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
-                self.offset
-            )
-        })?;
-
-        Ok(Some(adjusted))
-    }
 }
 
 struct FrameDropTracker {
@@ -146,7 +97,7 @@ pub struct MacOSFragmentedM4SMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     state: Option<EncoderState>,
-    pause: PauseTracker,
+    pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
 }
@@ -155,6 +106,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
+    pub shared_pause_state: Option<SharedPauseState>,
 }
 
 impl Default for MacOSFragmentedM4SMuxerConfig {
@@ -163,6 +115,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
+            shared_pause_state: None,
         }
     }
 }
@@ -187,12 +140,16 @@ impl Muxer for MacOSFragmentedM4SMuxer {
         std::fs::create_dir_all(&output_path)
             .with_context(|| format!("Failed to create segments directory: {output_path:?}"))?;
 
+        let pause = config
+            .shared_pause_state
+            .unwrap_or_else(|| SharedPauseState::new(pause_flag));
+
         Ok(Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
             state: None,
-            pause: PauseTracker::new(pause_flag),
+            pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
         })
@@ -602,7 +559,7 @@ pub struct MacOSFragmentedM4SCameraMuxer {
     video_config: VideoInfo,
     segment_duration: Duration,
     state: Option<EncoderState>,
-    pause: PauseTracker,
+    pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
 }
@@ -611,6 +568,7 @@ pub struct MacOSFragmentedM4SCameraMuxerConfig {
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
+    pub shared_pause_state: Option<SharedPauseState>,
 }
 
 impl Default for MacOSFragmentedM4SCameraMuxerConfig {
@@ -619,6 +577,7 @@ impl Default for MacOSFragmentedM4SCameraMuxerConfig {
             segment_duration: Duration::from_secs(3),
             preset: H264Preset::Ultrafast,
             output_size: None,
+            shared_pause_state: None,
         }
     }
 }
@@ -644,12 +603,16 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             format!("Failed to create camera segments directory: {output_path:?}")
         })?;
 
+        let pause = config
+            .shared_pause_state
+            .unwrap_or_else(|| SharedPauseState::new(pause_flag));
+
         Ok(Self {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
             state: None,
-            pause: PauseTracker::new(pause_flag),
+            pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
         })
