@@ -8,7 +8,7 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::base::EncoderBase;
 
@@ -130,7 +130,7 @@ impl H264EncoderBuilder {
                             "Selected hardware H264 encoder"
                         );
                     } else {
-                        error!(
+                        warn!(
                             encoder = %codec_name,
                             input_width = input_config.width,
                             input_height = input_config.height,

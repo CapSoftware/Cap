@@ -226,7 +226,7 @@ impl ImageBufProcessor {
 }
 
 impl CachedFrame {
-    fn new(_processor: &ImageBufProcessor, image_buf: R<cv::ImageBuf>, number: u32) -> Self {
+    fn new(processor: &ImageBufProcessor, image_buf: R<cv::ImageBuf>, number: u32) -> Self {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
 
@@ -246,7 +246,7 @@ impl CachedFrame {
             }
             format::Pixel::RGBA | format::Pixel::BGRA | format::Pixel::YUV420P => {
                 let mut img = image_buf;
-                let (data, fmt, y_str, uv_str) = _processor.extract_raw(&mut img);
+                let (data, fmt, y_str, uv_str) = processor.extract_raw(&mut img);
                 return Self(ProcessedFrame {
                     _number: number,
                     width,

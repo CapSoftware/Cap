@@ -1,7 +1,37 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 use tokio::runtime::Runtime;
+
+const DEFAULT_DURATION_SECS: f32 = 60.0;
+
+fn get_video_duration(path: &Path) -> f32 {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let duration_str = String::from_utf8_lossy(&output.stdout);
+            duration_str.trim().parse().unwrap_or(DEFAULT_DURATION_SECS)
+        }
+        _ => {
+            eprintln!(
+                "Warning: Could not determine video duration via ffprobe, using default {DEFAULT_DURATION_SECS}s"
+            );
+            DEFAULT_DURATION_SECS
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct BenchmarkConfig {
@@ -15,9 +45,12 @@ struct BenchmarkResults {
     decoder_creation_ms: f64,
     sequential_decode_times_ms: Vec<f64>,
     sequential_fps: f64,
+    sequential_failures: usize,
     seek_times_by_distance: Vec<(f32, f64)>,
+    seek_failures: usize,
     random_access_times_ms: Vec<f64>,
     random_access_avg_ms: f64,
+    random_access_failures: usize,
     cache_hits: usize,
     cache_misses: usize,
 }
@@ -36,9 +69,13 @@ impl BenchmarkResults {
         println!();
 
         println!("SEQUENTIAL DECODE PERFORMANCE");
-        if !self.sequential_decode_times_ms.is_empty() {
-            let avg: f64 = self.sequential_decode_times_ms.iter().sum::<f64>()
-                / self.sequential_decode_times_ms.len() as f64;
+        if !self.sequential_decode_times_ms.is_empty() || self.sequential_failures > 0 {
+            let avg: f64 = if self.sequential_decode_times_ms.is_empty() {
+                0.0
+            } else {
+                self.sequential_decode_times_ms.iter().sum::<f64>()
+                    / self.sequential_decode_times_ms.len() as f64
+            };
             let min = self
                 .sequential_decode_times_ms
                 .iter()
@@ -53,6 +90,9 @@ impl BenchmarkResults {
                 "  Frames decoded: {}",
                 self.sequential_decode_times_ms.len()
             );
+            if self.sequential_failures > 0 {
+                println!("  Frames failed: {}", self.sequential_failures);
+            }
             println!("  Avg decode time: {avg:.2}ms");
             println!("  Min decode time: {min:.2}ms");
             println!("  Max decode time: {max:.2}ms");
@@ -61,19 +101,26 @@ impl BenchmarkResults {
         println!();
 
         println!("SEEK PERFORMANCE (by distance)");
-        if !self.seek_times_by_distance.is_empty() {
+        if !self.seek_times_by_distance.is_empty() || self.seek_failures > 0 {
             println!("  {:>10} | {:>12}", "Distance(s)", "Time(ms)");
             println!("  {}-+-{}", "-".repeat(10), "-".repeat(12));
             for (distance, time) in &self.seek_times_by_distance {
                 println!("  {distance:>10.1} | {time:>12.2}");
             }
+            if self.seek_failures > 0 {
+                println!("  Seek failures: {}", self.seek_failures);
+            }
         }
         println!();
 
         println!("RANDOM ACCESS PERFORMANCE");
-        if !self.random_access_times_ms.is_empty() {
-            let avg = self.random_access_times_ms.iter().sum::<f64>()
-                / self.random_access_times_ms.len() as f64;
+        if !self.random_access_times_ms.is_empty() || self.random_access_failures > 0 {
+            let avg = if self.random_access_times_ms.is_empty() {
+                0.0
+            } else {
+                self.random_access_times_ms.iter().sum::<f64>()
+                    / self.random_access_times_ms.len() as f64
+            };
             let min = self
                 .random_access_times_ms
                 .iter()
@@ -85,6 +132,9 @@ impl BenchmarkResults {
                 .cloned()
                 .fold(f64::NEG_INFINITY, f64::max);
             println!("  Samples: {}", self.random_access_times_ms.len());
+            if self.random_access_failures > 0 {
+                println!("  Failures: {}", self.random_access_failures);
+            }
             println!("  Avg access time: {avg:.2}ms");
             println!("  Min access time: {min:.2}ms");
             println!("  Max access time: {max:.2}ms");
@@ -123,11 +173,15 @@ impl BenchmarkResults {
 }
 
 fn percentile(data: &[f64], p: f64) -> f64 {
-    if data.is_empty() {
+    let filtered: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+    if filtered.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f64> = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut sorted = filtered;
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b)
+            .expect("NaN values should have been filtered out")
+    });
     let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
 }
@@ -161,22 +215,35 @@ async fn benchmark_sequential_decode(
     fps: u32,
     frame_count: usize,
     start_time: f32,
-) -> (Vec<f64>, f64) {
+) -> (Vec<f64>, f64, usize) {
     let mut times = Vec::with_capacity(frame_count);
+    let mut failures = 0;
     let overall_start = Instant::now();
 
     for i in 0..frame_count {
         let time = start_time + (i as f32 / fps as f32);
         let start = Instant::now();
-        let _frame = decoder.get_frame(time).await;
-        let elapsed = start.elapsed();
-        times.push(elapsed.as_secs_f64() * 1000.0);
+        match decoder.get_frame(time).await {
+            Some(_frame) => {
+                let elapsed = start.elapsed();
+                times.push(elapsed.as_secs_f64() * 1000.0);
+            }
+            None => {
+                failures += 1;
+                eprintln!("Failed to get frame at time {time:.3}s");
+            }
+        }
     }
 
     let overall_elapsed = overall_start.elapsed();
-    let effective_fps = frame_count as f64 / overall_elapsed.as_secs_f64();
+    let successful_frames = frame_count - failures;
+    let effective_fps = if overall_elapsed.as_secs_f64() > 0.0 {
+        successful_frames as f64 / overall_elapsed.as_secs_f64()
+    } else {
+        0.0
+    };
 
-    (times, effective_fps)
+    (times, effective_fps, failures)
 }
 
 async fn benchmark_seek(
@@ -184,14 +251,23 @@ async fn benchmark_seek(
     _fps: u32,
     from_time: f32,
     to_time: f32,
-) -> f64 {
-    let _ = decoder.get_frame(from_time).await;
+) -> Option<f64> {
+    if decoder.get_frame(from_time).await.is_none() {
+        eprintln!("Failed to get initial frame at time {from_time:.3}s for seek benchmark");
+        return None;
+    }
 
     let start = Instant::now();
-    let _frame = decoder.get_frame(to_time).await;
-    let elapsed = start.elapsed();
-
-    elapsed.as_secs_f64() * 1000.0
+    match decoder.get_frame(to_time).await {
+        Some(_frame) => {
+            let elapsed = start.elapsed();
+            Some(elapsed.as_secs_f64() * 1000.0)
+        }
+        None => {
+            eprintln!("Failed to get frame at time {to_time:.3}s for seek benchmark");
+            None
+        }
+    }
 }
 
 async fn benchmark_random_access(
@@ -199,8 +275,9 @@ async fn benchmark_random_access(
     _fps: u32,
     duration_secs: f32,
     sample_count: usize,
-) -> Vec<f64> {
+) -> (Vec<f64>, usize) {
     let mut times = Vec::with_capacity(sample_count);
+    let mut failures = 0;
 
     let golden_ratio = 1.618_034_f32;
     let mut position = 0.0_f32;
@@ -208,12 +285,19 @@ async fn benchmark_random_access(
     for _ in 0..sample_count {
         position = (position + golden_ratio * duration_secs) % duration_secs;
         let start = Instant::now();
-        let _frame = decoder.get_frame(position).await;
-        let elapsed = start.elapsed();
-        times.push(elapsed.as_secs_f64() * 1000.0);
+        match decoder.get_frame(position).await {
+            Some(_frame) => {
+                let elapsed = start.elapsed();
+                times.push(elapsed.as_secs_f64() * 1000.0);
+            }
+            None => {
+                failures += 1;
+                eprintln!("Failed to get frame at position {position:.3}s during random access");
+            }
+        }
     }
 
-    times
+    (times, failures)
 }
 
 async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
@@ -246,24 +330,44 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     };
     println!("      Done");
 
+    let video_duration = get_video_duration(&config.video_path);
+    println!("Detected video duration: {video_duration:.2}s");
+    println!();
+
     println!("[3/5] Benchmarking sequential decode (100 frames from start)...");
-    let (seq_times, seq_fps) = benchmark_sequential_decode(&decoder, config.fps, 100, 0.0).await;
+    let (seq_times, seq_fps, seq_failures) =
+        benchmark_sequential_decode(&decoder, config.fps, 100, 0.0).await;
     results.sequential_decode_times_ms = seq_times;
     results.sequential_fps = seq_fps;
+    results.sequential_failures = seq_failures;
     println!("      Done: {seq_fps:.1} effective FPS");
+    if seq_failures > 0 {
+        println!("      Warning: {seq_failures} frames failed to decode");
+    }
 
     println!("[4/5] Benchmarking seek performance...");
-    let seek_distances = vec![0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
+    let seek_distances: Vec<f32> = vec![0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+        .into_iter()
+        .filter(|&d| d <= video_duration)
+        .collect();
     for distance in seek_distances {
-        let seek_time = benchmark_seek(&decoder, config.fps, 0.0, distance).await;
-        results.seek_times_by_distance.push((distance, seek_time));
-        println!("      {distance:.1}s seek: {seek_time:.2}ms");
+        match benchmark_seek(&decoder, config.fps, 0.0, distance).await {
+            Some(seek_time) => {
+                results.seek_times_by_distance.push((distance, seek_time));
+                println!("      {distance:.1}s seek: {seek_time:.2}ms");
+            }
+            None => {
+                results.seek_failures += 1;
+                println!("      {distance:.1}s seek: FAILED");
+            }
+        }
     }
 
     println!("[5/5] Benchmarking random access (50 samples)...");
-    let video_duration = 60.0f32;
-    results.random_access_times_ms =
+    let (random_times, random_failures) =
         benchmark_random_access(&decoder, config.fps, video_duration, 50).await;
+    results.random_access_times_ms = random_times;
+    results.random_access_failures = random_failures;
     results.random_access_avg_ms = if results.random_access_times_ms.is_empty() {
         0.0
     } else {
@@ -271,6 +375,9 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
             / results.random_access_times_ms.len() as f64
     };
     println!("      Done: {:.2}ms avg", results.random_access_avg_ms);
+    if random_failures > 0 {
+        println!("      Warning: {random_failures} random accesses failed");
+    }
 
     results
 }

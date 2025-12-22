@@ -96,6 +96,8 @@ pub struct MacOSFragmentedM4SMuxer {
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
+    preset: H264Preset,
+    output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
@@ -148,6 +150,8 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
+            preset: config.preset,
+            output_size: config.output_size,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(),
@@ -174,11 +178,17 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "M4S encoder thread panicked during finish: {:?}",
-                                panic_payload
-                            );
+                        match handle.join() {
+                            Err(panic_payload) => {
+                                warn!(
+                                    "M4S encoder thread panicked during finish: {:?}",
+                                    panic_payload
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                warn!("M4S encoder thread returned error: {e}");
+                            }
+                            Ok(Ok(())) => {}
                         }
                         break;
                     }
@@ -218,9 +228,9 @@ impl MacOSFragmentedM4SMuxer {
 
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
-            preset: H264Preset::Ultrafast,
+            preset: self.preset,
             bpp: H264EncoderBuilder::QUALITY_BPP,
-            output_size: None,
+            output_size: self.output_size,
         };
 
         let encoder =
@@ -550,7 +560,7 @@ impl<'a> BaseAddrLockGuard<'a> {
 
 impl Drop for BaseAddrLockGuard<'_> {
     fn drop(&mut self) {
-        let _ = unsafe { self.0.unlock_lock_base_addr(self.1) };
+        unsafe { self.0.unlock_lock_base_addr(self.1) };
     }
 }
 
@@ -558,6 +568,8 @@ pub struct MacOSFragmentedM4SCameraMuxer {
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
+    preset: H264Preset,
+    output_size: Option<(u32, u32)>,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
@@ -611,6 +623,8 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
+            preset: config.preset,
+            output_size: config.output_size,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(),
@@ -637,11 +651,17 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
-                        if let Err(panic_payload) = handle.join() {
-                            warn!(
-                                "M4S camera encoder thread panicked during finish: {:?}",
-                                panic_payload
-                            );
+                        match handle.join() {
+                            Err(panic_payload) => {
+                                warn!(
+                                    "M4S camera encoder thread panicked during finish: {:?}",
+                                    panic_payload
+                                );
+                            }
+                            Ok(Err(e)) => {
+                                warn!("M4S camera encoder thread returned error: {e}");
+                            }
+                            Ok(Ok(())) => {}
                         }
                         break;
                     }
@@ -681,9 +701,9 @@ impl MacOSFragmentedM4SCameraMuxer {
 
         let encoder_config = SegmentedVideoEncoderConfig {
             segment_duration: self.segment_duration,
-            preset: H264Preset::Ultrafast,
+            preset: self.preset,
             bpp: H264EncoderBuilder::QUALITY_BPP,
-            output_size: None,
+            output_size: self.output_size,
         };
 
         let encoder =
