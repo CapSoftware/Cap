@@ -413,7 +413,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn select_best_decoder(&mut self, requested_time: f32) -> (usize, bool) {
-        let (best_id, distance, needs_reset) =
+        let (best_id, _distance, needs_reset) =
             self.pool_manager.find_best_decoder_for_time(requested_time);
 
         let decoder_idx = best_id.min(self.decoders.len().saturating_sub(1));
@@ -517,7 +517,7 @@ impl AVAssetReaderDecoder {
                 if let Some(cached) = cache.get(&request.frame) {
                     let data = cached.data().clone();
                     let req = pending_requests.remove(i);
-                    if req.sender.send(data.to_decoded_frame()).is_err() {}
+                    let _ = req.sender.send(data.to_decoded_frame());
                     *last_sent_frame.borrow_mut() = Some(data);
                 } else {
                     i += 1;
@@ -609,16 +609,16 @@ impl AVAssetReaderDecoder {
                             if req.frame == current_frame {
                                 let data = cache_frame.data().clone();
                                 *last_sent_frame.borrow_mut() = Some(data.clone());
-                                if req.sender.send(data.to_decoded_frame()).is_err() {}
+                                let _ = req.sender.send(data.to_decoded_frame());
                             } else if req.frame < current_frame {
                                 if let Some(cached) = cache.get(&req.frame) {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    if req.sender.send(data.to_decoded_frame()).is_err() {}
+                                    let _ = req.sender.send(data.to_decoded_frame());
                                 } else if is_scrubbing {
                                     let data = cache_frame.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
-                                    if req.sender.send(data.to_decoded_frame()).is_err() {}
+                                    let _ = req.sender.send(data.to_decoded_frame());
                                 }
                             } else {
                                 remaining_requests.push(req);
@@ -650,7 +650,7 @@ impl AVAssetReaderDecoder {
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
-                    if req.sender.send(data.to_decoded_frame()).is_err() {}
+                    let _ = req.sender.send(data.to_decoded_frame());
                 } else if let Some(last) = last_sent_frame.borrow().clone() {
                     if req.sender.send(last.to_decoded_frame()).is_err() {}
                 } else if let Some(first) = first_ever_frame.borrow().clone() {

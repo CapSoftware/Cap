@@ -204,7 +204,7 @@ impl ScrubDetector {
         let instantaneous_rate = frame_delta as f64 / elapsed_secs;
         self.request_rate = self.request_rate * 0.7 + instantaneous_rate * 0.3;
 
-        let was_scrubbing = self.is_scrubbing;
+        let _was_scrubbing = self.is_scrubbing;
 
         if self.request_rate > Self::SCRUB_THRESHOLD_RATE && frame_delta > 1 {
             self.is_scrubbing = true;

@@ -267,11 +267,11 @@ impl AVAssetReaderDecoder {
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
-        let reset_start = std::time::Instant::now();
+        let _reset_start = std::time::Instant::now();
 
         self.reader.cancel_reading();
 
-        let (seek_time, keyframe_frame) = if let Some(ref keyframe_index) = self.keyframe_index {
+        let (seek_time, _keyframe_frame) = if let Some(ref keyframe_index) = self.keyframe_index {
             let fps = keyframe_index.fps();
             let target_frame = (requested_time as f64 * fps).round() as u32;
 

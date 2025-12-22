@@ -1,5 +1,5 @@
 use cap_rendering::decoder::{AsyncVideoDecoderHandle, spawn_decoder};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
@@ -53,9 +53,9 @@ impl BenchmarkResults {
                 "  Frames decoded: {}",
                 self.sequential_decode_times_ms.len()
             );
-            println!("  Avg decode time: {:.2}ms", avg);
-            println!("  Min decode time: {:.2}ms", min);
-            println!("  Max decode time: {:.2}ms", max);
+            println!("  Avg decode time: {avg:.2}ms");
+            println!("  Min decode time: {min:.2}ms");
+            println!("  Max decode time: {max:.2}ms");
             println!("  Effective FPS: {:.1}", self.sequential_fps);
         }
         println!();
@@ -65,7 +65,7 @@ impl BenchmarkResults {
             println!("  {:>10} | {:>12}", "Distance(s)", "Time(ms)");
             println!("  {}-+-{}", "-".repeat(10), "-".repeat(12));
             for (distance, time) in &self.seek_times_by_distance {
-                println!("  {:>10.1} | {:>12.2}", distance, time);
+                println!("  {distance:>10.1} | {time:>12.2}");
             }
         }
         println!();
@@ -85,9 +85,9 @@ impl BenchmarkResults {
                 .cloned()
                 .fold(f64::NEG_INFINITY, f64::max);
             println!("  Samples: {}", self.random_access_times_ms.len());
-            println!("  Avg access time: {:.2}ms", avg);
-            println!("  Min access time: {:.2}ms", min);
-            println!("  Max access time: {:.2}ms", max);
+            println!("  Avg access time: {avg:.2}ms");
+            println!("  Min access time: {min:.2}ms");
+            println!("  Max access time: {max:.2}ms");
             println!(
                 "  P50: {:.2}ms",
                 percentile(&self.random_access_times_ms, 50.0)
@@ -132,12 +132,12 @@ fn percentile(data: &[f64], p: f64) -> f64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-async fn benchmark_decoder_creation(path: &PathBuf, fps: u32, iterations: usize) -> f64 {
+async fn benchmark_decoder_creation(path: &Path, fps: u32, iterations: usize) -> f64 {
     let mut total_ms = 0.0;
 
     for i in 0..iterations {
         let start = Instant::now();
-        let decoder = spawn_decoder("benchmark", path.clone(), fps, 0.0).await;
+        let decoder = spawn_decoder("benchmark", path.to_path_buf(), fps, 0.0).await;
         let elapsed = start.elapsed();
 
         match decoder {
@@ -146,7 +146,7 @@ async fn benchmark_decoder_creation(path: &PathBuf, fps: u32, iterations: usize)
             }
             Err(e) => {
                 if i == 0 {
-                    eprintln!("Failed to create decoder: {}", e);
+                    eprintln!("Failed to create decoder: {e}");
                     return -1.0;
                 }
             }
@@ -202,7 +202,7 @@ async fn benchmark_random_access(
 ) -> Vec<f64> {
     let mut times = Vec::with_capacity(sample_count);
 
-    let golden_ratio = 1.618033988749895_f32;
+    let golden_ratio = 1.618_034_f32;
     let mut position = 0.0_f32;
 
     for _ in 0..sample_count {
@@ -240,7 +240,7 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("Failed to create decoder: {}", e);
+            eprintln!("Failed to create decoder: {e}");
             return results;
         }
     };
@@ -250,14 +250,14 @@ async fn run_full_benchmark(config: BenchmarkConfig) -> BenchmarkResults {
     let (seq_times, seq_fps) = benchmark_sequential_decode(&decoder, config.fps, 100, 0.0).await;
     results.sequential_decode_times_ms = seq_times;
     results.sequential_fps = seq_fps;
-    println!("      Done: {:.1} effective FPS", seq_fps);
+    println!("      Done: {seq_fps:.1} effective FPS");
 
     println!("[4/5] Benchmarking seek performance...");
     let seek_distances = vec![0.5, 1.0, 2.0, 5.0, 10.0, 30.0];
     for distance in seek_distances {
         let seek_time = benchmark_seek(&decoder, config.fps, 0.0, distance).await;
         results.seek_times_by_distance.push((distance, seek_time));
-        println!("      {:.1}s seek: {:.2}ms", distance, seek_time);
+        println!("      {distance:.1}s seek: {seek_time:.2}ms");
     }
 
     println!("[5/5] Benchmarking random access (50 samples)...");
