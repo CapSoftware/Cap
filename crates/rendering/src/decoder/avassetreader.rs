@@ -287,7 +287,6 @@ impl AVAssetReaderDecoder {
         let mut last_active_frame = None::<u32>;
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
         let first_ever_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
-        let mut backward_stale_count: u32 = 0;
 
         let mut frames = this.inner.frames();
         let processor = ImageBufProcessor::new();
@@ -347,28 +346,6 @@ impl AVAssetReaderDecoder {
             let requested_time = requested_frame as f32 / fps as f32;
 
             const BACKWARD_SEEK_TOLERANCE: u32 = 120;
-            const MAX_STALE_FRAMES: u32 = 3;
-            let cache_frame_min_early = cache.keys().next().copied();
-            let cache_frame_max_early = cache.keys().next_back().copied();
-
-            if let (Some(c_min), Some(_c_max)) = (cache_frame_min_early, cache_frame_max_early) {
-                let is_backward_within_tolerance =
-                    requested_frame < c_min && requested_frame + BACKWARD_SEEK_TOLERANCE >= c_min;
-                if is_backward_within_tolerance
-                    && backward_stale_count < MAX_STALE_FRAMES
-                    && let Some(closest_frame) = cache.get(&c_min)
-                {
-                    backward_stale_count += 1;
-                    let data = closest_frame.data().clone();
-                    *last_sent_frame.borrow_mut() = Some(data.clone());
-                    for req in pending_requests.drain(..) {
-                        if req.sender.send(data.to_decoded_frame()).is_err() {
-                            debug!("frame receiver dropped before send");
-                        }
-                    }
-                    continue;
-                }
-            }
 
             let cache_min = min_requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
             let cache_max = max_requested_frame + FRAME_CACHE_SIZE as u32 / 2;
@@ -382,11 +359,7 @@ impl AVAssetReaderDecoder {
                     requested_frame + BACKWARD_SEEK_TOLERANCE < c_min;
                 let is_forward_seek_beyond_cache =
                     requested_frame > c_max + FRAME_CACHE_SIZE as u32 / 4;
-                let stale_limit_exceeded =
-                    backward_stale_count >= MAX_STALE_FRAMES && requested_frame < c_min;
-                is_backward_seek_beyond_tolerance
-                    || is_forward_seek_beyond_cache
-                    || stale_limit_exceeded
+                is_backward_seek_beyond_tolerance || is_forward_seek_beyond_cache
             } else {
                 true
             };
@@ -395,7 +368,6 @@ impl AVAssetReaderDecoder {
                 this.reset(requested_time);
                 frames = this.inner.frames();
                 *last_sent_frame.borrow_mut() = None;
-                backward_stale_count = 0;
                 cache.retain(|&f, _| f >= cache_min && f <= cache_max);
             }
 
@@ -445,7 +417,6 @@ impl AVAssetReaderDecoder {
                     }
 
                     cache.insert(current_frame, cache_frame.clone());
-                    backward_stale_count = 0;
 
                     let mut remaining_requests = Vec::with_capacity(pending_requests.len());
                     for req in pending_requests.drain(..) {
@@ -456,13 +427,9 @@ impl AVAssetReaderDecoder {
                                 debug!("frame receiver dropped before send");
                             }
                         } else if req.frame < current_frame {
-                            let prev_frame_data = last_sent_frame.borrow().clone();
-                            if let Some(data) = prev_frame_data {
-                                if req.sender.send(data.to_decoded_frame()).is_err() {
-                                    debug!("frame receiver dropped before send");
-                                }
-                            } else {
-                                let data = cache_frame.data().clone();
+                            if let Some(cached) = cache.get(&req.frame) {
+                                let data = cached.data().clone();
+                                *last_sent_frame.borrow_mut() = Some(data.clone());
                                 if req.sender.send(data.to_decoded_frame()).is_err() {
                                     debug!("frame receiver dropped before send");
                                 }
@@ -486,37 +453,9 @@ impl AVAssetReaderDecoder {
             this.is_done = true;
 
             for req in pending_requests.drain(..) {
-                let prev_data = last_sent_frame.borrow().clone();
-                if let Some(data) = prev_data {
+                if let Some(cached) = cache.get(&req.frame) {
+                    let data = cached.data().clone();
                     if req.sender.send(data.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
-                } else if let Some(first_frame) = first_ever_frame.borrow().clone() {
-                    debug!(
-                        "Returning first decoded frame as fallback for request {}",
-                        req.frame
-                    );
-                    if req.sender.send(first_frame.to_decoded_frame()).is_err() {
-                        debug!("frame receiver dropped before send");
-                    }
-                } else {
-                    debug!(
-                        "No frames available for request {}, returning black frame",
-                        req.frame
-                    );
-                    let black_frame_data = vec![0u8; (video_width * video_height * 4) as usize];
-                    let black_frame = ProcessedFrame {
-                        _number: req.frame,
-                        width: video_width,
-                        height: video_height,
-                        format: PixelFormat::Rgba,
-                        frame_data: FrameData {
-                            data: Arc::new(black_frame_data),
-                            y_stride: video_width * 4,
-                            uv_stride: 0,
-                        },
-                    };
-                    if req.sender.send(black_frame.to_decoded_frame()).is_err() {
                         debug!("frame receiver dropped before send");
                     }
                 }
