@@ -106,11 +106,12 @@ use crate::{
 };
 use crate::{recording::start_recording, upload::build_video_meta};
 
+type FinalizingRecordingsMap =
+    std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
+
 #[derive(Default)]
 pub struct FinalizingRecordings {
-    recordings: std::sync::Mutex<
-        std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>,
-    >,
+    recordings: std::sync::Mutex<FinalizingRecordingsMap>,
 }
 
 impl FinalizingRecordings {

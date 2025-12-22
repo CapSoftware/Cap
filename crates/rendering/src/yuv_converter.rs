@@ -157,6 +157,7 @@ impl BindGroupCache {
         self.cached_height = 0;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn get_or_create_nv12(
         &mut self,
         device: &wgpu::Device,
@@ -199,6 +200,7 @@ impl BindGroupCache {
         self.nv12_bind_groups[output_index].as_ref().unwrap()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn get_or_create_yuv420p(
         &mut self,
         device: &wgpu::Device,
