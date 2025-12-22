@@ -158,7 +158,7 @@ impl RecordingSegmentDecoders {
                         segment.camera.as_ref().unwrap().fps
                     }
                     StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                        inner.segments[0].camera.as_ref().unwrap().fps
+                        inner.segments[segment_i].camera.as_ref().unwrap().fps
                     }
                 },
                 match &meta {

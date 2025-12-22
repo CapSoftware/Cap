@@ -20,11 +20,22 @@ use crate::{DecodedFrame, PixelFormat};
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::{DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
+struct SendableImageBuf(R<cv::ImageBuf>);
+unsafe impl Send for SendableImageBuf {}
+unsafe impl Sync for SendableImageBuf {}
+
+impl Clone for SendableImageBuf {
+    fn clone(&self) -> Self {
+        Self(self.0.retained())
+    }
+}
+
 #[derive(Clone)]
 struct FrameData {
     data: Arc<Vec<u8>>,
     y_stride: u32,
     uv_stride: u32,
+    image_buf: Option<Arc<SendableImageBuf>>,
 }
 
 #[derive(Clone)]
@@ -42,19 +53,32 @@ impl ProcessedFrame {
             data,
             y_stride,
             uv_stride,
+            image_buf,
         } = &self.frame_data;
 
         match self.format {
             PixelFormat::Rgba => {
                 DecodedFrame::new_with_arc(Arc::clone(data), self.width, self.height)
             }
-            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
-                Arc::clone(data),
-                self.width,
-                self.height,
-                *y_stride,
-                *uv_stride,
-            ),
+            PixelFormat::Nv12 => {
+                if let Some(img_buf) = image_buf {
+                    DecodedFrame::new_nv12_zero_copy(
+                        self.width,
+                        self.height,
+                        *y_stride,
+                        *uv_stride,
+                        img_buf.0.retained(),
+                    )
+                } else {
+                    DecodedFrame::new_nv12_with_arc(
+                        Arc::clone(data),
+                        self.width,
+                        self.height,
+                        *y_stride,
+                        *uv_stride,
+                    )
+                }
+            }
             PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
                 Arc::clone(data),
                 self.width,
@@ -201,11 +225,56 @@ impl ImageBufProcessor {
 }
 
 impl CachedFrame {
-    fn new(processor: &ImageBufProcessor, mut image_buf: R<cv::ImageBuf>, number: u32) -> Self {
+    fn new(_processor: &ImageBufProcessor, image_buf: R<cv::ImageBuf>, number: u32) -> Self {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
 
-        let (data, format, y_stride, uv_stride) = processor.extract_raw(&mut image_buf);
+        let pixel_format =
+            cap_video_decode::avassetreader::pixel_format_to_pixel(image_buf.pixel_format());
+
+        let (format, y_stride, uv_stride, stored_image_buf) = match pixel_format {
+            format::Pixel::NV12 => {
+                let y_stride = image_buf.plane_bytes_per_row(0) as u32;
+                let uv_stride = image_buf.plane_bytes_per_row(1) as u32;
+                (
+                    PixelFormat::Nv12,
+                    y_stride,
+                    uv_stride,
+                    Some(Arc::new(SendableImageBuf(image_buf))),
+                )
+            }
+            format::Pixel::RGBA | format::Pixel::BGRA | format::Pixel::YUV420P => {
+                let mut img = image_buf;
+                let (data, fmt, y_str, uv_str) = _processor.extract_raw(&mut img);
+                return Self(ProcessedFrame {
+                    _number: number,
+                    width,
+                    height,
+                    format: fmt,
+                    frame_data: FrameData {
+                        data: Arc::new(data),
+                        y_stride: y_str,
+                        uv_stride: uv_str,
+                        image_buf: None,
+                    },
+                });
+            }
+            _ => {
+                let black_frame = vec![0u8; (width * height * 4) as usize];
+                return Self(ProcessedFrame {
+                    _number: number,
+                    width,
+                    height,
+                    format: PixelFormat::Rgba,
+                    frame_data: FrameData {
+                        data: Arc::new(black_frame),
+                        y_stride: width * 4,
+                        uv_stride: 0,
+                        image_buf: None,
+                    },
+                });
+            }
+        };
 
         let frame = ProcessedFrame {
             _number: number,
@@ -213,9 +282,10 @@ impl CachedFrame {
             height,
             format,
             frame_data: FrameData {
-                data: Arc::new(data),
+                data: Arc::new(Vec::new()),
                 y_stride,
                 uv_stride,
+                image_buf: stored_image_buf,
             },
         };
         Self(frame)
@@ -302,6 +372,12 @@ impl AVAssetReaderDecoder {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
                     let frame = (requested_time * fps as f32).floor() as u32;
+                    debug!(
+                        decoder = _name,
+                        requested_time = requested_time,
+                        frame = frame,
+                        "GetFrame request received"
+                    );
                     if !sender.is_closed() {
                         pending_requests.push(PendingRequest { frame, sender });
                     }
@@ -365,6 +441,13 @@ impl AVAssetReaderDecoder {
             };
 
             if needs_reset {
+                debug!(
+                    decoder = _name,
+                    requested_frame = requested_frame,
+                    cache_min = ?cache_frame_min,
+                    cache_max = ?cache_frame_max,
+                    "Triggering decoder reset"
+                );
                 this.reset(requested_time);
                 frames = this.inner.frames();
                 *last_sent_frame.borrow_mut() = None;
@@ -374,11 +457,13 @@ impl AVAssetReaderDecoder {
             last_active_frame = Some(requested_frame);
 
             let mut exit = false;
+            let mut frames_iterated = 0u32;
 
             for frame in &mut frames {
                 let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
                     continue;
                 };
+                frames_iterated += 1;
 
                 let current_frame =
                     pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
@@ -452,12 +537,46 @@ impl AVAssetReaderDecoder {
 
             this.is_done = true;
 
+            if !pending_requests.is_empty() {
+                debug!(
+                    decoder = _name,
+                    pending_count = pending_requests.len(),
+                    frames_iterated = frames_iterated,
+                    cache_size = cache.len(),
+                    "Handling unfulfilled requests after frame iteration"
+                );
+            }
+
             for req in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&req.frame) {
                     let data = cached.data().clone();
                     if req.sender.send(data.to_decoded_frame()).is_err() {
                         debug!("frame receiver dropped before send");
                     }
+                } else if let Some(last) = last_sent_frame.borrow().clone() {
+                    debug!(
+                        decoder = _name,
+                        requested_frame = req.frame,
+                        "Sending last known frame as fallback"
+                    );
+                    if req.sender.send(last.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
+                    }
+                } else if let Some(first) = first_ever_frame.borrow().clone() {
+                    debug!(
+                        decoder = _name,
+                        requested_frame = req.frame,
+                        "Sending first ever frame as fallback"
+                    );
+                    if req.sender.send(first.to_decoded_frame()).is_err() {
+                        debug!("frame receiver dropped before send");
+                    }
+                } else {
+                    debug!(
+                        decoder = _name,
+                        requested_frame = req.frame,
+                        "No frame available to send - request dropped"
+                    );
                 }
             }
         }

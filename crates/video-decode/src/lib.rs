@@ -5,7 +5,7 @@ pub mod ffmpeg;
 pub mod media_foundation;
 
 #[cfg(target_os = "macos")]
-pub use avassetreader::AVAssetReaderDecoder;
+pub use avassetreader::{AVAssetReaderDecoder, KeyframeIndex};
 pub use ffmpeg::FFmpegDecoder;
 #[cfg(target_os = "windows")]
 pub use media_foundation::{

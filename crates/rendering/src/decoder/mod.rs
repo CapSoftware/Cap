@@ -547,7 +547,7 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
-pub const FRAME_CACHE_SIZE: usize = 60;
+pub const FRAME_CACHE_SIZE: usize = 150;
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
@@ -570,7 +570,16 @@ impl AsyncVideoDecoderHandle {
             return None;
         }
 
-        rx.await.ok()
+        match tokio::time::timeout(std::time::Duration::from_millis(500), rx).await {
+            Ok(result) => result.ok(),
+            Err(_) => {
+                debug!(
+                    adjusted_time = adjusted_time,
+                    "get_frame timed out after 500ms"
+                );
+                None
+            }
+        }
     }
 
     pub fn get_time(&self, time: f32) -> f32 {

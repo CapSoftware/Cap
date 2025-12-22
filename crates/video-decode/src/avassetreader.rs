@@ -10,6 +10,92 @@ use cidre::{
 use ffmpeg::{codec as avcodec, format as avformat};
 use tokio::runtime::Handle as TokioHandle;
 
+pub struct KeyframeIndex {
+    keyframes: Vec<(u32, f64)>,
+    fps: f64,
+}
+
+impl KeyframeIndex {
+    pub fn build(path: &PathBuf) -> Result<Self, String> {
+        let build_start = std::time::Instant::now();
+
+        let input = avformat::input(path)
+            .map_err(|e| format!("Failed to open video for keyframe scan: {e}"))?;
+
+        let video_stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or("No video stream found")?;
+
+        let stream_index = video_stream.index();
+        let time_base = video_stream.time_base();
+        let fps = {
+            let rate = video_stream.avg_frame_rate();
+            if rate.denominator() == 0 {
+                30.0
+            } else {
+                rate.numerator() as f64 / rate.denominator() as f64
+            }
+        };
+
+        let mut keyframes = Vec::new();
+
+        let mut input =
+            avformat::input(path).map_err(|e| format!("Failed to reopen video for scan: {e}"))?;
+
+        for (stream, packet) in input.packets() {
+            if stream.index() != stream_index {
+                continue;
+            }
+
+            if packet.is_key() {
+                let pts = packet.pts().unwrap_or(0);
+                let time_secs =
+                    pts as f64 * time_base.numerator() as f64 / time_base.denominator() as f64;
+                let frame_number = (time_secs * fps).round() as u32;
+                keyframes.push((frame_number, time_secs));
+            }
+        }
+
+        let elapsed = build_start.elapsed();
+        tracing::info!(
+            path = %path.display(),
+            keyframe_count = keyframes.len(),
+            fps = fps,
+            build_ms = elapsed.as_millis(),
+            "Built keyframe index"
+        );
+
+        Ok(Self { keyframes, fps })
+    }
+
+    pub fn nearest_keyframe_before(&self, target_frame: u32) -> Option<(u32, f64)> {
+        if self.keyframes.is_empty() {
+            return None;
+        }
+
+        let pos = self
+            .keyframes
+            .binary_search_by_key(&target_frame, |(frame, _)| *frame);
+
+        let idx = match pos {
+            Ok(i) => i,
+            Err(0) => 0,
+            Err(i) => i - 1,
+        };
+
+        Some(self.keyframes[idx])
+    }
+
+    pub fn fps(&self) -> f64 {
+        self.fps
+    }
+
+    pub fn keyframe_count(&self) -> usize {
+        self.keyframes.len()
+    }
+}
+
 pub struct AVAssetReaderDecoder {
     path: PathBuf,
     pixel_format: cv::PixelFormat,
@@ -18,10 +104,23 @@ pub struct AVAssetReaderDecoder {
     reader: R<av::AssetReader>,
     width: u32,
     height: u32,
+    keyframe_index: Option<KeyframeIndex>,
 }
 
 impl AVAssetReaderDecoder {
     pub fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
+        let keyframe_index = match KeyframeIndex::build(&path) {
+            Ok(index) => Some(index),
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to build keyframe index, seeking may be slower"
+                );
+                None
+            }
+        };
+
         let (pixel_format, width, height) = {
             let input = ffmpeg::format::input(&path).unwrap();
 
@@ -55,21 +154,54 @@ impl AVAssetReaderDecoder {
             reader,
             width,
             height,
+            keyframe_index,
         })
     }
 
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
+        let reset_start = std::time::Instant::now();
+
         self.reader.cancel_reading();
+
+        let (seek_time, keyframe_frame) = if let Some(ref keyframe_index) = self.keyframe_index {
+            let fps = keyframe_index.fps();
+            let target_frame = (requested_time as f64 * fps).round() as u32;
+
+            if let Some((kf_frame, keyframe_time)) =
+                keyframe_index.nearest_keyframe_before(target_frame)
+            {
+                (keyframe_time as f32, Some(kf_frame))
+            } else {
+                (requested_time, None)
+            }
+        } else {
+            (requested_time, None)
+        };
+
         (self.track_output, self.reader) = Self::get_reader_track_output(
             &self.path,
-            requested_time,
+            seek_time,
             &self.tokio_handle,
             self.pixel_format,
             self.width,
             self.height,
         )?;
 
+        let elapsed = reset_start.elapsed();
+        tracing::info!(
+            requested_time = requested_time,
+            seek_time = seek_time,
+            keyframe_frame = ?keyframe_frame,
+            reset_ms = elapsed.as_millis(),
+            has_keyframe_index = self.keyframe_index.is_some(),
+            "AVAssetReader reset completed"
+        );
+
         Ok(())
+    }
+
+    pub fn keyframe_index(&self) -> Option<&KeyframeIndex> {
+        self.keyframe_index.as_ref()
     }
 
     fn get_reader_track_output(

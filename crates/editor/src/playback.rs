@@ -30,11 +30,11 @@ use crate::{
     segments::get_audio_segments,
 };
 
-const PREFETCH_BUFFER_SIZE: usize = 30;
+const PREFETCH_BUFFER_SIZE: usize = 60;
 const PARALLEL_DECODE_TASKS: usize = 8;
 const MAX_PREFETCH_AHEAD: u32 = 90;
 const PREFETCH_BEHIND: u32 = 15;
-const FRAME_CACHE_SIZE: usize = 30;
+const FRAME_CACHE_SIZE: usize = 60;
 
 #[derive(Debug)]
 pub enum PlaybackStartError {
@@ -356,8 +356,8 @@ impl Playback {
             let mut total_frames_rendered = 0u64;
             let mut _total_frames_skipped = 0u64;
 
-            let warmup_target_frames = 2usize;
-            let warmup_after_first_timeout = Duration::from_millis(50);
+            let warmup_target_frames = 1usize;
+            let warmup_after_first_timeout = Duration::from_millis(16);
             let mut first_frame_time: Option<Instant> = None;
 
             while !*stop_rx.borrow() {

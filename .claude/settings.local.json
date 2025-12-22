@@ -50,7 +50,8 @@
       "Bash(cargo build:*)",
       "Bash(footprint:*)",
       "Bash(RUST_LOG=info,cap_recording=debug ./target/release/examples/memory-leak-detector:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(./target/release/examples/decode-benchmark:*)"
     ],
     "deny": [],
     "ask": []
