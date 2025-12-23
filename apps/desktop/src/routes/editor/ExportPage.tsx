@@ -658,22 +658,22 @@ export function ExportPage() {
 					<Show
 						when={!previewLoading() && renderEstimate()}
 						fallback={
-							<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
+							<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 								<span class="flex items-center gap-1.5">
 									<IconLucideClock class="size-3.5" />
-									<span class="h-3.5 w-8 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideMonitor class="size-3.5" />
-									<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-20 bg-gray-4 rounded animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideHardDrive class="size-3.5" />
-									<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
 								</span>
 								<span class="flex items-center gap-1.5">
 									<IconLucideZap class="size-3.5" />
-									<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
+									<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
 								</span>
 							</div>
 						}
@@ -692,22 +692,30 @@ export function ExportPage() {
 							const estimatedSizeMb = data.estimatedSizeMb * sizeMultiplier;
 
 							return (
-								<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
+								<div class="flex items-center justify-center gap-4 mt-4 h-4 text-xs text-gray-11">
 									<span class="flex items-center gap-1.5">
 										<IconLucideClock class="size-3.5" />
-										{formatDuration(Math.round(durationSeconds))}
+										<span class="min-w-10">
+											{formatDuration(Math.round(durationSeconds))}
+										</span>
 									</span>
 									<span class="flex items-center gap-1.5">
 										<IconLucideMonitor class="size-3.5" />
-										{settings.resolution.width}×{settings.resolution.height}
+										<span class="min-w-20">
+											{settings.resolution.width}×{settings.resolution.height}
+										</span>
 									</span>
 									<span class="flex items-center gap-1.5">
-										<IconLucideHardDrive class="size-3.5" />~
-										{estimatedSizeMb.toFixed(1)} MB
+										<IconLucideHardDrive class="size-3.5" />
+										<span class="min-w-16">
+											~{estimatedSizeMb.toFixed(1)} MB
+										</span>
 									</span>
 									<span class="flex items-center gap-1.5">
-										<IconLucideZap class="size-3.5" />~
-										{formatDuration(Math.round(estimatedTimeSeconds))}
+										<IconLucideZap class="size-3.5" />
+										<span class="min-w-12">
+											~{formatDuration(Math.round(estimatedTimeSeconds))}
+										</span>
 									</span>
 								</div>
 							);
@@ -981,7 +989,7 @@ export function ExportPage() {
 						) : (
 							<Button
 								class="w-full gap-2 h-12 text-base"
-								variant="primary"
+								variant="blue"
 								size="lg"
 								onClick={() => {
 									if (settings.exportTo === "file") save.mutate();
@@ -989,12 +997,24 @@ export function ExportPage() {
 									else copy.mutate();
 								}}
 							>
-								{settings.exportTo === "file" && <IconCapFile class="size-5" />}
-								{settings.exportTo === "clipboard" && (
-									<IconCapCopy class="size-5" />
+								{settings.exportTo === "file" && (
+									<>
+										<IconCapFile class="size-5" />
+										Export to File
+									</>
 								)}
-								{settings.exportTo === "link" && <IconCapLink class="size-5" />}
-								Export {settings.format === "Gif" ? "GIF" : "Video"}
+								{settings.exportTo === "clipboard" && (
+									<>
+										<IconCapCopy class="size-5" />
+										Export to Clipboard
+									</>
+								)}
+								{settings.exportTo === "link" && (
+									<>
+										<IconCapLink class="size-5" />
+										Export to Link
+									</>
+								)}
 							</Button>
 						)}
 					</div>
