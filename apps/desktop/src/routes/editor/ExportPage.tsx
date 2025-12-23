@@ -2,11 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
-import {
-	createMutation,
-	createQuery,
-	keepPreviousData,
-} from "@tanstack/solid-query";
+import { createMutation } from "@tanstack/solid-query";
 import { Channel } from "@tauri-apps/api/core";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { ask, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -102,7 +98,7 @@ export const EXPORT_TO_OPTIONS = [
 		description: "Copy to paste anywhere",
 	},
 	{
-		label: "Link",
+		label: "Shareable Link",
 		value: "link",
 		icon: IconCapLink,
 		description: "Share via Cap cloud",
@@ -195,11 +191,33 @@ export function ExportPage() {
 
 	const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
 	const [previewLoading, setPreviewLoading] = createSignal(false);
+	const [renderEstimate, setRenderEstimate] = createSignal<{
+		frameRenderTimeMs: number;
+		totalFrames: number;
+		estimatedSizeMb: number;
+	} | null>(null);
 
-	const updateSettings: typeof setSettings = (...args) => {
+	type EstimateCacheKey = string;
+	const estimateCache = new Map<
+		EstimateCacheKey,
+		{ frameRenderTimeMs: number; totalFrames: number; estimatedSizeMb: number }
+	>();
+
+	const getEstimateCacheKey = (
+		fps: number,
+		width: number,
+		height: number,
+		bpp: number,
+	): EstimateCacheKey => `${fps}-${width}-${height}-${bpp}`;
+
+	const updateSettings: typeof setSettings = ((
+		...args: Parameters<typeof setSettings>
+	) => {
 		setPreviewLoading(true);
-		return setSettings(...args);
-	};
+		return (setSettings as (...args: Parameters<typeof setSettings>) => void)(
+			...args,
+		);
+	}) as typeof setSettings;
 	const [previewDialogOpen, setPreviewDialogOpen] = createSignal(false);
 	const [compressionBpp, setCompressionBpp] = createSignal(
 		COMPRESSION_TO_BPP[_settings.compression] ?? 0.15,
@@ -223,6 +241,13 @@ export function ExportPage() {
 			resHeight: number,
 			bpp: number,
 		) => {
+			const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp);
+			const cachedEstimate = estimateCache.get(cacheKey);
+
+			if (cachedEstimate) {
+				setRenderEstimate(cachedEstimate);
+			}
+
 			try {
 				const result = await commands.generateExportPreviewFast(frameTime, {
 					fps,
@@ -238,6 +263,17 @@ export function ExportPage() {
 				);
 				const blob = new Blob([byteArray], { type: "image/jpeg" });
 				setPreviewUrl(URL.createObjectURL(blob));
+
+				const newEstimate = {
+					frameRenderTimeMs: result.frame_render_time_ms,
+					totalFrames: result.total_frames,
+					estimatedSizeMb: result.estimated_size_mb,
+				};
+
+				if (!cachedEstimate) {
+					estimateCache.set(cacheKey, newEstimate);
+				}
+				setRenderEstimate(newEstimate);
 			} catch (e) {
 				console.error("Failed to generate preview:", e);
 			} finally {
@@ -333,39 +369,6 @@ export function ExportPage() {
 			}
 		}
 	};
-
-	const exportEstimates = createQuery(() => ({
-		placeholderData: keepPreviousData,
-		queryKey: [
-			"exportEstimates",
-			{
-				format: settings.format,
-				resolution: {
-					x: settings.resolution.width,
-					y: settings.resolution.height,
-				},
-				fps: settings.fps,
-				compression: settings.compression,
-			},
-		] as const,
-		queryFn: ({ queryKey: [_, { format, resolution, fps, compression }] }) => {
-			const exportSettings =
-				format === "Mp4"
-					? {
-							format: "Mp4" as const,
-							fps,
-							resolution_base: resolution,
-							compression,
-						}
-					: {
-							format: "Gif" as const,
-							fps,
-							resolution_base: resolution,
-							quality: null,
-						};
-			return commands.getExportEstimates(projectPath, exportSettings);
-		},
-	}));
 
 	const copy = createMutation(() => ({
 		mutationFn: async () => {
@@ -653,13 +656,48 @@ export function ExportPage() {
 							</Show>
 						</div>
 
-						<Suspense>
-							<Show when={exportEstimates.data}>
-								{(est) => (
+						<Show
+							when={!previewLoading() && renderEstimate()}
+							fallback={
+								<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
+									<span class="flex items-center gap-1.5">
+										<IconLucideClock class="size-3.5" />
+										<span class="h-3.5 w-8 bg-gray-4 rounded animate-pulse" />
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideMonitor class="size-3.5" />
+										<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideHardDrive class="size-3.5" />
+										<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideZap class="size-3.5" />
+										<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
+									</span>
+								</div>
+							}
+						>
+							{(est) => {
+								const data = est();
+								const durationSeconds = data.totalFrames / settings.fps;
+
+								const exportSpeedMultiplier =
+									settings.format === "Gif" ? 4 : 10;
+								const totalTimeMs =
+									(data.frameRenderTimeMs * data.totalFrames) /
+									exportSpeedMultiplier;
+								const estimatedTimeSeconds = Math.max(1, totalTimeMs / 1000);
+
+								const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
+								const estimatedSizeMb = data.estimatedSizeMb * sizeMultiplier;
+
+								return (
 									<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
 										<span class="flex items-center gap-1.5">
 											<IconLucideClock class="size-3.5" />
-											{formatDuration(Math.round(est().duration_seconds))}
+											{formatDuration(Math.round(durationSeconds))}
 										</span>
 										<span class="flex items-center gap-1.5">
 											<IconLucideMonitor class="size-3.5" />
@@ -667,19 +705,19 @@ export function ExportPage() {
 										</span>
 										<span class="flex items-center gap-1.5">
 											<IconLucideHardDrive class="size-3.5" />~
-											{est().estimated_size_mb.toFixed(1)} MB
+											{estimatedSizeMb.toFixed(1)} MB
 										</span>
 										<span class="flex items-center gap-1.5">
 											<IconLucideZap class="size-3.5" />~
-											{formatDuration(Math.round(est().estimated_time_seconds))}
+											{formatDuration(Math.round(estimatedTimeSeconds))}
 										</span>
 									</div>
-								)}
-							</Show>
-						</Suspense>
+								);
+							}}
+						</Show>
 					</div>
 
-					<div class="w-72 border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
+					<div class="w-[340px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
 						<div class="flex-1 overflow-y-auto p-4 space-y-5">
 							<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
 								<KRadioGroup
@@ -1006,15 +1044,17 @@ export function ExportPage() {
 							<span>
 								{settings.resolution.width}×{settings.resolution.height}
 							</span>
-							<Suspense>
-								<Show when={exportEstimates.data}>
-									{(est) => (
+							<Show when={renderEstimate()}>
+								{(est) => {
+									const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
+									return (
 										<span>
-											Estimated size: {est().estimated_size_mb.toFixed(1)} MB
+											Estimated size:{" "}
+											{(est().estimatedSizeMb * sizeMultiplier).toFixed(1)} MB
 										</span>
-									)}
-								</Show>
-							</Suspense>
+									);
+								}}
+							</Show>
 						</div>
 					</div>
 				</Dialog.Root>

@@ -184,6 +184,8 @@ pub struct ExportPreviewResult {
     pub estimated_size_mb: f64,
     pub actual_width: u32,
     pub actual_height: u32,
+    pub frame_render_time_ms: f64,
+    pub total_frames: u32,
 }
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
@@ -201,6 +203,7 @@ pub async fn generate_export_preview(
 ) -> Result<ExportPreviewResult, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use cap_editor::create_segments;
+    use std::time::Instant;
 
     let recording_meta = RecordingMeta::load_for_project(&project_path)
         .map_err(|e| format!("Failed to load recording meta: {e}"))?;
@@ -248,6 +251,8 @@ pub async fn generate_export_preview(
         .iter()
         .find(|v| v.index == segment.recording_clip);
 
+    let render_start = Instant::now();
+
     let segment_frames = render_segment
         .decoders
         .get_frames(
@@ -287,6 +292,8 @@ pub async fn generate_export_preview(
         .await
         .map_err(|e| format!("Failed to render frame: {e}"))?;
 
+    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
     let width = frame.width;
     let height = frame.height;
 
@@ -320,6 +327,7 @@ pub async fn generate_export_preview(
     } else {
         metadata.duration
     };
+    let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
     let audio_bitrate = 192_000.0;
@@ -331,6 +339,8 @@ pub async fn generate_export_preview(
         estimated_size_mb,
         actual_width: width,
         actual_height: height,
+        frame_render_time_ms,
+        total_frames,
     })
 }
 
@@ -343,6 +353,7 @@ pub async fn generate_export_preview_fast(
     settings: ExportPreviewSettings,
 ) -> Result<ExportPreviewResult, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::time::Instant;
 
     let project_config = editor.project_config.1.borrow().clone();
 
@@ -355,6 +366,8 @@ pub async fn generate_export_preview_fast(
         .clips
         .iter()
         .find(|v| v.index == segment.recording_clip);
+
+    let render_start = Instant::now();
 
     let segment_frames = segment_media
         .decoders
@@ -390,6 +403,8 @@ pub async fn generate_export_preview_fast(
         .await
         .map_err(|e| format!("Failed to render frame: {e}"))?;
 
+    let frame_render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
     let width = frame.width;
     let height = frame.height;
 
@@ -418,6 +433,7 @@ pub async fn generate_export_preview_fast(
     let fps_f64 = settings.fps as f64;
 
     let duration_seconds = editor.recordings.duration();
+    let total_frames = (duration_seconds * fps_f64).ceil() as u32;
 
     let video_bitrate = total_pixels * settings.compression_bpp as f64 * fps_f64;
     let audio_bitrate = 192_000.0;
@@ -429,5 +445,7 @@ pub async fn generate_export_preview_fast(
         estimated_size_mb,
         actual_width: width,
         actual_height: height,
+        frame_render_time_ms,
+        total_frames,
     })
 }
