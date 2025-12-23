@@ -86,6 +86,12 @@ async exportVideo(projectPath: string, progress: TAURI_CHANNEL<FramesRendered>, 
 async getExportEstimates(path: string, settings: ExportSettings) : Promise<ExportEstimates> {
     return await TAURI_INVOKE("get_export_estimates", { path, settings });
 },
+async generateExportPreview(projectPath: string, frameTime: number, settings: ExportPreviewSettings) : Promise<ExportPreviewResult> {
+    return await TAURI_INVOKE("generate_export_preview", { projectPath, frameTime, settings });
+},
+async generateExportPreviewFast(frameTime: number, settings: ExportPreviewSettings) : Promise<ExportPreviewResult> {
+    return await TAURI_INVOKE("generate_export_preview_fast", { frameTime, settings });
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
@@ -408,6 +414,8 @@ export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
+export type ExportPreviewResult = { jpeg_base64: string; estimated_size_mb: number; actual_width: number; actual_height: number }
+export type ExportPreviewSettings = { fps: number; resolution_base: XY<number>; compression_bpp: number }
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
 export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
