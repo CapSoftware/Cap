@@ -40,7 +40,7 @@ import {
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
-import { ExportDialog } from "./ExportDialog";
+import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
@@ -199,57 +199,66 @@ function Inner() {
 		),
 	);
 
+	const { dialog } = useEditorContext();
+
+	const isExportMode = () => {
+		const d = dialog();
+		return "type" in d && d.type === "export" && d.open;
+	};
+
 	return (
-		<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
-			<Header />
-			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
-				data-tauri-drag-region
-			>
+		<Show when={!isExportMode()} fallback={<ExportPage />}>
+			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
+				<Header />
 				<div
-					ref={setLayoutRef}
-					class="flex overflow-hidden flex-col flex-1 min-h-0"
+					class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
+					data-tauri-drag-region
 				>
 					<div
-						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
-						style={{
-							"min-height": `${MIN_PLAYER_HEIGHT}px`,
-						}}
+						ref={setLayoutRef}
+						class="flex overflow-hidden flex-col flex-1 min-h-0"
 					>
-						<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
-							<PlayerContent />
-							<div
-								role="separator"
-								aria-orientation="horizontal"
-								class="flex-none transition-colors hover:bg-gray-3/30"
-								style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
-							>
+						<div
+							class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
+							style={{
+								"min-height": `${MIN_PLAYER_HEIGHT}px`,
+							}}
+						>
+							<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
+								<PlayerContent />
 								<div
-									class="flex justify-center items-center h-full cursor-row-resize select-none group"
-									classList={{ "bg-gray-3/50": isResizingTimeline() }}
-									onMouseDown={handleTimelineResizeStart}
+									role="separator"
+									aria-orientation="horizontal"
+									class="flex-none transition-colors hover:bg-gray-3/30"
+									style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 								>
 									<div
-										class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
-										classList={{ "bg-gray-7": isResizingTimeline() }}
-									/>
+										class="flex justify-center items-center h-full cursor-row-resize select-none group"
+										classList={{ "bg-gray-3/50": isResizingTimeline() }}
+										onMouseDown={handleTimelineResizeStart}
+									>
+										<div
+											class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
+											classList={{ "bg-gray-7": isResizingTimeline() }}
+										/>
+									</div>
 								</div>
 							</div>
+							<ConfigSidebar />
 						</div>
-						<ConfigSidebar />
-					</div>
-					<div
-						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
-						style={{ height: `${timelineHeight()}px` }}
-					>
-						<div class="h-full">
-							<Timeline />
+						<div
+							class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
+							style={{ height: `${timelineHeight()}px` }}
+						>
+							<div class="h-full">
+								<Timeline />
+							</div>
 						</div>
 					</div>
+					<Dialogs />
 				</div>
-				<Dialogs />
 			</div>
-		</div>
+		</Show>
 	);
 }
 
@@ -276,14 +285,11 @@ function Dialogs() {
 			<Show
 				when={(() => {
 					const d = dialog();
-					if ("type" in d) return d;
+					if ("type" in d && d.type !== "export") return d;
 				})()}
 			>
 				{(dialog) => (
 					<Switch>
-						<Match when={dialog().type === "export"}>
-							<ExportDialog />
-						</Match>
 						<Match when={dialog().type === "createPreset"}>
 							{(_) => {
 								const [form, setForm] = createStore({
