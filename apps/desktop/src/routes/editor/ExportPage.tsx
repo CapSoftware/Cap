@@ -608,457 +608,445 @@ export function ExportPage() {
 				</div>
 			</div>
 
-			<Show when={exportState.type === "idle"}>
-				<div class="flex-1 min-h-0 flex">
-					<div class="flex-1 min-h-0 p-5 flex flex-col">
-						<div class="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-gray-2 border border-gray-3 flex items-center justify-center group">
-							<Show
-								when={previewUrl()}
-								fallback={
-									<div class="absolute inset-0 flex items-center justify-center">
-										<Show
-											when={previewLoading()}
-											fallback={
-												<div class="flex flex-col items-center gap-3 text-gray-10">
-													<IconLucideImage class="size-12 text-gray-8" />
-													<span class="text-sm">Generating preview...</span>
-												</div>
-											}
-										>
-											<div class="absolute inset-4 rounded-lg bg-gray-4 overflow-hidden">
-												<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
-											</div>
-										</Show>
-									</div>
-								}
-							>
-								{(url) => (
-									<>
-										<img
-											src={url()}
-											alt="Export preview"
-											class="relative z-0 w-full h-full object-contain"
-										/>
-										<Show when={previewLoading()}>
-											<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
-												<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
-											</div>
-										</Show>
-										<button
-											type="button"
-											onClick={() => setPreviewDialogOpen(true)}
-											class="absolute bottom-3 right-3 p-2 rounded-lg bg-gray-12/80 hover:bg-gray-12 text-gray-1 opacity-0 group-hover:opacity-100 transition-opacity"
-										>
-											<IconLucideMaximize2 class="size-4" />
-										</button>
-									</>
-								)}
-							</Show>
-						</div>
-
+			<div class="flex-1 min-h-0 flex relative">
+				<div class="flex-1 min-h-0 p-5 flex flex-col">
+					<div class="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-gray-2 border border-gray-3 flex items-center justify-center group">
 						<Show
-							when={!previewLoading() && renderEstimate()}
+							when={previewUrl()}
 							fallback={
-								<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
-									<span class="flex items-center gap-1.5">
-										<IconLucideClock class="size-3.5" />
-										<span class="h-3.5 w-8 bg-gray-4 rounded animate-pulse" />
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideMonitor class="size-3.5" />
-										<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideHardDrive class="size-3.5" />
-										<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
-									</span>
-									<span class="flex items-center gap-1.5">
-										<IconLucideZap class="size-3.5" />
-										<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
-									</span>
+								<div class="absolute inset-0 flex items-center justify-center">
+									<Show
+										when={previewLoading()}
+										fallback={
+											<div class="flex flex-col items-center gap-3 text-gray-10">
+												<IconLucideImage class="size-12 text-gray-8" />
+												<span class="text-sm">Generating preview...</span>
+											</div>
+										}
+									>
+										<div class="absolute inset-4 rounded-lg bg-gray-4 overflow-hidden">
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-gray-6 via-50% to-transparent to-70%" />
+										</div>
+									</Show>
 								</div>
 							}
 						>
+							{(url) => (
+								<>
+									<img
+										src={url()}
+										alt="Export preview"
+										class="relative z-0 w-full h-full object-contain"
+									/>
+									<Show when={previewLoading()}>
+										<div class="absolute inset-0 z-50 overflow-hidden pointer-events-none">
+											<div class="absolute inset-y-0 w-full animate-shimmer bg-gradient-to-r from-transparent from-30% via-white/60 via-50% to-transparent to-70%" />
+										</div>
+									</Show>
+									<button
+										type="button"
+										onClick={() => setPreviewDialogOpen(true)}
+										class="absolute bottom-3 right-3 p-2 rounded-lg bg-gray-12/80 hover:bg-gray-12 text-gray-1 opacity-0 group-hover:opacity-100 transition-opacity"
+									>
+										<IconLucideMaximize2 class="size-4" />
+									</button>
+								</>
+							)}
+						</Show>
+					</div>
+
+					<Show
+						when={!previewLoading() && renderEstimate()}
+						fallback={
+							<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
+								<span class="flex items-center gap-1.5">
+									<IconLucideClock class="size-3.5" />
+									<span class="h-3.5 w-8 bg-gray-4 rounded animate-pulse" />
+								</span>
+								<span class="flex items-center gap-1.5">
+									<IconLucideMonitor class="size-3.5" />
+									<span class="h-3.5 w-16 bg-gray-4 rounded animate-pulse" />
+								</span>
+								<span class="flex items-center gap-1.5">
+									<IconLucideHardDrive class="size-3.5" />
+									<span class="h-3.5 w-12 bg-gray-4 rounded animate-pulse" />
+								</span>
+								<span class="flex items-center gap-1.5">
+									<IconLucideZap class="size-3.5" />
+									<span class="h-3.5 w-10 bg-gray-4 rounded animate-pulse" />
+								</span>
+							</div>
+						}
+					>
+						{(est) => {
+							const data = est();
+							const durationSeconds = data.totalFrames / settings.fps;
+
+							const exportSpeedMultiplier = settings.format === "Gif" ? 4 : 10;
+							const totalTimeMs =
+								(data.frameRenderTimeMs * data.totalFrames) /
+								exportSpeedMultiplier;
+							const estimatedTimeSeconds = Math.max(1, totalTimeMs / 1000);
+
+							const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
+							const estimatedSizeMb = data.estimatedSizeMb * sizeMultiplier;
+
+							return (
+								<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
+									<span class="flex items-center gap-1.5">
+										<IconLucideClock class="size-3.5" />
+										{formatDuration(Math.round(durationSeconds))}
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideMonitor class="size-3.5" />
+										{settings.resolution.width}×{settings.resolution.height}
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideHardDrive class="size-3.5" />~
+										{estimatedSizeMb.toFixed(1)} MB
+									</span>
+									<span class="flex items-center gap-1.5">
+										<IconLucideZap class="size-3.5" />~
+										{formatDuration(Math.round(estimatedTimeSeconds))}
+									</span>
+								</div>
+							);
+						}}
+					</Show>
+				</div>
+
+				<div class="w-[400px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
+					<div class="flex-1 overflow-y-auto p-4 space-y-5">
+						<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
+							<KRadioGroup
+								class="flex flex-col gap-2"
+								value={settings.exportTo}
+								onChange={(value) => {
+									setSettings(
+										produce((newSettings) => {
+											newSettings.exportTo = value as ExportToOption;
+											if (value === "link" && settings.format === "Gif") {
+												newSettings.format = "Mp4";
+											}
+										}),
+									);
+								}}
+							>
+								<For each={EXPORT_TO_OPTIONS}>
+									{(option) => {
+										const Icon = option.icon;
+										return (
+											<KRadioGroup.Item
+												value={option.value}
+												class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+											>
+												<KRadioGroup.ItemInput class="sr-only" />
+												<KRadioGroup.ItemLabel class="flex cursor-pointer items-center gap-3 p-3">
+													<KRadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9 shrink-0" />
+													<Icon class="size-4 text-gray-11" />
+													<div class="flex flex-col text-left flex-1">
+														<span class="text-sm font-medium text-gray-12">
+															{option.label}
+														</span>
+														<span class="text-xs text-gray-11">
+															{option.description}
+														</span>
+													</div>
+												</KRadioGroup.ItemLabel>
+											</KRadioGroup.Item>
+										);
+									}}
+								</For>
+							</KRadioGroup>
+
+							<Suspense>
+								<Show
+									when={
+										settings.exportTo === "link" && organisations().length > 1
+									}
+								>
+									<button
+										type="button"
+										class="w-full flex items-center justify-between px-3 py-2 mt-2 rounded-lg bg-gray-3 hover:bg-gray-4 transition-colors text-sm"
+										onClick={async () => {
+											const menu = await Menu.new({
+												items: await Promise.all(
+													organisations().map((org) =>
+														CheckMenuItem.new({
+															text: org.name,
+															action: () => {
+																setSettings("organizationId", org.id);
+															},
+															checked: settings.organizationId === org.id,
+														}),
+													),
+												),
+											});
+											menu.popup();
+										}}
+									>
+										<span class="text-gray-11">Organization</span>
+										<span class="flex items-center gap-1 text-gray-12">
+											{
+												(
+													organisations().find(
+														(o) => o.id === settings.organizationId,
+													) ?? organisations()[0]
+												)?.name
+											}
+											<IconCapChevronDown class="size-4" />
+										</span>
+									</button>
+								</Show>
+							</Suspense>
+						</Field>
+
+						<Field name="Format" icon={<IconLucideVideo class="size-4" />}>
+							<div class="flex gap-2">
+								<For each={FORMAT_OPTIONS}>
+									{(option) => {
+										const isDisabled = () =>
+											(option.value === "Mp4" && hasTransparentBackground()) ||
+											(option.value === "Gif" && settings.exportTo === "link");
+
+										const disabledReason = () =>
+											option.value === "Mp4" && hasTransparentBackground()
+												? "MP4 doesn't support transparency"
+												: option.value === "Gif" && settings.exportTo === "link"
+													? "Links require MP4 format"
+													: undefined;
+
+										const button = (
+											<Button
+												variant="gray"
+												class="flex-1"
+												data-selected={settings.format === option.value}
+												disabled={isDisabled()}
+												onClick={() => {
+													updateSettings(
+														produce((newSettings) => {
+															newSettings.format = option.value;
+															if (
+																option.value === "Gif" &&
+																!(
+																	settings.resolution.value === "720p" ||
+																	settings.resolution.value === "1080p"
+																)
+															)
+																newSettings.resolution = {
+																	...RESOLUTION_OPTIONS._720p,
+																};
+															if (
+																option.value === "Gif" &&
+																GIF_FPS_OPTIONS.every(
+																	(v) => v.value !== settings.fps,
+																)
+															)
+																newSettings.fps = 15;
+															if (
+																option.value === "Mp4" &&
+																FPS_OPTIONS.every(
+																	(v) => v.value !== settings.fps,
+																)
+															)
+																newSettings.fps = 30;
+														}),
+													);
+												}}
+											>
+												{option.label}
+											</Button>
+										);
+
+										return disabledReason() ? (
+											<Tooltip content={disabledReason()}>{button}</Tooltip>
+										) : (
+											button
+										);
+									}}
+								</For>
+							</div>
+						</Field>
+
+						<Field
+							name="Resolution"
+							icon={<IconLucideMonitor class="size-4" />}
+						>
+							<div class="flex gap-2">
+								<For
+									each={
+										settings.format === "Gif"
+											? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
+											: [
+													RESOLUTION_OPTIONS._720p,
+													RESOLUTION_OPTIONS._1080p,
+													RESOLUTION_OPTIONS._4k,
+												]
+									}
+								>
+									{(option) => (
+										<Button
+											variant="gray"
+											class="flex-1"
+											data-selected={settings.resolution.value === option.value}
+											onClick={() => updateSettings("resolution", option)}
+										>
+											{option.label}
+										</Button>
+									)}
+								</For>
+							</div>
+						</Field>
+
+						<Field
+							name="Frame Rate"
+							icon={<IconLucideGauge class="size-4" />}
+							value={
+								<span class="text-xs text-gray-11 tabular-nums">
+									{settings.fps} FPS
+								</span>
+							}
+						>
+							<div class="flex gap-2">
+								<For
+									each={
+										settings.format === "Gif"
+											? GIF_FPS_OPTIONS.filter((o) =>
+													[10, 15, 20, 30].includes(o.value),
+												)
+											: FPS_OPTIONS
+									}
+								>
+									{(option) => (
+										<Button
+											variant="gray"
+											size="sm"
+											class="flex-1"
+											data-selected={settings.fps === option.value}
+											onClick={() => {
+												trackEvent("export_fps_changed", {
+													fps: option.value,
+												});
+												updateSettings("fps", option.value);
+											}}
+										>
+											{option.value}
+										</Button>
+									)}
+								</For>
+							</div>
+						</Field>
+
+						<Show when={settings.format === "Mp4"}>
+							<Field
+								name="Quality"
+								icon={<IconLucideSparkles class="size-4" />}
+								value={
+									<span class="text-xs text-gray-11">{qualityLabel()}</span>
+								}
+							>
+								<Slider
+									value={[
+										COMPRESSION_OPTIONS.length -
+											1 -
+											COMPRESSION_OPTIONS.findIndex(
+												(opt) => opt.value === settings.compression,
+											),
+									]}
+									minValue={0}
+									maxValue={COMPRESSION_OPTIONS.length - 1}
+									step={1}
+									onChange={([v]) => {
+										if (v === undefined) return;
+										const option =
+											COMPRESSION_OPTIONS[COMPRESSION_OPTIONS.length - 1 - v];
+										if (option) {
+											setPreviewLoading(true);
+											setCompressionBpp(option.bpp);
+											setSettings("compression", option.value);
+										}
+									}}
+									history={{ pause: () => () => {} }}
+								/>
+							</Field>
+						</Show>
+					</div>
+
+					<div class="p-4 border-t border-gray-3">
+						{settings.exportTo === "link" && !auth.data ? (
+							<SignInButton class="w-full justify-center">
+								<IconCapLink class="size-4" />
+								<span>Sign in to share</span>
+							</SignInButton>
+						) : (
+							<Button
+								class="w-full gap-2 h-12 text-base"
+								variant="primary"
+								size="lg"
+								onClick={() => {
+									if (settings.exportTo === "file") save.mutate();
+									else if (settings.exportTo === "link") upload.mutate();
+									else copy.mutate();
+								}}
+							>
+								{settings.exportTo === "file" && <IconCapFile class="size-5" />}
+								{settings.exportTo === "clipboard" && (
+									<IconCapCopy class="size-5" />
+								)}
+								{settings.exportTo === "link" && <IconCapLink class="size-5" />}
+								Export {settings.format === "Gif" ? "GIF" : "Video"}
+							</Button>
+						)}
+					</div>
+				</div>
+			</div>
+
+			<Dialog.Root
+				open={previewDialogOpen()}
+				onOpenChange={setPreviewDialogOpen}
+				size="lg"
+				contentClass="max-w-[90vw] w-full"
+			>
+				<div class="p-4">
+					<div class="flex items-center justify-between mb-4">
+						<h2 class="text-gray-12 font-medium">Quality Preview</h2>
+						<button
+							type="button"
+							onClick={() => setPreviewDialogOpen(false)}
+							class="p-1.5 rounded-md hover:bg-gray-3 text-gray-11 hover:text-gray-12 transition-colors"
+						>
+							<IconLucideX class="size-5" />
+						</button>
+					</div>
+					<div class="relative aspect-video rounded-lg overflow-hidden bg-gray-4 flex items-center justify-center">
+						<Show when={previewUrl()}>
+							{(url) => (
+								<img
+									src={url()}
+									alt="Export preview full size"
+									class="w-full h-full object-contain"
+								/>
+							)}
+						</Show>
+					</div>
+					<div class="flex justify-between text-sm text-gray-11 mt-4">
+						<span>
+							{settings.resolution.width}×{settings.resolution.height}
+						</span>
+						<Show when={renderEstimate()}>
 							{(est) => {
-								const data = est();
-								const durationSeconds = data.totalFrames / settings.fps;
-
-								const exportSpeedMultiplier =
-									settings.format === "Gif" ? 4 : 10;
-								const totalTimeMs =
-									(data.frameRenderTimeMs * data.totalFrames) /
-									exportSpeedMultiplier;
-								const estimatedTimeSeconds = Math.max(1, totalTimeMs / 1000);
-
 								const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
-								const estimatedSizeMb = data.estimatedSizeMb * sizeMultiplier;
-
 								return (
-									<div class="flex items-center justify-center gap-4 mt-4 text-xs text-gray-11">
-										<span class="flex items-center gap-1.5">
-											<IconLucideClock class="size-3.5" />
-											{formatDuration(Math.round(durationSeconds))}
-										</span>
-										<span class="flex items-center gap-1.5">
-											<IconLucideMonitor class="size-3.5" />
-											{settings.resolution.width}×{settings.resolution.height}
-										</span>
-										<span class="flex items-center gap-1.5">
-											<IconLucideHardDrive class="size-3.5" />~
-											{estimatedSizeMb.toFixed(1)} MB
-										</span>
-										<span class="flex items-center gap-1.5">
-											<IconLucideZap class="size-3.5" />~
-											{formatDuration(Math.round(estimatedTimeSeconds))}
-										</span>
-									</div>
+									<span>
+										Estimated size:{" "}
+										{(est().estimatedSizeMb * sizeMultiplier).toFixed(1)} MB
+									</span>
 								);
 							}}
 						</Show>
 					</div>
-
-					<div class="w-[340px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
-						<div class="flex-1 overflow-y-auto p-4 space-y-5">
-							<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
-								<KRadioGroup
-									class="flex flex-col gap-2"
-									value={settings.exportTo}
-									onChange={(value) => {
-										setSettings(
-											produce((newSettings) => {
-												newSettings.exportTo = value as ExportToOption;
-												if (value === "link" && settings.format === "Gif") {
-													newSettings.format = "Mp4";
-												}
-											}),
-										);
-									}}
-								>
-									<For each={EXPORT_TO_OPTIONS}>
-										{(option) => {
-											const Icon = option.icon;
-											return (
-												<KRadioGroup.Item
-													value={option.value}
-													class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
-												>
-													<KRadioGroup.ItemInput class="sr-only" />
-													<KRadioGroup.ItemLabel class="flex cursor-pointer items-center gap-3 p-3">
-														<KRadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9 shrink-0" />
-														<Icon class="size-4 text-gray-11" />
-														<div class="flex flex-col text-left flex-1">
-															<span class="text-sm font-medium text-gray-12">
-																{option.label}
-															</span>
-															<span class="text-xs text-gray-11">
-																{option.description}
-															</span>
-														</div>
-													</KRadioGroup.ItemLabel>
-												</KRadioGroup.Item>
-											);
-										}}
-									</For>
-								</KRadioGroup>
-
-								<Suspense>
-									<Show
-										when={
-											settings.exportTo === "link" && organisations().length > 1
-										}
-									>
-										<button
-											type="button"
-											class="w-full flex items-center justify-between px-3 py-2 mt-2 rounded-lg bg-gray-3 hover:bg-gray-4 transition-colors text-sm"
-											onClick={async () => {
-												const menu = await Menu.new({
-													items: await Promise.all(
-														organisations().map((org) =>
-															CheckMenuItem.new({
-																text: org.name,
-																action: () => {
-																	setSettings("organizationId", org.id);
-																},
-																checked: settings.organizationId === org.id,
-															}),
-														),
-													),
-												});
-												menu.popup();
-											}}
-										>
-											<span class="text-gray-11">Organization</span>
-											<span class="flex items-center gap-1 text-gray-12">
-												{
-													(
-														organisations().find(
-															(o) => o.id === settings.organizationId,
-														) ?? organisations()[0]
-													)?.name
-												}
-												<IconCapChevronDown class="size-4" />
-											</span>
-										</button>
-									</Show>
-								</Suspense>
-							</Field>
-
-							<Field name="Format" icon={<IconLucideVideo class="size-4" />}>
-								<div class="flex gap-2">
-									<For each={FORMAT_OPTIONS}>
-										{(option) => {
-											const isDisabled = () =>
-												(option.value === "Mp4" &&
-													hasTransparentBackground()) ||
-												(option.value === "Gif" &&
-													settings.exportTo === "link");
-
-											const disabledReason = () =>
-												option.value === "Mp4" && hasTransparentBackground()
-													? "MP4 doesn't support transparency"
-													: option.value === "Gif" &&
-															settings.exportTo === "link"
-														? "Links require MP4 format"
-														: undefined;
-
-											const button = (
-												<Button
-													variant="gray"
-													class="flex-1"
-													data-selected={settings.format === option.value}
-													disabled={isDisabled()}
-													onClick={() => {
-														updateSettings(
-															produce((newSettings) => {
-																newSettings.format = option.value;
-																if (
-																	option.value === "Gif" &&
-																	!(
-																		settings.resolution.value === "720p" ||
-																		settings.resolution.value === "1080p"
-																	)
-																)
-																	newSettings.resolution = {
-																		...RESOLUTION_OPTIONS._720p,
-																	};
-																if (
-																	option.value === "Gif" &&
-																	GIF_FPS_OPTIONS.every(
-																		(v) => v.value !== settings.fps,
-																	)
-																)
-																	newSettings.fps = 15;
-																if (
-																	option.value === "Mp4" &&
-																	FPS_OPTIONS.every(
-																		(v) => v.value !== settings.fps,
-																	)
-																)
-																	newSettings.fps = 30;
-															}),
-														);
-													}}
-												>
-													{option.label}
-												</Button>
-											);
-
-											return disabledReason() ? (
-												<Tooltip content={disabledReason()}>{button}</Tooltip>
-											) : (
-												button
-											);
-										}}
-									</For>
-								</div>
-							</Field>
-
-							<Field
-								name="Resolution"
-								icon={<IconLucideMonitor class="size-4" />}
-							>
-								<div class="flex gap-2">
-									<For
-										each={
-											settings.format === "Gif"
-												? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
-												: [
-														RESOLUTION_OPTIONS._720p,
-														RESOLUTION_OPTIONS._1080p,
-														RESOLUTION_OPTIONS._4k,
-													]
-										}
-									>
-										{(option) => (
-											<Button
-												variant="gray"
-												class="flex-1"
-												data-selected={
-													settings.resolution.value === option.value
-												}
-												onClick={() => updateSettings("resolution", option)}
-											>
-												{option.label}
-											</Button>
-										)}
-									</For>
-								</div>
-							</Field>
-
-							<Field
-								name="Frame Rate"
-								icon={<IconLucideGauge class="size-4" />}
-								value={
-									<span class="text-xs text-gray-11 tabular-nums">
-										{settings.fps} FPS
-									</span>
-								}
-							>
-								<div class="flex gap-2">
-									<For
-										each={
-											settings.format === "Gif"
-												? GIF_FPS_OPTIONS.filter((o) =>
-														[10, 15, 20, 30].includes(o.value),
-													)
-												: FPS_OPTIONS
-										}
-									>
-										{(option) => (
-											<Button
-												variant="gray"
-												size="sm"
-												class="flex-1"
-												data-selected={settings.fps === option.value}
-												onClick={() => {
-													trackEvent("export_fps_changed", {
-														fps: option.value,
-													});
-													updateSettings("fps", option.value);
-												}}
-											>
-												{option.value}
-											</Button>
-										)}
-									</For>
-								</div>
-							</Field>
-
-							<Show when={settings.format === "Mp4"}>
-								<Field
-									name="Quality"
-									icon={<IconLucideSparkles class="size-4" />}
-									value={
-										<span class="text-xs text-gray-11">{qualityLabel()}</span>
-									}
-								>
-									<Slider
-										value={[
-											COMPRESSION_OPTIONS.length -
-												1 -
-												COMPRESSION_OPTIONS.findIndex(
-													(opt) => opt.value === settings.compression,
-												),
-										]}
-										minValue={0}
-										maxValue={COMPRESSION_OPTIONS.length - 1}
-										step={1}
-										onChange={([v]) => {
-											if (v === undefined) return;
-											const option =
-												COMPRESSION_OPTIONS[COMPRESSION_OPTIONS.length - 1 - v];
-											if (option) {
-												setPreviewLoading(true);
-												setCompressionBpp(option.bpp);
-												setSettings("compression", option.value);
-											}
-										}}
-										history={{ pause: () => () => {} }}
-									/>
-								</Field>
-							</Show>
-						</div>
-
-						<div class="p-4 border-t border-gray-3">
-							{settings.exportTo === "link" && !auth.data ? (
-								<SignInButton class="w-full justify-center">
-									<IconCapLink class="size-4" />
-									<span>Sign in to share</span>
-								</SignInButton>
-							) : (
-								<Button
-									class="w-full gap-2 h-12 text-base"
-									variant="primary"
-									size="lg"
-									onClick={() => {
-										if (settings.exportTo === "file") save.mutate();
-										else if (settings.exportTo === "link") upload.mutate();
-										else copy.mutate();
-									}}
-								>
-									{settings.exportTo === "file" && (
-										<IconCapFile class="size-5" />
-									)}
-									{settings.exportTo === "clipboard" && (
-										<IconCapCopy class="size-5" />
-									)}
-									{settings.exportTo === "link" && (
-										<IconCapLink class="size-5" />
-									)}
-									Export {settings.format === "Gif" ? "GIF" : "Video"}
-								</Button>
-							)}
-						</div>
-					</div>
 				</div>
-
-				<Dialog.Root
-					open={previewDialogOpen()}
-					onOpenChange={setPreviewDialogOpen}
-					size="lg"
-					contentClass="max-w-[90vw] w-full"
-				>
-					<div class="p-4">
-						<div class="flex items-center justify-between mb-4">
-							<h2 class="text-gray-12 font-medium">Quality Preview</h2>
-							<button
-								type="button"
-								onClick={() => setPreviewDialogOpen(false)}
-								class="p-1.5 rounded-md hover:bg-gray-3 text-gray-11 hover:text-gray-12 transition-colors"
-							>
-								<IconLucideX class="size-5" />
-							</button>
-						</div>
-						<div class="relative aspect-video rounded-lg overflow-hidden bg-gray-4 flex items-center justify-center">
-							<Show when={previewUrl()}>
-								{(url) => (
-									<img
-										src={url()}
-										alt="Export preview full size"
-										class="w-full h-full object-contain"
-									/>
-								)}
-							</Show>
-						</div>
-						<div class="flex justify-between text-sm text-gray-11 mt-4">
-							<span>
-								{settings.resolution.width}×{settings.resolution.height}
-							</span>
-							<Show when={renderEstimate()}>
-								{(est) => {
-									const sizeMultiplier = settings.format === "Gif" ? 0.7 : 0.5;
-									return (
-										<span>
-											Estimated size:{" "}
-											{(est().estimatedSizeMb * sizeMultiplier).toFixed(1)} MB
-										</span>
-									);
-								}}
-							</Show>
-						</div>
-					</div>
-				</Dialog.Root>
-			</Show>
+			</Dialog.Root>
 
 			<Show when={exportState.type !== "idle" && exportState} keyed>
 				{(exportState) => {
@@ -1076,7 +1064,13 @@ export function ExportPage() {
 					});
 
 					return (
-						<div class="flex-1 flex flex-col items-center justify-center p-6 text-gray-12">
+						<div
+							class="absolute inset-0 z-50 flex flex-col items-center justify-center p-6 text-gray-12 backdrop-blur-sm"
+							style={{
+								"background-color":
+									"color-mix(in srgb, var(--gray-1) 85%, transparent)",
+							}}
+						>
 							<div class="relative z-10 space-y-6 w-full max-w-md text-center">
 								<Switch>
 									<Match
@@ -1367,6 +1361,16 @@ export function ExportPage() {
 										</div>
 									</Show>
 								</div>
+							</Show>
+							<Show when={exportState.type === "done"}>
+								<Button
+									variant="secondary"
+									class="mt-4 hover:underline"
+									onClick={() => setExportState({ type: "idle" })}
+								>
+									<IconLucideArrowLeft class="size-4" />
+									Back to Editor
+								</Button>
 							</Show>
 						</div>
 					);
