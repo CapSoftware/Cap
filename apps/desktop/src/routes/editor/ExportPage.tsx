@@ -1384,7 +1384,7 @@ export function ExportPage() {
 							</Show>
 							<Show when={exportState.type === "done"}>
 								<Button
-									variant="secondary"
+									variant="gray"
 									class="mt-4 hover:underline"
 									onClick={() => setExportState({ type: "idle" })}
 								>
