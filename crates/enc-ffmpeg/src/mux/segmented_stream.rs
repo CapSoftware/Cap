@@ -37,10 +37,10 @@ fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()>
 }
 
 fn sync_file(path: &Path) {
-    if let Ok(file) = std::fs::File::open(path) {
-        if let Err(e) = file.sync_all() {
-            tracing::warn!("File fsync failed for {}: {e}", path.display());
-        }
+    if let Ok(file) = std::fs::File::open(path)
+        && let Err(e) = file.sync_all()
+    {
+        tracing::warn!("File fsync failed for {}: {e}", path.display());
     }
 }
 
@@ -161,7 +161,7 @@ impl SegmentedVideoEncoder {
             set_opt("media_seg_name", "segment_$Number%03d$.m4s");
             set_opt(
                 "seg_duration",
-                &config.segment_duration.as_secs().to_string(),
+                &config.segment_duration.as_secs_f64().to_string(),
             );
             set_opt("use_timeline", "0");
             set_opt("use_template", "1");
@@ -428,30 +428,29 @@ impl SegmentedVideoEncoder {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("segment_") && name.ends_with(".m4s.tmp") {
-                    let final_name = name.trim_end_matches(".tmp");
-                    let final_path = self.base_path.join(final_name);
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name.starts_with("segment_")
+                && name.ends_with(".m4s.tmp")
+                && let Ok(metadata) = std::fs::metadata(&path)
+                && metadata.len() > 0
+            {
+                let final_name = name.trim_end_matches(".tmp");
+                let final_path = self.base_path.join(final_name);
 
-                    if let Ok(metadata) = std::fs::metadata(&path) {
-                        if metadata.len() > 0 {
-                            if let Err(e) = std::fs::rename(&path, &final_path) {
-                                tracing::warn!(
-                                    "Failed to rename tmp segment {} to {}: {}",
-                                    path.display(),
-                                    final_path.display(),
-                                    e
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "Finalized pending segment: {} ({} bytes)",
-                                    final_path.display(),
-                                    metadata.len()
-                                );
-                                sync_file(&final_path);
-                            }
-                        }
-                    }
+                if let Err(e) = std::fs::rename(&path, &final_path) {
+                    tracing::warn!(
+                        "Failed to rename tmp segment {} to {}: {}",
+                        path.display(),
+                        final_path.display(),
+                        e
+                    );
+                } else {
+                    tracing::debug!(
+                        "Finalized pending segment: {} ({} bytes)",
+                        final_path.display(),
+                        metadata.len()
+                    );
+                    sync_file(&final_path);
                 }
             }
         }
@@ -474,20 +473,17 @@ impl SegmentedVideoEncoder {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("segment_") && name.ends_with(".m4s") && !name.contains(".tmp")
-                {
-                    if let Some(index_str) = name
-                        .strip_prefix("segment_")
-                        .and_then(|s| s.strip_suffix(".m4s"))
-                    {
-                        if let Ok(index) = index_str.parse::<u32>() {
-                            if !completed_indices.contains(&index) {
-                                orphaned.push((index, path));
-                            }
-                        }
-                    }
-                }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name.starts_with("segment_")
+                && name.ends_with(".m4s")
+                && !name.contains(".tmp")
+                && let Some(index_str) = name
+                    .strip_prefix("segment_")
+                    .and_then(|s| s.strip_suffix(".m4s"))
+                && let Ok(index) = index_str.parse::<u32>()
+                && !completed_indices.contains(&index)
+            {
+                orphaned.push((index, path));
             }
         }
 

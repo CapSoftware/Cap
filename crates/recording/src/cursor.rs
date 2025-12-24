@@ -72,11 +72,8 @@ pub fn spawn_cursor_recorder(
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
     use futures::future::Either;
-    use std::{
-        hash::{DefaultHasher, Hash, Hasher},
-        pin::pin,
-        time::Duration,
-    };
+    use sha2::{Digest, Sha256};
+    use std::{pin::pin, time::Duration};
     use tracing::{error, info};
 
     let stop_token = CancellationToken::new();
@@ -100,7 +97,7 @@ pub fn spawn_cursor_recorder(
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
-        let mut last_cursor_id = "default".to_string();
+        let mut last_cursor_id: Option<String> = None;
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(16));
@@ -116,49 +113,55 @@ pub fn spawn_cursor_recorder(
             let position = cap_cursor_capture::RawCursorPosition::get();
             let position_changed = position != last_position;
 
-            let cursor_id = if position_changed {
+            if position_changed {
                 last_position = position;
-                if let Some(data) = get_cursor_data() {
-                    let mut hasher = DefaultHasher::default();
-                    data.image.hash(&mut hasher);
-                    let id = hasher.finish();
+            }
 
-                    let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
-                        existing_id.id.to_string()
-                    } else {
-                        let cursor_id = response.next_cursor_id.to_string();
-                        let file_name = format!("cursor_{cursor_id}.png");
-                        let cursor_path = cursors_dir.join(&file_name);
+            let cursor_id = if let Some(data) = get_cursor_data() {
+                let hash_bytes = Sha256::digest(&data.image);
+                let id = u64::from_le_bytes(
+                    hash_bytes[..8]
+                        .try_into()
+                        .expect("sha256 produces at least 8 bytes"),
+                );
 
-                        if let Ok(image) = image::load_from_memory(&data.image) {
-                            let rgba_image = image.into_rgba8();
-
-                            if let Err(e) = rgba_image.save(&cursor_path) {
-                                error!("Failed to save cursor image: {}", e);
-                            } else {
-                                info!("Saved cursor {cursor_id} image to: {:?}", file_name);
-                                response.cursors.insert(
-                                    id,
-                                    Cursor {
-                                        file_name,
-                                        id: response.next_cursor_id,
-                                        hotspot: data.hotspot,
-                                        shape: data.shape,
-                                    },
-                                );
-                                response.next_cursor_id += 1;
-                            }
-                        }
-
-                        cursor_id
-                    };
-                    last_cursor_id = cursor_id.clone();
-                    cursor_id
+                let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
+                    existing_id.id.to_string()
                 } else {
-                    last_cursor_id.clone()
-                }
+                    let cursor_id = response.next_cursor_id.to_string();
+                    let file_name = format!("cursor_{cursor_id}.png");
+                    let cursor_path = cursors_dir.join(&file_name);
+
+                    if let Ok(image) = image::load_from_memory(&data.image) {
+                        let rgba_image = image.into_rgba8();
+
+                        if let Err(e) = rgba_image.save(&cursor_path) {
+                            error!("Failed to save cursor image: {}", e);
+                        } else {
+                            info!("Saved cursor {cursor_id} image to: {:?}", file_name);
+                            response.cursors.insert(
+                                id,
+                                Cursor {
+                                    file_name,
+                                    id: response.next_cursor_id,
+                                    hotspot: data.hotspot,
+                                    shape: data.shape,
+                                },
+                            );
+                            response.next_cursor_id += 1;
+                        }
+                    }
+
+                    cursor_id
+                };
+                last_cursor_id = Some(cursor_id.clone());
+                Some(cursor_id)
             } else {
                 last_cursor_id.clone()
+            };
+
+            let Some(cursor_id) = cursor_id else {
+                continue;
             };
 
             if position_changed {
