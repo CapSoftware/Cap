@@ -615,7 +615,7 @@ mod macos {
 }
 
 #[cfg(test)]
-#[allow(clippy::unchecked_duration_subtraction)]
+#[allow(clippy::unchecked_time_subtraction)]
 mod tests {
     use super::*;
     use std::time::Instant;
