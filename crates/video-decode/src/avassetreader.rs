@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cidre::{
     arc::{self, R},
@@ -17,7 +17,7 @@ pub struct KeyframeIndex {
 }
 
 impl KeyframeIndex {
-    pub fn build(path: &PathBuf) -> Result<Self, String> {
+    pub fn build(path: &Path) -> Result<Self, String> {
         let build_start = std::time::Instant::now();
 
         let input = avformat::input(path)
@@ -165,6 +165,17 @@ impl KeyframeIndex {
     }
 }
 
+fn compute_seek_time(keyframe_index: Option<&KeyframeIndex>, requested_time: f32) -> f32 {
+    if let Some(kf_index) = keyframe_index {
+        let fps = kf_index.fps();
+        let target_frame = (requested_time as f64 * fps).round() as u32;
+        if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
+            return keyframe_time as f32;
+        }
+    }
+    requested_time
+}
+
 pub struct AVAssetReaderDecoder {
     path: PathBuf,
     pixel_format: cv::PixelFormat,
@@ -230,17 +241,7 @@ impl AVAssetReaderDecoder {
             )
         };
 
-        let seek_time = if let Some(ref kf_index) = keyframe_index {
-            let fps = kf_index.fps();
-            let target_frame = (start_time as f64 * fps).round() as u32;
-            if let Some((_, keyframe_time)) = kf_index.nearest_keyframe_before(target_frame) {
-                keyframe_time as f32
-            } else {
-                start_time
-            }
-        } else {
-            start_time
-        };
+        let seek_time = compute_seek_time(keyframe_index.as_ref(), start_time);
 
         let (track_output, reader) = Self::get_reader_track_output(
             &path,
@@ -267,18 +268,7 @@ impl AVAssetReaderDecoder {
     pub fn reset(&mut self, requested_time: f32) -> Result<(), String> {
         self.reader.cancel_reading();
 
-        let seek_time = if let Some(ref keyframe_index) = self.keyframe_index {
-            let fps = keyframe_index.fps();
-            let target_frame = (requested_time as f64 * fps).round() as u32;
-
-            if let Some((_, keyframe_time)) = keyframe_index.nearest_keyframe_before(target_frame) {
-                keyframe_time as f32
-            } else {
-                requested_time
-            }
-        } else {
-            requested_time
-        };
+        let seek_time = compute_seek_time(self.keyframe_index.as_ref(), requested_time);
 
         (self.track_output, self.reader) = Self::get_reader_track_output(
             &self.path,
@@ -319,7 +309,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn get_reader_track_output(
-        path: &PathBuf,
+        path: &Path,
         time: f32,
         handle: &TokioHandle,
         pixel_format: cv::PixelFormat,

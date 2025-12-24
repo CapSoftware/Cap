@@ -3225,15 +3225,15 @@ async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), St
         }
     };
 
-    if let Some(studio_meta) = meta.studio_meta() {
-        if recording::needs_fragment_remux(path, studio_meta) {
-            info!("Recording needs remux (crash recovery), starting remux...");
-            let path = path.to_path_buf();
-            tokio::task::spawn_blocking(move || recording::remux_fragmented_recording(&path))
-                .await
-                .map_err(|e| format!("Remux task panicked: {e}"))??;
-            info!("Crash recovery remux completed");
-        }
+    if let Some(studio_meta) = meta.studio_meta()
+        && recording::needs_fragment_remux(path, studio_meta)
+    {
+        info!("Recording needs remux (crash recovery), starting remux...");
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || recording::remux_fragmented_recording(&path))
+            .await
+            .map_err(|e| format!("Remux task panicked: {e}"))??;
+        info!("Crash recovery remux completed");
     }
 
     Ok(())

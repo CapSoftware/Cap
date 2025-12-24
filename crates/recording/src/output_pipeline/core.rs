@@ -553,12 +553,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             let mut drained = 0u64;
             let mut skipped = 0u64;
 
+            let mut hit_limit = false;
             while let Some(frame) = video_rx.next().await {
                 frame_count += 1;
 
                 if drain_start.elapsed() > drain_timeout || drained >= max_drain_frames {
-                    skipped += 1;
-                    continue;
+                    hit_limit = true;
+                    break;
                 }
 
                 drained += 1;
@@ -581,11 +582,13 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     }
                 }
             }
-            if drained > 0 || skipped > 0 {
+
+            if drained > 0 || skipped > 0 || hit_limit {
                 info!(
-                    "mux-video drain complete: {} frames processed, {} skipped in {:?}",
+                    "mux-video drain complete: {} frames processed, {} errors (limit hit: {}) in {:?}",
                     drained,
                     skipped,
+                    hit_limit,
                     drain_start.elapsed()
                 );
             }

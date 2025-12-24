@@ -135,25 +135,8 @@ impl DisplayLayer {
                     let screen_frame = &segment_frames.screen_frame;
 
                     #[cfg(target_os = "macos")]
-                    let iosurface_result = screen_frame.iosurface_backing().map(|image_buf| {
-                        self.yuv_converter
-                            .convert_nv12_from_iosurface(device, queue, image_buf)
-                    });
-
-                    #[cfg(target_os = "macos")]
                     if !self.prefer_cpu_conversion {
-                        if let Some(Ok(_)) = iosurface_result {
-                            if self.yuv_converter.output_texture().is_some() {
-                                self.pending_copy = Some(PendingTextureCopy {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    dst_texture_index: next_texture,
-                                });
-                                true
-                            } else {
-                                false
-                            }
-                        } else if let (Some(y_data), Some(uv_data)) =
+                        if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();

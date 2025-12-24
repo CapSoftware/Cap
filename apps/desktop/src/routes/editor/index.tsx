@@ -5,7 +5,7 @@ import { createEffect, Suspense } from "solid-js";
 import { generalSettingsStore } from "~/store";
 import { commands } from "~/utils/tauri";
 import { Editor } from "./Editor";
-import { EditorSkeleton } from "./EditorSkeleton";
+import { EditorSkeleton } from "./editor-skeleton";
 
 export default function () {
 	const generalSettings = generalSettingsStore.createQuery();

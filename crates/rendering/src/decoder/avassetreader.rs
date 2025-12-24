@@ -21,22 +21,11 @@ use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::multi_position::{DecoderPoolManager, MultiPositionDecoderConfig, ScrubDetector};
 use super::{DecoderInitResult, DecoderType, FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
-struct SendableImageBuf(R<cv::ImageBuf>);
-unsafe impl Send for SendableImageBuf {}
-unsafe impl Sync for SendableImageBuf {}
-
-impl Clone for SendableImageBuf {
-    fn clone(&self) -> Self {
-        Self(self.0.retained())
-    }
-}
-
 #[derive(Clone)]
 struct FrameData {
     data: Arc<Vec<u8>>,
     y_stride: u32,
     uv_stride: u32,
-    image_buf: Option<Arc<SendableImageBuf>>,
 }
 
 #[derive(Clone)]
@@ -54,32 +43,19 @@ impl ProcessedFrame {
             data,
             y_stride,
             uv_stride,
-            image_buf,
         } = &self.frame_data;
 
         match self.format {
             PixelFormat::Rgba => {
                 DecodedFrame::new_with_arc(Arc::clone(data), self.width, self.height)
             }
-            PixelFormat::Nv12 => {
-                if let Some(img_buf) = image_buf {
-                    DecodedFrame::new_nv12_zero_copy(
-                        self.width,
-                        self.height,
-                        *y_stride,
-                        *uv_stride,
-                        img_buf.0.retained(),
-                    )
-                } else {
-                    DecodedFrame::new_nv12_with_arc(
-                        Arc::clone(data),
-                        self.width,
-                        self.height,
-                        *y_stride,
-                        *uv_stride,
-                    )
-                }
-            }
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::clone(data),
+                self.width,
+                self.height,
+                *y_stride,
+                *uv_stride,
+            ),
             PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
                 Arc::clone(data),
                 self.width,
@@ -233,21 +209,14 @@ impl CachedFrame {
         let pixel_format =
             cap_video_decode::avassetreader::pixel_format_to_pixel(image_buf.pixel_format());
 
-        let (format, y_stride, uv_stride, stored_image_buf) = match pixel_format {
-            format::Pixel::NV12 => {
-                let y_stride = image_buf.plane_bytes_per_row(0) as u32;
-                let uv_stride = image_buf.plane_bytes_per_row(1) as u32;
-                (
-                    PixelFormat::Nv12,
-                    y_stride,
-                    uv_stride,
-                    Some(Arc::new(SendableImageBuf(image_buf))),
-                )
-            }
-            format::Pixel::RGBA | format::Pixel::BGRA | format::Pixel::YUV420P => {
+        match pixel_format {
+            format::Pixel::NV12
+            | format::Pixel::RGBA
+            | format::Pixel::BGRA
+            | format::Pixel::YUV420P => {
                 let mut img = image_buf;
                 let (data, fmt, y_str, uv_str) = processor.extract_raw(&mut img);
-                return Self(ProcessedFrame {
+                Self(ProcessedFrame {
                     _number: number,
                     width,
                     height,
@@ -256,13 +225,12 @@ impl CachedFrame {
                         data: Arc::new(data),
                         y_stride: y_str,
                         uv_stride: uv_str,
-                        image_buf: None,
                     },
-                });
+                })
             }
             _ => {
                 let black_frame = vec![0u8; (width * height * 4) as usize];
-                return Self(ProcessedFrame {
+                Self(ProcessedFrame {
                     _number: number,
                     width,
                     height,
@@ -271,25 +239,10 @@ impl CachedFrame {
                         data: Arc::new(black_frame),
                         y_stride: width * 4,
                         uv_stride: 0,
-                        image_buf: None,
                     },
-                });
+                })
             }
-        };
-
-        let frame = ProcessedFrame {
-            _number: number,
-            width,
-            height,
-            format,
-            frame_data: FrameData {
-                data: Arc::new(Vec::new()),
-                y_stride,
-                uv_stride,
-                image_buf: stored_image_buf,
-            },
-        };
-        Self(frame)
+        }
     }
 
     fn data(&self) -> &ProcessedFrame {
@@ -523,18 +476,21 @@ impl AVAssetReaderDecoder {
                 false
             };
 
-            let mut i = 0;
-            while i < pending_requests.len() {
-                let request = &pending_requests[i];
+            let mut unfulfilled = Vec::with_capacity(pending_requests.len());
+            let mut last_sent_data = None;
+            for request in pending_requests.drain(..) {
                 if let Some(cached) = cache.get(&request.frame) {
                     let data = cached.data().clone();
-                    let req = pending_requests.remove(i);
-                    let _ = req.sender.send(data.to_decoded_frame());
-                    *last_sent_frame.borrow_mut() = Some(data);
+                    let _ = request.sender.send(data.to_decoded_frame());
+                    last_sent_data = Some(data);
                 } else {
-                    i += 1;
+                    unfulfilled.push(request);
                 }
             }
+            if let Some(data) = last_sent_data {
+                *last_sent_frame.borrow_mut() = Some(data);
+            }
+            pending_requests = unfulfilled;
 
             if pending_requests.is_empty() {
                 continue;

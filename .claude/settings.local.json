@@ -52,7 +52,9 @@
       "Bash(RUST_LOG=info,cap_recording=debug ./target/release/examples/memory-leak-detector:*)",
       "Bash(git rm:*)",
       "Bash(./target/release/examples/decode-benchmark:*)",
-      "Bash(RUST_LOG=warn ./target/release/examples/decode-benchmark:*)"
+      "Bash(RUST_LOG=warn ./target/release/examples/decode-benchmark:*)",
+      "Bash(git mv:*)",
+      "Bash(xargs cat:*)"
     ],
     "deny": [],
     "ask": []

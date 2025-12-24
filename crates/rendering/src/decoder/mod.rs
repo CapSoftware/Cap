@@ -70,30 +70,8 @@ pub struct DecoderInitResult {
     pub decoder_type: DecoderType,
 }
 
-#[cfg(target_os = "macos")]
-use cidre::{arc::R, cv};
-
 #[cfg(target_os = "windows")]
 use windows::Win32::{Foundation::HANDLE, Graphics::Direct3D11::ID3D11Texture2D};
-
-#[cfg(target_os = "macos")]
-pub struct SendableImageBuf(R<cv::ImageBuf>);
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for SendableImageBuf {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for SendableImageBuf {}
-
-#[cfg(target_os = "macos")]
-impl SendableImageBuf {
-    pub fn new(image_buf: R<cv::ImageBuf>) -> Self {
-        Self(image_buf)
-    }
-
-    pub fn inner(&self) -> &cv::ImageBuf {
-        &self.0
-    }
-}
 
 #[cfg(target_os = "windows")]
 pub struct SendableD3D11Texture {
@@ -174,8 +152,6 @@ pub struct DecodedFrame {
     format: PixelFormat,
     y_stride: u32,
     uv_stride: u32,
-    #[cfg(target_os = "macos")]
-    iosurface_backing: Option<Arc<SendableImageBuf>>,
     #[cfg(target_os = "windows")]
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
 }
@@ -202,8 +178,6 @@ impl DecodedFrame {
             format: PixelFormat::Rgba,
             y_stride: width * 4,
             uv_stride: 0,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -217,8 +191,6 @@ impl DecodedFrame {
             format: PixelFormat::Rgba,
             y_stride: width * 4,
             uv_stride: 0,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -232,8 +204,6 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride,
             uv_stride,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -253,8 +223,6 @@ impl DecodedFrame {
             format: PixelFormat::Nv12,
             y_stride,
             uv_stride,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -274,8 +242,6 @@ impl DecodedFrame {
             format: PixelFormat::Yuv420p,
             y_stride,
             uv_stride,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
@@ -295,76 +261,9 @@ impl DecodedFrame {
             format: PixelFormat::Yuv420p,
             y_stride,
             uv_stride,
-            #[cfg(target_os = "macos")]
-            iosurface_backing: None,
             #[cfg(target_os = "windows")]
             d3d11_texture_backing: None,
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn new_nv12_with_iosurface(
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-        y_stride: u32,
-        uv_stride: u32,
-        image_buf: R<cv::ImageBuf>,
-    ) -> Self {
-        Self {
-            data: Arc::new(data),
-            width,
-            height,
-            format: PixelFormat::Nv12,
-            y_stride,
-            uv_stride,
-            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn new_nv12_with_iosurface_arc(
-        data: Arc<Vec<u8>>,
-        width: u32,
-        height: u32,
-        y_stride: u32,
-        uv_stride: u32,
-        image_buf: R<cv::ImageBuf>,
-    ) -> Self {
-        Self {
-            data,
-            width,
-            height,
-            format: PixelFormat::Nv12,
-            y_stride,
-            uv_stride,
-            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn new_nv12_zero_copy(
-        width: u32,
-        height: u32,
-        y_stride: u32,
-        uv_stride: u32,
-        image_buf: R<cv::ImageBuf>,
-    ) -> Self {
-        Self {
-            data: Arc::new(Vec::new()),
-            width,
-            height,
-            format: PixelFormat::Nv12,
-            y_stride,
-            uv_stride,
-            iosurface_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[allow(clippy::redundant_closure)]
-    pub fn iosurface_backing(&self) -> Option<&cv::ImageBuf> {
-        self.iosurface_backing.as_ref().map(|b| b.inner())
     }
 
     #[cfg(target_os = "windows")]

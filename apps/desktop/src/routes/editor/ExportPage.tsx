@@ -56,11 +56,11 @@ export const COMPRESSION_OPTIONS: Array<{
 	{ label: "Potato", value: "Potato", bpp: 0.04 },
 ];
 
-const BPP_TO_COMPRESSION: Record<number, ExportCompression> = {
-	0.3: "Minimal",
-	0.15: "Social",
-	0.08: "Web",
-	0.04: "Potato",
+const BPP_TO_COMPRESSION: Record<string, ExportCompression> = {
+	"0.3": "Minimal",
+	"0.15": "Social",
+	"0.08": "Web",
+	"0.04": "Potato",
 };
 
 const COMPRESSION_TO_BPP: Record<ExportCompression, number> = {
@@ -286,10 +286,10 @@ export function ExportPage() {
 	createEffect(
 		on(
 			[
-				() => _settings.format,
-				() => _settings.fps,
-				() => _settings.resolution.width,
-				() => _settings.resolution.height,
+				() => settings.format,
+				() => settings.fps,
+				() => settings.resolution.width,
+				() => settings.resolution.height,
 				compressionBpp,
 			],
 			() => {
@@ -918,11 +918,7 @@ export function ExportPage() {
 							<div class="flex gap-2">
 								<For
 									each={
-										settings.format === "Gif"
-											? GIF_FPS_OPTIONS.filter((o) =>
-													[10, 15, 20, 30].includes(o.value),
-												)
-											: FPS_OPTIONS
+										settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
 									}
 								>
 									{(option) => (
@@ -1301,35 +1297,39 @@ export function ExportPage() {
 											exportState.type === "done"
 										}
 									>
-										<div class="relative">
-											<a
-												href={meta().sharing?.link}
-												target="_blank"
-												rel="noreferrer"
-												class="block"
-											>
-												<Button
-													onClick={() => {
-														setCopyPressed(true);
-														setTimeout(() => {
-															setCopyPressed(false);
-														}, 2000);
-														navigator.clipboard.writeText(
-															meta().sharing?.link!,
-														);
-													}}
-													variant="dark"
-													class="flex gap-2 justify-center items-center"
-												>
-													{!copyPressed() ? (
-														<IconCapCopy class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
-													) : (
-														<IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
-													)}
-													<p>Open Link</p>
-												</Button>
-											</a>
-										</div>
+										<Show when={meta().sharing?.link}>
+											{(link) => (
+												<div class="flex gap-2">
+													<Button
+														onClick={() => {
+															setCopyPressed(true);
+															setTimeout(() => {
+																setCopyPressed(false);
+															}, 2000);
+															navigator.clipboard.writeText(link());
+														}}
+														variant="dark"
+														class="flex gap-2 justify-center items-center"
+													>
+														{!copyPressed() ? (
+															<IconCapCopy class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
+														) : (
+															<IconLucideCheck class="transition-colors duration-200 text-gray-1 size-4 svgpathanimation group-hover:text-gray-12" />
+														)}
+														<p>Copy Link</p>
+													</Button>
+													<a href={link()} target="_blank" rel="noreferrer">
+														<Button
+															variant="dark"
+															class="flex gap-2 justify-center items-center"
+														>
+															<IconCapLink class="transition-colors duration-200 text-gray-1 size-4 group-hover:text-gray-12" />
+															<p>Open Link</p>
+														</Button>
+													</a>
+												</div>
+											)}
+										</Show>
 									</Show>
 
 									<Show

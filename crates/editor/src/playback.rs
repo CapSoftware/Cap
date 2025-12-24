@@ -631,7 +631,12 @@ impl Playback {
 
                 frame_number = frame_number.saturating_add(1);
                 let _ = playback_position_tx.send(frame_number);
-                let _ = audio_playhead_tx.send(frame_number as f64 / fps_f64);
+                if audio_playhead_tx
+                    .send(frame_number as f64 / fps_f64)
+                    .is_err()
+                {
+                    break 'playback;
+                }
 
                 let expected_frame = self.start_frame_number
                     + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
@@ -651,7 +656,12 @@ impl Playback {
                         prefetch_buffer.retain(|p| p.frame_number >= frame_number);
                         let _ = frame_request_tx.send(frame_number);
                         let _ = playback_position_tx.send(frame_number);
-                        let _ = audio_playhead_tx.send(frame_number as f64 / fps_f64);
+                        if audio_playhead_tx
+                            .send(frame_number as f64 / fps_f64)
+                            .is_err()
+                        {
+                            break 'playback;
+                        }
                     }
                 }
             }

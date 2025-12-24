@@ -14,6 +14,7 @@ import {
 	createSignal,
 	Match,
 	on,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -428,7 +429,7 @@ function Dialogs() {
 								const [crop, setCrop] = createSignal(CROP_ZERO);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
-								const [frameDataUrl, setFrameDataUrl] = createSignal<
+								const [frameBlobUrl, setFrameBlobUrl] = createSignal<
 									string | null
 								>(null);
 
@@ -436,12 +437,20 @@ function Dialogs() {
 									"canvas",
 								) as HTMLCanvasElement | null;
 								if (playerCanvas) {
-									try {
-										setFrameDataUrl(playerCanvas.toDataURL("image/png"));
-									} catch {
-										setFrameDataUrl(null);
-									}
+									playerCanvas.toBlob((blob) => {
+										if (blob) {
+											const url = URL.createObjectURL(blob);
+											setFrameBlobUrl(url);
+										}
+									}, "image/png");
 								}
+
+								onCleanup(() => {
+									const url = frameBlobUrl();
+									if (url) {
+										URL.revokeObjectURL(url);
+									}
+								});
 
 								const initialBounds = {
 									x: dialog().position.x,
@@ -607,7 +616,7 @@ function Dialogs() {
 															class="shadow pointer-events-none max-h-[70vh]"
 															alt="Current frame"
 															src={
-																frameDataUrl() ??
+																frameBlobUrl() ??
 																convertFileSrc(
 																	`${editorInstance.path}/screenshots/display.jpg`,
 																)

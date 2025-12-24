@@ -124,12 +124,12 @@ impl BenchmarkResults {
             let min = self
                 .random_access_times_ms
                 .iter()
-                .cloned()
+                .copied()
                 .fold(f64::INFINITY, f64::min);
             let max = self
                 .random_access_times_ms
                 .iter()
-                .cloned()
+                .copied()
                 .fold(f64::NEG_INFINITY, f64::max);
             println!("  Samples: {}", self.random_access_times_ms.len());
             if self.random_access_failures > 0 {

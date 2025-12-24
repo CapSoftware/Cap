@@ -130,35 +130,6 @@ impl CameraLayer {
                     );
                 }
                 PixelFormat::Nv12 => {
-                    #[cfg(target_os = "macos")]
-                    let iosurface_result = camera_frame.iosurface_backing().map(|image_buf| {
-                        self.yuv_converter
-                            .convert_nv12_from_iosurface(device, queue, image_buf)
-                    });
-
-                    #[cfg(target_os = "macos")]
-                    if let Some(Ok(_)) = iosurface_result {
-                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
-                    } else if let (Some(y_data), Some(uv_data)) =
-                        (camera_frame.y_plane(), camera_frame.uv_plane())
-                        && self
-                            .yuv_converter
-                            .convert_nv12(
-                                device,
-                                queue,
-                                y_data,
-                                uv_data,
-                                frame_size.x,
-                                frame_size.y,
-                                camera_frame.y_stride(),
-                                camera_frame.uv_stride(),
-                            )
-                            .is_ok()
-                    {
-                        self.copy_from_yuv_output(device, queue, next_texture, frame_size);
-                    }
-
-                    #[cfg(not(target_os = "macos"))]
                     if let (Some(y_data), Some(uv_data)) =
                         (camera_frame.y_plane(), camera_frame.uv_plane())
                         && self
