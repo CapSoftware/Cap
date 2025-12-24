@@ -203,10 +203,10 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock() {
-                if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                    warn!("Failed to finish segmented encoder: {e}");
-                }
+            if let Ok(mut encoder) = state.encoder.lock()
+                && let Err(e) = encoder.finish_with_timestamp(timestamp)
+            {
+                warn!("Failed to finish segmented encoder: {e}");
             }
         }
 
@@ -269,7 +269,7 @@ impl MacOSFragmentedM4SMuxer {
 
                     if convert_elapsed_ms > SLOW_THRESHOLD_MS {
                         slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count % 100 == 0 {
+                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = convert_elapsed_ms,
                                 count = slow_convert_count,
@@ -284,17 +284,17 @@ impl MacOSFragmentedM4SMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                    warn!("Failed to encode frame: {e}");
-                                }
+                            if let Ok(mut encoder) = encoder_clone.lock()
+                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
+                            {
+                                warn!("Failed to encode frame: {e}");
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
                             if encode_elapsed_ms > SLOW_THRESHOLD_MS {
                                 slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count % 100 == 0 {
+                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                                     debug!(
                                         elapsed_ms = encode_elapsed_ms,
                                         count = slow_encode_count,
@@ -676,10 +676,10 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock() {
-                if let Err(e) = encoder.finish_with_timestamp(timestamp) {
-                    warn!("Failed to finish camera segmented encoder: {e}");
-                }
+            if let Ok(mut encoder) = state.encoder.lock()
+                && let Err(e) = encoder.finish_with_timestamp(timestamp)
+            {
+                warn!("Failed to finish camera segmented encoder: {e}");
             }
         }
 
@@ -744,7 +744,7 @@ impl MacOSFragmentedM4SCameraMuxer {
 
                     if convert_elapsed_ms > SLOW_THRESHOLD_MS {
                         slow_convert_count += 1;
-                        if slow_convert_count <= 5 || slow_convert_count % 100 == 0 {
+                        if slow_convert_count <= 5 || slow_convert_count.is_multiple_of(100) {
                             debug!(
                                 elapsed_ms = convert_elapsed_ms,
                                 count = slow_convert_count,
@@ -759,17 +759,17 @@ impl MacOSFragmentedM4SCameraMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock() {
-                                if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
-                                    warn!("Failed to encode camera frame: {e}");
-                                }
+                            if let Ok(mut encoder) = encoder_clone.lock()
+                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
+                            {
+                                warn!("Failed to encode camera frame: {e}");
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
 
                             if encode_elapsed_ms > SLOW_THRESHOLD_MS {
                                 slow_encode_count += 1;
-                                if slow_encode_count <= 5 || slow_encode_count % 100 == 0 {
+                                if slow_encode_count <= 5 || slow_encode_count.is_multiple_of(100) {
                                     debug!(
                                         elapsed_ms = encode_elapsed_ms,
                                         count = slow_encode_count,

@@ -518,10 +518,10 @@ impl RecoveryManager {
                         debug!("Failed to remove display fragment {:?}: {e}", fragment);
                     }
                 }
-                if let Some(init_path) = &segment.display_init_segment {
-                    if let Err(e) = std::fs::remove_file(init_path) {
-                        debug!("Failed to remove display init segment {:?}: {e}", init_path);
-                    }
+                if let Some(init_path) = &segment.display_init_segment
+                    && let Err(e) = std::fs::remove_file(init_path)
+                {
+                    debug!("Failed to remove display init segment {:?}: {e}", init_path);
                 }
                 let display_dir = segment_dir.join("display");
                 if display_dir.exists()
@@ -569,10 +569,10 @@ impl RecoveryManager {
                             debug!("Failed to remove camera fragment {:?}: {e}", fragment);
                         }
                     }
-                    if let Some(init_path) = &segment.camera_init_segment {
-                        if let Err(e) = std::fs::remove_file(init_path) {
-                            debug!("Failed to remove camera init segment {:?}: {e}", init_path);
-                        }
+                    if let Some(init_path) = &segment.camera_init_segment
+                        && let Err(e) = std::fs::remove_file(init_path)
+                    {
+                        debug!("Failed to remove camera init segment {:?}: {e}", init_path);
                     }
                     let camera_dir = segment_dir.join("camera");
                     if camera_dir.exists()
