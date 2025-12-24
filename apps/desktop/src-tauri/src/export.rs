@@ -189,8 +189,7 @@ pub struct ExportPreviewResult {
 }
 
 fn bpp_to_jpeg_quality(bpp: f32) -> u8 {
-    let quality = ((bpp - 0.04) / (0.3 - 0.04) * (95.0 - 40.0) + 40.0).clamp(40.0, 95.0) as u8;
-    quality
+    ((bpp - 0.04) / (0.3 - 0.04) * (95.0 - 40.0) + 40.0).clamp(40.0, 95.0) as u8
 }
 
 #[tauri::command]
