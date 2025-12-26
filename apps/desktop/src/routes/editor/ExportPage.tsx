@@ -610,6 +610,12 @@ export function ExportPage() {
 
 			<div class="flex-1 min-h-0 flex relative">
 				<div class="flex-1 min-h-0 p-5 flex flex-col">
+					<div class="flex items-center gap-1.5 mb-2">
+						<span class="text-sm font-medium text-gray-11">Preview</span>
+						<Tooltip content="This is a rendered frame from your video. Adjust the settings below to see the quality of the final exported video.">
+							<IconLucideInfo class="size-3.5 text-gray-9 hover:text-gray-11 cursor-help transition-colors" />
+						</Tooltip>
+					</div>
 					<div class="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-gray-2 border border-gray-3 flex items-center justify-center group">
 						<Show
 							when={previewUrl()}
