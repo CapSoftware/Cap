@@ -116,14 +116,20 @@ pub struct FinalizingRecordings {
 
 impl FinalizingRecordings {
     pub fn start_finalizing(&self, path: PathBuf) -> watch::Receiver<bool> {
-        let mut recordings = self.recordings.lock().unwrap();
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
         let (tx, rx) = watch::channel(false);
         recordings.insert(path, (tx, rx.clone()));
         rx
     }
 
     pub fn finish_finalizing(&self, path: &Path) {
-        let mut recordings = self.recordings.lock().unwrap();
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
         if let Some((tx, _)) = recordings.remove(path)
             && tx.send(true).is_err()
         {

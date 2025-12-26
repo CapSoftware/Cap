@@ -446,7 +446,7 @@ impl FramePool {
                 self.height,
             ));
         }
-        self.frame.as_mut().unwrap()
+        self.frame.as_mut().expect("frame initialized above")
     }
 
     fn take_frame(&mut self) -> ffmpeg::frame::Video {
