@@ -124,10 +124,10 @@ impl FinalizingRecordings {
 
     pub fn finish_finalizing(&self, path: &Path) {
         let mut recordings = self.recordings.lock().unwrap();
-        if let Some((tx, _)) = recordings.remove(path) {
-            if tx.send(true).is_err() {
-                debug!("Finalizing receiver dropped for path: {:?}", path);
-            }
+        if let Some((tx, _)) = recordings.remove(path)
+            && tx.send(true).is_err()
+        {
+            debug!("Finalizing receiver dropped for path: {:?}", path);
         }
     }
 

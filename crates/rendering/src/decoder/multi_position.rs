@@ -128,7 +128,7 @@ impl DecoderPoolManager {
     }
 
     pub fn should_rebalance(&self) -> bool {
-        self.total_accesses > 0 && self.total_accesses % 100 == 0
+        self.total_accesses > 0 && self.total_accesses.is_multiple_of(100)
     }
 
     pub fn get_rebalance_positions(&self) -> Vec<f32> {
