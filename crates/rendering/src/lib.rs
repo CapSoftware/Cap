@@ -158,7 +158,7 @@ impl RecordingSegmentDecoders {
                         segment.camera.as_ref().unwrap().fps
                     }
                     StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                        inner.segments[0].camera.as_ref().unwrap().fps
+                        inner.segments[segment_i].camera.as_ref().unwrap().fps
                     }
                 },
                 match &meta {
@@ -1694,25 +1694,25 @@ impl RendererLayers {
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                ))
-            })(),
+            uniforms.camera,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            (|| {
-                Some((
-                    uniforms.camera_only?,
-                    constants.options.camera_size?,
-                    segment_frames.camera_frame.as_ref()?,
-                ))
-            })(),
+            uniforms.camera_only,
+            constants.options.camera_size.and_then(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map(|frame| (size, frame, segment_frames.recording_time))
+            }),
         );
 
         self.text.prepare(
@@ -1780,12 +1780,6 @@ impl RendererLayers {
         }
 
         let should_render = uniforms.scene.should_render_screen();
-        tracing::trace!(
-            should_render_screen = should_render,
-            screen_opacity = uniforms.scene.screen_opacity,
-            screen_blur = uniforms.scene.screen_blur,
-            "RendererLayers::render - checking should_render_screen"
-        );
 
         if should_render {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);

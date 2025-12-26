@@ -2,17 +2,13 @@ mod async_camera;
 mod core;
 pub mod ffmpeg;
 #[cfg(target_os = "macos")]
-mod fragmented;
-#[cfg(target_os = "macos")]
-mod macos_segmented_ffmpeg;
+mod macos_fragmented_m4s;
 
 pub use async_camera::*;
 pub use core::*;
 pub use ffmpeg::*;
 #[cfg(target_os = "macos")]
-pub use fragmented::*;
-#[cfg(target_os = "macos")]
-pub use macos_segmented_ffmpeg::*;
+pub use macos_fragmented_m4s::*;
 
 #[cfg(target_os = "macos")]
 mod macos;

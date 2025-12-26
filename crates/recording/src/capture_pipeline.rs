@@ -1,4 +1,5 @@
 use crate::{
+    SharedPauseState,
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::*,
     sources,
@@ -6,7 +7,7 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::output_pipeline::{MacOSSegmentedMuxer, MacOSSegmentedMuxerConfig};
+use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
@@ -50,6 +51,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -76,6 +78,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        shared_pause_state: Option<SharedPauseState>,
     ) -> anyhow::Result<OutputPipeline> {
         if fragmented {
             let fragments_dir = output_path
@@ -86,7 +89,10 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             OutputPipeline::builder(fragments_dir)
                 .with_video::<screen_capture::VideoSource>(screen_capture)
                 .with_timestamps(start_time)
-                .build::<MacOSSegmentedMuxer>(MacOSSegmentedMuxerConfig::default())
+                .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
+                    shared_pause_state,
+                    ..Default::default()
+                })
                 .await
         } else {
             OutputPipeline::builder(output_path.clone())
@@ -130,6 +136,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
         fragmented: bool,
+        _shared_pause_state: Option<SharedPauseState>,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let d3d_device = screen_capture.d3d_device.clone();

@@ -1,5 +1,5 @@
 use crate::{
-    ActorError, MediaError, RecordingBaseInputs, RecordingError,
+    ActorError, MediaError, RecordingBaseInputs, RecordingError, SharedPauseState,
     capture_pipeline::{
         MakeCapturePipeline, ScreenCaptureMethod, Stop, target_to_display_and_crop,
     },
@@ -13,8 +13,8 @@ use crate::{
 
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{
-    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, FragmentedAVFoundationCameraMuxer,
-    FragmentedAVFoundationCameraMuxerConfig,
+    AVFoundationCameraMuxer, AVFoundationCameraMuxerConfig, MacOSFragmentedM4SCameraMuxer,
+    MacOSFragmentedM4SCameraMuxerConfig,
 };
 
 #[cfg(windows)]
@@ -626,11 +626,8 @@ async fn stop_recording(
 
     let segment_metas: Vec<_> = futures::stream::iter(segments)
         .then(async |s| {
-            let to_start_time = |timestamp: Timestamp| {
-                timestamp
-                    .duration_since(s.pipeline.start_time)
-                    .as_secs_f64()
-            };
+            let to_start_time =
+                |timestamp: Timestamp| timestamp.signed_duration_since_secs(s.pipeline.start_time);
 
             MultipleSegment {
                 display: VideoMeta {
@@ -843,11 +840,13 @@ async fn create_segment_pipeline(
     let (display, crop) =
         target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
 
+    let max_fps = if fragmented { 60 } else { 120 };
+
     let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         display,
         crop,
         !custom_cursor_capture,
-        120,
+        max_fps,
         start_time.system_time(),
         base_inputs.capture_system_audio,
         #[cfg(windows)]
@@ -868,11 +867,24 @@ async fn create_segment_pipeline(
 
     trace!("preparing segment pipeline {index}");
 
+    #[cfg(target_os = "macos")]
+    let shared_pause_state = if fragmented {
+        Some(SharedPauseState::new(Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+    } else {
+        None
+    };
+
+    #[cfg(windows)]
+    let shared_pause_state: Option<SharedPauseState> = None;
+
     let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
         capture_source,
         screen_output_path.clone(),
         start_time,
         fragmented,
+        shared_pause_state.clone(),
         #[cfg(windows)]
         encoder_preferences.clone(),
     )
@@ -887,9 +899,10 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<FragmentedAVFoundationCameraMuxer>(
-                    FragmentedAVFoundationCameraMuxerConfig::default(),
-                )
+                .build::<MacOSFragmentedM4SCameraMuxer>(MacOSFragmentedM4SCameraMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("camera-out"))
                 .await
         } else {
@@ -940,7 +953,10 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_audio_source::<sources::Microphone>(mic_feed)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("mic-out"))
                 .await
         } else {
@@ -962,7 +978,10 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_audio_source::<screen_capture::SystemAudioSource>(system_audio_source)
                 .with_timestamps(start_time)
-                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig::default())
+                .build::<SegmentedAudioMuxer>(SegmentedAudioMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
+                    ..Default::default()
+                })
                 .instrument(error_span!("system-audio-out"))
                 .await
         } else {

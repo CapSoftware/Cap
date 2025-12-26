@@ -39,6 +39,19 @@ impl MachAbsoluteTimestamp {
         Some(Duration::from_nanos((diff as f64 * freq) as u64))
     }
 
+    pub fn signed_duration_since_secs(&self, other: Self) -> f64 {
+        let info = TimeBaseInfo::new();
+        let freq = info.numer as f64 / info.denom as f64;
+
+        let nanos = if self.0 >= other.0 {
+            ((self.0 - other.0) as f64 * freq) as i64
+        } else {
+            -(((other.0 - self.0) as f64 * freq) as i64)
+        };
+
+        nanos as f64 / 1_000_000_000.0
+    }
+
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
         use cpal::host::coreaudio::StreamInstantExt;
 

@@ -72,11 +72,8 @@ pub fn spawn_cursor_recorder(
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
     use futures::future::Either;
-    use std::{
-        hash::{DefaultHasher, Hash, Hasher},
-        pin::pin,
-        time::Duration,
-    };
+    use sha2::{Digest, Sha256};
+    use std::{pin::pin, time::Duration};
     use tracing::{error, info};
 
     let stop_token = CancellationToken::new();
@@ -100,9 +97,10 @@ pub fn spawn_cursor_recorder(
 
         let mut last_flush = Instant::now();
         let flush_interval = Duration::from_secs(CURSOR_FLUSH_INTERVAL_SECS);
+        let mut last_cursor_id: Option<String> = None;
 
         loop {
-            let sleep = tokio::time::sleep(Duration::from_millis(10));
+            let sleep = tokio::time::sleep(Duration::from_millis(16));
             let Either::Right(_) =
                 futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
             else {
@@ -112,13 +110,22 @@ pub fn spawn_cursor_recorder(
             let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let cursor_data = get_cursor_data();
-            let cursor_id = if let Some(data) = cursor_data {
-                let mut hasher = DefaultHasher::default();
-                data.image.hash(&mut hasher);
-                let id = hasher.finish();
+            let position = cap_cursor_capture::RawCursorPosition::get();
+            let position_changed = position != last_position;
 
-                if let Some(existing_id) = response.cursors.get(&id) {
+            if position_changed {
+                last_position = position;
+            }
+
+            let cursor_id = if let Some(data) = get_cursor_data() {
+                let hash_bytes = Sha256::digest(&data.image);
+                let id = u64::from_le_bytes(
+                    hash_bytes[..8]
+                        .try_into()
+                        .expect("sha256 produces at least 8 bytes"),
+                );
+
+                let cursor_id = if let Some(existing_id) = response.cursors.get(&id) {
                     existing_id.id.to_string()
                 } else {
                     let cursor_id = response.next_cursor_id.to_string();
@@ -146,34 +153,33 @@ pub fn spawn_cursor_recorder(
                     }
 
                     cursor_id
-                }
+                };
+                last_cursor_id = Some(cursor_id.clone());
+                Some(cursor_id)
             } else {
-                "default".to_string()
+                last_cursor_id.clone()
             };
 
-            let position = cap_cursor_capture::RawCursorPosition::get();
+            let Some(cursor_id) = cursor_id else {
+                continue;
+            };
 
-            let position = (position != last_position).then(|| {
-                last_position = position;
-
+            if position_changed {
                 let cropped_norm_pos = position
-                    .relative_to_display(display)?
-                    .normalize()?
-                    .with_crop(crop_bounds);
+                    .relative_to_display(display)
+                    .and_then(|p| p.normalize())
+                    .map(|p| p.with_crop(crop_bounds));
 
-                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
-            });
-
-            if let Some((x, y)) = position.flatten() {
-                let mouse_event = CursorMoveEvent {
-                    active_modifiers: vec![],
-                    cursor_id: cursor_id.clone(),
-                    time_ms: elapsed,
-                    x,
-                    y,
-                };
-
-                response.moves.push(mouse_event);
+                if let Some(pos) = cropped_norm_pos {
+                    let mouse_event = CursorMoveEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id.clone(),
+                        time_ms: elapsed,
+                        x: pos.x(),
+                        y: pos.y(),
+                    };
+                    response.moves.push(mouse_event);
+                }
             }
 
             for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {

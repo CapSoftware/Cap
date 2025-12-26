@@ -8,7 +8,7 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::base::EncoderBase;
 
@@ -120,7 +120,23 @@ impl H264EncoderBuilder {
                 self.external_conversion,
             ) {
                 Ok(encoder) => {
-                    debug!("Using encoder {}", codec_name);
+                    let is_hardware = matches!(
+                        codec_name.as_str(),
+                        "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf"
+                    );
+                    if is_hardware {
+                        debug!(
+                            encoder = %codec_name,
+                            "Selected hardware H264 encoder"
+                        );
+                    } else {
+                        warn!(
+                            encoder = %codec_name,
+                            input_width = input_config.width,
+                            input_height = input_config.height,
+                            "WARNING: Using SOFTWARE H264 encoder (high CPU usage expected)"
+                        );
+                    }
                     return Ok(encoder);
                 }
                 Err(err) => {
@@ -156,15 +172,17 @@ impl H264EncoderBuilder {
             input_config.pixel_format
         } else {
             needs_pixel_conversion = true;
-            let format = ffmpeg::format::Pixel::NV12;
-            if !external_conversion {
-                debug!(
-                    "Converting from {:?} to {:?} for H264 encoding",
-                    input_config.pixel_format, format
-                );
-            }
-            format
+            ffmpeg::format::Pixel::NV12
         };
+
+        debug!(
+            encoder = %codec.name(),
+            input_format = ?input_config.pixel_format,
+            output_format = ?output_format,
+            needs_pixel_conversion = needs_pixel_conversion,
+            external_conversion = external_conversion,
+            "Encoder pixel format configuration"
+        );
 
         if is_420(output_format)
             && (!output_width.is_multiple_of(2) || !output_height.is_multiple_of(2))
@@ -187,8 +205,10 @@ impl H264EncoderBuilder {
 
         let converter = if external_conversion {
             debug!(
-                "External conversion enabled, skipping internal converter. Expected input: {:?} {}x{}",
-                output_format, output_width, output_height
+                output_format = ?output_format,
+                output_width = output_width,
+                output_height = output_height,
+                "External conversion enabled, skipping internal converter"
             );
             None
         } else if needs_pixel_conversion || needs_scaling {
@@ -207,7 +227,18 @@ impl H264EncoderBuilder {
                 output_height,
                 flags,
             ) {
-                Ok(context) => Some(context),
+                Ok(context) => {
+                    debug!(
+                        encoder = %codec.name(),
+                        src_format = ?input_config.pixel_format,
+                        src_size = %format!("{}x{}", input_config.width, input_config.height),
+                        dst_format = ?output_format,
+                        dst_size = %format!("{}x{}", output_width, output_height),
+                        needs_scaling = needs_scaling,
+                        "Created SOFTWARE scaler for pixel format conversion (CPU-intensive)"
+                    );
+                    Some(context)
+                }
                 Err(e) => {
                     if needs_pixel_conversion {
                         error!(
@@ -223,6 +254,10 @@ impl H264EncoderBuilder {
                 }
             }
         } else {
+            debug!(
+                encoder = %codec.name(),
+                "No pixel format conversion needed (zero-copy path)"
+            );
             None
         };
 
@@ -346,6 +381,36 @@ impl H264Encoder {
 
         self.base
             .send_frame(&frame, output, &mut self.encoder)
+            .map_err(QueueFrameError::Encode)?;
+
+        Ok(())
+    }
+
+    pub fn queue_frame_reusable(
+        &mut self,
+        frame: &mut frame::Video,
+        converted_frame: &mut Option<frame::Video>,
+        timestamp: Duration,
+        output: &mut format::context::Output,
+    ) -> Result<(), QueueFrameError> {
+        self.base.update_pts(frame, timestamp, &mut self.encoder);
+
+        let frame_to_send = if let Some(converter) = &mut self.converter {
+            let pts = frame.pts();
+            let converted = converted_frame.get_or_insert_with(|| {
+                frame::Video::new(self.output_format, self.output_width, self.output_height)
+            });
+            converter
+                .run(frame, converted)
+                .map_err(QueueFrameError::Converter)?;
+            converted.set_pts(pts);
+            converted as &frame::Video
+        } else {
+            frame as &frame::Video
+        };
+
+        self.base
+            .send_frame(frame_to_send, output, &mut self.encoder)
             .map_err(QueueFrameError::Encode)?;
 
         Ok(())

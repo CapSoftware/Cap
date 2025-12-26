@@ -14,6 +14,7 @@ import {
 	createSignal,
 	Match,
 	on,
+	onCleanup,
 	Show,
 	Switch,
 } from "solid-js";
@@ -40,19 +41,11 @@ import {
 	useEditorContext,
 	useEditorInstanceContext,
 } from "./context";
-import { ExportDialog } from "./ExportDialog";
+import { ExportPage } from "./ExportPage";
 import { Header } from "./Header";
 import { PlayerContent } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-	Dialog,
-	DialogContent,
-	EditorButton,
-	Input,
-	Slider,
-	Subfield,
-} from "./ui";
-import { formatTime } from "./utils";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 
 const DEFAULT_TIMELINE_HEIGHT = 260;
 const MIN_PLAYER_CONTENT_HEIGHT = 320;
@@ -207,57 +200,66 @@ function Inner() {
 		),
 	);
 
+	const { dialog } = useEditorContext();
+
+	const isExportMode = () => {
+		const d = dialog();
+		return "type" in d && d.type === "export" && d.open;
+	};
+
 	return (
-		<>
-			<Header />
-			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5 animate-in fade-in"
-				data-tauri-drag-region
-			>
+		<Show when={!isExportMode()} fallback={<ExportPage />}>
+			<div class="flex flex-col flex-1 min-h-0 animate-in fade-in duration-300">
+				<Header />
 				<div
-					ref={setLayoutRef}
-					class="flex overflow-hidden flex-col flex-1 min-h-0"
+					class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full min-h-0 leading-5"
+					data-tauri-drag-region
 				>
 					<div
-						class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
-						style={{
-							"min-height": `${MIN_PLAYER_HEIGHT}px`,
-						}}
+						ref={setLayoutRef}
+						class="flex overflow-hidden flex-col flex-1 min-h-0"
 					>
-						<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
-							<PlayerContent />
-							<div
-								role="separator"
-								aria-orientation="horizontal"
-								class="flex-none transition-colors hover:bg-gray-3/30"
-								style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
-							>
+						<div
+							class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2"
+							style={{
+								"min-height": `${MIN_PLAYER_HEIGHT}px`,
+							}}
+						>
+							<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3 overflow-hidden">
+								<PlayerContent />
 								<div
-									class="flex justify-center items-center h-full cursor-row-resize select-none group"
-									classList={{ "bg-gray-3/50": isResizingTimeline() }}
-									onMouseDown={handleTimelineResizeStart}
+									role="separator"
+									aria-orientation="horizontal"
+									class="flex-none transition-colors hover:bg-gray-3/30"
+									style={{ height: `${RESIZE_HANDLE_HEIGHT}px` }}
 								>
 									<div
-										class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
-										classList={{ "bg-gray-7": isResizingTimeline() }}
-									/>
+										class="flex justify-center items-center h-full cursor-row-resize select-none group"
+										classList={{ "bg-gray-3/50": isResizingTimeline() }}
+										onMouseDown={handleTimelineResizeStart}
+									>
+										<div
+											class="h-1 w-12 rounded-full bg-gray-4 transition-colors group-hover:bg-gray-6"
+											classList={{ "bg-gray-7": isResizingTimeline() }}
+										/>
+									</div>
 								</div>
 							</div>
+							<ConfigSidebar />
 						</div>
-						<ConfigSidebar />
-					</div>
-					<div
-						class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
-						style={{ height: `${timelineHeight()}px` }}
-					>
-						<div class="h-full">
-							<Timeline />
+						<div
+							class="flex-none min-h-0 px-2 pb-0.5 overflow-hidden relative"
+							style={{ height: `${timelineHeight()}px` }}
+						>
+							<div class="h-full">
+								<Timeline />
+							</div>
 						</div>
 					</div>
+					<Dialogs />
 				</div>
-				<Dialogs />
 			</div>
-		</>
+		</Show>
 	);
 }
 
@@ -284,14 +286,11 @@ function Dialogs() {
 			<Show
 				when={(() => {
 					const d = dialog();
-					if ("type" in d) return d;
+					if ("type" in d && d.type !== "export") return d;
 				})()}
 			>
 				{(dialog) => (
 					<Switch>
-						<Match when={dialog().type === "export"}>
-							<ExportDialog />
-						</Match>
 						<Match when={dialog().type === "createPreset"}>
 							{(_) => {
 								const [form, setForm] = createStore({
@@ -422,59 +421,34 @@ function Dialogs() {
 							})()}
 						>
 							{(dialog) => {
-								const {
-									setProject: setState,
-									editorInstance,
-									editorState,
-									totalDuration,
-									project,
-								} = useEditorContext();
+								const { setProject: setState, editorInstance } =
+									useEditorContext();
 								const display = editorInstance.recordings.segments[0].display;
 
 								let cropperRef: CropperRef | undefined;
-								let videoRef: HTMLVideoElement | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
 								const [aspect, setAspect] = createSignal<Ratio | null>(null);
-								const [previewTime, setPreviewTime] = createSignal(
-									editorState.playbackTime,
-								);
-								const [videoLoaded, setVideoLoaded] = createSignal(false);
 
-								const currentSegment = createMemo(() => {
-									const time = previewTime();
-									let elapsed = 0;
-									for (const seg of project.timeline?.segments ?? []) {
-										const segDuration = (seg.end - seg.start) / seg.timescale;
-										if (time < elapsed + segDuration) {
-											return {
-												index: seg.recordingSegment ?? 0,
-												localTime: seg.start / seg.timescale + (time - elapsed),
-											};
+								const [frameBlobUrl, setFrameBlobUrl] = createSignal<
+									string | null
+								>(null);
+
+								const playerCanvas = document.getElementById(
+									"canvas",
+								) as HTMLCanvasElement | null;
+								if (playerCanvas) {
+									playerCanvas.toBlob((blob) => {
+										if (blob) {
+											const url = URL.createObjectURL(blob);
+											setFrameBlobUrl(url);
 										}
-										elapsed += segDuration;
-									}
-									return { index: 0, localTime: 0 };
-								});
+									}, "image/png");
+								}
 
-								const videoSrc = createMemo(() =>
-									convertFileSrc(
-										`${editorInstance.path}/content/segments/segment-${currentSegment().index}/display.mp4`,
-									),
-								);
-
-								createEffect(
-									on(
-										() => currentSegment().index,
-										() => {
-											setVideoLoaded(false);
-										},
-										{ defer: true },
-									),
-								);
-
-								createEffect(() => {
-									if (videoRef && videoLoaded()) {
-										videoRef.currentTime = currentSegment().localTime;
+								onCleanup(() => {
+									const url = frameBlobUrl();
+									if (url) {
+										URL.revokeObjectURL(url);
 									}
 								});
 
@@ -638,59 +612,18 @@ function Dialogs() {
 														allowLightMode={true}
 														onContextMenu={(e) => showCropOptionsMenu(e, true)}
 													>
-														<div class="relative">
-															<img
-																class="shadow pointer-events-none max-h-[70vh]"
-																alt="screenshot"
-																src={convertFileSrc(
+														<img
+															class="shadow pointer-events-none max-h-[70vh]"
+															alt="Current frame"
+															src={
+																frameBlobUrl() ??
+																convertFileSrc(
 																	`${editorInstance.path}/screenshots/display.jpg`,
-																)}
-																style={{
-																	opacity: videoLoaded() ? 0 : 1,
-																	transition: "opacity 150ms ease-out",
-																}}
-															/>
-															<video
-																ref={videoRef}
-																src={videoSrc()}
-																class="absolute inset-0 w-full h-full object-contain shadow pointer-events-none"
-																preload="auto"
-																muted
-																onLoadedData={() => setVideoLoaded(true)}
-																onError={() => setVideoLoaded(false)}
-																style={{
-																	opacity: videoLoaded() ? 1 : 0,
-																	transition: "opacity 150ms ease-out",
-																}}
-															/>
-															<Show when={!videoLoaded()}>
-																<div class="absolute bottom-2 right-2 flex items-center gap-1.5 bg-gray-500/80 rounded-full px-2 py-1">
-																	<IconLucideLoaderCircle class="size-3 text-white animate-spin" />
-																	<span class="text-[10px] text-white font-medium">
-																		Loading
-																	</span>
-																</div>
-															</Show>
-														</div>
+																)
+															}
+														/>
 													</Cropper>
 												</div>
-											</div>
-											<div class="flex items-center gap-3 mt-4 px-2">
-												<span class="text-gray-11 text-sm tabular-nums min-w-[3rem]">
-													{formatTime(previewTime())}
-												</span>
-												<Slider
-													class="flex-1"
-													minValue={0}
-													maxValue={totalDuration()}
-													step={1 / FPS}
-													value={[previewTime()]}
-													onChange={([v]) => setPreviewTime(v)}
-													aria-label="Video timeline"
-												/>
-												<span class="text-gray-11 text-sm tabular-nums min-w-[3rem] text-right">
-													{formatTime(totalDuration())}
-												</span>
 											</div>
 										</Dialog.Content>
 										<Dialog.Footer>

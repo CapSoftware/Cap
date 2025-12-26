@@ -17,13 +17,74 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{self, AtomicBool},
+        atomic::{self, AtomicBool, Ordering},
     },
     time::Duration,
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::*;
+
+struct SharedPauseStateInner {
+    paused_at: Option<Duration>,
+    offset: Duration,
+}
+
+#[derive(Clone)]
+pub struct SharedPauseState {
+    flag: Arc<AtomicBool>,
+    inner: Arc<std::sync::Mutex<SharedPauseStateInner>>,
+}
+
+impl SharedPauseState {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            flag,
+            inner: Arc::new(std::sync::Mutex::new(SharedPauseStateInner {
+                paused_at: None,
+                offset: Duration::ZERO,
+            })),
+        }
+    }
+
+    pub fn adjust(&self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow!("Lock poisoned: {e}"))?;
+
+        if self.flag.load(Ordering::Relaxed) {
+            if inner.paused_at.is_none() {
+                inner.paused_at = Some(timestamp);
+            }
+            return Ok(None);
+        }
+
+        if let Some(start) = inner.paused_at.take() {
+            let delta = timestamp.checked_sub(start).ok_or_else(|| {
+                anyhow!(
+                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
+                )
+            })?;
+
+            inner.offset = inner.offset.checked_add(delta).ok_or_else(|| {
+                anyhow!(
+                    "Pause offset overflow (offset={:?}, delta={delta:?})",
+                    inner.offset
+                )
+            })?;
+        }
+
+        let adjusted = timestamp.checked_sub(inner.offset).ok_or_else(|| {
+            anyhow!(
+                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
+                inner.offset
+            )
+        })?;
+
+        Ok(Some(adjusted))
+    }
+}
 
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
 
@@ -455,7 +516,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         let mut first_tx = Some(first_tx);
         let mut frame_count = 0u64;
-
         let res = stop_token
             .run_until_cancelled(async {
                 while let Some(frame) = video_rx.next().await {
@@ -487,9 +547,21 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         if was_cancelled {
             info!("mux-video cancelled, draining remaining frames from channel");
+            let drain_start = std::time::Instant::now();
+            let drain_timeout = Duration::from_secs(2);
+            let max_drain_frames = 30u64;
             let mut drained = 0u64;
+            let mut skipped = 0u64;
+
+            let mut hit_limit = false;
             while let Some(frame) = video_rx.next().await {
                 frame_count += 1;
+
+                if drain_start.elapsed() > drain_timeout || drained >= max_drain_frames {
+                    hit_limit = true;
+                    break;
+                }
+
                 drained += 1;
 
                 let timestamp = frame.timestamp();
@@ -506,14 +578,18 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     Ok(()) => {}
                     Err(e) => {
                         warn!("Error processing drained frame: {e}");
-                        break;
+                        skipped += 1;
                     }
                 }
             }
-            if drained > 0 {
+
+            if drained > 0 || skipped > 0 || hit_limit {
                 info!(
-                    "mux-video drained {} additional frames after cancellation",
-                    drained
+                    "mux-video drain complete: {} frames processed, {} errors (limit hit: {}) in {:?}",
+                    drained,
+                    skipped,
+                    hit_limit,
+                    drain_start.elapsed()
                 );
             }
         }

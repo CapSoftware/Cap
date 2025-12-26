@@ -6,6 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[[example]]
+name = "decode-benchmark"
+path = "examples/decode-benchmark.rs"
+
 [dependencies]
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
