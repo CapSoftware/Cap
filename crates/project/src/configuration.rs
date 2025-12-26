@@ -227,7 +227,7 @@ pub struct BackgroundConfiguration {
     pub padding: f64,
     pub rounding: f64,
     #[serde(default)]
-    pub rounding_type: CornerStyle,
+    pub rounding_smoothness: f32,
     pub inset: u32,
     pub crop: Option<Crop>,
     #[serde(default)]
@@ -256,12 +256,12 @@ impl Default for BackgroundConfiguration {
             blur: 0.0,
             padding: 0.0,
             rounding: 0.0,
-            rounding_type: CornerStyle::default(),
+            rounding_smoothness: 0.6,
             inset: 0,
             crop: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
-            border: None, // Border is disabled by default for backwards compatibility
+            border: None,
         }
     }
 }
@@ -307,8 +307,8 @@ pub struct Camera {
     pub advanced_shadow: Option<ShadowConfiguration>,
     #[serde(default)]
     pub shape: CameraShape,
-    #[serde(alias = "rounding_type", default)]
-    pub rounding_type: CornerStyle,
+    #[serde(default)]
+    pub rounding_smoothness: f32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Default)]
@@ -345,7 +345,7 @@ impl Default for Camera {
                 blur: 10.5,
             }),
             shape: CameraShape::Square,
-            rounding_type: CornerStyle::default(),
+            rounding_smoothness: 0.0,
         }
     }
 }
