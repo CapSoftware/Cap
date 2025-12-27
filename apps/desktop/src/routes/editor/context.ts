@@ -44,6 +44,7 @@ import {
 	cleanup as cleanupCropVideoPreloader,
 	preloadCropVideoMetadata,
 } from "./cropVideoPreloader";
+import type { Layout3DSegment } from "./layout3d";
 import type { MaskSegment } from "./masks";
 import type { TextSegment } from "./text";
 import { createProgressBar } from "./utils";
@@ -82,7 +83,13 @@ export const getPreviewResolution = (quality: PreviewQuality): XY<number> => {
 	return { x: width, y: height };
 };
 
-export type TimelineTrackType = "clip" | "text" | "zoom" | "scene" | "mask";
+export type TimelineTrackType =
+	| "clip"
+	| "text"
+	| "zoom"
+	| "scene"
+	| "mask"
+	| "layout3d";
 
 export const MAX_ZOOM_IN = 3;
 const PROJECT_SAVE_DEBOUNCE_MS = 250;
@@ -107,6 +114,7 @@ type EditorTimelineConfiguration = Omit<
 	sceneSegments?: SceneSegment[];
 	maskSegments: MaskSegment[];
 	textSegments: TextSegment[];
+	layout3DSegments: Layout3DSegment[];
 };
 
 export type EditorProjectConfiguration = Omit<
@@ -151,6 +159,12 @@ export function normalizeProject(
 							textSegments?: TextSegment[];
 						}
 					).textSegments ?? [],
+				layout3DSegments:
+					(
+						config.timeline as TimelineConfiguration & {
+							layout3DSegments?: Layout3DSegment[];
+						}
+					).layout3DSegments ?? [],
 			}
 		: undefined;
 
@@ -175,6 +189,7 @@ export function serializeProjectConfiguration(
 				...project.timeline,
 				maskSegments: project.timeline.maskSegments ?? [],
 				textSegments: project.timeline.textSegments ?? [],
+				layout3DSegments: project.timeline.layout3DSegments ?? [],
 			}
 		: project.timeline;
 
@@ -413,6 +428,45 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			splitLayout3DSegment: (index: number, time: number) => {
+				setProject(
+					"timeline",
+					"layout3DSegments",
+					produce((segments) => {
+						const segment = segments?.[index];
+						if (!segment) return;
+
+						const duration = segment.end - segment.start;
+						const remaining = duration - time;
+						if (time < 1 || remaining < 1) return;
+
+						segments.splice(index + 1, 0, {
+							...segment,
+							start: segment.start + time,
+							end: segment.end,
+						});
+						segments[index].end = segment.start + time;
+					}),
+				);
+			},
+			deleteLayout3DSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"layout3DSegments",
+						produce((segments) => {
+							if (!segments) return;
+							const sorted = [...new Set(segmentIndices)]
+								.filter(
+									(i) => Number.isInteger(i) && i >= 0 && i < segments.length,
+								)
+								.sort((a, b) => b - a);
+							for (const i of sorted) segments.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			setClipSegmentTimescale: (index: number, timescale: number) => {
 				setProject(
 					produce((project) => {
@@ -454,6 +508,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						for (const textSegment of timeline.textSegments) {
 							textSegment.start += diff(textSegment.start);
 							textSegment.end += diff(textSegment.end);
+						}
+
+						for (const layout3DSegment of timeline.layout3DSegments ?? []) {
+							layout3DSegment.start += diff(layout3DSegment.start);
+							layout3DSegment.end += diff(layout3DSegment.end);
 						}
 
 						segment.timescale = timescale;
@@ -607,6 +666,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			(project.timeline?.maskSegments?.length ?? 0) > 0;
 		const initialTextTrackEnabled =
 			(project.timeline?.textSegments?.length ?? 0) > 0;
+		const initialLayout3DTrackEnabled =
+			(project.timeline?.layout3DSegments?.length ?? 0) > 0;
 
 		const [editorState, setEditorState] = createStore({
 			previewTime: null as number | null,
@@ -620,7 +681,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| { type: "clip"; indices: number[] }
 					| { type: "scene"; indices: number[] }
 					| { type: "mask"; indices: number[] }
-					| { type: "text"; indices: number[] },
+					| { type: "text"; indices: number[] }
+					| { type: "layout3d"; indices: number[] },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),
@@ -663,6 +725,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					scene: true,
 					mask: initialMaskTrackEnabled,
 					text: initialTextTrackEnabled,
+					layout3d: initialLayout3DTrackEnabled,
 				},
 				hoveredTrack: null as null | TimelineTrackType,
 			},

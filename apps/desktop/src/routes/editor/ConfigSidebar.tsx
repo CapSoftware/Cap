@@ -66,6 +66,8 @@ import IconLucideType from "~icons/lucide/type";
 import IconLucideWind from "~icons/lucide/wind";
 import { CaptionsTab } from "./CaptionsTab";
 import { type CornerRoundingType, useEditorContext } from "./context";
+import type { Layout3DEasing, Layout3DSegment } from "./layout3d";
+import { LAYOUT_3D_PRESETS } from "./layout3d";
 import { evaluateMask, type MaskKind, type MaskSegment } from "./masks";
 import {
 	DEFAULT_GRADIENT_FROM,
@@ -1043,6 +1045,93 @@ export function ConfigSidebar() {
 												{(item) => (
 													<div class="p-4 rounded-lg border border-gray-200">
 														<ZoomSegmentConfig
+															segment={item.segment}
+															segmentIndex={item.index}
+														/>
+													</div>
+												)}
+											</For>
+										</Show>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const layout3dSelection = selection();
+									if (layout3dSelection.type !== "layout3d") return;
+
+									const segments = layout3dSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.layout3DSegments?.[index],
+										}))
+										.filter(
+											(
+												item,
+											): item is { index: number; segment: Layout3DSegment } =>
+												item.segment !== undefined,
+										);
+
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: layout3dSelection, segments };
+								})()}
+							>
+								{(value) => (
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} 3D layout{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() => {
+													projectActions.deleteLayout3DSegments(
+														value().segments.map((s) => s.index),
+													);
+												}}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<Show
+											when={value().segments.length === 1}
+											fallback={
+												<div class="grid grid-cols-3 gap-4">
+													<Index each={value().segments}>
+														{(item, index) => (
+															<div class="p-2.5 rounded-lg border border-gray-4 bg-gray-3">
+																<Layout3DSegmentPreview
+																	segment={item().segment}
+																	segmentIndex={index}
+																/>
+															</div>
+														)}
+													</Index>
+												</div>
+											}
+										>
+											<For each={value().segments}>
+												{(item) => (
+													<div class="p-4 rounded-lg border border-gray-200">
+														<Layout3DSegmentConfig
 															segment={item.segment}
 															segmentIndex={item.index}
 														/>
@@ -3700,6 +3789,206 @@ function RgbInput(props: {
 					}
 				}}
 			/>
+		</div>
+	);
+}
+
+function Layout3DSegmentPreview(props: {
+	segmentIndex: number;
+	segment: Layout3DSegment;
+}) {
+	const presetName = () => {
+		const seg = props.segment;
+		for (const [key, preset] of Object.entries(LAYOUT_3D_PRESETS)) {
+			if (
+				preset.rotationX === seg.rotationX &&
+				preset.rotationY === seg.rotationY &&
+				preset.depthZoom === seg.depthZoom
+			) {
+				return preset.label;
+			}
+		}
+		return null;
+	};
+
+	return (
+		<div class="flex flex-col items-center gap-1 text-center">
+			<IconLucideLayout class="size-5 text-gray-11" />
+			<span class="text-xs font-medium text-gray-12">
+				{presetName() ??
+					`${props.segment.rotationX.toFixed(0)}°, ${props.segment.rotationY.toFixed(0)}°`}
+			</span>
+		</div>
+	);
+}
+
+function Layout3DSegmentConfig(props: {
+	segmentIndex: number;
+	segment: Layout3DSegment;
+}) {
+	const { setProject } = useEditorContext();
+
+	const easingOptions: { value: Layout3DEasing; label: string }[] = [
+		{ value: "linear", label: "Linear" },
+		{ value: "ease-in", label: "Ease In" },
+		{ value: "ease-out", label: "Ease Out" },
+		{ value: "ease-in-out", label: "Ease In Out" },
+	];
+
+	return (
+		<div class="space-y-4">
+			<Field
+				name={`3D Layout ${props.segmentIndex + 1}`}
+				icon={<IconLucideLayout />}
+			>
+				<div class="flex flex-wrap gap-2">
+					<For each={Object.entries(LAYOUT_3D_PRESETS)}>
+						{([key, preset]) => (
+							<button
+								class={cx(
+									"px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
+									props.segment.rotationX === preset.rotationX &&
+										props.segment.rotationY === preset.rotationY &&
+										props.segment.depthZoom === preset.depthZoom
+										? "bg-blue-500 text-white"
+										: "bg-gray-3 text-gray-11 hover:bg-gray-4",
+								)}
+								onClick={() => {
+									setProject(
+										"timeline",
+										"layout3DSegments",
+										props.segmentIndex,
+										produce((seg: Layout3DSegment) => {
+											seg.rotationX = preset.rotationX;
+											seg.rotationY = preset.rotationY;
+											seg.depthZoom = preset.depthZoom;
+										}),
+									);
+								}}
+							>
+								{preset.label}
+							</button>
+						)}
+					</For>
+				</div>
+			</Field>
+			<Field name="Rotation X" icon={<IconCapSettings />}>
+				<Slider
+					value={[props.segment.rotationX]}
+					onChange={([v]) =>
+						setProject(
+							"timeline",
+							"layout3DSegments",
+							props.segmentIndex,
+							"rotationX",
+							v,
+						)
+					}
+					minValue={-45}
+					maxValue={45}
+					step={1}
+					formatTooltip="°"
+				/>
+			</Field>
+			<Field name="Rotation Y" icon={<IconCapSettings />}>
+				<Slider
+					value={[props.segment.rotationY]}
+					onChange={([v]) =>
+						setProject(
+							"timeline",
+							"layout3DSegments",
+							props.segmentIndex,
+							"rotationY",
+							v,
+						)
+					}
+					minValue={-45}
+					maxValue={45}
+					step={1}
+					formatTooltip="°"
+				/>
+			</Field>
+			<Field name="Depth Zoom" icon={<IconLucideSearch />}>
+				<Slider
+					value={[props.segment.depthZoom]}
+					onChange={([v]) =>
+						setProject(
+							"timeline",
+							"layout3DSegments",
+							props.segmentIndex,
+							"depthZoom",
+							v,
+						)
+					}
+					minValue={0.5}
+					maxValue={2.0}
+					step={0.01}
+					formatTooltip="x"
+				/>
+			</Field>
+			<Field name="Easing" icon={<IconLucideRabbit />}>
+				<KSelect<Layout3DEasing>
+					options={easingOptions.map((o) => o.value)}
+					value={props.segment.easing}
+					onChange={(value) => {
+						if (value) {
+							setProject(
+								"timeline",
+								"layout3DSegments",
+								props.segmentIndex,
+								"easing",
+								value,
+							);
+						}
+					}}
+					itemComponent={(itemProps) => (
+						<KSelect.Item
+							item={itemProps.item}
+							class="px-4 py-2 hover:bg-gray-3 cursor-pointer outline-none focus:bg-gray-3 rounded"
+						>
+							{
+								easingOptions.find((o) => o.value === itemProps.item.rawValue)
+									?.label
+							}
+						</KSelect.Item>
+					)}
+				>
+					<KSelect.Trigger class="flex flex-row items-center justify-between p-2 rounded-lg border border-gray-4 bg-gray-2 min-w-[140px]">
+						<KSelect.Value<Layout3DEasing>>
+							{(state) =>
+								easingOptions.find((o) => o.value === state.selectedOption())
+									?.label
+							}
+						</KSelect.Value>
+						<KSelect.Icon>
+							<IconCapChevronDown class="size-4" />
+						</KSelect.Icon>
+					</KSelect.Trigger>
+					<KSelect.Portal>
+						<KSelect.Content class="bg-gray-1 border border-gray-4 rounded-lg shadow-lg overflow-hidden z-50">
+							<KSelect.Listbox class="max-h-[200px] overflow-y-auto" />
+						</KSelect.Content>
+					</KSelect.Portal>
+				</KSelect>
+			</Field>
+			<Field name="Fade Duration" icon={<IconLucideTimer />}>
+				<Slider
+					value={[props.segment.fadeDuration]}
+					onChange={([v]) =>
+						setProject(
+							"timeline",
+							"layout3DSegments",
+							props.segmentIndex,
+							"fadeDuration",
+							v,
+						)
+					}
+					minValue={0}
+					maxValue={2}
+					step={0.05}
+					formatTooltip="s"
+				/>
+			</Field>
 		</div>
 	);
 }

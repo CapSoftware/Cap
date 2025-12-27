@@ -475,6 +475,9 @@ impl CursorLayer {
                 effective_strength,
                 cursor_opacity,
             ],
+            layout_3d_enabled: uniforms.display.layout_3d_enabled,
+            _padding: [0.0; 3],
+            layout_3d_matrix: uniforms.display.layout_3d_matrix,
         };
 
         constants.queue.write_buffer(
@@ -532,6 +535,9 @@ pub struct CursorUniforms {
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
     motion_vector_strength: [f32; 4],
+    layout_3d_enabled: f32,
+    _padding: [f32; 3],
+    layout_3d_matrix: [[f32; 4]; 4],
 }
 
 fn compute_cursor_idle_opacity(

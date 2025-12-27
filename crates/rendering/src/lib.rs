@@ -31,6 +31,7 @@ mod frame_pipeline;
 #[cfg(target_os = "macos")]
 pub mod iosurface_texture;
 mod layers;
+mod layout3d;
 mod mask;
 mod project_recordings;
 mod scene;
@@ -44,6 +45,7 @@ pub use decoder::{DecodedFrame, DecoderStatus, DecoderType, PixelFormat};
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 
+use layout3d::*;
 use mask::interpolate_masks;
 use scene::*;
 use text::{PreparedText, prepare_texts};
@@ -1138,6 +1140,12 @@ impl ProjectUniforms {
             .map(|t| t.scene_segments.as_slice())
             .unwrap_or(&[]);
 
+        let layout_3d_segments = project
+            .timeline
+            .as_ref()
+            .map(|t| t.layout_3d_segments.as_slice())
+            .unwrap_or(&[]);
+
         let zoom_focus = Self::auto_zoom_focus(
             cursor_events,
             current_recording_time,
@@ -1167,6 +1175,11 @@ impl ProjectUniforms {
         let prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
             prev_frame_time as f64,
             scene_segments,
+        ));
+
+        let layout_3d = InterpolatedLayout3D::new(Layout3DSegmentsCursor::new(
+            frame_time as f64,
+            layout_3d_segments,
         ));
 
         let (display, display_motion_parent) = {
@@ -1269,7 +1282,9 @@ impl ProjectUniforms {
                     } else {
                         [0.0, 0.0, 0.0, 0.0]
                     },
-                    _padding2: [0.0; 4],
+                    layout_3d_enabled: if layout_3d.is_identity() { 0.0 } else { 1.0 },
+                    layout_3d_matrix: layout_3d.to_matrix(),
+                    ..Default::default()
                 },
                 display_parent_motion_px,
             )
@@ -1341,11 +1356,19 @@ impl ProjectUniforms {
                 let position = position_for(size);
                 let prev_position = position_for(prev_size);
 
+                let screen_bounds = display.target_bounds;
+                let camera_center = [position[0] + size[0] / 2.0, position[1] + size[1] / 2.0];
+                let transformed_center = layout_3d.transform_position(camera_center, screen_bounds);
+                let transformed_position = [
+                    transformed_center[0] - size[0] / 2.0,
+                    transformed_center[1] - size[1] / 2.0,
+                ];
+
                 let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
+                    transformed_position[0],
+                    transformed_position[1],
+                    transformed_position[0] + size[0],
+                    transformed_position[1] + size[1],
                 ];
                 let prev_target_bounds = [
                     prev_position[0],
@@ -1429,7 +1452,7 @@ impl ProjectUniforms {
                     _padding1: [0.0; 2],
                     _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
-                    _padding2: [0.0; 4],
+                    ..Default::default()
                 }
             });
 
@@ -1516,7 +1539,7 @@ impl ProjectUniforms {
                     _padding1: [0.0; 2],
                     _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
-                    _padding2: [0.0; 4],
+                    ..Default::default()
                 }
             });
 

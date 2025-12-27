@@ -1987,6 +1987,7 @@ fn project_config_from_recording(
         scene_segments: Vec::new(),
         mask_segments: Vec::new(),
         text_segments: Vec::new(),
+        layout_3d_segments: Vec::new(),
     });
 
     config

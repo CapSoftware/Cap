@@ -17,9 +17,21 @@ struct Uniforms {
     opacity: f32,
     border_enabled: f32,
     border_width: f32,
+    _padding0: f32,
+    _vec2_align: f32,
     _padding1: vec2<f32>,
+    _padding1b: vec2<f32>,
+    _vec4_align: vec2<f32>,
     border_color: vec4<f32>,
-    _padding2: vec4<f32>,
+    layout_3d_enabled: f32,
+    _vec3_align_0: f32,
+    _vec3_align_1: f32,
+    _vec3_align_2: f32,
+    _padding2_0: f32,
+    _padding2_1: f32,
+    _padding2_2: f32,
+    _mat4_align: f32,
+    layout_3d_matrix: mat4x4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -65,6 +77,21 @@ fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f
     let outside = max(q, vec2<f32>(0.0));
     let outside_norm = rounded_corner_norm(outside, rounding_type);
     return outside_norm + min(max(q.x, q.y), 0.0) - r;
+}
+
+fn apply_3d_transform(uv: vec2<f32>) -> vec2<f32> {
+    if uniforms.layout_3d_enabled < 0.5 {
+        return uv;
+    }
+
+    let centered = (uv - 0.5) * 2.0;
+    let point = vec4<f32>(centered.x, centered.y, 0.0, 1.0);
+    let transformed = uniforms.layout_3d_matrix * point;
+
+    let w = max(transformed.w, 0.001);
+    let projected = transformed.xy / w;
+
+    return projected * 0.5 + 0.5;
 }
 
 @fragment
@@ -220,8 +247,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
-    if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
-        var sample_uv = uv;
+    var transformed_uv = apply_3d_transform(uv);
+
+    if transformed_uv.x >= 0.0 && transformed_uv.x <= 1.0 && transformed_uv.y >= 0.0 && transformed_uv.y <= 1.0 {
+        var sample_uv = transformed_uv;
         if uniforms.mirror_x != 0.0 {
             sample_uv.x = 1.0 - sample_uv.x;
         }

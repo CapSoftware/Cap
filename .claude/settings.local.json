@@ -54,7 +54,8 @@
       "Bash(./target/release/examples/decode-benchmark:*)",
       "Bash(RUST_LOG=warn ./target/release/examples/decode-benchmark:*)",
       "Bash(git mv:*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []

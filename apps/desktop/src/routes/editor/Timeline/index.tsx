@@ -20,6 +20,7 @@ import { FPS, type TimelineTrackType, useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type Layout3DSegmentDragState, Layout3DTrack } from "./Layout3DTrack";
 import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
 import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type TextSegmentDragState, TextTrack } from "./TextTrack";
@@ -36,6 +37,7 @@ const trackIcons: Record<TimelineTrackType, JSX.Element> = {
 	mask: <IconLucideBoxSelect class="size-4" />,
 	zoom: <IconLucideSearch class="size-4" />,
 	scene: <IconLucideVideo class="size-4" />,
+	layout3d: <IconLucideLayout class="size-4" />,
 };
 
 type TrackDefinition = {
@@ -76,6 +78,12 @@ const trackDefinitions: TrackDefinition[] = [
 		icon: trackIcons.scene,
 		locked: false,
 	},
+	{
+		type: "layout3d",
+		label: "3D Layout",
+		icon: trackIcons.layout3d,
+		locked: false,
+	},
 ];
 
 export function Timeline() {
@@ -112,15 +120,19 @@ export function Timeline() {
 						? trackState().mask
 						: definition.type === "text"
 							? trackState().text
-							: true,
+							: definition.type === "layout3d"
+								? trackState().layout3d
+								: true,
 			available: definition.type === "scene" ? sceneAvailable() : true,
 		}));
 	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+	const layout3dTrackVisible = () => trackState().layout3d;
 	const visibleTrackCount = () =>
 		2 +
 		(trackState().text ? 1 : 0) +
 		(trackState().mask ? 1 : 0) +
-		(sceneTrackVisible() ? 1 : 0);
+		(sceneTrackVisible() ? 1 : 0) +
+		(layout3dTrackVisible() ? 1 : 0);
 	const trackHeight = () => (visibleTrackCount() > 2 ? "3rem" : "3.25rem");
 
 	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
@@ -140,6 +152,14 @@ export function Timeline() {
 		if (type === "mask") {
 			setEditorState("timeline", "tracks", "mask", next);
 			if (!next && editorState.timeline.selection?.type === "mask") {
+				setEditorState("timeline", "selection", null);
+			}
+			return;
+		}
+
+		if (type === "layout3d") {
+			setEditorState("timeline", "tracks", "layout3d", next);
+			if (!next && editorState.timeline.selection?.type === "layout3d") {
 				setEditorState("timeline", "selection", null);
 			}
 		}
@@ -201,17 +221,20 @@ export function Timeline() {
 					sceneSegments: [],
 					maskSegments: [],
 					textSegments: [],
+					layout3DSegments: [],
 				};
 				project.timeline.sceneSegments ??= [];
 				project.timeline.maskSegments ??= [];
 				project.timeline.textSegments ??= [];
 				project.timeline.zoomSegments ??= [];
+				project.timeline.layout3DSegments ??= [];
 			}),
 		);
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
 	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
+	let layout3dSegmentDragState = { type: "idle" } as Layout3DSegmentDragState;
 	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
 	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
 
@@ -271,6 +294,7 @@ export function Timeline() {
 		if (
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving" &&
+			layout3dSegmentDragState.type !== "moving" &&
 			maskSegmentDragState.type !== "moving" &&
 			textSegmentDragState.type !== "moving"
 		) {
@@ -568,6 +592,16 @@ export function Timeline() {
 									<SceneTrack
 										onDragStateChanged={(v) => {
 											sceneSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+							<Show when={layout3dTrackVisible()}>
+								<TrackRow icon={trackIcons.layout3d}>
+									<Layout3DTrack
+										onDragStateChanged={(v) => {
+											layout3dSegmentDragState = v;
 										}}
 										handleUpdatePlayhead={handleUpdatePlayhead}
 									/>

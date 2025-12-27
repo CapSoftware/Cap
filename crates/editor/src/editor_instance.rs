@@ -124,6 +124,7 @@ impl EditorInstance {
                     scene_segments: Vec::new(),
                     mask_segments: Vec::new(),
                     text_segments: Vec::new(),
+                    layout_3d_segments: Vec::new(),
                 });
 
                 if let Err(e) = project.write(&recording_meta.project_path) {

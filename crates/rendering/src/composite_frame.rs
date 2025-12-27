@@ -31,10 +31,16 @@ pub struct CompositeVideoFrameUniforms {
     pub border_enabled: f32,
     pub border_width: f32,
     pub _padding0: f32,
+    pub _vec2_align: f32,
     pub _padding1: [f32; 2],
     pub _padding1b: [f32; 2],
+    pub _vec4_align: [f32; 2],
     pub border_color: [f32; 4],
-    pub _padding2: [f32; 4],
+    pub layout_3d_enabled: f32,
+    pub _vec3_align: [f32; 3],
+    pub _padding2: [f32; 3],
+    pub _mat4_align: f32,
+    pub layout_3d_matrix: [[f32; 4]; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -59,10 +65,21 @@ impl Default for CompositeVideoFrameUniforms {
             border_enabled: 0.0,
             border_width: 5.0,
             _padding0: 0.0,
+            _vec2_align: 0.0,
             _padding1: [0.0; 2],
             _padding1b: [0.0; 2],
+            _vec4_align: [0.0; 2],
             border_color: [0.0, 0.0, 0.0, 0.0],
-            _padding2: [0.0; 4],
+            layout_3d_enabled: 0.0,
+            _vec3_align: [0.0; 3],
+            _padding2: [0.0; 3],
+            _mat4_align: 0.0,
+            layout_3d_matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
         }
     }
 }

@@ -553,6 +553,49 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Layout3DEasing {
+    Linear,
+    EaseIn,
+    EaseOut,
+    #[default]
+    EaseInOut,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Layout3DSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default = "Layout3DSegment::default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rotation_x: f64,
+    #[serde(default)]
+    pub rotation_y: f64,
+    #[serde(default = "Layout3DSegment::default_depth_zoom")]
+    pub depth_zoom: f64,
+    #[serde(default)]
+    pub easing: Layout3DEasing,
+    #[serde(default = "Layout3DSegment::default_fade_duration")]
+    pub fade_duration: f64,
+}
+
+impl Layout3DSegment {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_depth_zoom() -> f64 {
+        1.0
+    }
+
+    fn default_fade_duration() -> f64 {
+        0.5
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum MaskKind {
@@ -718,6 +761,8 @@ pub struct TimelineConfiguration {
     pub mask_segments: Vec<MaskSegment>,
     #[serde(default)]
     pub text_segments: Vec<TextSegment>,
+    #[serde(default, rename = "layout3DSegments")]
+    pub layout_3d_segments: Vec<Layout3DSegment>,
 }
 
 impl TimelineConfiguration {
