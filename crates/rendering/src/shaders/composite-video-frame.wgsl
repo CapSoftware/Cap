@@ -8,7 +8,7 @@ struct Uniforms {
     motion_blur_params: vec4<f32>,
     target_size: vec2<f32>,
     rounding_px: f32,
-    rounding_type: f32,
+    corner_exponent: f32,
     mirror_x: f32,
     shadow: f32,
     shadow_size: f32,
@@ -51,19 +51,20 @@ fn superellipse_norm(p: vec2<f32>, power: f32) -> f32 {
     return pow(x + y, 1.0 / power);
 }
 
-fn rounded_corner_norm(p: vec2<f32>, rounding_type: f32) -> f32 {
-    if rounding_type < 0.5 {
+// Accept an exponent directly. If exponent <= 0 -> use circular corner (length).
+fn rounded_corner_norm(p: vec2<f32>, exponent: f32) -> f32 {
+    if exponent <= 0.0 {
         return length(p);
     }
-
-    let power = 4.0;
+    // protect against pathological exponent values
+    let power = max(exponent, 1e-3);
     return superellipse_norm(p, power);
 }
 
-fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, rounding_type: f32) -> f32 {
+fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32, exponent: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     let outside = max(q, vec2<f32>(0.0));
-    let outside_norm = rounded_corner_norm(outside, rounding_type);
+    let outside_norm = rounded_corner_norm(outside, exponent);
     return outside_norm + min(max(q.x, q.y), 0.0) - r;
 }
 
@@ -72,8 +73,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let p = frag_coord.xy;
     let center = (uniforms.target_bounds.xy + uniforms.target_bounds.zw) * 0.5;
     let size = (uniforms.target_bounds.zw - uniforms.target_bounds.xy) * 0.5;
-    
-    let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+
+    let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.corner_exponent);
 
     let min_frame_size = min(size.x, size.y);
     let shadow_enabled = uniforms.shadow > 0.0;
@@ -100,7 +101,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         shadow_enabled
     );
 
-    let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+    let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.corner_exponent);
 
     // Apply blur and size to shadow
     let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
@@ -117,10 +118,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             p - center,
             size + vec2<f32>(uniforms.border_width),
             uniforms.rounding_px + uniforms.border_width,
-            uniforms.rounding_type
+            uniforms.corner_exponent
         );
         let border_inner_dist =
-            sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.rounding_type);
+            sdf_rounded_rect(p - center, size, uniforms.rounding_px, uniforms.corner_exponent);
 
         if (border_outer_dist <= 0.0 && border_inner_dist > 0.0) {
             let inner_alpha = smoothstep(-0.5, 0.5, border_inner_dist);
@@ -131,7 +132,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return vec4<f32>(uniforms.border_color.xyz, border_alpha);
         }
     }
-    
+
     if target_uv.x < 0.0 || target_uv.x > 1.0 || target_uv.y < 0.0 || target_uv.y > 1.0 {
         return shadow_color;
     }
@@ -269,7 +270,7 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
     let centered_uv = (target_uv - vec2<f32>(0.5)) * uniforms.target_size;
     let half_size = uniforms.target_size * 0.5;
-    let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.rounding_type);
+    let distance = sdf_rounded_rect(centered_uv, half_size, uniforms.rounding_px, uniforms.corner_exponent);
 
     let anti_alias_width = max(fwidth(distance), 0.5);
     let coverage = clamp(1.0 - smoothstep(0.0, anti_alias_width, distance), 0.0, 1.0);

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, CornerStyle, Crop,
-    CursorEvents, MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, Crop, CursorEvents,
+    MaskKind, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -50,13 +50,6 @@ use text::{PreparedText, prepare_texts};
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
-
-fn rounding_type_value(style: CornerStyle) -> f32 {
-    match style {
-        CornerStyle::Rounded => 0.0,
-        CornerStyle::Squircle => 1.0,
-    }
-}
 
 #[derive(Debug, Clone, Copy, Type)]
 pub struct RenderOptions {
@@ -1216,9 +1209,11 @@ impl ProjectUniforms {
                     ],
                     target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
                     target_size: [target_size.x as f32, target_size.y as f32],
-                    rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
-                        as f32,
-                    rounding_type: rounding_type_value(project.background.rounding_type),
+                    rounding_px: compute_adjusted_radius(
+                        project.background.rounding as f32 / 100.0 * 0.5 * min_target_axis as f32,
+                        project.background.rounding_smoothness,
+                    ),
+                    corner_exponent: smoothness_to_exponent(project.background.rounding_smoothness),
                     mirror_x: 0.0,
                     motion_blur_vector: descriptor.movement_vector_uv,
                     motion_blur_zoom_center: descriptor.zoom_center_uv,
@@ -1395,8 +1390,11 @@ impl ProjectUniforms {
                         target_bounds[2] - target_bounds[0],
                         target_bounds[3] - target_bounds[1],
                     ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
-                    rounding_type: rounding_type_value(project.camera.rounding_type),
+                    rounding_px: compute_adjusted_radius(
+                        project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]) as f32,
+                        project.camera.rounding_smoothness,
+                    ),
+                    corner_exponent: smoothness_to_exponent(project.camera.rounding_smoothness),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_descriptor.movement_vector_uv,
                     motion_blur_zoom_center: camera_descriptor.zoom_center_uv,
@@ -1495,7 +1493,7 @@ impl ProjectUniforms {
                         target_bounds[3] - target_bounds[1],
                     ],
                     rounding_px: 0.0,
-                    rounding_type: rounding_type_value(project.camera.rounding_type),
+                    corner_exponent: 0.0,
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     motion_blur_vector: camera_only_descriptor.movement_vector_uv,
                     motion_blur_zoom_center: camera_only_descriptor.zoom_center_uv,
@@ -1942,6 +1940,26 @@ fn srgb_to_linear(c: u16) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
+}
+
+// Converts a smoothness value (0.0 to 1.0) to a super ellipse exponent.
+#[inline]
+pub(crate) fn smoothness_to_exponent(smoothness: f32) -> f32 {
+    2.0 + smoothness * 6.0
+}
+
+// Adjusts radius to maintain visual consistency across different super ellipse exponents.
+fn compute_adjusted_radius(radius: f32, smoothness: f32) -> f32 {
+    if smoothness == 0.0 {
+        return radius;
+    }
+
+    let power = smoothness_to_exponent(smoothness);
+    let capsule_scale = 2.0f32.powf(0.5 - 1.0 / power);
+
+    // Visual normalization: compensate for super ellipses appearing smaller
+    let visual_compensation = 1.0 + smoothness * 0.8;
+    radius * capsule_scale * visual_compensation
 }
 
 #[cfg(test)]
