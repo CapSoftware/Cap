@@ -77,6 +77,7 @@ pub struct SegmentedVideoEncoder {
     disk_space_callback: Option<DiskSpaceCallback>,
     disk_space_warned: bool,
     disk_space_critical_warned: bool,
+    init_segment_validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +251,7 @@ impl SegmentedVideoEncoder {
             disk_space_callback: None,
             disk_space_warned: false,
             disk_space_critical_warned: false,
+            init_segment_validated: false,
         };
 
         instance.write_in_progress_manifest();
@@ -326,6 +328,11 @@ impl SegmentedVideoEncoder {
         self.encoder
             .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
+
+        if !self.init_segment_validated {
+            self.validate_init_segment_early()?;
+            self.init_segment_validated = true;
+        }
 
         let new_segment_index = self.detect_current_segment_index();
 
@@ -740,5 +747,67 @@ impl SegmentedVideoEncoder {
                 e
             )),
         }
+    }
+
+    fn validate_init_segment_early(&self) -> Result<(), QueueFrameError> {
+        let init_path = self.init_segment_path();
+
+        if !init_path.exists() {
+            return Err(QueueFrameError::InitSegmentInvalid(format!(
+                "init.mp4 missing at {} after first frame. Segments will be unplayable!",
+                init_path.display()
+            )));
+        }
+
+        let metadata = std::fs::metadata(&init_path).map_err(|e| {
+            QueueFrameError::InitSegmentInvalid(format!(
+                "Cannot read init.mp4 metadata at {}: {}",
+                init_path.display(),
+                e
+            ))
+        })?;
+
+        let size = metadata.len();
+        if size < 8 {
+            return Err(QueueFrameError::InitSegmentInvalid(format!(
+                "init.mp4 at {} is too small ({} bytes) to contain valid ftyp box",
+                init_path.display(),
+                size
+            )));
+        }
+
+        let mut file = std::fs::File::open(&init_path).map_err(|e| {
+            QueueFrameError::InitSegmentInvalid(format!(
+                "Cannot open init.mp4 at {}: {}",
+                init_path.display(),
+                e
+            ))
+        })?;
+
+        let mut header = [0u8; 8];
+        std::io::Read::read_exact(&mut file, &mut header).map_err(|e| {
+            QueueFrameError::InitSegmentInvalid(format!(
+                "Cannot read init.mp4 header at {}: {}",
+                init_path.display(),
+                e
+            ))
+        })?;
+
+        let ftyp_signature = &header[4..8];
+        if ftyp_signature != b"ftyp" {
+            return Err(QueueFrameError::InitSegmentInvalid(format!(
+                "init.mp4 at {} has invalid ftyp box (got {:?}, expected 'ftyp'). File may be corrupted!",
+                init_path.display(),
+                String::from_utf8_lossy(ftyp_signature)
+            )));
+        }
+
+        tracing::debug!(
+            path = %init_path.display(),
+            size_bytes = size,
+            "init.mp4 validated successfully with valid ftyp box"
+        );
+
+        Ok(())
     }
 }
