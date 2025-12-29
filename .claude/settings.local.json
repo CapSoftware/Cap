@@ -54,7 +54,11 @@
       "Bash(./target/release/examples/decode-benchmark:*)",
       "Bash(RUST_LOG=warn ./target/release/examples/decode-benchmark:*)",
       "Bash(git mv:*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(cargo test:*)",
+      "Bash(/opt/homebrew/bin/ffmpeg:*)",
+      "Bash(RUST_LOG=info cargo run:*)",
+      "Bash(RUST_LOG=warn cargo run:*)"
     ],
     "deny": [],
     "ask": []

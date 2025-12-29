@@ -1531,6 +1531,7 @@ dependencies = [
  "cap-utils",
  "chrono",
  "cidre",
+ "clap",
  "cocoa",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",

@@ -4,6 +4,7 @@ use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
     Dictionary,
     codec::{codec::Codec, context, encoder},
+    color,
     format::{self},
     frame,
     threading::Config,
@@ -274,6 +275,14 @@ impl H264EncoderBuilder {
         encoder.set_format(output_format);
         encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
+        encoder.set_colorspace(color::Space::BT709);
+        encoder.set_color_range(color::Range::MPEG);
+        unsafe {
+            (*encoder.as_mut_ptr()).color_primaries =
+                ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*encoder.as_mut_ptr()).color_trc =
+                ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        }
 
         let bitrate = get_bitrate(
             output_width,
@@ -514,6 +523,7 @@ fn get_codec_and_options(
         match *encoder_name {
             "h264_videotoolbox" => {
                 options.set("realtime", "true");
+                options.set("prio_speed", "true");
             }
             "h264_nvenc" => {
                 options.set("preset", "p4");

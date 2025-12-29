@@ -11,6 +11,9 @@ pub mod screenshot;
 pub mod sources;
 pub mod studio_recording;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_sources;
+
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
 pub use output_pipeline::*;
 pub use sources::screen_capture;

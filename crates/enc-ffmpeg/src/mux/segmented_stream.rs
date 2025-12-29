@@ -148,19 +148,6 @@ impl SegmentedVideoEncoder {
 
         let mut output = format::output_as(&manifest_path, "dash")?;
 
-        let init_seg_path = base_path.join(INIT_SEGMENT_NAME);
-        let media_seg_pattern = base_path.join("segment_$Number%03d$.m4s");
-
-        #[cfg(windows)]
-        let init_seg_str = init_seg_path.to_string_lossy().replace('\\', "/");
-        #[cfg(windows)]
-        let media_seg_str = media_seg_pattern.to_string_lossy().replace('\\', "/");
-
-        #[cfg(not(windows))]
-        let init_seg_str = init_seg_path.to_string_lossy().to_string();
-        #[cfg(not(windows))]
-        let media_seg_str = media_seg_pattern.to_string_lossy().to_string();
-
         unsafe {
             let opts = output.as_mut_ptr();
 
@@ -170,8 +157,8 @@ impl SegmentedVideoEncoder {
                 ffmpeg::ffi::av_opt_set((*opts).priv_data, k.as_ptr(), v.as_ptr(), 0);
             };
 
-            set_opt("init_seg_name", &init_seg_str);
-            set_opt("media_seg_name", &media_seg_str);
+            set_opt("init_seg_name", INIT_SEGMENT_NAME);
+            set_opt("media_seg_name", "segment_$Number%03d$.m4s");
             set_opt(
                 "seg_duration",
                 &config.segment_duration.as_secs_f64().to_string(),
@@ -179,6 +166,7 @@ impl SegmentedVideoEncoder {
             set_opt("use_timeline", "0");
             set_opt("use_template", "1");
             set_opt("single_file", "0");
+            set_opt("hls_playlist", "1");
         }
 
         let mut builder = H264EncoderBuilder::new(video_config)
