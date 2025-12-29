@@ -82,6 +82,7 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	excludedWindows: [],
 	instantModeMaxResolution: 1920,
 	crashRecoveryRecording: true,
+	maxFps: 60,
 });
 
 const deriveInitialSettings = (
@@ -101,6 +102,15 @@ const INSTANT_MODE_RESOLUTION_OPTIONS = [
 	{ value: 1920, label: "1080p" },
 	{ value: 2560, label: "1440p" },
 	{ value: 3840, label: "4K" },
+] satisfies {
+	value: number;
+	label: string;
+}[];
+
+const MAX_FPS_OPTIONS = [
+	{ value: 30, label: "30 FPS" },
+	{ value: 60, label: "60 FPS (Recommended)" },
+	{ value: 120, label: "120 FPS" },
 ] satisfies {
 	value: number;
 	label: string;
@@ -576,6 +586,24 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						value={settings.crashRecoveryRecording ?? true}
 						onChange={(value) => handleChange("crashRecoveryRecording", value)}
 					/>
+					<div class="flex flex-col gap-1">
+						<SelectSettingItem
+							label="Max capture framerate"
+							description="Maximum framerate for screen capture. Higher values may cause instability on some systems."
+							value={settings.maxFps ?? 60}
+							onChange={(value) => handleChange("maxFps", value)}
+							options={MAX_FPS_OPTIONS.map((option) => ({
+								text: option.label,
+								value: option.value,
+							}))}
+						/>
+						{(settings.maxFps ?? 60) > 60 && (
+							<p class="text-xs text-amber-500 px-1 pb-2">
+								⚠️ Higher framerates may cause frame drops or increased CPU usage
+								on some systems.
+							</p>
+						)}
+					</div>
 				</SettingGroup>
 
 				<DefaultProjectNameCard

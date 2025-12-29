@@ -455,6 +455,7 @@ pub struct ActorBuilder {
     camera_feed: Option<Arc<CameraFeedLock>>,
     custom_cursor: bool,
     fragmented: bool,
+    max_fps: u32,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
 }
@@ -469,6 +470,7 @@ impl ActorBuilder {
             camera_feed: None,
             custom_cursor: false,
             fragmented: false,
+            max_fps: 60,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
         }
@@ -499,6 +501,11 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_max_fps(mut self, max_fps: u32) -> Self {
+        self.max_fps = max_fps.clamp(1, 120);
+        self
+    }
+
     #[cfg(target_os = "macos")]
     pub fn with_excluded_windows(mut self, excluded_windows: Vec<scap_targets::WindowId>) -> Self {
         self.excluded_windows = excluded_windows;
@@ -523,6 +530,7 @@ impl ActorBuilder {
             },
             self.custom_cursor,
             self.fragmented,
+            self.max_fps,
         )
         .await
     }
@@ -534,6 +542,7 @@ async fn spawn_studio_recording_actor(
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
     fragmented: bool,
+    max_fps: u32,
 ) -> anyhow::Result<ActorHandle> {
     ensure_dir(&recording_dir)?;
 
@@ -564,6 +573,7 @@ async fn spawn_studio_recording_actor(
         base_inputs.clone(),
         custom_cursor_capture,
         fragmented,
+        max_fps,
         start_time,
         completion_tx.clone(),
     );
@@ -620,8 +630,36 @@ async fn stop_recording(
 ) -> Result<CompletedRecording, RecordingError> {
     use cap_project::*;
 
-    let make_relative = |path: &PathBuf| {
-        RelativePathBuf::from_path(path.strip_prefix(&recording_dir).unwrap()).unwrap()
+    const DEFAULT_FPS: u32 = 30;
+
+    let make_relative = |path: &PathBuf| -> RelativePathBuf {
+        match path.strip_prefix(&recording_dir) {
+            Ok(stripped) => RelativePathBuf::from_path(stripped).unwrap_or_else(|_| {
+                tracing::warn!(
+                    "Failed to convert path to relative: {:?}, using filename only",
+                    path
+                );
+                RelativePathBuf::from(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            }),
+            Err(_) => {
+                tracing::warn!(
+                    "Path {:?} is not inside recording_dir {:?}, using filename only",
+                    path,
+                    recording_dir
+                );
+                RelativePathBuf::from(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_ref(),
+                )
+            }
+        }
     };
 
     let segment_metas: Vec<_> = futures::stream::iter(segments)
@@ -632,12 +670,29 @@ async fn stop_recording(
             MultipleSegment {
                 display: VideoMeta {
                     path: make_relative(&s.pipeline.screen.path),
-                    fps: s.pipeline.screen.video_info.unwrap().fps(),
+                    fps: s
+                        .pipeline
+                        .screen
+                        .video_info
+                        .map(|v| v.fps())
+                        .unwrap_or_else(|| {
+                            tracing::warn!(
+                                "Screen video_info missing, using default fps: {}",
+                                DEFAULT_FPS
+                            );
+                            DEFAULT_FPS
+                        }),
                     start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
                 },
                 camera: s.pipeline.camera.map(|camera| VideoMeta {
                     path: make_relative(&camera.path),
-                    fps: camera.video_info.unwrap().fps(),
+                    fps: camera.video_info.map(|v| v.fps()).unwrap_or_else(|| {
+                        tracing::warn!(
+                            "Camera video_info missing, using default fps: {}",
+                            DEFAULT_FPS
+                        );
+                        DEFAULT_FPS
+                    }),
                     start_time: Some(to_start_time(camera.first_timestamp)),
                 }),
                 mic: s.pipeline.microphone.map(|mic| AudioMeta {
@@ -716,6 +771,7 @@ struct SegmentPipelineFactory {
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
     fragmented: bool,
+    max_fps: u32,
     start_time: Timestamps,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
@@ -731,6 +787,7 @@ impl SegmentPipelineFactory {
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
         fragmented: bool,
+        max_fps: u32,
         start_time: Timestamps,
         completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
@@ -740,6 +797,7 @@ impl SegmentPipelineFactory {
             base_inputs,
             custom_cursor_capture,
             fragmented,
+            max_fps,
             start_time,
             index: 0,
             completion_tx,
@@ -762,6 +820,7 @@ impl SegmentPipelineFactory {
             next_cursors_id,
             self.custom_cursor_capture,
             self.fragmented,
+            self.max_fps,
             self.start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
@@ -831,6 +890,7 @@ async fn create_segment_pipeline(
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     fragmented: bool,
+    max_fps: u32,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
@@ -839,8 +899,6 @@ async fn create_segment_pipeline(
 
     let (display, crop) =
         target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
-
-    let max_fps = if fragmented { 60 } else { 120 };
 
     let screen_config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         display,
