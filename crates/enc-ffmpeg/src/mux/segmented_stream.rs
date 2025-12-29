@@ -57,6 +57,8 @@ pub struct SegmentedVideoEncoder {
     frames_in_segment: u32,
 
     completed_segments: Vec<VideoSegmentInfo>,
+
+    codec_info: CodecInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +79,18 @@ struct SegmentEntry {
     file_size: Option<u64>,
 }
 
-const MANIFEST_VERSION: u32 = 4;
+#[derive(Serialize, Clone)]
+struct CodecInfo {
+    width: u32,
+    height: u32,
+    frame_rate_num: i32,
+    frame_rate_den: i32,
+    time_base_num: i32,
+    time_base_den: i32,
+    pixel_format: String,
+}
+
+const MANIFEST_VERSION: u32 = 5;
 
 #[derive(Serialize)]
 struct Manifest {
@@ -86,6 +99,8 @@ struct Manifest {
     manifest_type: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     init_segment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codec_info: Option<CodecInfo>,
     segments: Vec<SegmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -193,10 +208,22 @@ impl SegmentedVideoEncoder {
 
         output.write_header()?;
 
+        let codec_info = CodecInfo {
+            width: video_config.width,
+            height: video_config.height,
+            frame_rate_num: video_config.frame_rate.0,
+            frame_rate_den: video_config.frame_rate.1,
+            time_base_num: video_config.time_base.0,
+            time_base_den: video_config.time_base.1,
+            pixel_format: format!("{:?}", video_config.pixel_format),
+        };
+
         tracing::info!(
             path = %base_path.display(),
             segment_duration_secs = config.segment_duration.as_secs(),
-            "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments)"
+            width = codec_info.width,
+            height = codec_info.height,
+            "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments). CRITICAL: init.mp4 is required for segment playback/recovery."
         );
 
         let instance = Self {
@@ -209,6 +236,7 @@ impl SegmentedVideoEncoder {
             last_frame_timestamp: None,
             frames_in_segment: 0,
             completed_segments: Vec::new(),
+            codec_info,
         };
 
         instance.write_in_progress_manifest();
@@ -289,6 +317,10 @@ impl SegmentedVideoEncoder {
             self.segment_start_time = Some(timestamp);
             self.frames_in_segment = 0;
 
+            if let Err(e) = self.validate_init_segment() {
+                tracing::error!("{e}");
+            }
+
             self.write_manifest();
             self.write_in_progress_manifest();
         }
@@ -306,6 +338,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments: self
                 .completed_segments
                 .iter()
@@ -370,6 +403,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments,
             total_duration: None,
             is_complete: false,
@@ -553,6 +587,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments: self
                 .completed_segments
                 .iter()
@@ -608,5 +643,35 @@ impl SegmentedVideoEncoder {
 
     pub fn init_segment_path(&self) -> PathBuf {
         self.base_path.join(INIT_SEGMENT_NAME)
+    }
+
+    pub fn validate_init_segment(&self) -> Result<(), String> {
+        let init_path = self.init_segment_path();
+
+        if !init_path.exists() {
+            return Err(format!(
+                "CRITICAL: init.mp4 is missing at {}. M4S segments will be unplayable without it!",
+                init_path.display()
+            ));
+        }
+
+        match std::fs::metadata(&init_path) {
+            Ok(metadata) => {
+                let size = metadata.len();
+                if size < 100 {
+                    return Err(format!(
+                        "CRITICAL: init.mp4 at {} is too small ({} bytes). It may be corrupted!",
+                        init_path.display(),
+                        size
+                    ));
+                }
+                Ok(())
+            }
+            Err(e) => Err(format!(
+                "CRITICAL: Cannot read init.mp4 metadata at {}: {}",
+                init_path.display(),
+                e
+            )),
+        }
     }
 }
