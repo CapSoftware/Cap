@@ -72,12 +72,12 @@ impl TimestampAnomalyTracker {
         let raw_duration = Duration::from_secs_f64(signed_secs);
         let adjusted = raw_duration.saturating_add(self.accumulated_compensation);
 
-        if let Some(last) = self.last_valid_duration {
-            if let Some(forward_jump) = adjusted.checked_sub(last) {
-                let jump_secs = forward_jump.as_secs_f64();
-                if jump_secs > LARGE_FORWARD_JUMP_SECS {
-                    return self.handle_forward_jump(last, adjusted, jump_secs);
-                }
+        if let Some(last) = self.last_valid_duration
+            && let Some(forward_jump) = adjusted.checked_sub(last)
+        {
+            let jump_secs = forward_jump.as_secs_f64();
+            if jump_secs > LARGE_FORWARD_JUMP_SECS {
+                return self.handle_forward_jump(last, adjusted, jump_secs);
             }
         }
 
