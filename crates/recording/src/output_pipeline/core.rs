@@ -61,26 +61,42 @@ impl SharedPauseState {
         }
 
         if let Some(start) = inner.paused_at.take() {
-            let delta = timestamp.checked_sub(start).ok_or_else(|| {
-                anyhow!(
-                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
-                )
-            })?;
+            let delta = match timestamp.checked_sub(start) {
+                Some(d) => d,
+                None => {
+                    warn!(
+                        resume_at = ?start,
+                        current = ?timestamp,
+                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
+                    );
+                    Duration::ZERO
+                }
+            };
 
-            inner.offset = inner.offset.checked_add(delta).ok_or_else(|| {
-                anyhow!(
-                    "Pause offset overflow (offset={:?}, delta={delta:?})",
-                    inner.offset
-                )
-            })?;
+            inner.offset = match inner.offset.checked_add(delta) {
+                Some(o) => o,
+                None => {
+                    warn!(
+                        offset = ?inner.offset,
+                        delta = ?delta,
+                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
+                    );
+                    Duration::MAX
+                }
+            };
         }
 
-        let adjusted = timestamp.checked_sub(inner.offset).ok_or_else(|| {
-            anyhow!(
-                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
-                inner.offset
-            )
-        })?;
+        let adjusted = match timestamp.checked_sub(inner.offset) {
+            Some(t) => t,
+            None => {
+                warn!(
+                    timestamp = ?timestamp,
+                    offset = ?inner.offset,
+                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
+                );
+                Duration::ZERO
+            }
+        };
 
         Ok(Some(adjusted))
     }
