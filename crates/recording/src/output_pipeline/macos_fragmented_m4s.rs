@@ -4,7 +4,9 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
-use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+use cap_enc_ffmpeg::segmented_stream::{
+    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+};
 use cap_media_info::{AudioInfo, VideoInfo};
 use std::{
     path::PathBuf,
@@ -102,6 +104,7 @@ pub struct MacOSFragmentedM4SMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
+    disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 pub struct MacOSFragmentedM4SMuxerConfig {
@@ -109,6 +112,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 impl Default for MacOSFragmentedM4SMuxerConfig {
@@ -118,6 +122,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            disk_space_callback: None,
         }
     }
 }
@@ -156,6 +161,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
+            disk_space_callback: config.disk_space_callback,
         })
     }
 
@@ -203,10 +209,18 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    error!("Encoder mutex poisoned during finish - encoder thread likely panicked");
+                    return Ok(Err(anyhow!(
+                        "Encoder mutex poisoned - recording may be corrupt or incomplete"
+                    )));
+                }
             }
         }
 
@@ -233,8 +247,11 @@ impl MacOSFragmentedM4SMuxer {
             output_size: self.output_size,
         };
 
-        let encoder =
+        let mut encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        if let Some(callback) = &self.disk_space_callback {
+            encoder.set_disk_space_callback(callback.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
@@ -284,10 +301,16 @@ impl MacOSFragmentedM4SMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
-                            {
-                                warn!("Failed to encode frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
+                                        warn!("Failed to encode frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                    return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
@@ -574,6 +597,7 @@ pub struct MacOSFragmentedM4SCameraMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
+    disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 pub struct MacOSFragmentedM4SCameraMuxerConfig {
@@ -581,6 +605,7 @@ pub struct MacOSFragmentedM4SCameraMuxerConfig {
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 impl Default for MacOSFragmentedM4SCameraMuxerConfig {
@@ -590,6 +615,7 @@ impl Default for MacOSFragmentedM4SCameraMuxerConfig {
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            disk_space_callback: None,
         }
     }
 }
@@ -629,6 +655,7 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
+            disk_space_callback: config.disk_space_callback,
         })
     }
 
@@ -676,10 +703,20 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish camera segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish camera segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    error!(
+                        "Camera encoder mutex poisoned during finish - encoder thread likely panicked"
+                    );
+                    return Ok(Err(anyhow!(
+                        "Camera encoder mutex poisoned - recording may be corrupt or incomplete"
+                    )));
+                }
             }
         }
 
@@ -706,8 +743,11 @@ impl MacOSFragmentedM4SCameraMuxer {
             output_size: self.output_size,
         };
 
-        let encoder =
+        let mut encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        if let Some(callback) = &self.disk_space_callback {
+            encoder.set_disk_space_callback(callback.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
@@ -759,10 +799,16 @@ impl MacOSFragmentedM4SCameraMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
-                            {
-                                warn!("Failed to encode camera frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
+                                        warn!("Failed to encode camera frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                    return Err(anyhow!("Camera encoder mutex poisoned - all subsequent frames would be lost"));
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();

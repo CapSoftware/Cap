@@ -131,18 +131,18 @@ export default function FeedbackTab() {
 							}
 						>
 							{(diag) => {
-								const d = diag();
+								const d = diag() as Record<string, unknown>;
 								const osVersion =
 									"macosVersion" in d
-										? d.macosVersion
+										? (d.macosVersion as { displayName: string } | null)
 										: "windowsVersion" in d
-											? d.windowsVersion
+											? (d.windowsVersion as { displayName: string } | null)
 											: null;
 								const captureSupported =
 									"screenCaptureSupported" in d
-										? d.screenCaptureSupported
+										? (d.screenCaptureSupported as boolean)
 										: "graphicsCaptureSupported" in d
-											? d.graphicsCaptureSupported
+											? (d.graphicsCaptureSupported as boolean)
 											: false;
 								return (
 									<div class="space-y-3 text-sm">
@@ -153,7 +153,7 @@ export default function FeedbackTab() {
 														Operating System
 													</p>
 													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
-														{(ver() as { displayName: string }).displayName}
+														{ver().displayName}
 													</p>
 												</div>
 											)}
@@ -175,13 +175,13 @@ export default function FeedbackTab() {
 											</div>
 										</div>
 
-										<Show when={d.availableEncoders.length > 0}>
+										<Show when={(d.availableEncoders as string[])?.length > 0}>
 											<div class="space-y-1">
 												<p class="text-gray-11 font-medium">
 													Available Encoders
 												</p>
 												<div class="flex gap-1.5 flex-wrap">
-													<For each={d.availableEncoders}>
+													<For each={d.availableEncoders as string[]}>
 														{(encoder) => (
 															<span class="px-2 py-1 bg-gray-2 rounded text-xs text-gray-10 font-mono">
 																{encoder}

@@ -53,7 +53,7 @@ use crate::general_settings;
 use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
-    RecordingState, RecordingStopped, VideoUploadInfo,
+    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -192,6 +192,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        match self {
+            Self::Instant { handle, .. } => handle.is_paused().await,
+            Self::Studio { handle, .. } => handle.is_paused().await,
         }
     }
 
@@ -340,12 +347,25 @@ pub enum RecordingInputKind {
 #[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
 #[serde(tag = "variant")]
 pub enum RecordingEvent {
-    Countdown { value: u32 },
+    Countdown {
+        value: u32,
+    },
     Started,
     Stopped,
-    Failed { error: String },
-    InputLost { input: RecordingInputKind },
-    InputRestored { input: RecordingInputKind },
+    Failed {
+        error: String,
+    },
+    InputLost {
+        input: RecordingInputKind,
+    },
+    InputRestored {
+        input: RecordingInputKind,
+    },
+    DiskSpaceLow {
+        available_mb: u32,
+        threshold_mb: u32,
+        path: String,
+    },
 }
 
 #[derive(Serialize, Type)]
@@ -729,6 +749,9 @@ pub async fn start_recording(
                                     .as_ref()
                                     .map(|s| s.crash_recovery_recording)
                                     .unwrap_or_default(),
+                            )
+                            .with_max_fps(
+                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
                             );
 
                             #[cfg(target_os = "macos")]
@@ -878,6 +901,7 @@ pub async fn start_recording(
     };
 
     let _ = RecordingEvent::Started.emit(&app);
+    let _ = RecordingStarted.emit(&app);
 
     spawn_actor({
         let app = app.clone();
@@ -947,6 +971,23 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
     if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn toggle_pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let state = state.read().await;
+
+    if let Some(recording) = state.current_recording() {
+        if recording.is_paused().await.map_err(|e| e.to_string())? {
+            recording.resume().await.map_err(|e| e.to_string())?;
+        } else {
+            recording.pause().await.map_err(|e| e.to_string())?;
+        }
     }
 
     Ok(())

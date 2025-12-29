@@ -2385,6 +2385,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::stop_recording,
             recording::pause_recording,
             recording::resume_recording,
+            recording::toggle_pause_recording,
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,

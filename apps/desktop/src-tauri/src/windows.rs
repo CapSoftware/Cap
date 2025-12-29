@@ -962,11 +962,22 @@ impl ShowCapWindow {
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
         let id = self.id(app);
 
+        let theme = GeneralSettingsStore::get(app)
+            .ok()
+            .flatten()
+            .map(|s| match s.theme {
+                AppTheme::System => None,
+                AppTheme::Light => Some(tauri::Theme::Light),
+                AppTheme::Dark => Some(tauri::Theme::Dark),
+            })
+            .unwrap_or(None);
+
         let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
-            .shadow(true);
+            .shadow(true)
+            .theme(theme);
 
         if let Some(min) = id.min_size() {
             builder = builder

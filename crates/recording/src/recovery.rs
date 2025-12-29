@@ -241,7 +241,7 @@ impl RecoveryManager {
                 .unwrap_or("fragments");
 
             let max_supported_version = if manifest_type == "m4s_segments" {
-                4
+                5
             } else {
                 CURRENT_MANIFEST_VERSION
             };
