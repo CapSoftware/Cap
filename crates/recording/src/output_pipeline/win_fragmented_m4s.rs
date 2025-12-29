@@ -205,10 +205,15 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    warn!("Encoder mutex poisoned during finish");
+                }
             }
         }
 
@@ -274,10 +279,15 @@ impl WindowsFragmentedM4SMuxer {
                         Ok(ffmpeg_frame) => {
                             let encode_start = std::time::Instant::now();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp)
-                            {
-                                warn!("Failed to encode frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp) {
+                                        warn!("Failed to encode frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("Encoder mutex poisoned, skipping frame");
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
@@ -506,10 +516,15 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish camera segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish camera segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    warn!("Camera encoder mutex poisoned during finish");
+                }
             }
         }
 
@@ -576,10 +591,15 @@ impl WindowsFragmentedM4SCameraMuxer {
                         Ok(ffmpeg_frame) => {
                             let encode_start = std::time::Instant::now();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp)
-                            {
-                                warn!("Failed to encode camera frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(ffmpeg_frame, timestamp) {
+                                        warn!("Failed to encode camera frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("Camera encoder mutex poisoned, skipping frame");
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();

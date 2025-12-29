@@ -203,10 +203,15 @@ impl Muxer for MacOSFragmentedM4SMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    warn!("Encoder mutex poisoned during finish");
+                }
             }
         }
 
@@ -284,10 +289,15 @@ impl MacOSFragmentedM4SMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
-                            {
-                                warn!("Failed to encode frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
+                                        warn!("Failed to encode frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("Encoder mutex poisoned, skipping frame");
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
@@ -676,10 +686,15 @@ impl Muxer for MacOSFragmentedM4SCameraMuxer {
                 }
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish camera segmented encoder: {e}");
+            match state.encoder.lock() {
+                Ok(mut encoder) => {
+                    if let Err(e) = encoder.finish_with_timestamp(timestamp) {
+                        warn!("Failed to finish camera segmented encoder: {e}");
+                    }
+                }
+                Err(_) => {
+                    warn!("Camera encoder mutex poisoned during finish");
+                }
             }
         }
 
@@ -759,10 +774,15 @@ impl MacOSFragmentedM4SCameraMuxer {
                             let encode_start = std::time::Instant::now();
                             let owned_frame = frame_pool.take_frame();
 
-                            if let Ok(mut encoder) = encoder_clone.lock()
-                                && let Err(e) = encoder.queue_frame(owned_frame, timestamp)
-                            {
-                                warn!("Failed to encode camera frame: {e}");
+                            match encoder_clone.lock() {
+                                Ok(mut encoder) => {
+                                    if let Err(e) = encoder.queue_frame(owned_frame, timestamp) {
+                                        warn!("Failed to encode camera frame: {e}");
+                                    }
+                                }
+                                Err(_) => {
+                                    warn!("Camera encoder mutex poisoned, skipping frame");
+                                }
                             }
 
                             let encode_elapsed_ms = encode_start.elapsed().as_millis();
