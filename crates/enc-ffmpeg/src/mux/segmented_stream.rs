@@ -5,12 +5,26 @@ use std::{
     ffi::CString,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
+use sysinfo::Disks;
 
 use crate::video::h264::{H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset};
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
+const DISK_SPACE_WARNING_THRESHOLD_MB: u64 = 500;
+const DISK_SPACE_CRITICAL_THRESHOLD_MB: u64 = 100;
+
+#[derive(Debug, Clone)]
+pub struct DiskSpaceWarning {
+    pub available_mb: u64,
+    pub threshold_mb: u64,
+    pub path: String,
+    pub is_critical: bool,
+}
+
+pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -59,6 +73,10 @@ pub struct SegmentedVideoEncoder {
     completed_segments: Vec<VideoSegmentInfo>,
 
     codec_info: CodecInfo,
+
+    disk_space_callback: Option<DiskSpaceCallback>,
+    disk_space_warned: bool,
+    disk_space_critical_warned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +143,8 @@ pub enum QueueFrameError {
     Init(#[from] InitError),
     #[error("Encode: {0}")]
     Encode(#[from] crate::video::h264::QueueFrameError),
+    #[error("Init segment validation failed: {0}")]
+    InitSegmentInvalid(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -237,11 +257,67 @@ impl SegmentedVideoEncoder {
             frames_in_segment: 0,
             completed_segments: Vec::new(),
             codec_info,
+            disk_space_callback: None,
+            disk_space_warned: false,
+            disk_space_critical_warned: false,
         };
 
         instance.write_in_progress_manifest();
 
         Ok(instance)
+    }
+
+    pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
+        self.disk_space_callback = Some(callback);
+    }
+
+    fn check_disk_space(&mut self) {
+        let Some(callback) = &self.disk_space_callback else {
+            return;
+        };
+
+        let disks = Disks::new_with_refreshed_list();
+
+        let matching_disk = disks.iter().find(|disk| {
+            let mount_point = disk.mount_point();
+            self.base_path.starts_with(mount_point)
+        });
+
+        let Some(disk) = matching_disk else {
+            tracing::debug!("Could not find disk for path {}", self.base_path.display());
+            return;
+        };
+
+        let available_bytes = disk.available_space();
+        let available_mb = available_bytes / 1024 / 1024;
+
+        if available_mb < DISK_SPACE_CRITICAL_THRESHOLD_MB && !self.disk_space_critical_warned {
+            tracing::error!(
+                available_mb,
+                path = %self.base_path.display(),
+                "CRITICAL: Disk space critically low! Recording may fail."
+            );
+            self.disk_space_critical_warned = true;
+            callback(DiskSpaceWarning {
+                available_mb,
+                threshold_mb: DISK_SPACE_CRITICAL_THRESHOLD_MB,
+                path: self.base_path.display().to_string(),
+                is_critical: true,
+            });
+        } else if available_mb < DISK_SPACE_WARNING_THRESHOLD_MB && !self.disk_space_warned {
+            tracing::warn!(
+                available_mb,
+                path = %self.base_path.display(),
+                "Disk space running low. Consider freeing up space."
+            );
+            self.disk_space_warned = true;
+            callback(DiskSpaceWarning {
+                available_mb,
+                threshold_mb: DISK_SPACE_WARNING_THRESHOLD_MB,
+                path: self.base_path.display().to_string(),
+                is_critical: false,
+            });
+        }
     }
 
     pub fn queue_frame(
@@ -317,12 +393,13 @@ impl SegmentedVideoEncoder {
             self.segment_start_time = Some(timestamp);
             self.frames_in_segment = 0;
 
-            if let Err(e) = self.validate_init_segment() {
-                tracing::error!("{e}");
-            }
+            self.validate_init_segment()
+                .map_err(QueueFrameError::InitSegmentInvalid)?;
 
             self.write_manifest();
             self.write_in_progress_manifest();
+
+            self.check_disk_space();
         }
 
         Ok(())

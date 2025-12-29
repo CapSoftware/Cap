@@ -5,7 +5,9 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
-use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+use cap_enc_ffmpeg::segmented_stream::{
+    DiskSpaceCallback, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
+};
 use cap_media_info::{AudioInfo, VideoInfo};
 use scap_ffmpeg::AsFFmpeg;
 use std::{
@@ -104,6 +106,7 @@ pub struct WindowsFragmentedM4SMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
+    disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
@@ -111,6 +114,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -120,6 +124,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            disk_space_callback: None,
         }
     }
 }
@@ -158,6 +163,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
+            disk_space_callback: config.disk_space_callback,
         })
     }
 
@@ -240,8 +246,11 @@ impl WindowsFragmentedM4SMuxer {
             output_size: self.output_size,
         };
 
-        let encoder =
+        let mut encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        if let Some(callback) = &self.disk_space_callback {
+            encoder.set_disk_space_callback(callback.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
@@ -414,6 +423,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
     started: bool,
+    disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
@@ -421,6 +431,7 @@ pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub preset: H264Preset,
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
+    pub disk_space_callback: Option<DiskSpaceCallback>,
 }
 
 impl Default for WindowsFragmentedM4SCameraMuxerConfig {
@@ -430,6 +441,7 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
             preset: H264Preset::Ultrafast,
             output_size: None,
             shared_pause_state: None,
+            disk_space_callback: None,
         }
     }
 }
@@ -469,6 +481,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             pause,
             frame_drops: FrameDropTracker::new(),
             started: false,
+            disk_space_callback: config.disk_space_callback,
         })
     }
 
@@ -551,8 +564,11 @@ impl WindowsFragmentedM4SCameraMuxer {
             output_size: self.output_size,
         };
 
-        let encoder =
+        let mut encoder =
             SegmentedVideoEncoder::init(self.base_path.clone(), self.video_config, encoder_config)?;
+        if let Some(callback) = &self.disk_space_callback {
+            encoder.set_disk_space_callback(callback.clone());
+        }
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
 
