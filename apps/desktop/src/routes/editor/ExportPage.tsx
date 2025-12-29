@@ -233,54 +233,62 @@ export function ExportPage() {
 		),
 	);
 
-	const debouncedFetchPreview = debounce(
-		async (
-			frameTime: number,
-			fps: number,
-			resWidth: number,
-			resHeight: number,
-			bpp: number,
-		) => {
-			const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp);
-			const cachedEstimate = estimateCache.get(cacheKey);
+	const fetchPreview = async (
+		frameTime: number,
+		fps: number,
+		resWidth: number,
+		resHeight: number,
+		bpp: number,
+	) => {
+		const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp);
+		const cachedEstimate = estimateCache.get(cacheKey);
 
-			if (cachedEstimate) {
-				setRenderEstimate(cachedEstimate);
+		if (cachedEstimate) {
+			setRenderEstimate(cachedEstimate);
+		}
+
+		try {
+			const result = await commands.generateExportPreviewFast(frameTime, {
+				fps,
+				resolution_base: { x: resWidth, y: resHeight },
+				compression_bpp: bpp,
+			});
+
+			const oldUrl = previewUrl();
+			if (oldUrl) URL.revokeObjectURL(oldUrl);
+
+			const byteArray = Uint8Array.from(atob(result.jpeg_base64), (c) =>
+				c.charCodeAt(0),
+			);
+			const blob = new Blob([byteArray], { type: "image/jpeg" });
+			setPreviewUrl(URL.createObjectURL(blob));
+
+			const newEstimate = {
+				frameRenderTimeMs: result.frame_render_time_ms,
+				totalFrames: result.total_frames,
+				estimatedSizeMb: result.estimated_size_mb,
+			};
+
+			if (!cachedEstimate) {
+				estimateCache.set(cacheKey, newEstimate);
 			}
+			setRenderEstimate(newEstimate);
+		} catch (e) {
+			console.error("Failed to generate preview:", e);
+		} finally {
+			setPreviewLoading(false);
+		}
+	};
 
-			try {
-				const result = await commands.generateExportPreviewFast(frameTime, {
-					fps,
-					resolution_base: { x: resWidth, y: resHeight },
-					compression_bpp: bpp,
-				});
+	const debouncedFetchPreview = debounce(fetchPreview, 300);
 
-				const oldUrl = previewUrl();
-				if (oldUrl) URL.revokeObjectURL(oldUrl);
-
-				const byteArray = Uint8Array.from(atob(result.jpeg_base64), (c) =>
-					c.charCodeAt(0),
-				);
-				const blob = new Blob([byteArray], { type: "image/jpeg" });
-				setPreviewUrl(URL.createObjectURL(blob));
-
-				const newEstimate = {
-					frameRenderTimeMs: result.frame_render_time_ms,
-					totalFrames: result.total_frames,
-					estimatedSizeMb: result.estimated_size_mb,
-				};
-
-				if (!cachedEstimate) {
-					estimateCache.set(cacheKey, newEstimate);
-				}
-				setRenderEstimate(newEstimate);
-			} catch (e) {
-				console.error("Failed to generate preview:", e);
-			} finally {
-				setPreviewLoading(false);
-			}
-		},
-		300,
+	setPreviewLoading(true);
+	fetchPreview(
+		editorState.playbackTime ?? 0,
+		settings.fps,
+		settings.resolution.width,
+		settings.resolution.height,
+		compressionBpp(),
 	);
 
 	createEffect(
