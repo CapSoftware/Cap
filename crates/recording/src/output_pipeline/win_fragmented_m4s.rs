@@ -218,7 +218,10 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                     }
                 }
                 Err(_) => {
-                    warn!("Encoder mutex poisoned during finish");
+                    error!("Encoder mutex poisoned during finish - encoder thread likely panicked");
+                    return Ok(Err(anyhow!(
+                        "Encoder mutex poisoned - recording may be corrupt or incomplete"
+                    )));
                 }
             }
         }
@@ -295,7 +298,8 @@ impl WindowsFragmentedM4SMuxer {
                                     }
                                 }
                                 Err(_) => {
-                                    warn!("Encoder mutex poisoned, skipping frame");
+                                    error!("Encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                    return Err(anyhow!("Encoder mutex poisoned - all subsequent frames would be lost"));
                                 }
                             }
 
@@ -536,7 +540,12 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                     }
                 }
                 Err(_) => {
-                    warn!("Camera encoder mutex poisoned during finish");
+                    error!(
+                        "Camera encoder mutex poisoned during finish - encoder thread likely panicked"
+                    );
+                    return Ok(Err(anyhow!(
+                        "Camera encoder mutex poisoned - recording may be corrupt or incomplete"
+                    )));
                 }
             }
         }
@@ -614,7 +623,8 @@ impl WindowsFragmentedM4SCameraMuxer {
                                     }
                                 }
                                 Err(_) => {
-                                    warn!("Camera encoder mutex poisoned, skipping frame");
+                                    error!("Camera encoder mutex poisoned - encoder thread likely panicked, stopping");
+                                    return Err(anyhow!("Camera encoder mutex poisoned - all subsequent frames would be lost"));
                                 }
                             }
 

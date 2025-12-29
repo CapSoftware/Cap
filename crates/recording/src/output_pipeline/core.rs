@@ -53,7 +53,7 @@ impl SharedPauseState {
             .lock()
             .map_err(|e| anyhow!("Lock poisoned: {e}"))?;
 
-        if self.flag.load(Ordering::Relaxed) {
+        if self.flag.load(Ordering::Acquire) {
             if inner.paused_at.is_none() {
                 inner.paused_at = Some(timestamp);
             }
@@ -791,11 +791,11 @@ impl OutputPipeline {
     }
 
     pub fn pause(&self) {
-        self.pause_flag.store(true, atomic::Ordering::Relaxed);
+        self.pause_flag.store(true, atomic::Ordering::Release);
     }
 
     pub fn resume(&self) {
-        self.pause_flag.store(false, atomic::Ordering::Relaxed);
+        self.pause_flag.store(false, atomic::Ordering::Release);
     }
 
     pub fn video_info(&self) -> Option<VideoInfo> {

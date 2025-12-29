@@ -39,7 +39,7 @@ impl PauseTracker {
     }
 
     fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Relaxed) {
+        if self.flag.load(Ordering::Acquire) {
             if self.paused_at.is_none() {
                 self.paused_at = Some(timestamp);
             }
