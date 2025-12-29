@@ -153,7 +153,7 @@ export default function FeedbackTab() {
 														Operating System
 													</p>
 													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
-														{ver().displayName}
+														{(ver() as { displayName: string }).displayName}
 													</p>
 												</div>
 											)}
