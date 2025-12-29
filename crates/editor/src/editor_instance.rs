@@ -10,7 +10,13 @@ use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
     RenderedFrame, SegmentVideoPaths, Video, get_duration,
 };
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -32,6 +38,7 @@ pub struct EditorInstance {
     // ws_shutdown_token: CancellationToken,
     pub segment_medias: Arc<Vec<SegmentMedia>>,
     meta: RecordingMeta,
+    pub export_preview_active: AtomicBool,
 }
 
 impl EditorInstance {
@@ -172,6 +179,7 @@ impl EditorInstance {
             meta: recording_meta,
             playback_active: playback_active_tx,
             playback_active_rx,
+            export_preview_active: AtomicBool::new(false),
         });
 
         this.state.lock().await.preview_task =
@@ -326,7 +334,9 @@ impl EditorInstance {
                     prefetch_cancel_token = Some(new_cancel_token.clone());
 
                     let playback_is_active = *self.playback_active_rx.borrow();
-                    if !playback_is_active {
+                    let export_preview_is_active =
+                        self.export_preview_active.load(Ordering::Acquire);
+                    if !playback_is_active && !export_preview_is_active {
                         let prefetch_frames_count = 5u32;
                         let hide_camera = project.camera.hide;
                         let playback_rx = self.playback_active_rx.clone();

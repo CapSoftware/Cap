@@ -239,6 +239,7 @@ export function ExportPage() {
 		resWidth: number,
 		resHeight: number,
 		bpp: number,
+		retryCount = 0,
 	) => {
 		const cacheKey = getEstimateCacheKey(fps, resWidth, resHeight, bpp);
 		const cachedEstimate = estimateCache.get(cacheKey);
@@ -246,6 +247,8 @@ export function ExportPage() {
 		if (cachedEstimate) {
 			setRenderEstimate(cachedEstimate);
 		}
+
+		const maxRetries = 2;
 
 		try {
 			const result = await commands.generateExportPreviewFast(frameTime, {
@@ -275,6 +278,19 @@ export function ExportPage() {
 			setRenderEstimate(newEstimate);
 		} catch (e) {
 			console.error("Failed to generate preview:", e);
+			if (retryCount < maxRetries) {
+				await new Promise((resolve) =>
+					setTimeout(resolve, 200 * (retryCount + 1)),
+				);
+				return fetchPreview(
+					frameTime,
+					fps,
+					resWidth,
+					resHeight,
+					bpp,
+					retryCount + 1,
+				);
+			}
 		} finally {
 			setPreviewLoading(false);
 		}
