@@ -895,7 +895,8 @@ async fn create_segment_pipeline(
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
-    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
+    let d3d_device = crate::capture_pipeline::create_d3d_device()
+        .context("D3D11 device creation failed - this may happen in VMs, RDP sessions, or systems without GPU drivers")?;
 
     let (display, crop) =
         target_to_display_and_crop(&base_inputs.capture_target).context("target_display_crop")?;
