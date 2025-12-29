@@ -19,8 +19,8 @@ use crate::output_pipeline::{
 
 #[cfg(windows)]
 use crate::output_pipeline::{
-    WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsSegmentedCameraMuxer,
-    WindowsSegmentedCameraMuxerConfig,
+    WindowsCameraMuxer, WindowsCameraMuxerConfig, WindowsFragmentedM4SCameraMuxer,
+    WindowsFragmentedM4SCameraMuxerConfig,
 };
 use anyhow::{Context as _, anyhow, bail};
 use cap_media_info::VideoInfo;
@@ -877,7 +877,13 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let shared_pause_state: Option<SharedPauseState> = None;
+    let shared_pause_state = if fragmented {
+        Some(SharedPauseState::new(Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )))
+    } else {
+        None
+    };
 
     let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
         capture_source,
@@ -925,8 +931,8 @@ async fn create_segment_pipeline(
             OutputPipeline::builder(fragments_dir)
                 .with_video::<sources::NativeCamera>(camera_feed)
                 .with_timestamps(start_time)
-                .build::<WindowsSegmentedCameraMuxer>(WindowsSegmentedCameraMuxerConfig {
-                    encoder_preferences: encoder_preferences.clone(),
+                .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
+                    shared_pause_state: shared_pause_state.clone(),
                     ..Default::default()
                 })
                 .instrument(error_span!("camera-out"))
