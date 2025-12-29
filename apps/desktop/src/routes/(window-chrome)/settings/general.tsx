@@ -81,6 +81,7 @@ const createDefaultGeneralSettings = (): ExtendedGeneralSettingsStore => ({
 	custom_cursor_capture2: true,
 	excludedWindows: [],
 	instantModeMaxResolution: 1920,
+	crashRecoveryRecording: true,
 });
 
 const deriveInitialSettings = (
@@ -568,6 +569,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						onChange={(v) =>
 							handleChange("deleteInstantRecordingsAfterUpload", v)
 						}
+					/>
+					<ToggleSettingItem
+						label="Crash-recoverable recording"
+						description="Records in fragmented segments that can be recovered if the app crashes or your system loses power. May have slightly higher storage usage during recording."
+						value={settings.crashRecoveryRecording ?? true}
+						onChange={(value) => handleChange("crashRecoveryRecording", value)}
 					/>
 				</SettingGroup>
 

@@ -123,7 +123,7 @@ pub struct GeneralSettingsStore {
     pub instant_mode_max_resolution: u32,
     #[serde(default)]
     pub default_project_name_template: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub crash_recovery_recording: bool,
 }
 
