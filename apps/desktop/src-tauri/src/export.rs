@@ -9,7 +9,10 @@ use cap_rendering::{
 use image::codecs::jpeg::JpegEncoder;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::Ordering},
+};
 use tracing::{info, instrument};
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
@@ -368,6 +371,7 @@ pub async fn generate_export_preview_fast(
 
     let render_start = Instant::now();
 
+    editor.export_preview_active.store(true, Ordering::Release);
     let segment_frames = segment_media
         .decoders
         .get_frames(
@@ -375,8 +379,9 @@ pub async fn generate_export_preview_fast(
             !project_config.camera.hide,
             clip_config.map(|v| v.offsets).unwrap_or_default(),
         )
-        .await
-        .ok_or_else(|| "Failed to decode frame".to_string())?;
+        .await;
+    editor.export_preview_active.store(false, Ordering::Release);
+    let segment_frames = segment_frames.ok_or_else(|| "Failed to decode frame".to_string())?;
 
     let frame_number = (frame_time * settings.fps as f64).floor() as u32;
 

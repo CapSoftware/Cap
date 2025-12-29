@@ -225,12 +225,21 @@ function createThemeListener(currentWindow: WebviewWindow) {
 
 		if (appTheme === undefined || appTheme === null) return;
 
+		const isDark =
+			appTheme === "dark" ||
+			(appTheme === "system" &&
+				window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+		try {
+			if (appTheme === "system") {
+				localStorage.removeItem("cap-theme");
+			} else {
+				localStorage.setItem("cap-theme", appTheme);
+			}
+		} catch {}
+
 		commands.setTheme(appTheme).then(() => {
-			document.documentElement.classList.toggle(
-				"dark",
-				appTheme === "dark" ||
-					window.matchMedia("(prefers-color-scheme: dark)").matches,
-			);
+			document.documentElement.classList.toggle("dark", isDark);
 		});
 	}
 }

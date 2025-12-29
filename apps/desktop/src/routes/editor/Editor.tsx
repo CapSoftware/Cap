@@ -90,8 +90,18 @@ export function Editor() {
 }
 
 function Inner() {
-	const { project, editorState, setEditorState, previewResolutionBase } =
-		useEditorContext();
+	const {
+		project,
+		editorState,
+		setEditorState,
+		previewResolutionBase,
+		dialog,
+	} = useEditorContext();
+
+	const isExportMode = () => {
+		const d = dialog();
+		return "type" in d && d.type === "export" && d.open;
+	};
 
 	const [layoutRef, setLayoutRef] = createSignal<HTMLDivElement>();
 	const layoutBounds = createElementBounds(layoutRef);
@@ -183,7 +193,16 @@ function Inner() {
 				if (editorState.playing) return;
 				renderFrame(number as number);
 			},
+			{ defer: false },
 		),
+	);
+
+	createEffect(
+		on(isExportMode, (exportMode, prevExportMode) => {
+			if (prevExportMode === true && exportMode === false) {
+				emitRenderFrame(frameNumberToRender());
+			}
+		}),
 	);
 
 	const updateConfigAndRender = throttle(async (time: number) => {
@@ -199,13 +218,6 @@ function Inner() {
 			},
 		),
 	);
-
-	const { dialog } = useEditorContext();
-
-	const isExportMode = () => {
-		const d = dialog();
-		return "type" in d && d.type === "export" && d.open;
-	};
 
 	return (
 		<Show when={!isExportMode()} fallback={<ExportPage />}>

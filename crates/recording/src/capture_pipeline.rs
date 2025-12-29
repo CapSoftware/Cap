@@ -157,6 +157,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     preset: H264Preset::Ultrafast,
                     output_size: None,
                     shared_pause_state,
+                    disk_space_callback: None,
                 })
                 .await
         } else {

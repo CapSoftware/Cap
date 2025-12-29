@@ -5,12 +5,26 @@ use std::{
     ffi::CString,
     io::Write,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
+use sysinfo::Disks;
 
 use crate::video::h264::{H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset};
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
+const DISK_SPACE_WARNING_THRESHOLD_MB: u64 = 500;
+const DISK_SPACE_CRITICAL_THRESHOLD_MB: u64 = 100;
+
+#[derive(Debug, Clone)]
+pub struct DiskSpaceWarning {
+    pub available_mb: u64,
+    pub threshold_mb: u64,
+    pub path: String,
+    pub is_critical: bool,
+}
+
+pub type DiskSpaceCallback = Arc<dyn Fn(DiskSpaceWarning) + Send + Sync>;
 
 fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> std::io::Result<()> {
     let temp_path = path.with_extension("json.tmp");
@@ -57,6 +71,13 @@ pub struct SegmentedVideoEncoder {
     frames_in_segment: u32,
 
     completed_segments: Vec<VideoSegmentInfo>,
+
+    codec_info: CodecInfo,
+
+    disk_space_callback: Option<DiskSpaceCallback>,
+    disk_space_warned: bool,
+    disk_space_critical_warned: bool,
+    init_segment_validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +98,18 @@ struct SegmentEntry {
     file_size: Option<u64>,
 }
 
-const MANIFEST_VERSION: u32 = 4;
+#[derive(Serialize, Clone)]
+struct CodecInfo {
+    width: u32,
+    height: u32,
+    frame_rate_num: i32,
+    frame_rate_den: i32,
+    time_base_num: i32,
+    time_base_den: i32,
+    pixel_format: String,
+}
+
+const MANIFEST_VERSION: u32 = 5;
 
 #[derive(Serialize)]
 struct Manifest {
@@ -86,6 +118,8 @@ struct Manifest {
     manifest_type: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     init_segment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codec_info: Option<CodecInfo>,
     segments: Vec<SegmentEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     total_duration: Option<f64>,
@@ -110,6 +144,8 @@ pub enum QueueFrameError {
     Init(#[from] InitError),
     #[error("Encode: {0}")]
     Encode(#[from] crate::video::h264::QueueFrameError),
+    #[error("Init segment validation failed: {0}")]
+    InitSegmentInvalid(String),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -146,7 +182,15 @@ impl SegmentedVideoEncoder {
 
         let manifest_path = base_path.join("dash_manifest.mpd");
 
-        let mut output = format::output_as(&manifest_path, "dash")?;
+        #[cfg(target_os = "windows")]
+        let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
+        #[cfg(not(target_os = "windows"))]
+        let manifest_path_str = manifest_path.to_string_lossy().to_string();
+
+        let mut output = format::output_as(&manifest_path_str, "dash")?;
+
+        let init_seg_str = INIT_SEGMENT_NAME;
+        let media_seg_str = "segment_$Number%03d$.m4s";
 
         unsafe {
             let opts = output.as_mut_ptr();
@@ -157,8 +201,8 @@ impl SegmentedVideoEncoder {
                 ffmpeg::ffi::av_opt_set((*opts).priv_data, k.as_ptr(), v.as_ptr(), 0);
             };
 
-            set_opt("init_seg_name", INIT_SEGMENT_NAME);
-            set_opt("media_seg_name", "segment_$Number%03d$.m4s");
+            set_opt("init_seg_name", init_seg_str);
+            set_opt("media_seg_name", media_seg_str);
             set_opt(
                 "seg_duration",
                 &config.segment_duration.as_secs_f64().to_string(),
@@ -181,10 +225,33 @@ impl SegmentedVideoEncoder {
 
         output.write_header()?;
 
+        let init_path = base_path.join(INIT_SEGMENT_NAME);
+        let manifest_exists = manifest_path.exists();
+        let init_exists = init_path.exists();
+        tracing::debug!(
+            manifest_path = %manifest_path.display(),
+            manifest_exists = manifest_exists,
+            init_path = %init_path.display(),
+            init_exists = init_exists,
+            "FFmpeg DASH muxer state after write_header()"
+        );
+
+        let codec_info = CodecInfo {
+            width: video_config.width,
+            height: video_config.height,
+            frame_rate_num: video_config.frame_rate.0,
+            frame_rate_den: video_config.frame_rate.1,
+            time_base_num: video_config.time_base.0,
+            time_base_den: video_config.time_base.1,
+            pixel_format: format!("{:?}", video_config.pixel_format),
+        };
+
         tracing::info!(
             path = %base_path.display(),
             segment_duration_secs = config.segment_duration.as_secs(),
-            "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments)"
+            width = codec_info.width,
+            height = codec_info.height,
+            "Initialized segmented video encoder with FFmpeg DASH muxer (init.mp4 + m4s segments). CRITICAL: init.mp4 is required for segment playback/recovery."
         );
 
         let instance = Self {
@@ -197,11 +264,69 @@ impl SegmentedVideoEncoder {
             last_frame_timestamp: None,
             frames_in_segment: 0,
             completed_segments: Vec::new(),
+            codec_info,
+            disk_space_callback: None,
+            disk_space_warned: false,
+            disk_space_critical_warned: false,
+            init_segment_validated: false,
         };
 
         instance.write_in_progress_manifest();
 
         Ok(instance)
+    }
+
+    pub fn set_disk_space_callback(&mut self, callback: DiskSpaceCallback) {
+        self.disk_space_callback = Some(callback);
+    }
+
+    fn check_disk_space(&mut self) {
+        let Some(callback) = &self.disk_space_callback else {
+            return;
+        };
+
+        let disks = Disks::new_with_refreshed_list();
+
+        let matching_disk = disks.iter().find(|disk| {
+            let mount_point = disk.mount_point();
+            self.base_path.starts_with(mount_point)
+        });
+
+        let Some(disk) = matching_disk else {
+            tracing::debug!("Could not find disk for path {}", self.base_path.display());
+            return;
+        };
+
+        let available_bytes = disk.available_space();
+        let available_mb = available_bytes / 1024 / 1024;
+
+        if available_mb < DISK_SPACE_CRITICAL_THRESHOLD_MB && !self.disk_space_critical_warned {
+            tracing::error!(
+                available_mb,
+                path = %self.base_path.display(),
+                "CRITICAL: Disk space critically low! Recording may fail."
+            );
+            self.disk_space_critical_warned = true;
+            callback(DiskSpaceWarning {
+                available_mb,
+                threshold_mb: DISK_SPACE_CRITICAL_THRESHOLD_MB,
+                path: self.base_path.display().to_string(),
+                is_critical: true,
+            });
+        } else if available_mb < DISK_SPACE_WARNING_THRESHOLD_MB && !self.disk_space_warned {
+            tracing::warn!(
+                available_mb,
+                path = %self.base_path.display(),
+                "Disk space running low. Consider freeing up space."
+            );
+            self.disk_space_warned = true;
+            callback(DiskSpaceWarning {
+                available_mb,
+                threshold_mb: DISK_SPACE_WARNING_THRESHOLD_MB,
+                path: self.base_path.display().to_string(),
+                is_critical: false,
+            });
+        }
     }
 
     pub fn queue_frame(
@@ -277,8 +402,18 @@ impl SegmentedVideoEncoder {
             self.segment_start_time = Some(timestamp);
             self.frames_in_segment = 0;
 
+            if !self.init_segment_validated && self.init_segment_path().exists() {
+                self.init_segment_validated = true;
+                tracing::debug!(
+                    segment = completed_index,
+                    "init.mp4 now exists after segment completion"
+                );
+            }
+
             self.write_manifest();
             self.write_in_progress_manifest();
+
+            self.check_disk_space();
         }
 
         Ok(())
@@ -294,6 +429,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments: self
                 .completed_segments
                 .iter()
@@ -358,6 +494,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments,
             total_duration: None,
             is_complete: false,
@@ -541,6 +678,7 @@ impl SegmentedVideoEncoder {
             version: MANIFEST_VERSION,
             manifest_type: "m4s_segments",
             init_segment: Some(INIT_SEGMENT_NAME.to_string()),
+            codec_info: Some(self.codec_info.clone()),
             segments: self
                 .completed_segments
                 .iter()
@@ -596,5 +734,35 @@ impl SegmentedVideoEncoder {
 
     pub fn init_segment_path(&self) -> PathBuf {
         self.base_path.join(INIT_SEGMENT_NAME)
+    }
+
+    pub fn validate_init_segment(&self) -> Result<(), String> {
+        let init_path = self.init_segment_path();
+
+        if !init_path.exists() {
+            return Err(format!(
+                "CRITICAL: init.mp4 is missing at {}. M4S segments will be unplayable without it!",
+                init_path.display()
+            ));
+        }
+
+        match std::fs::metadata(&init_path) {
+            Ok(metadata) => {
+                let size = metadata.len();
+                if size < 100 {
+                    return Err(format!(
+                        "CRITICAL: init.mp4 at {} is too small ({} bytes). It may be corrupted!",
+                        init_path.display(),
+                        size
+                    ));
+                }
+                Ok(())
+            }
+            Err(e) => Err(format!(
+                "CRITICAL: Cannot read init.mp4 metadata at {}: {}",
+                init_path.display(),
+                e
+            )),
+        }
     }
 }

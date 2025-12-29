@@ -25,6 +25,7 @@ const ACTION_TEXT = {
 	startInstantRecording: "Start instant recording",
 	restartRecording: "Restart recording",
 	stopRecording: "Stop recording",
+	togglePauseRecording: "Pause/resume recording",
 	cycleRecordingMode: "Cycle recording mode",
 	openRecordingPicker: "Open recording picker",
 	openRecordingPickerDisplay: "Record display",
@@ -84,6 +85,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 				: (["startStudioRecording", "startInstantRecording"] as const)),
 			"stopRecording",
 			"restartRecording",
+			"togglePauseRecording",
 			"cycleRecordingMode",
 			...(generalSettings.data?.enableNewRecordingFlow
 				? ([
