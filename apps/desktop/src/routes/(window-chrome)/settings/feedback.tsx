@@ -130,53 +130,70 @@ export default function FeedbackTab() {
 								</p>
 							}
 						>
-							{(diag) => (
-								<div class="space-y-3 text-sm">
-									<Show when={diag().macosVersion}>
-										{(ver) => (
-											<div class="space-y-1">
-												<p class="text-gray-11 font-medium">Operating System</p>
-												<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
-													{ver().displayName}
-												</p>
-											</div>
-										)}
-									</Show>
+							{(diag) => {
+								const d = diag();
+								const osVersion =
+									"macosVersion" in d
+										? d.macosVersion
+										: "windowsVersion" in d
+											? d.windowsVersion
+											: null;
+								const captureSupported =
+									"screenCaptureSupported" in d
+										? d.screenCaptureSupported
+										: "graphicsCaptureSupported" in d
+											? d.graphicsCaptureSupported
+											: false;
+								return (
+									<div class="space-y-3 text-sm">
+										<Show when={osVersion}>
+											{(ver) => (
+												<div class="space-y-1">
+													<p class="text-gray-11 font-medium">
+														Operating System
+													</p>
+													<p class="text-gray-10 bg-gray-2 px-2 py-1.5 rounded font-mono text-xs">
+														{(ver() as { displayName: string }).displayName}
+													</p>
+												</div>
+											)}
+										</Show>
 
-									<div class="space-y-1">
-										<p class="text-gray-11 font-medium">Capture Support</p>
-										<div class="flex gap-2 flex-wrap">
-											<span
-												class={`px-2 py-1 rounded text-xs ${
-													diag().screenCaptureSupported
-														? "bg-green-500/20 text-green-400"
-														: "bg-red-500/20 text-red-400"
-												}`}
-											>
-												Screen Capture:{" "}
-												{diag().screenCaptureSupported
-													? "Supported"
-													: "Not Supported"}
-											</span>
-										</div>
-									</div>
-
-									<Show when={diag().availableEncoders.length > 0}>
 										<div class="space-y-1">
-											<p class="text-gray-11 font-medium">Available Encoders</p>
-											<div class="flex gap-1.5 flex-wrap">
-												<For each={diag().availableEncoders}>
-													{(encoder) => (
-														<span class="px-2 py-1 bg-gray-2 rounded text-xs text-gray-10 font-mono">
-															{encoder}
-														</span>
-													)}
-												</For>
+											<p class="text-gray-11 font-medium">Capture Support</p>
+											<div class="flex gap-2 flex-wrap">
+												<span
+													class={`px-2 py-1 rounded text-xs ${
+														captureSupported
+															? "bg-green-500/20 text-green-400"
+															: "bg-red-500/20 text-red-400"
+													}`}
+												>
+													Screen Capture:{" "}
+													{captureSupported ? "Supported" : "Not Supported"}
+												</span>
 											</div>
 										</div>
-									</Show>
-								</div>
-							)}
+
+										<Show when={d.availableEncoders.length > 0}>
+											<div class="space-y-1">
+												<p class="text-gray-11 font-medium">
+													Available Encoders
+												</p>
+												<div class="flex gap-1.5 flex-wrap">
+													<For each={d.availableEncoders}>
+														{(encoder) => (
+															<span class="px-2 py-1 bg-gray-2 rounded text-xs text-gray-10 font-mono">
+																{encoder}
+															</span>
+														)}
+													</For>
+												</div>
+											</div>
+										</Show>
+									</div>
+								);
+							}}
 						</Show>
 					</div>
 				</div>
