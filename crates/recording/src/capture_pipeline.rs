@@ -10,9 +10,9 @@ use crate::{
 use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
+use anyhow::anyhow;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
-use anyhow::anyhow;
 use cap_timestamp::Timestamps;
 use std::{path::PathBuf, sync::Arc};
 
