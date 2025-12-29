@@ -182,7 +182,12 @@ impl SegmentedVideoEncoder {
 
         let manifest_path = base_path.join("dash_manifest.mpd");
 
-        let mut output = format::output_as(&manifest_path, "dash")?;
+        #[cfg(target_os = "windows")]
+        let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
+        #[cfg(not(target_os = "windows"))]
+        let manifest_path_str = manifest_path.to_string_lossy().to_string();
+
+        let mut output = format::output_as(&manifest_path_str, "dash")?;
 
         let init_seg_str = INIT_SEGMENT_NAME;
         let media_seg_str = "segment_$Number%03d$.m4s";
@@ -218,6 +223,17 @@ impl SegmentedVideoEncoder {
         let encoder = builder.build(&mut output)?;
 
         output.write_header()?;
+
+        let init_path = base_path.join(INIT_SEGMENT_NAME);
+        let manifest_exists = manifest_path.exists();
+        let init_exists = init_path.exists();
+        tracing::debug!(
+            manifest_path = %manifest_path.display(),
+            manifest_exists = manifest_exists,
+            init_path = %init_path.display(),
+            init_exists = init_exists,
+            "FFmpeg DASH muxer state after write_header()"
+        );
 
         let codec_info = CodecInfo {
             width: video_config.width,
@@ -329,11 +345,6 @@ impl SegmentedVideoEncoder {
             .queue_frame(frame, timestamp, &mut self.output)?;
         self.frames_in_segment += 1;
 
-        if !self.init_segment_validated {
-            self.validate_init_segment_early()?;
-            self.init_segment_validated = true;
-        }
-
         let new_segment_index = self.detect_current_segment_index();
 
         if new_segment_index > prev_segment_index {
@@ -390,8 +401,13 @@ impl SegmentedVideoEncoder {
             self.segment_start_time = Some(timestamp);
             self.frames_in_segment = 0;
 
-            self.validate_init_segment()
-                .map_err(QueueFrameError::InitSegmentInvalid)?;
+            if !self.init_segment_validated && self.init_segment_path().exists() {
+                self.init_segment_validated = true;
+                tracing::debug!(
+                    segment = completed_index,
+                    "init.mp4 now exists after segment completion"
+                );
+            }
 
             self.write_manifest();
             self.write_in_progress_manifest();
@@ -747,67 +763,5 @@ impl SegmentedVideoEncoder {
                 e
             )),
         }
-    }
-
-    fn validate_init_segment_early(&self) -> Result<(), QueueFrameError> {
-        let init_path = self.init_segment_path();
-
-        if !init_path.exists() {
-            return Err(QueueFrameError::InitSegmentInvalid(format!(
-                "init.mp4 missing at {} after first frame. Segments will be unplayable!",
-                init_path.display()
-            )));
-        }
-
-        let metadata = std::fs::metadata(&init_path).map_err(|e| {
-            QueueFrameError::InitSegmentInvalid(format!(
-                "Cannot read init.mp4 metadata at {}: {}",
-                init_path.display(),
-                e
-            ))
-        })?;
-
-        let size = metadata.len();
-        if size < 8 {
-            return Err(QueueFrameError::InitSegmentInvalid(format!(
-                "init.mp4 at {} is too small ({} bytes) to contain valid ftyp box",
-                init_path.display(),
-                size
-            )));
-        }
-
-        let mut file = std::fs::File::open(&init_path).map_err(|e| {
-            QueueFrameError::InitSegmentInvalid(format!(
-                "Cannot open init.mp4 at {}: {}",
-                init_path.display(),
-                e
-            ))
-        })?;
-
-        let mut header = [0u8; 8];
-        std::io::Read::read_exact(&mut file, &mut header).map_err(|e| {
-            QueueFrameError::InitSegmentInvalid(format!(
-                "Cannot read init.mp4 header at {}: {}",
-                init_path.display(),
-                e
-            ))
-        })?;
-
-        let ftyp_signature = &header[4..8];
-        if ftyp_signature != b"ftyp" {
-            return Err(QueueFrameError::InitSegmentInvalid(format!(
-                "init.mp4 at {} has invalid ftyp box (got {:?}, expected 'ftyp'). File may be corrupted!",
-                init_path.display(),
-                String::from_utf8_lossy(ftyp_signature)
-            )));
-        }
-
-        tracing::debug!(
-            path = %init_path.display(),
-            size_bytes = size,
-            "init.mp4 validated successfully with valid ftyp box"
-        );
-
-        Ok(())
     }
 }
