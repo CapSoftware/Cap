@@ -195,6 +195,13 @@ impl InProgressRecording {
         }
     }
 
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        match self {
+            Self::Instant { handle, .. } => handle.is_paused().await,
+            Self::Studio { handle, .. } => handle.is_paused().await,
+        }
+    }
+
     pub fn recording_dir(&self) -> &PathBuf {
         match self {
             Self::Instant { common, .. } => &common.recording_dir,
@@ -963,6 +970,23 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
     if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn toggle_pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let state = state.read().await;
+
+    if let Some(recording) = state.current_recording() {
+        if recording.is_paused().await.map_err(|e| e.to_string())? {
+            recording.resume().await.map_err(|e| e.to_string())?;
+        } else {
+            recording.pause().await.map_err(|e| e.to_string())?;
+        }
     }
 
     Ok(())

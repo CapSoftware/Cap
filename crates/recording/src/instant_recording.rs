@@ -64,6 +64,10 @@ impl ActorHandle {
     pub async fn cancel(&self) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(Cancel).await?)
     }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        Ok(self.actor_ref.ask(IsPaused).await?)
+    }
 }
 
 impl Drop for ActorHandle {
@@ -178,6 +182,16 @@ impl Message<Cancel> for Actor {
         let _ = self.stop().await;
 
         Ok(())
+    }
+}
+
+pub struct IsPaused;
+
+impl Message<IsPaused> for Actor {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: IsPaused, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        matches!(self.state, ActorState::Paused { .. })
     }
 }
 

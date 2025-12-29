@@ -285,6 +285,16 @@ impl Message<SetCameraFeed> for Actor {
     }
 }
 
+pub struct IsPaused;
+
+impl Message<IsPaused> for Actor {
+    type Reply = bool;
+
+    async fn handle(&mut self, _: IsPaused, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        matches!(self.state, Some(ActorState::Paused { .. }))
+    }
+}
+
 pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
@@ -435,6 +445,10 @@ impl ActorHandle {
         camera_feed: Option<Arc<CameraFeedLock>>,
     ) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
+    }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        Ok(self.actor_ref.ask(IsPaused).await?)
     }
 }
 
