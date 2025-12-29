@@ -53,7 +53,7 @@ use crate::general_settings;
 use crate::web_api::AuthedApiError;
 use crate::{
     App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
-    RecordingState, RecordingStopped, VideoUploadInfo,
+    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -901,6 +901,7 @@ pub async fn start_recording(
     };
 
     let _ = RecordingEvent::Started.emit(&app);
+    let _ = RecordingStarted.emit(&app);
 
     spawn_actor({
         let app = app.clone();
