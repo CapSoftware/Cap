@@ -1,13 +1,15 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc, time::Instant};
 use tauri::{AppHandle, Manager, Runtime, Window, ipc::CommandArg};
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::{
     create_editor_instance_impl,
-    frame_ws::{WSFrame, create_watch_frame_ws},
+    frame_ws::{WSFrame, create_mpsc_frame_ws},
 };
+
+const FRAME_CHANNEL_BUFFER: usize = 8;
 
 pub struct EditorInstance {
     inner: Arc<cap_editor::EditorInstance>,
@@ -22,9 +24,10 @@ type PendingReceiver = tokio::sync::watch::Receiver<Option<PendingResult>>;
 pub struct PendingEditorInstances(Arc<RwLock<HashMap<String, PendingReceiver>>>);
 
 async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
-    let (frame_tx, frame_rx) = watch::channel(None);
+    let (frame_tx, frame_rx) = mpsc::channel(FRAME_CHANNEL_BUFFER);
+    let frame_rx = Arc::new(Mutex::new(frame_rx));
 
-    let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+    let (ws_port, ws_shutdown_token) = create_mpsc_frame_ws(frame_rx).await;
     let inner = create_editor_instance_impl(
         &app,
         path,
@@ -35,7 +38,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let frame_number = frame.frame_number;
             let target_time_ns = frame.target_time_ns;
             let data = frame.data;
-            if let Err(e) = frame_tx.send(Some(WSFrame {
+            if let Err(e) = frame_tx.try_send(WSFrame {
                 data,
                 width,
                 height,
@@ -43,8 +46,8 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
                 frame_number,
                 target_time_ns,
                 created_at: Instant::now(),
-            })) {
-                debug!("Frame receiver dropped during prewarm: {e}");
+            }) {
+                debug!("Frame channel full or closed during prewarm: {e}");
             }
         }),
     )
@@ -188,9 +191,10 @@ impl EditorInstances {
                     }
                 }
 
-                let (frame_tx, frame_rx) = watch::channel(None);
+                let (frame_tx, frame_rx) = mpsc::channel(FRAME_CHANNEL_BUFFER);
+                let frame_rx = Arc::new(Mutex::new(frame_rx));
 
-                let (ws_port, ws_shutdown_token) = create_watch_frame_ws(frame_rx).await;
+                let (ws_port, ws_shutdown_token) = create_mpsc_frame_ws(frame_rx).await;
                 let instance = create_editor_instance_impl(
                     window.app_handle(),
                     path,
@@ -201,7 +205,7 @@ impl EditorInstances {
                         let frame_number = frame.frame_number;
                         let target_time_ns = frame.target_time_ns;
                         let data = frame.data;
-                        if let Err(e) = frame_tx.send(Some(WSFrame {
+                        if let Err(e) = frame_tx.try_send(WSFrame {
                             data,
                             width,
                             height,
@@ -209,8 +213,8 @@ impl EditorInstances {
                             frame_number,
                             target_time_ns,
                             created_at: Instant::now(),
-                        })) {
-                            debug!("Frame receiver dropped in get_or_create: {e}");
+                        }) {
+                            debug!("Frame channel full or closed in get_or_create: {e}");
                         }
                     }),
                 )

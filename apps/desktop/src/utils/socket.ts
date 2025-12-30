@@ -13,7 +13,7 @@ import StrideCorrectionWorker from "./stride-correction-worker?worker";
 
 const SAB_SUPPORTED = isSharedArrayBufferSupported();
 const FRAME_BUFFER_CONFIG: SharedFrameBufferConfig = {
-	slotCount: 4,
+	slotCount: 6,
 	slotSize: 16 * 1024 * 1024,
 };
 

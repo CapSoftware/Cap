@@ -147,13 +147,161 @@ let useSharedBuffer = false;
 let sharedReadBuffer: Uint8Array | null = null;
 let sharedReadBufferSize = 0;
 
-let pendingRenderFrame: PendingFrame | null = null;
+const FRAME_QUEUE_SIZE = 5;
+let frameQueue: PendingFrame[] = [];
 let _rafId: number | null = null;
 let rafRunning = false;
 
 let playbackStartTime: number | null = null;
 let playbackStartFrameNumber = 0;
 let lastRenderedFrameNumber = -1;
+
+const FRAME_DURATION_NS = 1_000_000_000n / 60n;
+const EARLY_THRESHOLD_MS = 2;
+const LATE_THRESHOLD_MS = 100;
+
+function tryPollSharedBuffer(): boolean {
+	if (!consumer || !useSharedBuffer) return false;
+
+	if (renderMode === "webgpu" && webgpuRenderer) {
+		const borrowed = consumer.borrow(0);
+		if (borrowed !== null) {
+			queueFrameFromBytes(borrowed.data, borrowed.release);
+			return true;
+		}
+	} else {
+		if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
+			sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
+			sharedReadBufferSize = sharedReadBuffer.byteLength;
+		}
+
+		const size = consumer.readInto(sharedReadBuffer, 0);
+		if (size != null && size > 0) {
+			queueFrameFromBytes(sharedReadBuffer.subarray(0, size));
+			return true;
+		}
+	}
+	return false;
+}
+
+function queueFrameFromBytes(
+	bytes: Uint8Array,
+	releaseCallback?: () => void,
+): void {
+	if (bytes.byteLength < 24) {
+		releaseCallback?.();
+		return;
+	}
+
+	const metadataOffset = bytes.byteOffset + bytes.byteLength - 24;
+	const meta = new DataView(bytes.buffer, metadataOffset, 24);
+	const strideBytes = meta.getUint32(0, true);
+	const height = meta.getUint32(4, true);
+	const width = meta.getUint32(8, true);
+	const frameNumber = meta.getUint32(12, true);
+	const targetTimeNs = meta.getBigUint64(16, true);
+	const timing: FrameTiming = { frameNumber, targetTimeNs };
+
+	if (!width || !height) {
+		releaseCallback?.();
+		return;
+	}
+
+	const expectedRowBytes = width * 4;
+	const availableLength = strideBytes * height;
+
+	if (
+		strideBytes === 0 ||
+		strideBytes < expectedRowBytes ||
+		bytes.byteLength - 24 < availableLength
+	) {
+		releaseCallback?.();
+		return;
+	}
+
+	const frameData = new Uint8ClampedArray(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength - 24,
+	);
+
+	if (renderMode === "webgpu" && webgpuRenderer) {
+		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
+			const dropped = frameQueue.shift();
+			if (dropped?.mode === "webgpu" && dropped.releaseCallback) {
+				dropped.releaseCallback();
+			}
+			frameDropCount++;
+		}
+
+		frameQueue.push({
+			mode: "webgpu",
+			data: frameData.subarray(0, availableLength),
+			width,
+			height,
+			strideBytes,
+			timing,
+			releaseCallback,
+		});
+	} else {
+		const expectedLength = expectedRowBytes * height;
+		let processedFrameData: Uint8ClampedArray;
+
+		if (strideBytes === expectedRowBytes) {
+			processedFrameData = frameData.subarray(0, expectedLength);
+		} else {
+			if (!strideBuffer || strideBufferSize < expectedLength) {
+				strideBuffer = new Uint8ClampedArray(expectedLength);
+				strideBufferSize = expectedLength;
+			}
+			for (let row = 0; row < height; row += 1) {
+				const srcStart = row * strideBytes;
+				const destStart = row * expectedRowBytes;
+				strideBuffer.set(
+					frameData.subarray(srcStart, srcStart + expectedRowBytes),
+					destStart,
+				);
+			}
+			processedFrameData = strideBuffer.subarray(0, expectedLength);
+		}
+
+		if (!lastRawFrameData || lastRawFrameData.length < expectedLength) {
+			lastRawFrameData = new Uint8ClampedArray(expectedLength);
+		}
+		lastRawFrameData.set(processedFrameData);
+		lastRawFrameWidth = width;
+		lastRawFrameHeight = height;
+
+		if (!cachedImageData || cachedWidth !== width || cachedHeight !== height) {
+			cachedImageData = new ImageData(width, height);
+			cachedWidth = width;
+			cachedHeight = height;
+		}
+		cachedImageData.data.set(processedFrameData);
+		lastImageData = cachedImageData;
+
+		releaseCallback?.();
+
+		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
+			frameQueue.shift();
+			frameDropCount++;
+		}
+
+		frameQueue.push({
+			mode: "canvas2d",
+			imageData: cachedImageData,
+			width,
+			height,
+			timing,
+		});
+	}
+
+	self.postMessage({
+		type: "frame-queued",
+		width,
+		height,
+	} satisfies FrameQueuedMessage);
+}
 
 function renderLoop() {
 	_rafId = null;
@@ -168,76 +316,128 @@ function renderLoop() {
 		return;
 	}
 
-	const frame = pendingRenderFrame;
-	if (frame) {
-		const now = performance.now();
+	if (useSharedBuffer && consumer && !consumer.isShutdown()) {
+		let polled = 0;
+		while (polled < 4 && tryPollSharedBuffer()) {
+			polled++;
+		}
+	}
+
+	const now = performance.now();
+	let frameToRender: PendingFrame | null = null;
+	let frameIndex = -1;
+	let fallbackFrame: PendingFrame | null = null;
+	let fallbackIndex = -1;
+	let fallbackDiffMs = Number.MAX_VALUE;
+
+	for (let i = 0; i < frameQueue.length; i++) {
+		const frame = frameQueue[i];
 		const frameNum = frame.timing.frameNumber;
 
 		const isSeek =
 			playbackStartTime !== null &&
 			lastRenderedFrameNumber >= 0 &&
 			(frameNum < lastRenderedFrameNumber ||
-				frameNum > lastRenderedFrameNumber + 10);
+				frameNum > lastRenderedFrameNumber + 30);
 
 		if (playbackStartTime === null || isSeek) {
 			playbackStartTime = now;
 			playbackStartFrameNumber = frameNum;
 		}
 
-		let shouldRender = true;
-
 		if (frame.timing.targetTimeNs > 0n) {
 			const elapsedMs = now - playbackStartTime;
 			const startFrameTimeNs =
-				(BigInt(playbackStartFrameNumber) * 1_000_000_000n) / 60n;
+				BigInt(playbackStartFrameNumber) * FRAME_DURATION_NS;
 			const adjustedTargetNs = frame.timing.targetTimeNs - startFrameTimeNs;
 			const targetMs = Number(adjustedTargetNs / 1_000_000n);
 			const diffMs = targetMs - elapsedMs;
 
-			if (diffMs > 8) {
-				shouldRender = false;
-			} else if (diffMs < -33) {
-				if (frameNum <= lastRenderedFrameNumber && !isSeek) {
-					shouldRender = false;
+			const absDiff = Math.abs(diffMs);
+			if (absDiff < fallbackDiffMs) {
+				fallbackDiffMs = absDiff;
+				fallbackFrame = frame;
+				fallbackIndex = i;
+			}
+
+			if (diffMs > EARLY_THRESHOLD_MS) {
+				continue;
+			}
+
+			if (diffMs < -LATE_THRESHOLD_MS && !isSeek) {
+				if (frame.mode === "webgpu" && frame.releaseCallback) {
+					frame.releaseCallback();
 				}
+				frameQueue.splice(i, 1);
+				i--;
+				frameDropCount++;
+				const logNow = performance.now();
+				if (logNow - lastFrameDropLogTime > 1000) {
+					if (frameDropCount > 0) {
+						console.warn(
+							`[frame-worker] Dropped ${frameDropCount} frames in the last second`,
+						);
+					}
+					frameDropCount = 0;
+					lastFrameDropLogTime = logNow;
+				}
+				continue;
 			}
 		}
 
-		if (shouldRender) {
-			pendingRenderFrame = null;
-			lastRenderedFrameNumber = frameNum;
-
-			if (frame.mode === "webgpu" && webgpuRenderer) {
-				renderFrameWebGPU(
-					webgpuRenderer,
-					frame.data,
-					frame.width,
-					frame.height,
-					frame.strideBytes,
-				);
-				if (frame.releaseCallback) {
-					frame.releaseCallback();
-				}
-			} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
-				if (
-					offscreenCanvas.width !== frame.width ||
-					offscreenCanvas.height !== frame.height
-				) {
-					offscreenCanvas.width = frame.width;
-					offscreenCanvas.height = frame.height;
-				}
-				offscreenCtx.putImageData(frame.imageData, 0, 0);
-			}
-
-			self.postMessage({
-				type: "frame-rendered",
-				width: frame.width,
-				height: frame.height,
-			} satisfies FrameRenderedMessage);
+		if (
+			frameToRender === null ||
+			frame.timing.frameNumber < frameToRender.timing.frameNumber
+		) {
+			frameToRender = frame;
+			frameIndex = i;
 		}
 	}
 
-	if (pendingRenderFrame !== null) {
+	if (frameToRender === null && fallbackFrame !== null) {
+		frameToRender = fallbackFrame;
+		frameIndex = fallbackIndex;
+	}
+
+	if (frameToRender !== null && frameIndex >= 0) {
+		frameQueue.splice(frameIndex, 1);
+		const frame = frameToRender;
+		lastRenderedFrameNumber = frame.timing.frameNumber;
+
+		if (frame.mode === "webgpu" && webgpuRenderer) {
+			renderFrameWebGPU(
+				webgpuRenderer,
+				frame.data,
+				frame.width,
+				frame.height,
+				frame.strideBytes,
+			);
+			if (frame.releaseCallback) {
+				frame.releaseCallback();
+			}
+		} else if (frame.mode === "canvas2d" && offscreenCanvas && offscreenCtx) {
+			if (
+				offscreenCanvas.width !== frame.width ||
+				offscreenCanvas.height !== frame.height
+			) {
+				offscreenCanvas.width = frame.width;
+				offscreenCanvas.height = frame.height;
+			}
+			offscreenCtx.putImageData(frame.imageData, 0, 0);
+		}
+
+		self.postMessage({
+			type: "frame-rendered",
+			width: frame.width,
+			height: frame.height,
+		} satisfies FrameRenderedMessage);
+	}
+
+	const shouldContinue =
+		frameQueue.length > 0 ||
+		(useSharedBuffer && consumer && !consumer.isShutdown());
+
+	if (shouldContinue) {
 		_rafId = requestAnimationFrame(renderLoop);
 	} else {
 		rafRunning = false;
@@ -268,12 +468,12 @@ function stopRenderLoop() {
 
 function cleanup() {
 	stopRenderLoop();
-	if (
-		pendingRenderFrame?.mode === "webgpu" &&
-		pendingRenderFrame.releaseCallback
-	) {
-		pendingRenderFrame.releaseCallback();
+	for (const frame of frameQueue) {
+		if (frame.mode === "webgpu" && frame.releaseCallback) {
+			frame.releaseCallback();
+		}
 	}
+	frameQueue = [];
 	if (webgpuRenderer) {
 		disposeWebGPU(webgpuRenderer);
 		webgpuRenderer = null;
@@ -284,7 +484,6 @@ function cleanup() {
 	useSharedBuffer = false;
 	sharedReadBuffer = null;
 	sharedReadBufferSize = 0;
-	pendingRenderFrame = null;
 	lastImageData = null;
 	cachedImageData = null;
 	cachedWidth = 0;
@@ -311,7 +510,7 @@ function initWorker() {
 	}
 
 	if (useSharedBuffer && consumer) {
-		pollSharedBuffer();
+		startRenderLoop();
 	}
 }
 
@@ -413,11 +612,12 @@ async function initCanvas(canvas: OffscreenCanvas): Promise<void> {
 
 type DecodeResult = FrameQueuedMessage | DecodedFrame | ErrorMessage;
 
-async function processFrameBytes(
+function processFrameBytesSync(
 	bytes: Uint8Array,
 	releaseCallback?: () => void,
-): Promise<DecodeResult> {
+): DecodeResult {
 	if (bytes.byteLength < 24) {
+		releaseCallback?.();
 		return {
 			type: "error",
 			message: "Received frame too small to contain metadata",
@@ -439,6 +639,7 @@ async function processFrameBytes(
 	);
 
 	if (!width || !height) {
+		releaseCallback?.();
 		return {
 			type: "error",
 			message: `Received invalid frame dimensions: ${width}x${height}`,
@@ -454,6 +655,7 @@ async function processFrameBytes(
 		strideBytes < expectedRowBytes ||
 		frameData.length < availableLength
 	) {
+		releaseCallback?.();
 		return {
 			type: "error",
 			message: `Received invalid frame stride: ${strideBytes}, expected: ${expectedRowBytes}`,
@@ -461,27 +663,15 @@ async function processFrameBytes(
 	}
 
 	if (renderMode === "webgpu" && webgpuRenderer) {
-		if (pendingRenderFrame !== null) {
-			if (
-				pendingRenderFrame.mode === "webgpu" &&
-				pendingRenderFrame.releaseCallback
-			) {
-				pendingRenderFrame.releaseCallback();
+		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
+			const dropped = frameQueue.shift();
+			if (dropped?.mode === "webgpu" && dropped.releaseCallback) {
+				dropped.releaseCallback();
 			}
 			frameDropCount++;
-			const now = performance.now();
-			if (now - lastFrameDropLogTime > 1000) {
-				if (frameDropCount > 0) {
-					console.warn(
-						`[frame-worker] Dropped ${frameDropCount} frames in the last second`,
-					);
-				}
-				frameDropCount = 0;
-				lastFrameDropLogTime = now;
-			}
 		}
 
-		pendingRenderFrame = {
+		frameQueue.push({
 			mode: "webgpu",
 			data: frameData.subarray(0, availableLength),
 			width,
@@ -489,7 +679,7 @@ async function processFrameBytes(
 			strideBytes,
 			timing,
 			releaseCallback,
-		};
+		});
 		startRenderLoop();
 		return { type: "frame-queued", width, height };
 	}
@@ -528,74 +718,26 @@ async function processFrameBytes(
 	cachedImageData.data.set(processedFrameData);
 	lastImageData = cachedImageData;
 
+	releaseCallback?.();
+
+	while (frameQueue.length >= FRAME_QUEUE_SIZE) {
+		frameQueue.shift();
+		frameDropCount++;
+	}
+
+	frameQueue.push({
+		mode: "canvas2d",
+		imageData: cachedImageData,
+		width,
+		height,
+		timing,
+	});
+
 	if (offscreenCanvas && offscreenCtx) {
-		pendingRenderFrame = {
-			mode: "canvas2d",
-			imageData: cachedImageData,
-			width,
-			height,
-			timing,
-		};
 		startRenderLoop();
-		return { type: "frame-queued", width, height };
 	}
 
-	try {
-		const bitmap = await createImageBitmap(cachedImageData);
-		return {
-			type: "decoded",
-			bitmap,
-			width,
-			height,
-		};
-	} catch (e) {
-		return {
-			type: "error",
-			message: `Failed to create ImageBitmap: ${e}`,
-		};
-	}
-}
-
-async function pollSharedBuffer(): Promise<void> {
-	if (!consumer || !useSharedBuffer) return;
-
-	if (renderMode === "webgpu" && webgpuRenderer) {
-		const borrowed = consumer.borrow(50);
-		if (borrowed !== null) {
-			const result = await processFrameBytes(borrowed.data, borrowed.release);
-			if (result.type === "decoded") {
-				self.postMessage(result, { transfer: [result.bitmap] });
-			} else if (result.type === "frame-queued") {
-				self.postMessage(result);
-			} else if (result.type === "error") {
-				borrowed.release();
-				self.postMessage(result);
-			}
-		}
-	} else {
-		if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
-			sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
-			sharedReadBufferSize = sharedReadBuffer.byteLength;
-		}
-
-		const size = consumer.readInto(sharedReadBuffer, 50);
-		if (size != null && size > 0) {
-			const result = await processFrameBytes(
-				sharedReadBuffer.subarray(0, size),
-			);
-			if (result.type === "decoded") {
-				self.postMessage(result, { transfer: [result.bitmap] });
-			} else if (result.type === "frame-queued") {
-				self.postMessage(result);
-			} else if (result.type === "error") {
-				self.postMessage(result);
-			}
-		}
-	}
-
-	if (!consumer.isShutdown()) {
-		setTimeout(pollSharedBuffer, 1);
-	}
+	return { type: "frame-queued", width, height };
 }
 
 self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
@@ -607,6 +749,12 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	if (e.data.type === "reset-frame-state") {
 		lastRenderedFrameNumber = -1;
 		playbackStartTime = null;
+		for (const frame of frameQueue) {
+			if (frame.mode === "webgpu" && frame.releaseCallback) {
+				frame.releaseCallback();
+			}
+		}
+		frameQueue = [];
 		return;
 	}
 
@@ -617,7 +765,7 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 		sharedReadBufferSize = 0;
 
 		if (workerReady) {
-			pollSharedBuffer();
+			startRenderLoop();
 		}
 		return;
 	}
@@ -656,10 +804,8 @@ self.onmessage = async (e: MessageEvent<IncomingMessage>) => {
 	}
 
 	if (e.data.type === "frame") {
-		const result = await processFrameBytes(new Uint8Array(e.data.buffer));
-		if (result.type === "decoded") {
-			self.postMessage(result, { transfer: [result.bitmap] });
-		} else if (result.type === "frame-queued") {
+		const result = processFrameBytesSync(new Uint8Array(e.data.buffer));
+		if (result.type === "frame-queued") {
 			self.postMessage(result);
 		} else if (result.type === "error") {
 			self.postMessage(result);
