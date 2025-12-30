@@ -448,6 +448,60 @@ pub fn default_output_latency_hint(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct InputLatencyInfo {
+    pub device_latency_secs: f64,
+    pub buffer_latency_secs: f64,
+    pub total_latency_secs: f64,
+    pub transport: OutputTransportKind,
+}
+
+impl InputLatencyInfo {
+    pub fn new(
+        device_latency_secs: f64,
+        buffer_latency_secs: f64,
+        transport: OutputTransportKind,
+    ) -> Self {
+        Self {
+            device_latency_secs,
+            buffer_latency_secs,
+            total_latency_secs: device_latency_secs + buffer_latency_secs,
+            transport,
+        }
+    }
+
+    pub fn from_buffer_only(sample_rate: u32, buffer_size_frames: u32) -> Self {
+        let buffer_latency = if sample_rate > 0 {
+            buffer_size_frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+        Self::new(0.0, buffer_latency, OutputTransportKind::Unknown)
+    }
+}
+
+pub fn estimate_input_latency(
+    sample_rate: u32,
+    buffer_size_frames: u32,
+    device_name: Option<&str>,
+) -> InputLatencyInfo {
+    if sample_rate == 0 {
+        return InputLatencyInfo::new(0.0, 0.0, OutputTransportKind::Unknown);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        macos::estimate_input_latency(sample_rate, buffer_size_frames, device_name)
+            .unwrap_or_else(|| InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = device_name;
+        InputLatencyInfo::from_buffer_only(sample_rate, buffer_size_frames)
+    }
+}
+
 fn time_based_alpha(dt_secs: f64, tau_secs: f64) -> f64 {
     if tau_secs <= 0.0 {
         return 1.0;
@@ -489,8 +543,8 @@ mod macos {
     #[cfg(target_os = "macos")]
     use super::AIRPLAY_MIN_LATENCY_SECS;
     use super::{
-        MAX_LATENCY_SECS, OutputLatencyHint, OutputTransportKind, WIRELESS_FALLBACK_LATENCY_SECS,
-        WIRELESS_MIN_LATENCY_SECS, transport_constraints,
+        InputLatencyInfo, MAX_LATENCY_SECS, OutputLatencyHint, OutputTransportKind,
+        WIRELESS_FALLBACK_LATENCY_SECS, WIRELESS_MIN_LATENCY_SECS, transport_constraints,
     };
     use cidre::{
         core_audio::{
@@ -506,6 +560,73 @@ mod macos {
     ) -> Option<OutputLatencyHint> {
         let device = System::default_output_device().ok()?;
         compute_latency_hint(&device, sample_rate, fallback_buffer_frames).ok()
+    }
+
+    pub(super) fn estimate_input_latency(
+        sample_rate: u32,
+        buffer_size_frames: u32,
+        _device_name: Option<&str>,
+    ) -> Option<InputLatencyInfo> {
+        let device = System::default_input_device().ok()?;
+        compute_input_latency(&device, sample_rate, buffer_size_frames).ok()
+    }
+
+    fn compute_input_latency(
+        device: &Device,
+        sample_rate: u32,
+        fallback_buffer_frames: u32,
+    ) -> os::Result<InputLatencyInfo> {
+        let transport = device
+            .transport_type()
+            .unwrap_or(DeviceTransportType::UNKNOWN);
+        let transport_kind = transport_kind(transport);
+
+        let device_latency_frames =
+            scoped_u32(device, PropSelector::DEVICE_LATENCY, PropScope::INPUT).unwrap_or(0);
+        let safety_offset_frames =
+            scoped_u32(device, PropSelector::DEVICE_SAFETY_OFFSET, PropScope::INPUT).unwrap_or(0);
+        let buffer_frames = device
+            .prop(&PropSelector::DEVICE_BUF_FRAME_SIZE.global_addr())
+            .unwrap_or(fallback_buffer_frames);
+        let stream_latency_frames = max_input_stream_latency(device).unwrap_or(0);
+
+        let device_sample_rate = device.nominal_sample_rate().unwrap_or(sample_rate as f64);
+        let effective_rate = if device_sample_rate > 0.0 {
+            device_sample_rate
+        } else {
+            sample_rate as f64
+        };
+
+        let device_latency_total_frames =
+            device_latency_frames as u64 + safety_offset_frames as u64 + stream_latency_frames as u64;
+
+        let device_latency_secs = device_latency_total_frames as f64 / effective_rate;
+        let buffer_latency_secs = buffer_frames as f64 / effective_rate;
+
+        Ok(InputLatencyInfo::new(
+            device_latency_secs,
+            buffer_latency_secs,
+            transport_kind,
+        ))
+    }
+
+    fn max_input_stream_latency(device: &Device) -> os::Result<u32> {
+        let streams = device.streams()?;
+        let mut max_latency = 0u32;
+
+        for stream in streams {
+            if is_input_stream(&stream)?
+                && let Ok(latency) = stream.latency()
+            {
+                max_latency = max_latency.max(latency);
+            }
+        }
+
+        Ok(max_latency)
+    }
+
+    fn is_input_stream(stream: &Stream) -> os::Result<bool> {
+        stream.direction().map(|dir| dir == 1)
     }
 
     fn compute_latency_hint(
