@@ -77,13 +77,14 @@ import {
 import CameraSelect from "./CameraSelect";
 import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
+import ModeInfoPanel from "./ModeInfoPanel";
 import SystemAudio from "./SystemAudio";
 import type { RecordingWithPath, ScreenshotWithPath } from "./TargetCard";
 import TargetDropdownButton from "./TargetDropdownButton";
 import TargetMenuGrid from "./TargetMenuGrid";
 import TargetTypeButton from "./TargetTypeButton";
 
-const WINDOW_SIZE = { width: 310, height: 320 } as const;
+const WINDOW_SIZE = { width: 330, height: 345 } as const;
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 	return cameras.find((c) => {
@@ -406,17 +407,23 @@ function Page() {
 		void getCurrentWindow().show();
 	});
 
+	const handleMouseEnter = () => {
+		getCurrentWindow().setFocus();
+	};
+
 	const [displayMenuOpen, setDisplayMenuOpen] = createSignal(false);
 	const [windowMenuOpen, setWindowMenuOpen] = createSignal(false);
 	const [recordingsMenuOpen, setRecordingsMenuOpen] = createSignal(false);
 	const [screenshotsMenuOpen, setScreenshotsMenuOpen] = createSignal(false);
+	const [modeInfoMenuOpen, setModeInfoMenuOpen] = createSignal(false);
 	const activeMenu = createMemo<
-		"display" | "window" | "recording" | "screenshot" | null
+		"display" | "window" | "recording" | "screenshot" | "modeInfo" | null
 	>(() => {
 		if (displayMenuOpen()) return "display";
 		if (windowMenuOpen()) return "window";
 		if (recordingsMenuOpen()) return "recording";
 		if (screenshotsMenuOpen()) return "screenshot";
+		if (modeInfoMenuOpen()) return "modeInfo";
 		return null;
 	});
 	const [hasOpenedDisplayMenu, setHasOpenedDisplayMenu] = createSignal(false);
@@ -529,23 +536,34 @@ function Page() {
 		return windowTargets.data?.filter((target) => ids.has(target.id));
 	});
 
-	const recordingsData = createMemo(() => {
+	const [recordingsStore, setRecordingsStore] = createStore<
+		RecordingWithPath[]
+	>([]);
+	createEffect(() => {
 		const data = recordings.data;
-		if (!data) return [];
-		// The Rust backend sorts files descending by creation time (newest first).
-		// See list_recordings in apps/desktop/src-tauri/src/lib.rs
-		// b_time.cmp(&a_time) ensures newest first.
-		// So we just need to take the top 20.
-		return data
+		if (!data) {
+			setRecordingsStore(reconcile([]));
+			return;
+		}
+		const mapped = data
 			.slice(0, 20)
 			.map(([path, meta]) => ({ ...meta, path }) as RecordingWithPath);
+		setRecordingsStore(reconcile(mapped));
 	});
+	const recordingsData = () => recordingsStore;
 
-	const screenshotsData = createMemo(() => {
+	const [screenshotsStore, setScreenshotsStore] = createStore<
+		ScreenshotWithPath[]
+	>([]);
+	createEffect(() => {
 		const data = screenshots.data;
-		if (!data) return [];
-		return data.slice(0, 20) as ScreenshotWithPath[];
+		if (!data) {
+			setScreenshotsStore(reconcile([]));
+			return;
+		}
+		setScreenshotsStore(reconcile(data.slice(0, 20)));
 	});
+	const screenshotsData = () => screenshotsStore;
 
 	const displayMenuLoading = () =>
 		!hasDisplayTargetsData() &&
@@ -600,6 +618,7 @@ function Page() {
 		setWindowMenuOpen(false);
 		setRecordingsMenuOpen(false);
 		setScreenshotsMenuOpen(false);
+		setModeInfoMenuOpen(false);
 	});
 
 	createUpdateCheck();
@@ -947,7 +966,10 @@ function Page() {
 	onCleanup(() => startSignInCleanup.then((cb) => cb()));
 
 	return (
-		<div class="flex relative flex-col px-3 gap-2 h-full min-h-0 text-[--text-primary]">
+		<div
+			onMouseEnter={handleMouseEnter}
+			class="flex relative flex-col px-[13px] gap-2 pb-[8px] h-full min-h-0 text-[--text-primary]"
+		>
 			<WindowChromeHeader hideMaximize>
 				<div
 					class={cx(
@@ -1026,7 +1048,7 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={!activeMenu()}>
-				<div class="flex items-center justify-between mt-4">
+				<div class="flex items-center justify-between mt-[18px] mb-[6px]">
 					<div class="flex items-center space-x-1">
 						<a
 							class="*:w-[92px] *:h-auto text-[--text-primary]"
@@ -1064,7 +1086,15 @@ function Page() {
 							</Suspense>
 						</ErrorBoundary>
 					</div>
-					<Mode />
+					<Mode
+						onInfoClick={() => {
+							setModeInfoMenuOpen(true);
+							setDisplayMenuOpen(false);
+							setWindowMenuOpen(false);
+							setRecordingsMenuOpen(false);
+							setScreenshotsMenuOpen(false);
+						}}
+					/>
 				</div>
 			</Show>
 			<div class="flex-1 min-h-0 w-full flex flex-col">
@@ -1165,7 +1195,7 @@ function Page() {
 									onReupload={handleReupload}
 									onRefetch={() => recordings.refetch()}
 								/>
-							) : (
+							) : variant === "screenshot" ? (
 								<TargetMenuPanel
 									variant="screenshot"
 									targets={screenshotsData()}
@@ -1179,7 +1209,6 @@ function Page() {
 												path: screenshot.path,
 											},
 										});
-										// getCurrentWindow().hide(); // Maybe keep open?
 									}}
 									disabled={isRecording()}
 									onBack={() => {
@@ -1190,6 +1219,12 @@ function Page() {
 											Settings: { page: "screenshots" },
 										});
 										getCurrentWindow().hide();
+									}}
+								/>
+							) : (
+								<ModeInfoPanel
+									onBack={() => {
+										setModeInfoMenuOpen(false);
 									}}
 								/>
 							)

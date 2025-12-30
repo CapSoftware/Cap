@@ -20,7 +20,7 @@ export default function CameraSelect(props: {
 		<CameraSelectBase
 			{...props}
 			PillComponent={InfoPill}
-			class="flex flex-row gap-2 items-center px-2 w-full h-10 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
+			class="flex flex-row gap-2 items-center px-2 w-full h-[42px] rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 			iconClass="text-gray-10 size-4"
 		/>
 	);
