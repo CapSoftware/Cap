@@ -225,7 +225,7 @@ pub async fn generate_export_preview(
         RenderVideoConstants::new(
             &recordings.segments,
             recording_meta.clone(),
-            (*studio_meta).clone(),
+            (**studio_meta).clone(),
         )
         .await
         .map_err(|e| format!("Failed to create render constants: {e}"))?,
