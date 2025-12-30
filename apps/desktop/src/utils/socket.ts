@@ -222,6 +222,8 @@ export function createImageDataWS(
 		}
 
 		if (e.data.type === "frame-rendered") {
+			const { width, height } = e.data;
+			onmessage({ width, height });
 			if (!hasRenderedFrame()) {
 				setHasRenderedFrame(true);
 			}

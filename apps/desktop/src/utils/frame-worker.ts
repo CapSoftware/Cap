@@ -153,23 +153,16 @@ let _rafId: number | null = null;
 let rafRunning = false;
 
 let playbackStartTime: number | null = null;
-let playbackStartFrameNumber = 0;
+let playbackStartTargetTimeNs: bigint | null = null;
 let lastRenderedFrameNumber = -1;
 
-const FRAME_DURATION_NS = 1_000_000_000n / 60n;
-const EARLY_THRESHOLD_MS = 2;
-const LATE_THRESHOLD_MS = 100;
+const EARLY_THRESHOLD_MS = 16;
+const LATE_THRESHOLD_MS = 40;
 
 function tryPollSharedBuffer(): boolean {
 	if (!consumer || !useSharedBuffer) return false;
 
-	if (renderMode === "webgpu" && webgpuRenderer) {
-		const borrowed = consumer.borrow(0);
-		if (borrowed !== null) {
-			queueFrameFromBytes(borrowed.data, borrowed.release);
-			return true;
-		}
-	} else {
+	if (renderMode !== "webgpu") {
 		if (!sharedReadBuffer || sharedReadBufferSize < consumer.getSlotSize()) {
 			sharedReadBuffer = new Uint8Array(consumer.getSlotSize());
 			sharedReadBufferSize = sharedReadBuffer.byteLength;
@@ -184,14 +177,15 @@ function tryPollSharedBuffer(): boolean {
 	return false;
 }
 
-function queueFrameFromBytes(
-	bytes: Uint8Array,
-	releaseCallback?: () => void,
-): void {
-	if (bytes.byteLength < 24) {
-		releaseCallback?.();
-		return;
-	}
+function parseFrameMetadata(bytes: Uint8Array): {
+	width: number;
+	height: number;
+	strideBytes: number;
+	frameNumber: number;
+	targetTimeNs: bigint;
+	availableLength: number;
+} | null {
+	if (bytes.byteLength < 24) return null;
 
 	const metadataOffset = bytes.byteOffset + bytes.byteLength - 24;
 	const meta = new DataView(bytes.buffer, metadataOffset, 24);
@@ -200,12 +194,8 @@ function queueFrameFromBytes(
 	const width = meta.getUint32(8, true);
 	const frameNumber = meta.getUint32(12, true);
 	const targetTimeNs = meta.getBigUint64(16, true);
-	const timing: FrameTiming = { frameNumber, targetTimeNs };
 
-	if (!width || !height) {
-		releaseCallback?.();
-		return;
-	}
+	if (!width || !height) return null;
 
 	const expectedRowBytes = width * 4;
 	const availableLength = strideBytes * height;
@@ -215,9 +205,104 @@ function queueFrameFromBytes(
 		strideBytes < expectedRowBytes ||
 		bytes.byteLength - 24 < availableLength
 	) {
+		return null;
+	}
+
+	return {
+		width,
+		height,
+		strideBytes,
+		frameNumber,
+		targetTimeNs,
+		availableLength,
+	};
+}
+
+function renderBorrowedWebGPU(bytes: Uint8Array, release: () => void): boolean {
+	if (renderMode !== "webgpu" || !webgpuRenderer) {
+		release();
+		return false;
+	}
+
+	const meta = parseFrameMetadata(bytes);
+	if (!meta) {
+		release();
+		return false;
+	}
+
+	const {
+		width,
+		height,
+		strideBytes,
+		frameNumber,
+		targetTimeNs,
+		availableLength,
+	} = meta;
+
+	const frameData = new Uint8ClampedArray(
+		bytes.buffer,
+		bytes.byteOffset,
+		bytes.byteLength - 24,
+	).subarray(0, availableLength);
+
+	lastRenderedFrameNumber = frameNumber;
+	if (playbackStartTime === null || playbackStartTargetTimeNs === null) {
+		playbackStartTime = performance.now();
+		playbackStartTargetTimeNs = targetTimeNs;
+	}
+
+	renderFrameWebGPU(webgpuRenderer, frameData, width, height, strideBytes);
+	release();
+
+	self.postMessage({
+		type: "frame-rendered",
+		width,
+		height,
+	} satisfies FrameRenderedMessage);
+
+	return true;
+}
+
+function drainAndRenderLatestSharedWebGPU(maxDrain: number): boolean {
+	if (!consumer || !useSharedBuffer || consumer.isShutdown()) return false;
+	if (renderMode !== "webgpu" || !webgpuRenderer) return false;
+
+	let latest: { bytes: Uint8Array; release: () => void } | null = null;
+
+	for (let i = 0; i < maxDrain; i += 1) {
+		const borrowed = consumer.borrow(0);
+		if (!borrowed) break;
+
+		if (latest) {
+			latest.release();
+		}
+		latest = { bytes: borrowed.data, release: borrowed.release };
+	}
+
+	if (!latest) return false;
+
+	return renderBorrowedWebGPU(latest.bytes, latest.release);
+}
+
+function queueFrameFromBytes(
+	bytes: Uint8Array,
+	releaseCallback?: () => void,
+): void {
+	const meta = parseFrameMetadata(bytes);
+	if (!meta) {
 		releaseCallback?.();
 		return;
 	}
+
+	const {
+		width,
+		height,
+		strideBytes,
+		frameNumber,
+		targetTimeNs,
+		availableLength,
+	} = meta;
+	const timing: FrameTiming = { frameNumber, targetTimeNs };
 
 	const frameData = new Uint8ClampedArray(
 		bytes.buffer,
@@ -226,13 +311,12 @@ function queueFrameFromBytes(
 	);
 
 	if (renderMode === "webgpu" && webgpuRenderer) {
-		while (frameQueue.length >= FRAME_QUEUE_SIZE) {
-			const dropped = frameQueue.shift();
-			if (dropped?.mode === "webgpu" && dropped.releaseCallback) {
-				dropped.releaseCallback();
+		for (const queued of frameQueue) {
+			if (queued.mode === "webgpu" && queued.releaseCallback) {
+				queued.releaseCallback();
 			}
-			frameDropCount++;
 		}
+		frameQueue = frameQueue.filter((f) => f.mode !== "webgpu");
 
 		frameQueue.push({
 			mode: "webgpu",
@@ -317,6 +401,14 @@ function renderLoop() {
 	}
 
 	if (useSharedBuffer && consumer && !consumer.isShutdown()) {
+		if (renderMode === "webgpu" && webgpuRenderer) {
+			const rendered = drainAndRenderLatestSharedWebGPU(8);
+			if (rendered) {
+				_rafId = requestAnimationFrame(renderLoop);
+				return;
+			}
+		}
+
 		let polled = 0;
 		while (polled < 4 && tryPollSharedBuffer()) {
 			polled++;
@@ -342,14 +434,14 @@ function renderLoop() {
 
 		if (playbackStartTime === null || isSeek) {
 			playbackStartTime = now;
-			playbackStartFrameNumber = frameNum;
+			playbackStartTargetTimeNs = frame.timing.targetTimeNs;
 		}
 
 		if (frame.timing.targetTimeNs > 0n) {
 			const elapsedMs = now - playbackStartTime;
-			const startFrameTimeNs =
-				BigInt(playbackStartFrameNumber) * FRAME_DURATION_NS;
-			const adjustedTargetNs = frame.timing.targetTimeNs - startFrameTimeNs;
+			const startTarget =
+				playbackStartTargetTimeNs ?? frame.timing.targetTimeNs;
+			const adjustedTargetNs = frame.timing.targetTimeNs - startTarget;
 			const targetMs = Number(adjustedTargetNs / 1_000_000n);
 			const diffMs = targetMs - elapsedMs;
 
@@ -358,10 +450,6 @@ function renderLoop() {
 				fallbackDiffMs = absDiff;
 				fallbackFrame = frame;
 				fallbackIndex = i;
-			}
-
-			if (diffMs > EARLY_THRESHOLD_MS) {
-				continue;
 			}
 
 			if (diffMs < -LATE_THRESHOLD_MS && !isSeek) {
@@ -387,7 +475,7 @@ function renderLoop() {
 
 		if (
 			frameToRender === null ||
-			frame.timing.frameNumber < frameToRender.timing.frameNumber
+			frame.timing.frameNumber > frameToRender.timing.frameNumber
 		) {
 			frameToRender = frame;
 			frameIndex = i;
@@ -496,7 +584,7 @@ function cleanup() {
 	frameDropCount = 0;
 	lastFrameDropLogTime = 0;
 	playbackStartTime = null;
-	playbackStartFrameNumber = 0;
+	playbackStartTargetTimeNs = null;
 	lastRenderedFrameNumber = -1;
 }
 
