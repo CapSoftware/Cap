@@ -659,6 +659,17 @@ pub fn is_format_supported(pixel: Pixel) -> bool {
 
 impl FrameConverter for D3D11Converter {
     fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+        let mut output =
+            frame::Video::new(self.output_format, self.output_width, self.output_height);
+        self.convert_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    fn convert_into(
+        &self,
+        input: frame::Video,
+        output: &mut frame::Video,
+    ) -> Result<(), ConvertError> {
         let start = Instant::now();
         let count = self.conversion_count.fetch_add(1, Ordering::Relaxed);
 
@@ -798,13 +809,7 @@ impl FrameConverter for D3D11Converter {
                 )
                 .map_err(|e| ConvertError::ConversionFailed(format!("Map output failed: {e:?}")))?;
 
-            let mut output =
-                frame::Video::new(self.output_format, self.output_width, self.output_height);
-            copy_mapped_to_frame(
-                mapped.pData as *const u8,
-                mapped.RowPitch as usize,
-                &mut output,
-            );
+            copy_mapped_to_frame(mapped.pData as *const u8, mapped.RowPitch as usize, output);
 
             resources.context.Unmap(&resources.staging_output, 0);
 
@@ -828,7 +833,7 @@ impl FrameConverter for D3D11Converter {
                 );
             }
 
-            Ok(output)
+            Ok(())
         }
     }
 

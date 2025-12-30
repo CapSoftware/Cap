@@ -65,17 +65,26 @@ impl SwscaleConverter {
 
 impl FrameConverter for SwscaleConverter {
     fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
-        let pts = input.pts();
         let mut output =
             frame::Video::new(self.output_format, self.output_width, self.output_height);
+        self.convert_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    fn convert_into(
+        &self,
+        input: frame::Video,
+        output: &mut frame::Video,
+    ) -> Result<(), ConvertError> {
+        let pts = input.pts();
 
         let context = self.get_or_create_context()?;
         context
-            .run(&input, &mut output)
+            .run(&input, output)
             .map_err(|e| ConvertError::ConversionFailed(e.to_string()))?;
 
         output.set_pts(pts);
-        Ok(output)
+        Ok(())
     }
 
     fn name(&self) -> &'static str {
