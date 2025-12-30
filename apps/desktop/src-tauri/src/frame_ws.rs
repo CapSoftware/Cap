@@ -1,11 +1,22 @@
+use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-fn pack_frame_data(mut data: Vec<u8>, stride: u32, height: u32, width: u32) -> Vec<u8> {
+fn pack_frame_data(
+    mut data: Vec<u8>,
+    stride: u32,
+    height: u32,
+    width: u32,
+    frame_number: u32,
+    target_time_ns: u64,
+) -> Vec<u8> {
+    data.reserve_exact(24);
     data.extend_from_slice(&stride.to_le_bytes());
     data.extend_from_slice(&height.to_le_bytes());
     data.extend_from_slice(&width.to_le_bytes());
+    data.extend_from_slice(&frame_number.to_le_bytes());
+    data.extend_from_slice(&target_time_ns.to_le_bytes());
     data
 }
 
@@ -15,6 +26,8 @@ pub struct WSFrame {
     pub width: u32,
     pub height: u32,
     pub stride: u32,
+    pub frame_number: u32,
+    pub target_time_ns: u64,
     #[allow(dead_code)]
     pub created_at: Instant,
 }
@@ -49,7 +62,14 @@ pub async fn create_watch_frame_ws(
         {
             let frame_opt = camera_rx.borrow().clone();
             if let Some(frame) = frame_opt {
-                let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                let packed = pack_frame_data(
+                    frame.data,
+                    frame.stride,
+                    frame.height,
+                    frame.width,
+                    frame.frame_number,
+                    frame.target_time_ns,
+                );
 
                 if let Err(e) = socket.send(Message::Binary(packed)).await {
                     tracing::error!("Failed to send initial frame to socket: {:?}", e);
@@ -82,7 +102,14 @@ pub async fn create_watch_frame_ws(
                     }
                     let frame_opt = camera_rx.borrow().clone();
                     if let Some(frame) = frame_opt {
-                        let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                        let packed = pack_frame_data(
+                            frame.data,
+                            frame.stride,
+                            frame.height,
+                            frame.width,
+                            frame.frame_number,
+                            frame.target_time_ns,
+                        );
 
                         if let Err(e) = socket.send(Message::Binary(packed)).await {
                             tracing::error!("Failed to send frame to socket: {:?}", e);
@@ -114,6 +141,103 @@ pub async fn create_watch_frame_ws(
             _ = server => {},
             _ = cancel_token.cancelled() => {
                 println!("WebSocket server shutting down");
+            }
+        }
+    });
+
+    (port, cancel_token_child)
+}
+
+pub async fn create_mpsc_frame_ws(
+    frame_rx: Arc<Mutex<mpsc::Receiver<WSFrame>>>,
+) -> (u16, CancellationToken) {
+    use axum::{
+        extract::{
+            State,
+            ws::{Message, WebSocket, WebSocketUpgrade},
+        },
+        response::IntoResponse,
+        routing::get,
+    };
+
+    type RouterState = Arc<Mutex<mpsc::Receiver<WSFrame>>>;
+
+    #[axum::debug_handler]
+    async fn ws_handler(
+        ws: WebSocketUpgrade,
+        State(state): State<RouterState>,
+    ) -> impl IntoResponse {
+        ws.on_upgrade(move |socket| handle_socket(socket, state))
+    }
+
+    async fn handle_socket(mut socket: WebSocket, frame_rx: RouterState) {
+        tracing::info!("Socket connection established (mpsc)");
+        let now = std::time::Instant::now();
+
+        loop {
+            let frame_opt = {
+                let mut rx = frame_rx.lock().await;
+                tokio::select! {
+                    biased;
+                    msg = socket.recv() => {
+                        match msg {
+                            Some(Ok(Message::Close(_))) | None => {
+                                tracing::info!("WebSocket closed");
+                                break;
+                            }
+                            Some(Ok(_)) => {
+                                continue;
+                            }
+                            Some(Err(e)) => {
+                                tracing::error!("WebSocket error: {:?}", e);
+                                break;
+                            }
+                        }
+                    },
+                    frame = rx.recv() => frame,
+                }
+            };
+
+            let Some(frame) = frame_opt else {
+                tracing::info!("Frame channel closed");
+                break;
+            };
+
+            let packed = pack_frame_data(
+                frame.data,
+                frame.stride,
+                frame.height,
+                frame.width,
+                frame.frame_number,
+                frame.target_time_ns,
+            );
+
+            if let Err(e) = socket.send(Message::Binary(packed)).await {
+                tracing::error!("Failed to send frame to socket: {:?}", e);
+                break;
+            }
+        }
+
+        let elapsed = now.elapsed();
+        tracing::info!("Websocket closing after {elapsed:.2?}");
+    }
+
+    let router = axum::Router::new()
+        .route("/", get(ws_handler))
+        .with_state(frame_rx);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tracing::info!("WebSocket server (mpsc) listening on port {}", port);
+
+    let cancel_token = CancellationToken::new();
+    let cancel_token_child = cancel_token.child_token();
+    tokio::spawn(async move {
+        let server = axum::serve(listener, router.into_make_service());
+        tokio::select! {
+            _ = server => {},
+            _ = cancel_token.cancelled() => {
+                tracing::info!("WebSocket server shutting down");
             }
         }
     });
@@ -167,7 +291,14 @@ pub async fn create_frame_ws(frame_tx: broadcast::Sender<WSFrame>) -> (u16, Canc
                 incoming_frame = camera_rx.recv() => {
                     match incoming_frame {
                         Ok(frame) => {
-                            let packed = pack_frame_data(frame.data, frame.stride, frame.height, frame.width);
+                            let packed = pack_frame_data(
+                                frame.data,
+                                frame.stride,
+                                frame.height,
+                                frame.width,
+                                frame.frame_number,
+                                frame.target_time_ns,
+                            );
 
                             if let Err(e) = socket.send(Message::Binary(packed)).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);

@@ -1,5 +1,4 @@
 import { Button } from "@cap/ui-solid";
-import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
 import { debounce } from "@solid-primitives/scheduled";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
@@ -13,7 +12,6 @@ import {
 	createEffect,
 	createSignal,
 	For,
-	type JSX,
 	Match,
 	mergeProps,
 	on,
@@ -41,7 +39,7 @@ import {
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
-import { Dialog, Field, Slider } from "./ui";
+import { Dialog, Field } from "./ui";
 
 class SilentError extends Error {}
 
@@ -55,13 +53,6 @@ export const COMPRESSION_OPTIONS: Array<{
 	{ label: "Web", value: "Web", bpp: 0.08 },
 	{ label: "Potato", value: "Potato", bpp: 0.04 },
 ];
-
-const BPP_TO_COMPRESSION: Record<string, ExportCompression> = {
-	"0.3": "Minimal",
-	"0.15": "Social",
-	"0.08": "Web",
-	"0.04": "Potato",
-};
 
 const COMPRESSION_TO_BPP: Record<ExportCompression, number> = {
 	Minimal: 0.3,
@@ -585,13 +576,6 @@ export function ExportPage() {
 		},
 	}));
 
-	const qualityLabel = () => {
-		const option = COMPRESSION_OPTIONS.find(
-			(opt) => opt.value === settings.compression,
-		);
-		return option?.label ?? "Minimal";
-	};
-
 	const formatDuration = (seconds: number) => {
 		const hours = Math.floor(seconds / 3600);
 		const minutes = Math.floor((seconds % 3600) / 60);
@@ -756,46 +740,47 @@ export function ExportPage() {
 				<div class="w-[400px] border-l border-gray-3 flex flex-col bg-gray-1 dark:bg-gray-2">
 					<div class="flex-1 overflow-y-auto p-4 space-y-5">
 						<Field name="Destination" icon={<IconCapUpload class="size-4" />}>
-							<KRadioGroup
-								class="flex flex-col gap-2"
-								value={settings.exportTo}
-								onChange={(value) => {
-									setSettings(
-										produce((newSettings) => {
-											newSettings.exportTo = value as ExportToOption;
-											if (value === "link" && settings.format === "Gif") {
-												newSettings.format = "Mp4";
-											}
-										}),
-									);
-								}}
-							>
+							<div class="flex gap-1.5">
 								<For each={EXPORT_TO_OPTIONS}>
 									{(option) => {
 										const Icon = option.icon;
+										const isSelected = () => settings.exportTo === option.value;
 										return (
-											<KRadioGroup.Item
-												value={option.value}
-												class="rounded-lg border border-gray-3 transition-colors ui-checked:border-blue-8 ui-checked:bg-blue-3/40"
+											<button
+												type="button"
+												class={cx(
+													"flex-1 flex flex-col items-center gap-1.5 px-3 py-2.5 rounded-lg border transition-colors",
+													isSelected()
+														? "bg-gray-3 border-gray-5 text-gray-12"
+														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+												)}
+												onClick={() => {
+													setSettings(
+														produce((newSettings) => {
+															newSettings.exportTo =
+																option.value as ExportToOption;
+															if (
+																option.value === "link" &&
+																settings.format === "Gif"
+															) {
+																newSettings.format = "Mp4";
+															}
+														}),
+													);
+												}}
 											>
-												<KRadioGroup.ItemInput class="sr-only" />
-												<KRadioGroup.ItemLabel class="flex cursor-pointer items-center gap-3 p-3">
-													<KRadioGroup.ItemControl class="size-4 rounded-full border border-gray-7 ui-checked:border-blue-9 ui-checked:bg-blue-9 shrink-0" />
-													<Icon class="size-4 text-gray-11" />
-													<div class="flex flex-col text-left flex-1">
-														<span class="text-sm font-medium text-gray-12">
-															{option.label}
-														</span>
-														<span class="text-xs text-gray-11">
-															{option.description}
-														</span>
-													</div>
-												</KRadioGroup.ItemLabel>
-											</KRadioGroup.Item>
+												<Icon
+													class={cx(
+														"size-5",
+														isSelected() ? "text-gray-12" : "text-gray-10",
+													)}
+												/>
+												<span class="text-xs font-medium">{option.label}</span>
+											</button>
 										);
 									}}
 								</For>
-							</KRadioGroup>
+							</div>
 
 							<Suspense>
 								<Show
@@ -805,7 +790,7 @@ export function ExportPage() {
 								>
 									<button
 										type="button"
-										class="w-full flex items-center justify-between px-3 py-2 mt-2 rounded-lg bg-gray-3 hover:bg-gray-4 transition-colors text-sm"
+										class="w-full flex items-center justify-between px-3 py-2 mt-3 rounded-lg bg-gray-3 hover:bg-gray-4 transition-colors text-sm"
 										onClick={async () => {
 											const menu = await Menu.new({
 												items: await Promise.all(
@@ -840,7 +825,7 @@ export function ExportPage() {
 						</Field>
 
 						<Field name="Format" icon={<IconLucideVideo class="size-4" />}>
-							<div class="flex gap-2">
+							<div class="flex gap-1.5">
 								<For each={FORMAT_OPTIONS}>
 									{(option) => {
 										const isDisabled = () =>
@@ -855,10 +840,15 @@ export function ExportPage() {
 													: undefined;
 
 										const button = (
-											<Button
-												variant="gray"
-												class="flex-1"
-												data-selected={settings.format === option.value}
+											<button
+												type="button"
+												class={cx(
+													"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
+													settings.format === option.value
+														? "bg-gray-3 border-gray-5 text-gray-12"
+														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+													isDisabled() && "opacity-50 cursor-not-allowed",
+												)}
 												disabled={isDisabled()}
 												onClick={() => {
 													updateSettings(
@@ -893,7 +883,7 @@ export function ExportPage() {
 												}}
 											>
 												{option.label}
-											</Button>
+											</button>
 										);
 
 										return disabledReason() ? (
@@ -910,7 +900,7 @@ export function ExportPage() {
 							name="Resolution"
 							icon={<IconLucideMonitor class="size-4" />}
 						>
-							<div class="flex gap-2">
+							<div class="flex gap-1.5">
 								<For
 									each={
 										settings.format === "Gif"
@@ -923,40 +913,39 @@ export function ExportPage() {
 									}
 								>
 									{(option) => (
-										<Button
-											variant="gray"
-											class="flex-1"
-											data-selected={settings.resolution.value === option.value}
+										<button
+											type="button"
+											class={cx(
+												"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
+												settings.resolution.value === option.value
+													? "bg-gray-3 border-gray-5 text-gray-12"
+													: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+											)}
 											onClick={() => updateSettings("resolution", option)}
 										>
 											{option.label}
-										</Button>
+										</button>
 									)}
 								</For>
 							</div>
 						</Field>
 
-						<Field
-							name="Frame Rate"
-							icon={<IconLucideGauge class="size-4" />}
-							value={
-								<span class="text-xs text-gray-11 tabular-nums">
-									{settings.fps} FPS
-								</span>
-							}
-						>
-							<div class="flex gap-2">
+						<Field name="Frame Rate" icon={<IconLucideGauge class="size-4" />}>
+							<div class="flex gap-1.5">
 								<For
 									each={
 										settings.format === "Gif" ? GIF_FPS_OPTIONS : FPS_OPTIONS
 									}
 								>
 									{(option) => (
-										<Button
-											variant="gray"
-											size="sm"
-											class="flex-1"
-											data-selected={settings.fps === option.value}
+										<button
+											type="button"
+											class={cx(
+												"flex-1 py-2 text-sm font-medium rounded-lg border transition-colors",
+												settings.fps === option.value
+													? "bg-gray-3 border-gray-5 text-gray-12"
+													: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+											)}
 											onClick={() => {
 												trackEvent("export_fps_changed", {
 													fps: option.value,
@@ -965,7 +954,7 @@ export function ExportPage() {
 											}}
 										>
 											{option.value}
-										</Button>
+										</button>
 									)}
 								</For>
 							</div>
@@ -975,33 +964,35 @@ export function ExportPage() {
 							<Field
 								name="Quality"
 								icon={<IconLucideSparkles class="size-4" />}
-								value={
-									<span class="text-xs text-gray-11">{qualityLabel()}</span>
-								}
 							>
-								<Slider
-									value={[
-										COMPRESSION_OPTIONS.length -
-											1 -
-											COMPRESSION_OPTIONS.findIndex(
-												(opt) => opt.value === settings.compression,
-											),
-									]}
-									minValue={0}
-									maxValue={COMPRESSION_OPTIONS.length - 1}
-									step={1}
-									onChange={([v]) => {
-										if (v === undefined) return;
-										const option =
-											COMPRESSION_OPTIONS[COMPRESSION_OPTIONS.length - 1 - v];
-										if (option) {
-											setPreviewLoading(true);
-											setCompressionBpp(option.bpp);
-											setSettings("compression", option.value);
-										}
-									}}
-									history={{ pause: () => () => {} }}
-								/>
+								<div class="grid grid-cols-4 gap-1.5">
+									<For each={[...COMPRESSION_OPTIONS].reverse()}>
+										{(option) => (
+											<button
+												type="button"
+												class={cx(
+													"px-2 py-2 text-xs font-medium rounded-lg border transition-colors",
+													settings.compression === option.value
+														? "bg-gray-3 border-gray-5 text-gray-12"
+														: "bg-transparent border-transparent text-gray-11 hover:bg-gray-3 hover:border-gray-4",
+												)}
+												onClick={() => {
+													setPreviewLoading(true);
+													setCompressionBpp(option.bpp);
+													setSettings("compression", option.value);
+												}}
+											>
+												{option.label === "Social Media"
+													? "Social"
+													: option.label}
+											</button>
+										)}
+									</For>
+								</div>
+								<div class="flex justify-between text-[10px] text-gray-10 mt-1.5 px-0.5">
+									<span>Smaller file</span>
+									<span>Larger file</span>
+								</div>
 							</Field>
 						</Show>
 					</div>

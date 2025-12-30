@@ -33,16 +33,18 @@ struct ProcessedFrame {
 impl ProcessedFrame {
     fn to_decoded_frame(&self) -> DecodedFrame {
         match self.format {
-            PixelFormat::Rgba => DecodedFrame::new((*self.data).clone(), self.width, self.height),
-            PixelFormat::Nv12 => DecodedFrame::new_nv12(
-                (*self.data).clone(),
+            PixelFormat::Rgba => {
+                DecodedFrame::new_with_arc(Arc::clone(&self.data), self.width, self.height)
+            }
+            PixelFormat::Nv12 => DecodedFrame::new_nv12_with_arc(
+                Arc::clone(&self.data),
                 self.width,
                 self.height,
                 self.y_stride,
                 self.uv_stride,
             ),
-            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p(
-                (*self.data).clone(),
+            PixelFormat::Yuv420p => DecodedFrame::new_yuv420p_with_arc(
+                Arc::clone(&self.data),
                 self.width,
                 self.height,
                 self.y_stride,

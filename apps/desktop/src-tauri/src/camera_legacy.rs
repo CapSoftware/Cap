@@ -64,6 +64,8 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
                     width: frame.width(),
                     height: frame.height(),
                     stride: frame.stride(0) as u32,
+                    frame_number: 0,
+                    target_time_ns: 0,
                     created_at: Instant::now(),
                 })
                 .ok();
