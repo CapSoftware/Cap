@@ -1,13 +1,13 @@
 use cap_audio::{
-    cast_f32_slice_to_bytes, AudioData, AudioRendererTrack, FromSampleBytes, StereoMode,
+    AudioData, AudioRendererTrack, FromSampleBytes, StereoMode, cast_f32_slice_to_bytes,
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, TimelineConfiguration};
-use ffmpeg::{format as avformat, frame::Audio as FFAudio, software::resampling, ChannelLayout};
+use ffmpeg::{ChannelLayout, format as avformat, frame::Audio as FFAudio, software::resampling};
 use ringbuf::{
-    traits::{Consumer, Observer, Producer},
     HeapRb,
+    traits::{Consumer, Observer, Producer},
 };
 use std::sync::Arc;
 
@@ -221,11 +221,7 @@ impl AudioRenderer {
                     f32::NEG_INFINITY
                 } else {
                     let g = t.gain(&project.audio);
-                    if g < -30.0 {
-                        f32::NEG_INFINITY
-                    } else {
-                        g
-                    }
+                    if g < -30.0 { f32::NEG_INFINITY } else { g }
                 },
                 stereo_mode: t.stereo_mode(&project.audio),
                 offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,

@@ -597,8 +597,9 @@ mod macos {
             sample_rate as f64
         };
 
-        let device_latency_total_frames =
-            device_latency_frames as u64 + safety_offset_frames as u64 + stream_latency_frames as u64;
+        let device_latency_total_frames = device_latency_frames as u64
+            + safety_offset_frames as u64
+            + stream_latency_frames as u64;
 
         let device_latency_secs = device_latency_total_frames as f64 / effective_rate;
         let buffer_latency_secs = buffer_frames as f64 / effective_rate;
