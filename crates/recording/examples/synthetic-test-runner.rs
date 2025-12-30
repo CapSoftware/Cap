@@ -10,7 +10,7 @@ use cap_recording::{
 use cap_timestamp::Timestamps;
 use clap::{Parser, Subcommand};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -234,11 +234,7 @@ enum TestResult {
     },
 }
 
-async fn run_synthetic_test(
-    config: &TestConfig,
-    output_dir: &PathBuf,
-    test_idx: usize,
-) -> TestResult {
+async fn run_synthetic_test(config: &TestConfig, output_dir: &Path, test_idx: usize) -> TestResult {
     let start = Instant::now();
 
     let test_output_dir = output_dir.join(format!("test_{}", test_idx));
