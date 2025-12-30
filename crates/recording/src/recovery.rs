@@ -996,12 +996,12 @@ impl RecoveryManager {
         let mut meta =
             RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
 
-        if let RecordingMetaInner::Studio(studio) = &mut meta.inner {
-            if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut() {
-                inner.status = Some(StudioRecordingStatus::NeedsRemux);
-                meta.save_for_project()
-                    .map_err(|_| RecoveryError::MetaSave)?;
-            }
+        if let RecordingMetaInner::Studio(studio) = &mut meta.inner
+            && let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut()
+        {
+            inner.status = Some(StudioRecordingStatus::NeedsRemux);
+            meta.save_for_project()
+                .map_err(|_| RecoveryError::MetaSave)?;
         }
 
         Ok(())
