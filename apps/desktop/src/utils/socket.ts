@@ -261,7 +261,11 @@ export function createImageDataWS(
 						directCanvas.height = height;
 					}
 
-					const imageData = new ImageData(frameData, width, height);
+					const imageData = new ImageData(
+						frameData.buffer as unknown as ImageDataArray,
+						width,
+						height,
+					);
 					directCtx.putImageData(imageData, 0, 0);
 
 					if (!hasRenderedFrame()) {
