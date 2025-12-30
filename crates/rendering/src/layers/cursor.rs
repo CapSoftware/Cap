@@ -341,15 +341,18 @@ impl CursorLayer {
                 let mut loaded_cursor = None;
 
                 let cursor_shape = match &constants.recording_meta.inner {
-                    RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
-                        inner:
-                            MultipleSegments {
-                                cursors: Cursors::Correct(cursors),
-                                ..
-                            },
-                    }) => cursors
-                        .get(&interpolated_cursor.cursor_id)
-                        .and_then(|v| v.shape),
+                    RecordingMetaInner::Studio(studio) => match studio.as_ref() {
+                        StudioRecordingMeta::MultipleSegments {
+                            inner:
+                                MultipleSegments {
+                                    cursors: Cursors::Correct(cursors),
+                                    ..
+                                },
+                        } => cursors
+                            .get(&interpolated_cursor.cursor_id)
+                            .and_then(|v| v.shape),
+                        _ => None,
+                    },
                     _ => None,
                 };
 

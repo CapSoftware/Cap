@@ -543,13 +543,13 @@ pub async fn start_recording(
         pretty_name: project_name.clone(),
         inner: match inputs.mode {
             RecordingMode::Studio => {
-                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
                     inner: MultipleSegments {
                         segments: Default::default(),
                         cursors: Default::default(),
                         status: Some(StudioRecordingStatus::InProgress),
                     },
-                })
+                }))
             }
             RecordingMode::Instant => {
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
@@ -1213,6 +1213,7 @@ pub async fn take_screenshot(
         path: relative_path,
         fps: 0,
         start_time: Some(0.0),
+        device_id: None,
     };
 
     let segment = cap_project::SingleSegment {
@@ -1227,9 +1228,9 @@ pub async fn take_screenshot(
         project_path: project_file_path.clone(),
         pretty_name: project_name,
         sharing: None,
-        inner: cap_project::RecordingMetaInner::Studio(
+        inner: cap_project::RecordingMetaInner::Studio(Box::new(
             cap_project::StudioRecordingMeta::SingleSegment { segment },
-        ),
+        )),
         upload: None,
     };
 
@@ -1331,7 +1332,7 @@ async fn handle_recording_end(
             {
                 match &mut project_meta.inner {
                     RecordingMetaInner::Studio(meta) => {
-                        if let StudioRecordingMeta::MultipleSegments { inner } = meta {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = &mut **meta {
                             inner.status = Some(StudioRecordingStatus::Failed { error });
                         }
                     }
@@ -1396,7 +1397,7 @@ async fn handle_recording_finish(
 
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
-            let meta_inner = RecordingMetaInner::Studio(recording.meta.clone());
+            let meta_inner = RecordingMetaInner::Studio(Box::new(recording.meta.clone()));
 
             if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
                 error!("Failed to load recording meta while saving finished recording: {err}")
@@ -1508,7 +1509,10 @@ async fn handle_recording_finish(
 
             config.write(&recording_dir).map_err(|e| e.to_string())?;
 
-            (RecordingMetaInner::Studio(updated_studio_meta), None)
+            (
+                RecordingMetaInner::Studio(Box::new(updated_studio_meta)),
+                None,
+            )
         }
         CompletedRecording::Instant {
             recording,
@@ -1910,7 +1914,7 @@ pub fn generate_zoom_segments_from_clicks(
         project_path: recording.project_path.clone(),
         pretty_name: String::new(),
         sharing: None,
-        inner: RecordingMetaInner::Studio(recording.meta.clone()),
+        inner: RecordingMetaInner::Studio(Box::new(recording.meta.clone())),
         upload: None,
     };
 
@@ -1930,7 +1934,7 @@ pub fn generate_zoom_segments_for_project(
     let mut all_clicks = Vec::new();
     let mut all_moves = Vec::new();
 
-    match studio_meta {
+    match &**studio_meta {
         StudioRecordingMeta::SingleSegment { segment } => {
             if let Some(cursor_path) = &segment.cursor {
                 let mut events = CursorEvents::load_from_file(&recording_meta.path(cursor_path))

@@ -745,7 +745,7 @@ impl RecoveryManager {
         let meta = Self::build_recovered_meta(recording)?;
 
         let mut recording_meta = recording.meta.clone();
-        recording_meta.inner = RecordingMetaInner::Studio(meta.clone());
+        recording_meta.inner = RecordingMetaInner::Studio(Box::new(meta.clone()));
         recording_meta
             .save_for_project()
             .map_err(|_| RecoveryError::MetaSave)?;
@@ -795,6 +795,7 @@ impl RecoveryManager {
                         path: RelativePathBuf::from(format!("{segment_base}/display.mp4")),
                         fps,
                         start_time: original_segment.and_then(|s| s.display.start_time),
+                        device_id: original_segment.and_then(|s| s.display.device_id.clone()),
                     },
                     camera: if camera_path.exists() {
                         Some(VideoMeta {
@@ -806,6 +807,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.camera.as_ref())
                                 .and_then(|c| c.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.camera.as_ref())
+                                .and_then(|c| c.device_id.clone()),
                         })
                     } else {
                         None
@@ -816,6 +820,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.mic.as_ref())
                                 .and_then(|m| m.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.mic.as_ref())
+                                .and_then(|m| m.device_id.clone()),
                         })
                     } else {
                         None
@@ -826,6 +833,9 @@ impl RecoveryManager {
                             start_time: original_segment
                                 .and_then(|s| s.system_audio.as_ref())
                                 .and_then(|a| a.start_time),
+                            device_id: original_segment
+                                .and_then(|s| s.system_audio.as_ref())
+                                .and_then(|a| a.device_id.clone()),
                         })
                     } else {
                         None
@@ -986,8 +996,8 @@ impl RecoveryManager {
         let mut meta =
             RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
 
-        if let RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) =
-            &mut meta.inner
+        if let RecordingMetaInner::Studio(studio) = &mut meta.inner
+            && let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut()
         {
             inner.status = Some(StudioRecordingStatus::NeedsRemux);
             meta.save_for_project()
@@ -1001,11 +1011,15 @@ impl RecoveryManager {
         let mut updated_meta = meta.clone();
 
         let status_updated = match &mut updated_meta.inner {
-            RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => {
-                inner.status = Some(StudioRecordingStatus::Failed {
-                    error: "No recoverable segments found".to_string(),
-                });
-                true
+            RecordingMetaInner::Studio(studio) => {
+                if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut() {
+                    inner.status = Some(StudioRecordingStatus::Failed {
+                        error: "No recoverable segments found".to_string(),
+                    });
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         };

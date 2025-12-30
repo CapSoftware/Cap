@@ -132,8 +132,9 @@ impl AudioRenderer {
         };
 
         let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
+        let frame_samples = (AudioData::SAMPLE_RATE as usize) / 30;
         if new_cursor.clip_index != self.cursor.clip_index
-            || cursor_diff.unsigned_abs() > (AudioData::SAMPLE_RATE as usize) / 5
+            || cursor_diff.unsigned_abs() > frame_samples
         {
             self.cursor = new_cursor;
         }
@@ -184,9 +185,22 @@ impl AudioRenderer {
             return None;
         }
 
+        let start = self.cursor;
+
+        let offsets = project
+            .clips
+            .iter()
+            .find(|c| c.index == start.clip_index)
+            .map(|c| c.offsets)
+            .unwrap_or_default();
+
         let max_samples = tracks
             .iter()
-            .map(|t| t.data().sample_count())
+            .map(|t| {
+                let track_offset_samples = (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize;
+                let available = t.data().sample_count() as isize - track_offset_samples;
+                available.max(0) as usize
+            })
             .max()
             .unwrap();
 
@@ -197,31 +211,20 @@ impl AudioRenderer {
 
         let samples = samples.min(max_samples - self.cursor.samples);
 
-        let start = self.cursor;
-
         let mut ret = vec![0.0; samples * 2];
 
         let track_datas = tracks
             .iter()
-            .map(|t| {
-                let offsets = project
-                    .clips
-                    .iter()
-                    .find(|c| c.index == start.clip_index)
-                    .map(|c| c.offsets)
-                    .unwrap_or_default();
-
-                AudioRendererTrack {
-                    data: t.data().as_ref(),
-                    gain: if project.audio.mute {
-                        f32::NEG_INFINITY
-                    } else {
-                        let g = t.gain(&project.audio);
-                        if g < -30.0 { f32::NEG_INFINITY } else { g }
-                    },
-                    stereo_mode: t.stereo_mode(&project.audio),
-                    offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
-                }
+            .map(|t| AudioRendererTrack {
+                data: t.data().as_ref(),
+                gain: if project.audio.mute {
+                    f32::NEG_INFINITY
+                } else {
+                    let g = t.gain(&project.audio);
+                    if g < -30.0 { f32::NEG_INFINITY } else { g }
+                },
+                stereo_mode: t.stereo_mode(&project.audio),
+                offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
             })
             .collect::<Vec<_>>();
 
@@ -277,8 +280,27 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.frame_buffer.set_playhead(playhead, project);
     }
 
+    #[allow(dead_code)]
     pub fn current_playhead(&self) -> f64 {
         self.frame_buffer.elapsed_samples_to_playhead()
+    }
+
+    pub fn current_audible_playhead(
+        &self,
+        device_sample_rate: u32,
+        device_latency_secs: f64,
+    ) -> f64 {
+        let generated_secs = self.frame_buffer.elapsed_samples_to_playhead();
+        let channels = self.resampler.output.channels;
+        let buffered_elements = self.resampled_buffer.occupied_len();
+        let buffered_frames = buffered_elements / channels;
+        let buffered_secs = buffered_frames as f64 / device_sample_rate as f64;
+        let audible = generated_secs - buffered_secs - device_latency_secs.max(0.0);
+        if audible.is_sign_negative() {
+            0.0
+        } else {
+            audible
+        }
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {

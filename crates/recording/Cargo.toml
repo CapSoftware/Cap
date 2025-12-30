@@ -15,6 +15,7 @@ cap-audio = { path = "../audio" }
 cap-fail = { path = "../fail" }
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
+cap-rendering = { path = "../rendering" }
 cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 scap-targets = { path = "../scap-targets" }

@@ -359,7 +359,7 @@ impl AudioMixer {
         }
     }
 
-    fn tick(&mut self, start: Timestamps, now: Timestamp) -> Result<(), ()> {
+    fn tick(&mut self, _start: Timestamps, now: Timestamp) -> Result<(), ()> {
         self.buffer_sources(now);
 
         let Some(start_timestamp) = self.start_timestamp else {
@@ -383,10 +383,10 @@ impl AudioMixer {
             filtered.set_rate(output_rate_i32 as u32);
 
             let elapsed = Duration::from_secs_f64(self.samples_out as f64 / output_rate);
-            let timestamp = start.instant() + start_timestamp.duration_since(start) + elapsed;
+            let output_timestamp = start_timestamp + elapsed;
 
             let frame_samples = filtered.samples();
-            let mut frame = AudioFrame::new(filtered, Timestamp::Instant(timestamp));
+            let mut frame = AudioFrame::new(filtered, output_timestamp);
 
             loop {
                 match self.output.try_send(frame) {

@@ -364,6 +364,7 @@ pub struct MicrophoneFeedLock {
     audio_info: AudioInfo,
     buffer_size_frames: Option<u32>,
     drop_tx: Option<oneshot::Sender<()>>,
+    device_name: String,
 }
 
 impl MicrophoneFeedLock {
@@ -377,6 +378,10 @@ impl MicrophoneFeedLock {
 
     pub fn buffer_size_frames(&self) -> Option<u32> {
         self.buffer_size_frames
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
     }
 }
 
@@ -715,6 +720,7 @@ impl Message<Lock> for MicrophoneFeed {
 
         let config = attached.config.clone();
         let buffer_size_frames = attached.buffer_size_frames;
+        let device_name = attached.label.clone();
 
         self.state = State::Locked { inner: attached };
 
@@ -732,6 +738,7 @@ impl Message<Lock> for MicrophoneFeed {
             config,
             buffer_size_frames,
             drop_tx: Some(drop_tx),
+            device_name,
         })
     }
 }

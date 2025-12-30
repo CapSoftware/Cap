@@ -103,10 +103,15 @@ impl Actor {
             (Default::default(), 0)
         };
 
+        let camera_device_id = self.segment_factory.camera_device_id();
+        let mic_device_id = self.segment_factory.mic_device_id();
+
         self.segments.push(RecordingSegment {
             start: segment_start_time,
             end: segment_stop_time,
             pipeline,
+            camera_device_id,
+            mic_device_id,
         });
 
         Ok(cursors)
@@ -299,6 +304,8 @@ pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
     pipeline: FinishedPipeline,
+    pub camera_device_id: Option<String>,
+    pub mic_device_id: Option<String>,
 }
 
 pub struct ScreenPipelineOutput {
@@ -697,6 +704,7 @@ async fn stop_recording(
                             DEFAULT_FPS
                         }),
                     start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
+                    device_id: None,
                 },
                 camera: s.pipeline.camera.map(|camera| VideoMeta {
                     path: make_relative(&camera.path),
@@ -708,14 +716,17 @@ async fn stop_recording(
                         DEFAULT_FPS
                     }),
                     start_time: Some(to_start_time(camera.first_timestamp)),
+                    device_id: s.camera_device_id.clone(),
                 }),
                 mic: s.pipeline.microphone.map(|mic| AudioMeta {
                     path: make_relative(&mic.path),
                     start_time: Some(to_start_time(mic.first_timestamp)),
+                    device_id: s.mic_device_id.clone(),
                 }),
                 system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
                     path: make_relative(&audio.path),
                     start_time: Some(to_start_time(audio.first_timestamp)),
+                    device_id: None,
                 }),
                 cursor: s
                     .pipeline
@@ -854,6 +865,20 @@ impl SegmentPipelineFactory {
 
     pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
         self.base_inputs.camera_feed = camera_feed;
+    }
+
+    pub fn camera_device_id(&self) -> Option<String> {
+        self.base_inputs
+            .camera_feed
+            .as_ref()
+            .map(|f| f.camera_info().device_id().to_string())
+    }
+
+    pub fn mic_device_id(&self) -> Option<String> {
+        self.base_inputs
+            .mic_feed
+            .as_ref()
+            .map(|f| f.device_name().to_string())
     }
 }
 
@@ -1141,13 +1166,13 @@ fn write_in_progress_meta(recording_dir: &Path) -> anyhow::Result<()> {
         project_path: recording_dir.to_path_buf(),
         pretty_name,
         sharing: None,
-        inner: RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
             inner: MultipleSegments {
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
             },
-        }),
+        })),
         upload: None,
     };
 

@@ -58,7 +58,7 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
 
-        let segment_count = match meta {
+        let segment_count = match meta.as_ref() {
             StudioRecordingMeta::SingleSegment { .. } => 1,
             StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
         };
@@ -73,7 +73,7 @@ impl EditorInstance {
 
         if project.timeline.is_none() {
             warn!("Project config has no timeline, creating one from recording segments");
-            let timeline_segments = match meta {
+            let timeline_segments = match meta.as_ref() {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     let display_path = recording_meta.path(&segment.display.path);
                     let duration = match Video::new(&display_path, 0.0) {
@@ -139,17 +139,57 @@ impl EditorInstance {
             }
         }
 
+        if project.clips.is_empty() {
+            let calibration_store = load_calibration_store(&recording_meta.project_path);
+
+            match meta.as_ref() {
+                StudioRecordingMeta::MultipleSegments { inner } => {
+                    project.clips = inner
+                        .segments
+                        .iter()
+                        .enumerate()
+                        .map(|(i, segment)| {
+                            let calibration_offset = get_calibration_offset(
+                                segment.camera_device_id(),
+                                segment.mic_device_id(),
+                                &calibration_store,
+                            );
+                            cap_project::ClipConfiguration {
+                                index: i as u32,
+                                offsets: segment
+                                    .calculate_audio_offsets_with_calibration(calibration_offset),
+                            }
+                        })
+                        .collect();
+                }
+                StudioRecordingMeta::SingleSegment { .. } => {
+                    project.clips = vec![cap_project::ClipConfiguration {
+                        index: 0,
+                        offsets: cap_project::ClipOffsets::default(),
+                    }];
+                }
+            }
+
+            if let Err(e) = project.write(&recording_meta.project_path) {
+                warn!("Failed to save auto-generated clip offsets: {}", e);
+            }
+        }
+
         let recordings = Arc::new(ProjectRecordingsMeta::new(
             &recording_meta.project_path,
-            meta,
+            meta.as_ref(),
         )?);
 
-        let segments = create_segments(&recording_meta, meta).await?;
+        let segments = create_segments(&recording_meta, meta.as_ref()).await?;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
-                .await
-                .map_err(|e| format!("Failed to create render constants: {e}"))?,
+            RenderVideoConstants::new(
+                &recordings.segments,
+                recording_meta.clone(),
+                (**meta).clone(),
+            )
+            .await
+            .map_err(|e| format!("Failed to create render constants: {e}"))?,
         );
 
         let renderer = Arc::new(editor::Renderer::spawn(
@@ -426,7 +466,7 @@ impl EditorInstance {
 
     fn get_studio_meta(&self) -> &StudioRecordingMeta {
         match &self.meta.inner {
-            RecordingMetaInner::Studio(meta) => meta,
+            RecordingMetaInner::Studio(meta) => meta.as_ref(),
             _ => panic!("Not a studio recording"),
         }
     }
@@ -546,5 +586,26 @@ pub async fn create_segments(
 
             Ok(segments)
         }
+    }
+}
+
+fn load_calibration_store(project_path: &std::path::Path) -> cap_audio::CalibrationStore {
+    let calibration_dir = project_path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| project_path.to_path_buf());
+
+    cap_audio::CalibrationStore::load(&calibration_dir)
+}
+
+fn get_calibration_offset(
+    camera_id: Option<&str>,
+    mic_id: Option<&str>,
+    store: &cap_audio::CalibrationStore,
+) -> Option<f32> {
+    match (camera_id, mic_id) {
+        (Some(cam), Some(mic)) => store.get_offset(cam, mic).map(|o| o as f32),
+        _ => None,
     }
 }

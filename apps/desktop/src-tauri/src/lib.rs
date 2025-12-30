@@ -1456,7 +1456,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
                 return Err("Unable to get metadata on in-progress recording".to_string());
             }
 
-            match meta {
+            match &**meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
                     vec![recording_meta.path(&segment.display.path)]
                 }
@@ -1888,15 +1888,13 @@ impl RecordingMetaWithMetadata {
                 RecordingMetaInner::Instant(_) => RecordingMode::Instant,
             },
             status: match &inner.inner {
-                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
-                    inner
+                RecordingMetaInner::Studio(meta) => match &**meta {
+                    StudioRecordingMeta::MultipleSegments { inner } => inner
                         .status
                         .clone()
-                        .unwrap_or(StudioRecordingStatus::Complete)
-                }
-                RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { .. }) => {
-                    StudioRecordingStatus::Complete
-                }
+                        .unwrap_or(StudioRecordingStatus::Complete),
+                    StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Complete,
+                },
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
                     StudioRecordingStatus::InProgress
                 }
@@ -3072,8 +3070,10 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                 // Check if recording is still marked as in-progress and if so mark as failed
                 // This should only happen if the application crashes while recording
                 match &mut meta.inner {
-                    RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
-                        if let Some(StudioRecordingStatus::InProgress) = &inner.status {
+                    RecordingMetaInner::Studio(meta_box) => {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = &mut **meta_box
+                            && let Some(StudioRecordingStatus::InProgress) = &inner.status
+                        {
                             inner.status = Some(StudioRecordingStatus::Failed {
                                 error: "Recording crashed".to_string(),
                             });
