@@ -153,6 +153,7 @@ export function renderFrameWebGPU(
 	data: Uint8ClampedArray,
 	width: number,
 	height: number,
+	bytesPerRow: number = width * 4,
 ): void {
 	const { device, context, pipeline, sampler, bindGroupLayout, canvas } =
 		renderer;
@@ -184,7 +185,7 @@ export function renderFrameWebGPU(
 		return;
 	}
 
-	const requiredBytes = width * height * 4;
+	const requiredBytes = bytesPerRow * height;
 	if (data.byteLength < requiredBytes) {
 		console.error(
 			`WebGPU renderFrame: buffer too small. Expected at least ${requiredBytes} bytes, got ${data.byteLength}`,
@@ -198,7 +199,7 @@ export function renderFrameWebGPU(
 	device.queue.writeTexture(
 		{ texture: renderer.frameTexture },
 		textureData.buffer as unknown as GPUAllowSharedBufferSource,
-		{ bytesPerRow: width * 4, rowsPerImage: height },
+		{ bytesPerRow, rowsPerImage: height },
 		{ width, height },
 	);
 
