@@ -347,7 +347,7 @@ fn fill_checkerboard(frame: &mut ffmpeg::frame::Video, info: &VideoInfo, frame_n
                 for x in 0..width {
                     let check_x = (x + offset) / check_size;
                     let check_y = y / check_size;
-                    let is_white = (check_x + check_y) % 2 == 0;
+                    let is_white = (check_x + check_y).is_multiple_of(2);
                     let val = if is_white { 255 } else { 0 };
 
                     let pixel_offset = y * stride + x * 4;
@@ -564,7 +564,7 @@ fn fill_nv12_checkerboard(
             for x in 0..width {
                 let check_x = (x + offset) / check_size;
                 let check_y = y / check_size;
-                let is_white = (check_x + check_y) % 2 == 0;
+                let is_white = (check_x + check_y).is_multiple_of(2);
                 let val = if is_white { 235 } else { 16 };
 
                 let y_offset = y * y_stride + x;

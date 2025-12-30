@@ -128,21 +128,20 @@ impl VideoTestConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TestPattern {
     SmpteColorBars,
     ColorGradient,
+    #[default]
     FrameCounter,
     TimestampOverlay,
     Checkerboard,
-    SolidColor { r: u8, g: u8, b: u8 },
+    SolidColor {
+        r: u8,
+        g: u8,
+        b: u8,
+    },
     Random,
-}
-
-impl Default for TestPattern {
-    fn default() -> Self {
-        Self::FrameCounter
-    }
 }
 
 #[derive(Debug, Clone)]
