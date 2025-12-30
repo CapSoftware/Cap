@@ -92,7 +92,7 @@ async fn main() {
             vec![create_studio_mode_config(duration)]
         }
         Some(Commands::Resolution { width, height, fps }) => {
-            println!("Testing resolution {}x{} @ {}fps...\n", width, height, fps);
+            println!("Testing resolution {width}x{height} @ {fps}fps...\n");
             vec![TestConfig {
                 video: Some(
                     VideoTestConfig::default()
@@ -125,10 +125,7 @@ async fn main() {
             return;
         }
         Some(Commands::Sync { tolerance_ms }) => {
-            println!(
-                "Running A/V sync verification tests (tolerance: {}ms)...\n",
-                tolerance_ms
-            );
+            println!("Running A/V sync verification tests (tolerance: {tolerance_ms}ms)...\n");
             sync_test_configs(duration, *tolerance_ms)
         }
     };
@@ -176,11 +173,11 @@ async fn main() {
             }
             TestResult::Failed { error, elapsed } => {
                 failed += 1;
-                println!("       \u{2717} FAILED: {}", error);
+                println!("       \u{2717} FAILED: {error}");
                 println!("       Duration: {:.2}s\n", elapsed.as_secs_f64());
             }
             TestResult::Skipped { reason } => {
-                println!("       - SKIPPED: {}\n", reason);
+                println!("       - SKIPPED: {reason}\n");
             }
         }
 
@@ -190,17 +187,14 @@ async fn main() {
     let total_elapsed = start.elapsed();
 
     println!("\n{}", "=".repeat(60));
-    println!(
-        "Summary: {}/{} passed, {} failed",
-        passed, total_tests, failed
-    );
+    println!("Summary: {passed}/{total_tests} passed, {failed} failed");
     println!("Total time: {:.1}s", total_elapsed.as_secs_f64());
 
     if failed > 0 {
         println!("\nFailed tests:");
         for (name, result) in &results {
             if let TestResult::Failed { error, .. } = result {
-                println!("  - {}: {}", name, error);
+                println!("  - {name}: {error}");
             }
         }
     }
@@ -237,10 +231,10 @@ enum TestResult {
 async fn run_synthetic_test(config: &TestConfig, output_dir: &Path, test_idx: usize) -> TestResult {
     let start = Instant::now();
 
-    let test_output_dir = output_dir.join(format!("test_{}", test_idx));
+    let test_output_dir = output_dir.join(format!("test_{test_idx}"));
     if let Err(e) = std::fs::create_dir_all(&test_output_dir) {
         return TestResult::Failed {
-            error: format!("Failed to create output directory: {}", e),
+            error: format!("Failed to create output directory: {e}"),
             elapsed: start.elapsed(),
         };
     }
@@ -382,13 +376,13 @@ async fn run_synthetic_test(config: &TestConfig, output_dir: &Path, test_idx: us
                     }
                 }
                 Err(e) => TestResult::Failed {
-                    error: format!("Validation error: {}", e),
+                    error: format!("Validation error: {e}"),
                     elapsed,
                 },
             }
         }
         Err(e) => TestResult::Failed {
-            error: format!("Recording failed: {}", e),
+            error: format!("Recording failed: {e}"),
             elapsed,
         },
     }
@@ -859,8 +853,7 @@ fn save_report(path: &PathBuf, results: &[(String, TestResult)]) {
         };
 
         report.push_str(&format!(
-            "    {{ \"name\": \"{}\", \"status\": \"{}\", {} }}",
-            name, status, details
+            "    {{ \"name\": \"{name}\", \"status\": \"{status}\", {details} }}"
         ));
 
         if idx < results.len() - 1 {

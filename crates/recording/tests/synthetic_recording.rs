@@ -428,20 +428,20 @@ fn test_comprehensive_config_matrix() {
     let has_4k = configs.iter().any(|c| {
         c.video
             .as_ref()
-            .map_or(false, |v| v.width == 3840 && v.height == 2160)
+            .is_some_and(|v| v.width == 3840 && v.height == 2160)
     });
     assert!(has_4k, "Should include 4K resolution");
 
     let has_ultrawide = configs.iter().any(|c| {
         c.video
             .as_ref()
-            .map_or(false, |v| v.width == 3440 && v.height == 1440)
+            .is_some_and(|v| v.width == 3440 && v.height == 1440)
     });
     assert!(has_ultrawide, "Should include ultrawide resolution");
 
     let has_60fps = configs
         .iter()
-        .any(|c| c.video.as_ref().map_or(false, |v| v.frame_rate >= 60));
+        .any(|c| c.video.as_ref().is_some_and(|v| v.frame_rate >= 60));
     assert!(has_60fps, "Should include 60fps or higher");
 }
 

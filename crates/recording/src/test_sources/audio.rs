@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(samples.len(), 1024 * 2);
 
         for &sample in &samples {
-            assert!(sample >= -1.0 && sample <= 1.0);
+            assert!((-1.0..=1.0).contains(&sample));
         }
     }
 
