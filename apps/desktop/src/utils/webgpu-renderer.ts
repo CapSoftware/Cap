@@ -198,7 +198,7 @@ export function renderFrameWebGPU(
 
 	device.queue.writeTexture(
 		{ texture: renderer.frameTexture },
-		textureData,
+		textureData.buffer as unknown as GPUAllowSharedBufferSource,
 		{ bytesPerRow, rowsPerImage: height },
 		{ width, height },
 	);
