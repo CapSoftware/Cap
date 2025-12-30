@@ -28,11 +28,12 @@ pub struct H264EncoderBuilder {
     external_conversion: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum H264Preset {
     Slow,
     Medium,
     Ultrafast,
+    HighThroughput,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -125,18 +126,37 @@ impl H264EncoderBuilder {
                         codec_name.as_str(),
                         "h264_videotoolbox" | "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf"
                     );
+                    let fps =
+                        input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
                     if is_hardware {
                         debug!(
                             encoder = %codec_name,
+                            width = input_config.width,
+                            height = input_config.height,
+                            fps = fps,
                             "Selected hardware H264 encoder"
                         );
                     } else {
-                        warn!(
-                            encoder = %codec_name,
-                            input_width = input_config.width,
-                            input_height = input_config.height,
-                            "WARNING: Using SOFTWARE H264 encoder (high CPU usage expected)"
-                        );
+                        let is_high_throughput =
+                            requires_software_encoder(&input_config, self.preset);
+                        if is_high_throughput {
+                            warn!(
+                                encoder = %codec_name,
+                                width = input_config.width,
+                                height = input_config.height,
+                                fps = fps,
+                                preset = ?self.preset,
+                                "Using SOFTWARE encoder for high throughput (hardware cannot keep up at this resolution/fps)"
+                            );
+                        } else {
+                            warn!(
+                                encoder = %codec_name,
+                                width = input_config.width,
+                                height = input_config.height,
+                                fps = fps,
+                                "Using SOFTWARE H264 encoder (high CPU usage expected)"
+                            );
+                        }
                     }
                     return Ok(encoder);
                 }
@@ -292,7 +312,6 @@ impl H264EncoderBuilder {
         );
 
         encoder.set_bit_rate(bitrate);
-        encoder.set_max_bit_rate(bitrate);
 
         let encoder = encoder.open_with(encoder_options)?;
 
@@ -301,6 +320,16 @@ impl H264EncoderBuilder {
         output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&encoder);
+
+        let converted_frame_pool = if converter.is_some() {
+            Some(frame::Video::new(
+                output_format,
+                output_width,
+                output_height,
+            ))
+        } else {
+            None
+        };
 
         Ok(H264Encoder {
             base: EncoderBase::new(stream_index),
@@ -312,6 +341,7 @@ impl H264EncoderBuilder {
             input_format: input_config.pixel_format,
             input_width: input_config.width,
             input_height: input_config.height,
+            converted_frame_pool,
         })
     }
 }
@@ -326,6 +356,7 @@ pub struct H264Encoder {
     input_format: format::Pixel,
     input_width: u32,
     input_height: u32,
+    converted_frame_pool: Option<frame::Video>,
 }
 
 pub struct ConversionRequirements {
@@ -377,19 +408,20 @@ impl H264Encoder {
         self.base
             .update_pts(&mut frame, timestamp, &mut self.encoder);
 
-        if let Some(converter) = &mut self.converter {
+        let frame_to_send = if let Some(converter) = &mut self.converter {
             let pts = frame.pts();
-            let mut converted =
-                frame::Video::new(self.output_format, self.output_width, self.output_height);
+            let converted = self.converted_frame_pool.as_mut().unwrap();
             converter
-                .run(&frame, &mut converted)
+                .run(&frame, converted)
                 .map_err(QueueFrameError::Converter)?;
             converted.set_pts(pts);
-            frame = converted;
-        }
+            converted as &frame::Video
+        } else {
+            &frame
+        };
 
         self.base
-            .send_frame(&frame, output, &mut self.encoder)
+            .send_frame(frame_to_send, output, &mut self.encoder)
             .map_err(QueueFrameError::Encode)?;
 
         Ok(())
@@ -456,7 +488,97 @@ impl H264Encoder {
     }
 }
 
-fn get_encoder_priority() -> &'static [&'static str] {
+const VIDEOTOOLBOX_4K_MAX_FPS: f64 = 55.0;
+const VIDEOTOOLBOX_1080P_MAX_FPS: f64 = 190.0;
+const NVENC_4K_MAX_FPS: f64 = 120.0;
+const NVENC_1080P_MAX_FPS: f64 = 500.0;
+const QSV_4K_MAX_FPS: f64 = 90.0;
+const QSV_1080P_MAX_FPS: f64 = 300.0;
+const AMF_4K_MAX_FPS: f64 = 100.0;
+const AMF_1080P_MAX_FPS: f64 = 350.0;
+
+const PIXELS_4K: f64 = 3840.0 * 2160.0;
+const PIXELS_1080P: f64 = 1920.0 * 1080.0;
+
+fn estimate_hw_encoder_max_fps(encoder_name: &str, width: u32, height: u32) -> f64 {
+    let pixels = (width as f64) * (height as f64);
+
+    let (max_fps_4k, max_fps_1080p) = match encoder_name {
+        "h264_videotoolbox" => (VIDEOTOOLBOX_4K_MAX_FPS, VIDEOTOOLBOX_1080P_MAX_FPS),
+        "h264_nvenc" => (NVENC_4K_MAX_FPS, NVENC_1080P_MAX_FPS),
+        "h264_qsv" => (QSV_4K_MAX_FPS, QSV_1080P_MAX_FPS),
+        "h264_amf" | "h264_mf" => (AMF_4K_MAX_FPS, AMF_1080P_MAX_FPS),
+        _ => return f64::MAX,
+    };
+
+    if pixels >= PIXELS_4K {
+        max_fps_4k
+    } else if pixels <= PIXELS_1080P {
+        max_fps_1080p
+    } else {
+        let ratio = (pixels - PIXELS_1080P) / (PIXELS_4K - PIXELS_1080P);
+        max_fps_1080p + (max_fps_4k - max_fps_1080p) * ratio
+    }
+}
+
+fn requires_software_encoder(config: &VideoInfo, preset: H264Preset) -> bool {
+    if preset == H264Preset::HighThroughput {
+        return true;
+    }
+
+    let fps = config.frame_rate.numerator() as f64 / config.frame_rate.denominator().max(1) as f64;
+
+    #[cfg(target_os = "macos")]
+    {
+        let max_hw_fps =
+            estimate_hw_encoder_max_fps("h264_videotoolbox", config.width, config.height);
+        let headroom_factor = 0.9;
+        if fps > max_hw_fps * headroom_factor {
+            debug!(
+                width = config.width,
+                height = config.height,
+                target_fps = fps,
+                hw_max_fps = max_hw_fps,
+                "Target FPS exceeds VideoToolbox capability, using software encoder"
+            );
+            return true;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use cap_frame_converter::{GpuVendor, detect_primary_gpu};
+
+        let encoder_name = match detect_primary_gpu().map(|info| info.vendor) {
+            Some(GpuVendor::Nvidia) => "h264_nvenc",
+            Some(GpuVendor::Amd) => "h264_amf",
+            Some(GpuVendor::Intel) => "h264_qsv",
+            _ => "h264_nvenc",
+        };
+
+        let max_hw_fps = estimate_hw_encoder_max_fps(encoder_name, config.width, config.height);
+        let headroom_factor = 0.9;
+        if fps > max_hw_fps * headroom_factor {
+            debug!(
+                width = config.width,
+                height = config.height,
+                target_fps = fps,
+                hw_max_fps = max_hw_fps,
+                encoder = encoder_name,
+                "Target FPS exceeds hardware encoder capability, using software encoder"
+            );
+            return true;
+        }
+    }
+
+    false
+}
+
+fn get_encoder_priority(config: &VideoInfo, preset: H264Preset) -> &'static [&'static str] {
+    if requires_software_encoder(config, preset) {
+        return &["libx264"];
+    }
+
     #[cfg(target_os = "macos")]
     {
         &[
@@ -496,11 +618,13 @@ fn get_encoder_priority() -> &'static [&'static str] {
     }
 }
 
+pub const DEFAULT_KEYFRAME_INTERVAL_SECS: u32 = 3;
+
 fn get_codec_and_options(
     config: &VideoInfo,
     preset: H264Preset,
 ) -> Vec<(Codec, Dictionary<'static>)> {
-    let keyframe_interval_secs = 2;
+    let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
     let frames_per_sec = config.frame_rate.numerator() as f64
         / if denominator == 0 { 1 } else { denominator } as f64;
@@ -509,7 +633,7 @@ fn get_codec_and_options(
         .max(1.0) as i32;
     let keyframe_interval_str = keyframe_interval.to_string();
 
-    let encoder_priority = get_encoder_priority();
+    let encoder_priority = get_encoder_priority(config, preset);
 
     let mut encoders = Vec::new();
 
@@ -524,6 +648,7 @@ fn get_codec_and_options(
             "h264_videotoolbox" => {
                 options.set("realtime", "true");
                 options.set("prio_speed", "true");
+                options.set("profile", "baseline");
             }
             "h264_nvenc" => {
                 options.set("preset", "p4");
@@ -555,10 +680,10 @@ fn get_codec_and_options(
                     match preset {
                         H264Preset::Slow => "slow",
                         H264Preset::Medium => "medium",
-                        H264Preset::Ultrafast => "ultrafast",
+                        H264Preset::Ultrafast | H264Preset::HighThroughput => "ultrafast",
                     },
                 );
-                if let H264Preset::Ultrafast = preset {
+                if matches!(preset, H264Preset::Ultrafast | H264Preset::HighThroughput) {
                     options.set("tune", "zerolatency");
                 }
                 options.set("vsync", "1");

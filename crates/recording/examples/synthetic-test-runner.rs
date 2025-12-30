@@ -138,6 +138,12 @@ async fn main() {
     let mut failed = 0;
     let mut results = Vec::new();
 
+    if cli.output_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&cli.output_dir) {
+            tracing::warn!("Failed to clean output directory before tests: {}", e);
+        }
+    }
+
     let start = Instant::now();
 
     for (idx, config) in configs.iter().enumerate() {

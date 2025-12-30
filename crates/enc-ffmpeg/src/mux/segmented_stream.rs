@@ -10,7 +10,9 @@ use std::{
 };
 use sysinfo::Disks;
 
-use crate::video::h264::{H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset};
+use crate::video::h264::{
+    DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
+};
 
 const INIT_SEGMENT_NAME: &str = "init.mp4";
 const DISK_SPACE_WARNING_THRESHOLD_MB: u64 = 500;
@@ -142,7 +144,7 @@ pub enum QueueFrameError {
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Init: {0}")]
     Init(#[from] InitError),
-    #[error("Encode: {0}")]
+    #[error(transparent)]
     Encode(#[from] crate::video::h264::QueueFrameError),
     #[error("Init segment validation failed: {0}")]
     InitSegmentInvalid(String),
@@ -164,7 +166,7 @@ pub struct SegmentedVideoEncoderConfig {
 impl Default for SegmentedVideoEncoderConfig {
     fn default() -> Self {
         Self {
-            segment_duration: Duration::from_secs(3),
+            segment_duration: Duration::from_secs(DEFAULT_KEYFRAME_INTERVAL_SECS as u64),
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,

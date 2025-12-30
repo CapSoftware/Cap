@@ -467,11 +467,28 @@ impl Muxer for SegmentedVideoMuxer {
                 trace!("Segmented encoder channel already closed during finish: {e}");
             }
 
+            let mut encoder_thread_finished = false;
+
             if let Some(handle) = state.encoder_handle.take() {
-                let timeout = Duration::from_secs(5);
+                let fps =
+                    self.video_config.frame_rate.0 as f32 / self.video_config.frame_rate.1 as f32;
+                let buffer_size = get_muxer_buffer_size();
+                let base_timeout_secs = 5u64;
+                let buffer_drain_time_secs = (buffer_size as f32 / fps.max(1.0)).ceil() as u64;
+                let total_timeout_secs = base_timeout_secs + buffer_drain_time_secs.min(30);
+                let timeout = Duration::from_secs(total_timeout_secs);
+
+                debug!(
+                    fps = fps,
+                    buffer_size = buffer_size,
+                    timeout_secs = total_timeout_secs,
+                    "Waiting for encoder thread to finish"
+                );
+
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
+                        encoder_thread_finished = true;
                         match handle.join() {
                             Err(panic_payload) => {
                                 warn!(
@@ -488,19 +505,33 @@ impl Muxer for SegmentedVideoMuxer {
                     }
                     if start.elapsed() > timeout {
                         warn!(
-                            "Segmented encoder thread did not finish within {:?}, abandoning",
+                            fps = fps,
+                            buffer_size = buffer_size,
+                            elapsed_secs = start.elapsed().as_secs(),
+                            "Segmented encoder thread did not finish within {:?}, abandoning (encoder may be overwhelmed at this resolution/fps)",
                             timeout
                         );
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
+            } else {
+                encoder_thread_finished = true;
             }
 
-            if let Ok(mut encoder) = state.encoder.lock()
-                && let Err(e) = encoder.finish_with_timestamp(timestamp)
-            {
-                warn!("Failed to finish segmented encoder: {e}");
+            if encoder_thread_finished {
+                if let Ok(mut encoder) = state.encoder.lock()
+                    && let Err(e) = encoder.finish_with_timestamp(timestamp)
+                {
+                    warn!("Failed to finish segmented encoder: {e}");
+                }
+            } else {
+                warn!("Skipping encoder finalization because encoder thread is still running");
+                if let Ok(mut encoder) = state.encoder.try_lock()
+                    && let Err(e) = encoder.finish_with_timestamp(timestamp)
+                {
+                    warn!("Failed to finish segmented encoder (non-blocking attempt): {e}");
+                }
             }
         }
 
@@ -542,6 +573,7 @@ impl SegmentedVideoMuxer {
                 }
 
                 let mut slow_encode_count = 0u32;
+                let mut encode_error_count = 0u32;
                 let mut total_frames = 0u64;
                 const SLOW_THRESHOLD_MS: u128 = 5;
 
@@ -551,7 +583,12 @@ impl SegmentedVideoMuxer {
                     if let Ok(mut encoder) = encoder_clone.lock()
                         && let Err(e) = encoder.queue_frame(frame, timestamp)
                     {
-                        warn!("Failed to encode frame: {e}");
+                        encode_error_count += 1;
+                        if encode_error_count <= 3 {
+                            warn!("Failed to encode frame: {e}");
+                        } else if encode_error_count == 4 {
+                            warn!("Suppressing further encode errors (too many failures)");
+                        }
                     }
 
                     let encode_elapsed_ms = encode_start.elapsed().as_millis();
@@ -575,11 +612,22 @@ impl SegmentedVideoMuxer {
                     debug!(
                         total_frames = total_frames,
                         slow_encodes = slow_encode_count,
+                        encode_errors = encode_error_count,
                         slow_encode_pct = format!(
                             "{:.1}%",
                             100.0 * slow_encode_count as f64 / total_frames as f64
                         ),
                         "Segmented encoder timing summary"
+                    );
+                }
+
+                if encode_error_count > 0 {
+                    warn!(
+                        encode_errors = encode_error_count,
+                        total_frames = total_frames,
+                        "Encoder finished with {} encode errors out of {} frames",
+                        encode_error_count,
+                        total_frames
                     );
                 }
 
