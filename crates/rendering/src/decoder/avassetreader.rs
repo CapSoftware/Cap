@@ -592,8 +592,15 @@ impl AVAssetReaderDecoder {
                                     let data = cached.data().clone();
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
-                                } else if is_scrubbing {
-                                    let data = cache_frame.data().clone();
+                                } else {
+                                    let data = if is_scrubbing {
+                                        cache_frame.data().clone()
+                                    } else {
+                                        last_sent_frame
+                                            .borrow()
+                                            .clone()
+                                            .unwrap_or_else(|| cache_frame.data().clone())
+                                    };
                                     *last_sent_frame.borrow_mut() = Some(data.clone());
                                     let _ = req.sender.send(data.to_decoded_frame());
                                 }
