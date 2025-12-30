@@ -996,12 +996,12 @@ impl RecoveryManager {
         let mut meta =
             RecordingMeta::load_for_project(project_path).map_err(|_| RecoveryError::MetaSave)?;
 
-        if let RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) =
-            &mut meta.inner
-        {
-            inner.status = Some(StudioRecordingStatus::NeedsRemux);
-            meta.save_for_project()
-                .map_err(|_| RecoveryError::MetaSave)?;
+        if let RecordingMetaInner::Studio(studio) = &mut meta.inner {
+            if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut() {
+                inner.status = Some(StudioRecordingStatus::NeedsRemux);
+                meta.save_for_project()
+                    .map_err(|_| RecoveryError::MetaSave)?;
+            }
         }
 
         Ok(())
@@ -1011,11 +1011,15 @@ impl RecoveryManager {
         let mut updated_meta = meta.clone();
 
         let status_updated = match &mut updated_meta.inner {
-            RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner, .. }) => {
-                inner.status = Some(StudioRecordingStatus::Failed {
-                    error: "No recoverable segments found".to_string(),
-                });
-                true
+            RecordingMetaInner::Studio(studio) => {
+                if let StudioRecordingMeta::MultipleSegments { inner, .. } = studio.as_mut() {
+                    inner.status = Some(StudioRecordingStatus::Failed {
+                        error: "No recoverable segments found".to_string(),
+                    });
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         };
