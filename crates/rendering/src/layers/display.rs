@@ -80,18 +80,9 @@ impl DisplayLayer {
         let format = segment_frames.screen_frame.format();
         let current_recording_time = segment_frames.recording_time;
 
-        tracing::trace!(
-            format = ?format,
-            actual_width,
-            actual_height,
-            frame_data_len = frame_data.len(),
-            recording_time = current_recording_time,
-            "DisplayLayer::prepare - frame info"
-        );
-
         let skipped = self
             .last_recording_time
-            .is_some_and(|last| (last - current_recording_time).abs() < f32::EPSILON);
+            .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
 
         if !skipped {
             let next_texture = 1 - self.current_texture;
@@ -144,25 +135,8 @@ impl DisplayLayer {
                     let screen_frame = &segment_frames.screen_frame;
 
                     #[cfg(target_os = "macos")]
-                    let iosurface_result = screen_frame.iosurface_backing().map(|image_buf| {
-                        self.yuv_converter
-                            .convert_nv12_from_iosurface(device, queue, image_buf)
-                    });
-
-                    #[cfg(target_os = "macos")]
                     if !self.prefer_cpu_conversion {
-                        if let Some(Ok(_)) = iosurface_result {
-                            if self.yuv_converter.output_texture().is_some() {
-                                self.pending_copy = Some(PendingTextureCopy {
-                                    width: frame_size.x,
-                                    height: frame_size.y,
-                                    dst_texture_index: next_texture,
-                                });
-                                true
-                            } else {
-                                false
-                            }
-                        } else if let (Some(y_data), Some(uv_data)) =
+                        if let (Some(y_data), Some(uv_data)) =
                             (screen_frame.y_plane(), screen_frame.uv_plane())
                         {
                             let y_stride = screen_frame.y_stride();
@@ -492,7 +466,6 @@ impl DisplayLayer {
 
     pub fn copy_to_texture(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(pending) = self.pending_copy.take() else {
-            tracing::trace!("copy_to_texture: no pending copy");
             return;
         };
 
@@ -524,10 +497,6 @@ impl DisplayLayer {
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if let Some(bind_group) = &self.bind_groups[self.current_texture] {
-            tracing::trace!(
-                current_texture_index = self.current_texture,
-                "DisplayLayer::render - rendering with bind group"
-            );
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);

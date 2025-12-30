@@ -165,7 +165,7 @@ export function Header() {
 					<ShareButton />
 				</Show>
 				<Button
-					variant="dark"
+					variant="blue"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
 						clearTimelineSelection();
@@ -176,7 +176,7 @@ export function Header() {
 						setDialog({ type: "export", open: true });
 					}}
 				>
-					<UploadIcon class="text-gray-1 size-4" />
+					<UploadIcon class="size-4" />
 					Export
 				</Button>
 				{ostype() === "windows" && <CaptionControlsWindows11 />}

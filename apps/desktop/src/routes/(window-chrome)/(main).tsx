@@ -15,7 +15,6 @@ import {
 	Suspense,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-
 import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
 import { identifyUser, trackEvent } from "~/utils/analytics";
@@ -37,6 +36,9 @@ import {
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
+import IconCapLogoFull from "~icons/cap/logo-full";
+import IconCapLogoFullDark from "~icons/cap/logo-full-dark";
+import IconLucideBug from "~icons/lucide/bug";
 
 function getWindowSize() {
 	return {

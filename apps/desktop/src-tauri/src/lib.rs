@@ -90,7 +90,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::{RwLock, oneshot, watch};
 use tracing::*;
 use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::AuthedApiError;
@@ -105,6 +105,43 @@ use crate::{
     upload::InstantMultipartUpload,
 };
 use crate::{recording::start_recording, upload::build_video_meta};
+
+type FinalizingRecordingsMap =
+    std::collections::HashMap<PathBuf, (watch::Sender<bool>, watch::Receiver<bool>)>;
+
+#[derive(Default)]
+pub struct FinalizingRecordings {
+    recordings: std::sync::Mutex<FinalizingRecordingsMap>,
+}
+
+impl FinalizingRecordings {
+    pub fn start_finalizing(&self, path: PathBuf) -> watch::Receiver<bool> {
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
+        let (tx, rx) = watch::channel(false);
+        recordings.insert(path, (tx, rx.clone()));
+        rx
+    }
+
+    pub fn finish_finalizing(&self, path: &Path) {
+        let mut recordings = self
+            .recordings
+            .lock()
+            .expect("FinalizingRecordings mutex poisoned");
+        if let Some((tx, _)) = recordings.remove(path)
+            && tx.send(true).is_err()
+        {
+            debug!("Finalizing receiver dropped for path: {:?}", path);
+        }
+    }
+
+    pub fn is_finalizing(&self, path: &Path) -> Option<watch::Receiver<bool>> {
+        let recordings = self.recordings.lock().unwrap();
+        recordings.get(path).map(|(_, rx)| rx.clone())
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -2348,6 +2385,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             recording::stop_recording,
             recording::pause_recording,
             recording::resume_recording,
+            recording::toggle_pause_recording,
             recording::restart_recording,
             recording::delete_recording,
             recording::take_screenshot,
@@ -2366,6 +2404,8 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             get_current_recording,
             export::export_video,
             export::get_export_estimates,
+            export::generate_export_preview,
+            export::generate_export_preview_fast,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -2596,6 +2636,7 @@ pub async fn run(recording_logging_handle: LoggingHandle, logs_dir: PathBuf) {
             app.manage(http_client::HttpClient::default());
             app.manage(http_client::RetryableHttpClient::default());
             app.manage(PendingScreenshots::default());
+            app.manage(FinalizingRecordings::default());
 
             gpu_context::prewarm_gpu();
 
@@ -3158,6 +3199,8 @@ async fn create_editor_instance_impl(
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
+    wait_for_recording_ready(&app, &path).await?;
+
     let instance = {
         let app = app.clone();
         EditorInstance::new(
@@ -3184,6 +3227,39 @@ async fn create_editor_instance_impl(
     });
 
     Ok(instance)
+}
+
+async fn wait_for_recording_ready(app: &AppHandle, path: &Path) -> Result<(), String> {
+    let finalizing_state = app.state::<FinalizingRecordings>();
+
+    if let Some(mut rx) = finalizing_state.is_finalizing(path) {
+        info!("Recording is being finalized, waiting for completion...");
+        rx.wait_for(|&ready| ready)
+            .await
+            .map_err(|_| "Finalization was cancelled".to_string())?;
+        info!("Recording finalization completed");
+        return Ok(());
+    }
+
+    let meta = match RecordingMeta::load_for_project(path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            return Err(format!("Failed to load recording meta: {e}"));
+        }
+    };
+
+    if let Some(studio_meta) = meta.studio_meta()
+        && recording::needs_fragment_remux(path, studio_meta)
+    {
+        info!("Recording needs remux (crash recovery), starting remux...");
+        let path = path.to_path_buf();
+        tokio::task::spawn_blocking(move || recording::remux_fragmented_recording(&path))
+            .await
+            .map_err(|e| format!("Remux task panicked: {e}"))??;
+        info!("Crash recovery remux completed");
+    }
+
+    Ok(())
 }
 
 fn recordings_path(app: &AppHandle) -> PathBuf {

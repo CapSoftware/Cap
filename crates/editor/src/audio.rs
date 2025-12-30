@@ -277,6 +277,10 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.frame_buffer.set_playhead(playhead, project);
     }
 
+    pub fn current_playhead(&self) -> f64 {
+        self.frame_buffer.elapsed_samples_to_playhead()
+    }
+
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
             <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.resampler.output.channels

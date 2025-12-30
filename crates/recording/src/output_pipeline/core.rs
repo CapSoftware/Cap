@@ -17,13 +17,271 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{self, AtomicBool},
+        atomic::{self, AtomicBool, Ordering},
     },
     time::Duration,
 };
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::*;
+
+const CONSECUTIVE_ANOMALY_ERROR_THRESHOLD: u64 = 30;
+const LARGE_BACKWARD_JUMP_SECS: f64 = 1.0;
+const LARGE_FORWARD_JUMP_SECS: f64 = 5.0;
+const DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY: usize = 128;
+
+fn get_video_source_channel_capacity() -> usize {
+    std::env::var("CAP_VIDEO_SOURCE_BUFFER_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_VIDEO_SOURCE_CHANNEL_CAPACITY)
+}
+
+pub struct TimestampAnomalyTracker {
+    stream_name: &'static str,
+    anomaly_count: u64,
+    consecutive_anomalies: u64,
+    total_backward_skew_secs: f64,
+    max_backward_skew_secs: f64,
+    total_forward_skew_secs: f64,
+    max_forward_skew_secs: f64,
+    last_valid_duration: Option<Duration>,
+    accumulated_compensation: Duration,
+    resync_count: u64,
+}
+
+impl TimestampAnomalyTracker {
+    pub fn new(stream_name: &'static str) -> Self {
+        Self {
+            stream_name,
+            anomaly_count: 0,
+            consecutive_anomalies: 0,
+            total_backward_skew_secs: 0.0,
+            max_backward_skew_secs: 0.0,
+            total_forward_skew_secs: 0.0,
+            max_forward_skew_secs: 0.0,
+            last_valid_duration: None,
+            accumulated_compensation: Duration::ZERO,
+            resync_count: 0,
+        }
+    }
+
+    pub fn process_timestamp(
+        &mut self,
+        timestamp: Timestamp,
+        timestamps: Timestamps,
+    ) -> Result<Duration, TimestampAnomalyError> {
+        let signed_secs = timestamp.signed_duration_since_secs(timestamps);
+
+        if signed_secs < 0.0 {
+            return self.handle_backward_timestamp(signed_secs);
+        }
+
+        let raw_duration = Duration::from_secs_f64(signed_secs);
+        let adjusted = raw_duration.saturating_add(self.accumulated_compensation);
+
+        if let Some(last) = self.last_valid_duration
+            && let Some(forward_jump) = adjusted.checked_sub(last)
+        {
+            let jump_secs = forward_jump.as_secs_f64();
+            if jump_secs > LARGE_FORWARD_JUMP_SECS {
+                return self.handle_forward_jump(last, adjusted, jump_secs);
+            }
+        }
+
+        self.consecutive_anomalies = 0;
+        self.last_valid_duration = Some(adjusted);
+        Ok(adjusted)
+    }
+
+    fn handle_backward_timestamp(
+        &mut self,
+        signed_secs: f64,
+    ) -> Result<Duration, TimestampAnomalyError> {
+        let skew_secs = signed_secs.abs();
+        self.anomaly_count += 1;
+        self.consecutive_anomalies += 1;
+        self.total_backward_skew_secs += skew_secs;
+        if skew_secs > self.max_backward_skew_secs {
+            self.max_backward_skew_secs = skew_secs;
+        }
+
+        if self.consecutive_anomalies >= CONSECUTIVE_ANOMALY_ERROR_THRESHOLD {
+            error!(
+                stream = self.stream_name,
+                consecutive = self.consecutive_anomalies,
+                total_anomalies = self.anomaly_count,
+                max_backward_skew_secs = self.max_backward_skew_secs,
+                "Timestamp anomaly threshold exceeded - too many consecutive backward timestamps"
+            );
+            return Err(TimestampAnomalyError::TooManyConsecutiveAnomalies {
+                count: self.consecutive_anomalies,
+            });
+        }
+
+        if skew_secs >= LARGE_BACKWARD_JUMP_SECS {
+            warn!(
+                stream = self.stream_name,
+                backward_secs = skew_secs,
+                consecutive = self.consecutive_anomalies,
+                total_anomalies = self.anomaly_count,
+                "Large backward timestamp jump detected (clock skew?), compensating"
+            );
+
+            let compensation = Duration::from_secs_f64(skew_secs);
+            self.accumulated_compensation =
+                self.accumulated_compensation.saturating_add(compensation);
+            self.resync_count += 1;
+
+            let adjusted = self.last_valid_duration.unwrap_or(Duration::ZERO);
+
+            return Ok(adjusted);
+        }
+
+        if self.consecutive_anomalies == 1 {
+            debug!(
+                stream = self.stream_name,
+                backward_secs = skew_secs,
+                "Minor backward timestamp detected, using last valid"
+            );
+        }
+
+        Ok(self.last_valid_duration.unwrap_or(Duration::ZERO))
+    }
+
+    fn handle_forward_jump(
+        &mut self,
+        last: Duration,
+        current: Duration,
+        jump_secs: f64,
+    ) -> Result<Duration, TimestampAnomalyError> {
+        self.anomaly_count += 1;
+        self.total_forward_skew_secs += jump_secs;
+        if jump_secs > self.max_forward_skew_secs {
+            self.max_forward_skew_secs = jump_secs;
+        }
+
+        warn!(
+            stream = self.stream_name,
+            forward_secs = jump_secs,
+            last_valid_ms = last.as_millis(),
+            current_ms = current.as_millis(),
+            total_anomalies = self.anomaly_count,
+            "Large forward timestamp jump detected (system sleep/wake?), clamping"
+        );
+
+        let expected_increment = Duration::from_millis(33);
+        let clamped = last.saturating_add(expected_increment);
+        self.last_valid_duration = Some(clamped);
+        self.consecutive_anomalies = 0;
+
+        Ok(clamped)
+    }
+
+    pub fn log_stats_if_notable(&self) {
+        if self.anomaly_count == 0 {
+            return;
+        }
+
+        info!(
+            stream = self.stream_name,
+            anomaly_count = self.anomaly_count,
+            total_backward_skew_secs = format!("{:.3}", self.total_backward_skew_secs),
+            max_backward_skew_secs = format!("{:.3}", self.max_backward_skew_secs),
+            total_forward_skew_secs = format!("{:.3}", self.total_forward_skew_secs),
+            max_forward_skew_secs = format!("{:.3}", self.max_forward_skew_secs),
+            resync_count = self.resync_count,
+            accumulated_compensation_ms = self.accumulated_compensation.as_millis(),
+            "Timestamp anomaly statistics"
+        );
+    }
+
+    pub fn anomaly_count(&self) -> u64 {
+        self.anomaly_count
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TimestampAnomalyError {
+    TooManyConsecutiveAnomalies { count: u64 },
+}
+
+struct SharedPauseStateInner {
+    paused_at: Option<Duration>,
+    offset: Duration,
+}
+
+#[derive(Clone)]
+pub struct SharedPauseState {
+    flag: Arc<AtomicBool>,
+    inner: Arc<std::sync::Mutex<SharedPauseStateInner>>,
+}
+
+impl SharedPauseState {
+    pub fn new(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            flag,
+            inner: Arc::new(std::sync::Mutex::new(SharedPauseStateInner {
+                paused_at: None,
+                offset: Duration::ZERO,
+            })),
+        }
+    }
+
+    pub fn adjust(&self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow!("Lock poisoned: {e}"))?;
+
+        if self.flag.load(Ordering::Acquire) {
+            if inner.paused_at.is_none() {
+                inner.paused_at = Some(timestamp);
+            }
+            return Ok(None);
+        }
+
+        if let Some(start) = inner.paused_at.take() {
+            let delta = match timestamp.checked_sub(start) {
+                Some(d) => d,
+                None => {
+                    warn!(
+                        resume_at = ?start,
+                        current = ?timestamp,
+                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
+                    );
+                    Duration::ZERO
+                }
+            };
+
+            inner.offset = match inner.offset.checked_add(delta) {
+                Some(o) => o,
+                None => {
+                    warn!(
+                        offset = ?inner.offset,
+                        delta = ?delta,
+                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
+                    );
+                    Duration::MAX
+                }
+            };
+        }
+
+        let adjusted = match timestamp.checked_sub(inner.offset) {
+            Some(t) => t,
+            None => {
+                warn!(
+                    timestamp = ?timestamp,
+                    offset = ?inner.offset,
+                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
+                );
+                Duration::ZERO
+            }
+        };
+
+        Ok(Some(adjusted))
+    }
+}
 
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
 
@@ -397,7 +655,8 @@ async fn setup_video_source<TVideo: VideoSource>(
     video_config: TVideo::Config,
     setup_ctx: &mut SetupCtx,
 ) -> anyhow::Result<(TVideo, mpsc::Receiver<TVideo::Frame>)> {
-    let (video_tx, video_rx) = mpsc::channel(128);
+    let capacity = get_video_source_channel_capacity();
+    let (video_tx, video_rx) = mpsc::channel(capacity);
     let video_source = TVideo::setup(video_config, video_tx, setup_ctx).await?;
 
     Ok((video_source, video_rx))
@@ -455,6 +714,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         let mut first_tx = Some(first_tx);
         let mut frame_count = 0u64;
+        let mut anomaly_tracker = TimestampAnomalyTracker::new("video");
 
         let res = stop_token
             .run_until_cancelled(async {
@@ -467,9 +727,15 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                         let _ = first_tx.send(timestamp);
                     }
 
-                    let duration = timestamp
-                        .checked_duration_since(timestamps)
-                        .unwrap_or(Duration::ZERO);
+                    let duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                        Ok(d) => d,
+                        Err(TimestampAnomalyError::TooManyConsecutiveAnomalies { count }) => {
+                            return Err(anyhow!(
+                                "Video stream timestamp anomaly: {} consecutive anomalies exceeded threshold",
+                                count
+                            ));
+                        }
+                    };
 
                     muxer
                         .lock()
@@ -487,9 +753,21 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         if was_cancelled {
             info!("mux-video cancelled, draining remaining frames from channel");
+            let drain_start = std::time::Instant::now();
+            let drain_timeout = Duration::from_secs(2);
+            let max_drain_frames = 30u64;
             let mut drained = 0u64;
+            let mut skipped = 0u64;
+
+            let mut hit_limit = false;
             while let Some(frame) = video_rx.next().await {
                 frame_count += 1;
+
+                if drain_start.elapsed() > drain_timeout || drained >= max_drain_frames {
+                    hit_limit = true;
+                    break;
+                }
+
                 drained += 1;
 
                 let timestamp = frame.timestamp();
@@ -498,26 +776,36 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                     let _ = first_tx.send(timestamp);
                 }
 
-                let duration = timestamp
-                    .checked_duration_since(timestamps)
-                    .unwrap_or(Duration::ZERO);
+                let duration = match anomaly_tracker.process_timestamp(timestamp, timestamps) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        warn!("Timestamp anomaly during drain, skipping frame");
+                        skipped += 1;
+                        continue;
+                    }
+                };
 
                 match muxer.lock().await.send_video_frame(frame, duration) {
                     Ok(()) => {}
                     Err(e) => {
                         warn!("Error processing drained frame: {e}");
-                        break;
+                        skipped += 1;
                     }
                 }
             }
-            if drained > 0 {
+
+            if drained > 0 || skipped > 0 || hit_limit {
                 info!(
-                    "mux-video drained {} additional frames after cancellation",
-                    drained
+                    "mux-video drain complete: {} frames processed, {} errors (limit hit: {}) in {:?}",
+                    drained,
+                    skipped,
+                    hit_limit,
+                    drain_start.elapsed()
                 );
             }
         }
 
+        anomaly_tracker.log_stats_if_notable();
         muxer.lock().await.stop();
 
         if let Some(Err(e)) = res {
@@ -554,29 +842,52 @@ impl PreparedAudioSources {
             let stop_token = stop_token.child_token();
             let muxer = muxer.clone();
             async move {
-                stop_token
+                let mut anomaly_tracker = TimestampAnomalyTracker::new("audio");
+
+                let res = stop_token
                     .run_until_cancelled(async {
                         while let Some(frame) = self.audio_rx.next().await {
                             if let Some(first_tx) = first_tx.take() {
                                 let _ = first_tx.send(frame.timestamp);
                             }
 
-                            let timestamp = frame
-                                .timestamp
-                                .checked_duration_since(timestamps)
-                                .unwrap_or(Duration::ZERO);
+                            let timestamp =
+                                match anomaly_tracker.process_timestamp(frame.timestamp, timestamps)
+                                {
+                                    Ok(d) => d,
+                                    Err(TimestampAnomalyError::TooManyConsecutiveAnomalies {
+                                        count,
+                                    }) => {
+                                        error!(
+                                            consecutive = count,
+                                            "Audio stream timestamp anomaly threshold exceeded"
+                                        );
+                                        return Err(anyhow!(
+                                            "Audio stream timestamp anomaly: {} consecutive anomalies exceeded threshold",
+                                            count
+                                        ));
+                                    }
+                                };
+
                             if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
                                 error!("Audio encoder: {e}");
                             }
                         }
+                        Ok::<(), anyhow::Error>(())
                     })
                     .await;
+
+                anomaly_tracker.log_stats_if_notable();
 
                 for source in &mut self.erased_audio_sources {
                     let _ = (source.stop_fn)(source.inner.as_mut()).await;
                 }
 
                 muxer.lock().await.stop();
+
+                if let Some(Err(e)) = res {
+                    return Err(e);
+                }
 
                 Ok(())
             }
@@ -699,11 +1010,11 @@ impl OutputPipeline {
     }
 
     pub fn pause(&self) {
-        self.pause_flag.store(true, atomic::Ordering::Relaxed);
+        self.pause_flag.store(true, atomic::Ordering::Release);
     }
 
     pub fn resume(&self) {
-        self.pause_flag.store(false, atomic::Ordering::Relaxed);
+        self.pause_flag.store(false, atomic::Ordering::Release);
     }
 
     pub fn video_info(&self) -> Option<VideoInfo> {

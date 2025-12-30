@@ -1336,6 +1336,7 @@ dependencies = [
  "ffmpeg-next",
  "serde",
  "serde_json",
+ "sysinfo",
  "thiserror 1.0.69",
  "tracing",
  "workspace-hack",
@@ -1430,6 +1431,7 @@ dependencies = [
  "flume",
  "parking_lot",
  "thiserror 1.0.69",
+ "thread_local",
  "tracing",
  "windows 0.60.0",
  "workspace-hack",
@@ -1534,6 +1536,7 @@ dependencies = [
  "cap-utils",
  "chrono",
  "cidre",
+ "clap",
  "cocoa",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -1549,6 +1552,8 @@ dependencies = [
  "indexmap 2.11.4",
  "inquire",
  "kameo",
+ "libc",
+ "libproc",
  "objc",
  "objc2-app-kit",
  "relative-path",
@@ -4874,6 +4879,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
+name = "libproc"
+version = "0.14.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e78a09b56be5adbcad5aa1197371688dc6bb249a26da3bca2011ee2fb987ebfb"
+dependencies = [
+ "bindgen 0.70.1",
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,6 +5545,15 @@ dependencies = [
  "serde",
  "tauri-winrt-notification",
  "zbus",
+]
+
+[[package]]
+name = "ntapi"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c70f219e21142367c70c0b30c6a9e3a14d55b4d12a204d897fbec83a0363f081"
+dependencies = [
+ "winapi",
 ]
 
 [[package]]
@@ -8932,6 +8957,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "sysinfo"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c33cd241af0f2e9e3b5c32163b873b29956890b5342e6745b917ce9d490f4af"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+ "memchr",
+ "ntapi",
+ "rayon",
+ "windows 0.54.0",
 ]
 
 [[package]]

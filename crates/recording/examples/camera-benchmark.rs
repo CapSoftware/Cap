@@ -141,6 +141,7 @@ async fn run_camera_encoding_benchmark(
             input_capacity: 120,
             output_capacity: 90,
             drop_strategy: DropStrategy::DropOldest,
+            ..Default::default()
         };
 
         let pool = AsyncConverterPool::from_config(conversion_config, pool_config)

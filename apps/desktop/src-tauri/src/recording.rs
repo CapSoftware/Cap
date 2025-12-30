@@ -52,8 +52,8 @@ use crate::camera::{CameraPreviewManager, CameraPreviewShape};
 use crate::general_settings;
 use crate::web_api::AuthedApiError;
 use crate::{
-    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
-    RecordingStopped, VideoUploadInfo,
+    App, CurrentRecordingChanged, FinalizingRecordings, MutableState, NewStudioRecordingAdded,
+    RecordingStarted, RecordingState, RecordingStopped, VideoUploadInfo,
     api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
@@ -192,6 +192,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.resume().await,
             Self::Studio { handle, .. } => handle.resume().await,
+        }
+    }
+
+    pub async fn is_paused(&self) -> anyhow::Result<bool> {
+        match self {
+            Self::Instant { handle, .. } => handle.is_paused().await,
+            Self::Studio { handle, .. } => handle.is_paused().await,
         }
     }
 
@@ -729,6 +736,9 @@ pub async fn start_recording(
                                     .as_ref()
                                     .map(|s| s.crash_recovery_recording)
                                     .unwrap_or_default(),
+                            )
+                            .with_max_fps(
+                                general_settings.as_ref().map(|s| s.max_fps).unwrap_or(60),
                             );
 
                             #[cfg(target_os = "macos")]
@@ -878,6 +888,7 @@ pub async fn start_recording(
     };
 
     let _ = RecordingEvent::Started.emit(&app);
+    let _ = RecordingStarted.emit(&app);
 
     spawn_actor({
         let app = app.clone();
@@ -947,6 +958,23 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 
     if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[instrument(skip(state))]
+pub async fn toggle_pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let state = state.read().await;
+
+    if let Some(recording) = state.current_recording() {
+        if recording.is_paused().await.map_err(|e| e.to_string())? {
+            recording.resume().await.map_err(|e| e.to_string())?;
+        } else {
+            recording.pause().await.map_err(|e| e.to_string())?;
+        }
     }
 
     Ok(())
@@ -1379,22 +1407,75 @@ async fn handle_recording_finish(
                     .map_err(|e| format!("Failed to save recording meta: {e}"))?;
             }
 
-            let updated_studio_meta = if needs_fragment_remux(&recording_dir, &recording.meta) {
-                info!("Recording has fragments that need remuxing");
-                if let Err(e) = remux_fragmented_recording(&recording_dir) {
-                    error!("Failed to remux fragmented recording: {e}");
-                    return Err(format!("Failed to remux fragmented recording: {e}"));
+            let needs_remux = needs_fragment_remux(&recording_dir, &recording.meta);
+
+            if needs_remux {
+                info!("Recording has fragments that need remuxing - opening editor immediately");
+
+                let finalizing_state = app.state::<FinalizingRecordings>();
+                finalizing_state.start_finalizing(recording_dir.clone());
+
+                let post_behaviour = GeneralSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .map(|v| v.post_studio_recording_behaviour)
+                    .unwrap_or(PostStudioRecordingBehaviour::OpenEditor);
+
+                match post_behaviour {
+                    PostStudioRecordingBehaviour::OpenEditor => {
+                        let _ = ShowCapWindow::Editor {
+                            project_path: recording_dir.clone(),
+                        }
+                        .show(app)
+                        .await;
+                    }
+                    PostStudioRecordingBehaviour::ShowOverlay => {
+                        let _ = ShowCapWindow::RecordingsOverlay.show(app).await;
+
+                        let app_clone = AppHandle::clone(app);
+                        let recording_dir_clone = recording_dir.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(1000)).await;
+                            let _ = NewStudioRecordingAdded {
+                                path: recording_dir_clone,
+                            }
+                            .emit(&app_clone);
+                        });
+                    }
                 }
 
-                let updated_meta = RecordingMeta::load_for_project(&recording_dir)
-                    .map_err(|e| format!("Failed to reload recording meta: {e}"))?;
-                updated_meta
-                    .studio_meta()
-                    .ok_or_else(|| "Expected studio meta after remux".to_string())?
-                    .clone()
-            } else {
-                recording.meta.clone()
-            };
+                AppSounds::StopRecording.play();
+
+                let app = app.clone();
+                let recording_dir_for_finalize = recording_dir.clone();
+                let screenshots_dir = screenshots_dir.clone();
+                let default_preset = PresetsStore::get_default_preset(&app)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.config);
+
+                tokio::spawn(async move {
+                    let result = finalize_studio_recording(
+                        &app,
+                        recording_dir_for_finalize.clone(),
+                        screenshots_dir,
+                        recording,
+                        default_preset,
+                    )
+                    .await;
+
+                    if let Err(e) = result {
+                        error!("Failed to finalize recording: {e}");
+                    }
+
+                    app.state::<FinalizingRecordings>()
+                        .finish_finalizing(&recording_dir_for_finalize);
+                });
+
+                return Ok(());
+            }
+
+            let updated_studio_meta = recording.meta.clone();
 
             let display_output_path = match &updated_studio_meta {
                 StudioRecordingMeta::SingleSegment { segment } => {
@@ -1584,6 +1665,72 @@ async fn handle_recording_finish(
 
     // Play sound to indicate recording has stopped
     AppSounds::StopRecording.play();
+
+    Ok(())
+}
+
+async fn finalize_studio_recording(
+    app: &AppHandle,
+    recording_dir: PathBuf,
+    screenshots_dir: PathBuf,
+    recording: cap_recording::studio_recording::CompletedRecording,
+    default_preset: Option<ProjectConfiguration>,
+) -> Result<(), String> {
+    info!("Starting background finalization for recording");
+
+    let recording_dir_for_remux = recording_dir.clone();
+    let remux_result =
+        tokio::task::spawn_blocking(move || remux_fragmented_recording(&recording_dir_for_remux))
+            .await
+            .map_err(|e| format!("Remux task panicked: {e}"))?;
+
+    if let Err(e) = remux_result {
+        error!("Failed to remux fragmented recording: {e}");
+        return Err(format!("Failed to remux fragmented recording: {e}"));
+    }
+
+    let updated_meta = RecordingMeta::load_for_project(&recording_dir)
+        .map_err(|e| format!("Failed to reload recording meta: {e}"))?;
+    let updated_studio_meta = updated_meta
+        .studio_meta()
+        .ok_or_else(|| "Expected studio meta after remux".to_string())?
+        .clone();
+
+    let display_output_path = match &updated_studio_meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            segment.display.path.to_path(&recording_dir)
+        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            inner.segments[0].display.path.to_path(&recording_dir)
+        }
+    };
+
+    let display_screenshot = screenshots_dir.join("display.jpg");
+    tokio::spawn(create_screenshot(
+        display_output_path,
+        display_screenshot,
+        None,
+    ));
+
+    let recordings = ProjectRecordingsMeta::new(&recording_dir, &updated_studio_meta)
+        .map_err(|e| format!("Failed to create project recordings meta: {e}"))?;
+
+    let config = project_config_from_recording(
+        app,
+        &cap_recording::studio_recording::CompletedRecording {
+            project_path: recording.project_path,
+            meta: updated_studio_meta,
+            cursor_data: recording.cursor_data,
+        },
+        &recordings,
+        default_preset,
+    );
+
+    config
+        .write(&recording_dir)
+        .map_err(|e| format!("Failed to write project config: {e}"))?;
+
+    info!("Background finalization completed for recording");
 
     Ok(())
 }
@@ -1873,7 +2020,7 @@ fn project_config_from_recording(
     config
 }
 
-fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {
+pub fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> bool {
     let StudioRecordingMeta::MultipleSegments { inner, .. } = meta else {
         return false;
     };
@@ -1888,7 +2035,7 @@ fn needs_fragment_remux(recording_dir: &Path, meta: &StudioRecordingMeta) -> boo
     false
 }
 
-fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
+pub fn remux_fragmented_recording(recording_dir: &Path) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(recording_dir)
         .map_err(|e| format!("Failed to load recording meta: {e}"))?;
 
@@ -1924,10 +2071,12 @@ fn analyze_recording_for_remux(
 
     for (index, segment) in inner.segments.iter().enumerate() {
         let display_path = segment.display.path.to_path(project_path);
-        let display_fragments = if display_path.is_dir() {
-            find_fragments_in_dir(&display_path)
+        let (display_fragments, display_init_segment) = if display_path.is_dir() {
+            let frags = find_fragments_in_dir(&display_path);
+            let init = display_path.join("init.mp4");
+            (frags, if init.exists() { Some(init) } else { None })
         } else if display_path.exists() {
-            vec![display_path]
+            (vec![display_path], None)
         } else {
             continue;
         };
@@ -1936,17 +2085,27 @@ fn analyze_recording_for_remux(
             continue;
         }
 
-        let camera_fragments = segment.camera.as_ref().and_then(|cam| {
-            let cam_path = cam.path.to_path(project_path);
-            if cam_path.is_dir() {
-                let frags = find_fragments_in_dir(&cam_path);
-                if frags.is_empty() { None } else { Some(frags) }
-            } else if cam_path.exists() {
-                Some(vec![cam_path])
-            } else {
-                None
-            }
-        });
+        let (camera_fragments, camera_init_segment) = segment
+            .camera
+            .as_ref()
+            .map(|cam| {
+                let cam_path = cam.path.to_path(project_path);
+                if cam_path.is_dir() {
+                    let frags = find_fragments_in_dir(&cam_path);
+                    let init = cam_path.join("init.mp4");
+                    let init_seg = if init.exists() { Some(init) } else { None };
+                    if frags.is_empty() {
+                        (None, None)
+                    } else {
+                        (Some(frags), init_seg)
+                    }
+                } else if cam_path.exists() {
+                    (Some(vec![cam_path]), None)
+                } else {
+                    (None, None)
+                }
+            })
+            .unwrap_or((None, None));
 
         let cursor_path = segment
             .cursor
@@ -1981,7 +2140,9 @@ fn analyze_recording_for_remux(
         recoverable_segments.push(RecoverableSegment {
             index: index as u32,
             display_fragments,
+            display_init_segment,
             camera_fragments,
+            camera_init_segment,
             mic_fragments,
             system_audio_fragments,
             cursor_path,

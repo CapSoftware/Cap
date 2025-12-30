@@ -187,6 +187,7 @@ impl FfmpegDecoder {
             let mut last_active_frame = None::<u32>;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
+            let first_ever_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
             let mut frames = this.frames();
             let mut converter = FrameConverter::new();
@@ -275,6 +276,14 @@ impl FfmpegDecoder {
                                 number: current_frame,
                             };
 
+                            if first_ever_frame.borrow().is_none() {
+                                let processed = cache_frame.process(&mut converter);
+                                *first_ever_frame.borrow_mut() = Some(processed);
+                                cache_frame = CachedFrame::Processed(
+                                    first_ever_frame.borrow().as_ref().unwrap().clone(),
+                                );
+                            }
+
                             // Handles frame skips.
                             // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                             if let Some(most_recent_prev_frame) =
@@ -357,6 +366,11 @@ impl FfmpegDecoder {
                         if let Some(sender) = sender.take() {
                             if let Some(last_sent_frame) = last_sent_frame {
                                 (sender)(last_sent_frame);
+                            } else if let Some(first_frame) = first_ever_frame.borrow().clone() {
+                                debug!(
+                                    "Returning first decoded frame as fallback for request {requested_frame}"
+                                );
+                                (sender)(first_frame);
                             } else {
                                 debug!(
                                     "No frames available for request {requested_frame}, sending black frame"

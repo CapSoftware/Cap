@@ -39,7 +39,7 @@ impl PauseTracker {
     }
 
     fn adjust(&mut self, timestamp: Duration) -> anyhow::Result<Option<Duration>> {
-        if self.flag.load(Ordering::Relaxed) {
+        if self.flag.load(Ordering::Acquire) {
             if self.paused_at.is_none() {
                 self.paused_at = Some(timestamp);
             }
@@ -47,26 +47,42 @@ impl PauseTracker {
         }
 
         if let Some(start) = self.paused_at.take() {
-            let delta = timestamp.checked_sub(start).ok_or_else(|| {
-                anyhow!(
-                    "Frame timestamp went backward during unpause (resume={start:?}, current={timestamp:?})"
-                )
-            })?;
+            let delta = match timestamp.checked_sub(start) {
+                Some(d) => d,
+                None => {
+                    warn!(
+                        resume_at = ?start,
+                        current = ?timestamp,
+                        "Timestamp anomaly: frame timestamp went backward during unpause (clock skew?), treating as zero delta"
+                    );
+                    Duration::ZERO
+                }
+            };
 
-            self.offset = self.offset.checked_add(delta).ok_or_else(|| {
-                anyhow!(
-                    "Pause offset overflow (offset={:?}, delta={delta:?})",
-                    self.offset
-                )
-            })?;
+            self.offset = match self.offset.checked_add(delta) {
+                Some(o) => o,
+                None => {
+                    warn!(
+                        offset = ?self.offset,
+                        delta = ?delta,
+                        "Timestamp anomaly: pause offset overflow, clamping to MAX"
+                    );
+                    Duration::MAX
+                }
+            };
         }
 
-        let adjusted = timestamp.checked_sub(self.offset).ok_or_else(|| {
-            anyhow!(
-                "Adjusted timestamp underflow (timestamp={timestamp:?}, offset={:?})",
-                self.offset
-            )
-        })?;
+        let adjusted = match timestamp.checked_sub(self.offset) {
+            Some(t) => t,
+            None => {
+                warn!(
+                    timestamp = ?timestamp,
+                    offset = ?self.offset,
+                    "Timestamp anomaly: adjusted timestamp underflow (clock skew?), using zero"
+                );
+                Duration::ZERO
+            }
+        };
 
         Ok(Some(adjusted))
     }

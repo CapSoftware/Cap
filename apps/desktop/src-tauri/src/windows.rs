@@ -924,12 +924,22 @@ impl CapWindow {
         let def = self.def(app);
         let should_protect = should_protect_window(app, def.title());
 
-        let mut builder = WebviewWindow::builder(app, def.label(), WebviewUrl::App(url.into()))
-            .title(def.title())
+        let theme = GeneralSettingsStore::get(app)
+            .ok()
+            .flatten()
+            .map(|s| match s.theme {
+                AppTheme::System => None,
+                AppTheme::Light => Some(tauri::Theme::Light),
+                AppTheme::Dark => Some(tauri::Theme::Dark),
+            })
+            .unwrap_or(None);
+
+        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
+            .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
             .shadow(true)
-            .content_protected(should_protect);
+            .theme(theme);
 
         if let Some(min) = def.min_size() {
             builder = builder
