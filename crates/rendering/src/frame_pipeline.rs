@@ -44,7 +44,8 @@ impl PendingReadback {
 
         let buffer_slice = self.buffer.slice(..);
         let data = buffer_slice.get_mapped_range();
-        let data_vec = data.to_vec();
+        let mut data_vec = Vec::with_capacity(data.len() + 12);
+        data_vec.extend_from_slice(&data);
 
         drop(data);
         self.buffer.unmap();

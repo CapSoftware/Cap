@@ -355,13 +355,12 @@ impl ScreenshotEditorInstances {
 
                         match rendered_frame {
                             Ok(frame) => {
-                                let _ = frame_tx.send(Some(WSFrame {
-                                    data: frame.data,
-                                    width: frame.width,
-                                    height: frame.height,
-                                    stride: frame.padded_bytes_per_row,
-                                    created_at: Instant::now(),
-                                }));
+                                let _ = frame_tx.send(Some(WSFrame::new_rgba(
+                                    frame.data,
+                                    frame.width,
+                                    frame.height,
+                                    frame.padded_bytes_per_row,
+                                )));
                             }
                             Err(e) => {
                                 eprintln!("Failed to render frame: {e}");

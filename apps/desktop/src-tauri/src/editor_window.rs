@@ -23,7 +23,10 @@ fn strip_frame_padding(frame: RenderedFrame) -> Result<(Vec<u8>, u32), &'static 
         let capacity = expected_stride
             .checked_mul(frame.height)
             .ok_or("overflow computing buffer capacity")?;
-        let mut stripped = Vec::with_capacity(capacity as usize);
+        let full_capacity = capacity
+            .checked_add(12)
+            .ok_or("overflow computing buffer capacity")?;
+        let mut stripped = Vec::with_capacity(full_capacity as usize);
         for row in 0..frame.height {
             let start = row
                 .checked_mul(frame.padded_bytes_per_row)
@@ -59,13 +62,7 @@ async fn do_prewarm(app: AppHandle, path: PathBuf) -> PendingResult {
             let width = frame.width;
             let height = frame.height;
             if let Ok((data, stride)) = strip_frame_padding(frame)
-                && let Err(e) = frame_tx.send(Some(WSFrame {
-                    data,
-                    width,
-                    height,
-                    stride,
-                    created_at: Instant::now(),
-                }))
+                && let Err(e) = frame_tx.send(Some(WSFrame::new_rgba(data, width, height, stride)))
             {
                 debug!("Frame receiver dropped during prewarm: {e}");
             }
@@ -221,13 +218,8 @@ impl EditorInstances {
                         let width = frame.width;
                         let height = frame.height;
                         if let Ok((data, stride)) = strip_frame_padding(frame)
-                            && let Err(e) = frame_tx.send(Some(WSFrame {
-                                data,
-                                width,
-                                height,
-                                stride,
-                                created_at: Instant::now(),
-                            }))
+                            && let Err(e) =
+                                frame_tx.send(Some(WSFrame::new_rgba(data, width, height, stride)))
                         {
                             debug!("Frame receiver dropped in get_or_create: {e}");
                         }

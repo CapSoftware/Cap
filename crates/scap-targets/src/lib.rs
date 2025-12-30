@@ -71,7 +71,9 @@ impl FromStr for DisplayId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<DisplayIdImpl>().map(Self)
+        s.parse::<DisplayIdImpl>()
+            .map(Self)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -152,10 +154,9 @@ impl Window {
     }
 
     pub fn display_relative_logical_bounds(&self) -> Option<LogicalBounds> {
-        let display = self.display()?;
-
         #[cfg(target_os = "macos")]
         {
+            let display = self.display()?;
             let display_logical_bounds = display.raw_handle().logical_bounds()?;
             let window_logical_bounds = self.raw_handle().logical_bounds()?;
 
@@ -170,6 +171,7 @@ impl Window {
 
         #[cfg(windows)]
         {
+            let display = self.display()?;
             let display_physical_bounds = display.raw_handle().physical_bounds()?;
             let display_logical_size = display.logical_size()?;
             let window_physical_bounds: PhysicalBounds = self.raw_handle().physical_bounds()?;
@@ -195,6 +197,11 @@ impl Window {
                 ),
             ))
         }
+
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            None
+        }
     }
 }
 
@@ -215,7 +222,9 @@ impl FromStr for WindowId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<WindowIdImpl>().map(Self)
+        s.parse::<WindowIdImpl>()
+            .map(Self)
+            .map_err(|e| e.to_string())
     }
 }
 
